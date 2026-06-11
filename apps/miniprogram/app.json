@@ -1,0 +1,22 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/mine/index",
+    "pages/admin/catalog",
+    "pages/session/create",
+    "pages/session/detail",
+    "pages/session/apply",
+    "pages/session/manage"
+  ],
+  "window": {
+    "navigationBarTitleText": "拼车发车",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f7f7f7"
+  },
+  "networkTimeout": {
+    "request": 10000
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,12 @@
+node_modules
+apps/api/node_modules
+packages/shared/node_modules
+.git
+.codex
+work-log
+.env
+.env.*
+!.env.example
+docker-data
+npm-debug.log*
+.DS_Store

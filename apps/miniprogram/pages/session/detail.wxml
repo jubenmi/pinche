@@ -1,0 +1,10 @@
+<view class="page">
+  <view class="section">
+    <view class="title">车详情</view>
+    <view class="text">座位、价格调整和申请状态。</view>
+    <view class="actions">
+      <button class="button" bindtap="goApply">申请上车</button>
+      <button class="button secondary" open-type="share">分享</button>
+    </view>
+  </view>
+</view>

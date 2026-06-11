@@ -1,0 +1,58 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: development
+      PORT: 3018
+      APP_BASE_URL: http://localhost:3018
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: pinche
+      MYSQL_USER: pinche
+      MYSQL_PASSWORD: pinche_dev_password
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      WECHAT_MOCK_LOGIN: "true"
+      WECHAT_APP_ID: wx-placeholder
+      WECHAT_APP_SECRET: ""
+      SESSION_SECRET: local-docker-session-secret-change-before-production
+      CONTACT_ENCRYPTION_KEY: local-docker-contact-key-change-before-prod
+      BOOTSTRAP_ADMIN_OPENIDS: dev-admin-openid
+    ports:
+      - "3018:3018"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: pinche_root_password
+      MYSQL_DATABASE: pinche
+      MYSQL_USER: pinche
+      MYSQL_PASSWORD: pinche_dev_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - pinche_mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -upinche -ppinche_dev_password --silent"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+volumes:
+  pinche_mysql_data:

@@ -1,0 +1,15 @@
+node_modules/
+npm-debug.log*
+.DS_Store
+.codex/
+work-log/
+.env
+.env.*
+!.env.example
+dist/
+coverage/
+.idea/
+.vscode/
+tmp/
+docker-data/
+apps/miniprogram/project.private.config.json

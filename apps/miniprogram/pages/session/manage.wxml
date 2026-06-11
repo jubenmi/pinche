@@ -1,0 +1,6 @@
+<view class="page">
+  <view class="section">
+    <view class="title">车头管理</view>
+    <view class="text">审核申请、锁座和记录押金状态。</view>
+  </view>
+</view>

@@ -1,0 +1,19 @@
+{
+  "name": "pinche",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "packages/shared"
+  ],
+  "scripts": {
+    "check": "npm --workspace apps/api run check && node scripts/check-miniprogram.js",
+    "dev:api": "npm --workspace apps/api run dev",
+    "start:api": "npm --workspace apps/api run start",
+    "migrate": "npm --workspace apps/api run migrate"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
