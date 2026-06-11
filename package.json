@@ -9,14 +9,15 @@
     "packages/shared"
   ],
   "scripts": {
-    "check": "npm --workspace apps/api run check && node --check scripts/d2-smoke-test.js && node --check scripts/d3-smoke-test.js && node scripts/check-miniprogram.js",
+    "check": "npm --workspace apps/api run check && node --check scripts/d2-smoke-test.js && node --check scripts/d3-smoke-test.js && node --check scripts/d4-smoke-test.js && node scripts/check-miniprogram.js",
     "dev:mp-weixin": "npm --workspace apps/miniprogram run dev:mp-weixin",
     "build:mp-weixin": "npm --workspace apps/miniprogram run build:mp-weixin",
     "dev:api": "npm --workspace apps/api run dev",
     "start:api": "npm --workspace apps/api run start",
     "migrate": "npm --workspace apps/api run migrate",
     "d2:smoke": "node scripts/d2-smoke-test.js",
-    "d3:smoke": "node scripts/d3-smoke-test.js"
+    "d3:smoke": "node scripts/d3-smoke-test.js",
+    "d4:smoke": "node scripts/d4-smoke-test.js"
   },
   "engines": {
     "node": ">=20"

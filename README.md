@@ -8,6 +8,7 @@
 - D1：技术初始化，已完成。
 - D2：身份权限与数据模型，已完成。
 - D3：管理员资料录入，已完成。
+- D4：车头建车流程，已完成。
 
 ## 工程结构
 
@@ -101,6 +102,12 @@ curl -sS http://localhost:3018/health/db
 - [D1 Technical Initialization](./specs/d1-technical-initialization/README.md)
 - [D2 Identity and Data Model](./specs/d2-identity-data-model/README.md)
 - [D3 Admin Catalog](./specs/d3-admin-catalog/README.md)
+- [D4 Session Creation](./specs/d4-session-creation/README.md)
+- [D5 Share Signup](./specs/d5-share-signup/README.md)
+- [D6 Organizer Management](./specs/d6-organizer-management/README.md)
+- [D7 Share Analytics](./specs/d7-share-analytics/README.md)
+- [D8 QA Hardening](./specs/d8-qa-hardening/README.md)
+- [D9 MVP Release](./specs/d9-mvp-release/README.md)
 
 ## 文档入口
 

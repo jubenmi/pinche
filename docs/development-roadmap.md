@@ -12,6 +12,12 @@
 - [D1 Spec](../specs/d1-technical-initialization/README.md)
 - [D2 Spec](../specs/d2-identity-data-model/README.md)
 - [D3 Spec](../specs/d3-admin-catalog/README.md)
+- [D4 Spec](../specs/d4-session-creation/README.md)
+- [D5 Spec](../specs/d5-share-signup/README.md)
+- [D6 Spec](../specs/d6-organizer-management/README.md)
+- [D7 Spec](../specs/d7-share-analytics/README.md)
+- [D8 Spec](../specs/d8-qa-hardening/README.md)
+- [D9 Spec](../specs/d9-mvp-release/README.md)
 - [情感本拼车小程序产品设计](./mini-program-product-design.md)
 - [剧本杀情感本发车业务调研](./jubensha-emotional-carpool.md)
 - [微信小程序实现约束与设计修正](./wechat-miniprogram-design-notes.md)
@@ -467,6 +473,8 @@ D3已按spec方式执行，后续开发以 [D3 Requirements](../specs/d3-admin-c
   - `docker compose up -d api`
 
 ## 7. D4：车头建车流程
+
+D4已按spec方式执行，后续开发以 [D4 Requirements](../specs/d4-session-creation/requirements.md)、[D4 Design](../specs/d4-session-creation/design.md)、[D4 Tasks](../specs/d4-session-creation/tasks.md) 为准。
 
 ### 阶段工作
 
