@@ -2,7 +2,9 @@
 export default {
   globalData: {
     apiBaseUrl: "http://localhost:3018",
-    token: ""
+    token: "",
+    user: null,
+    roles: []
   },
   onLaunch() {}
 };

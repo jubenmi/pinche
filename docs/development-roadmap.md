@@ -11,6 +11,7 @@
 - [D0 Spec](../specs/d0-requirements-freeze/README.md)
 - [D1 Spec](../specs/d1-technical-initialization/README.md)
 - [D2 Spec](../specs/d2-identity-data-model/README.md)
+- [D3 Spec](../specs/d3-admin-catalog/README.md)
 - [情感本拼车小程序产品设计](./mini-program-product-design.md)
 - [剧本杀情感本发车业务调研](./jubensha-emotional-carpool.md)
 - [微信小程序实现约束与设计修正](./wechat-miniprogram-design-notes.md)
@@ -353,8 +354,10 @@ POST /auth/wechat-login
 POST /auth/wechat-phone
 
 POST /admin/stores
+GET /admin/stores
 PATCH /admin/stores/:id
 POST /admin/scripts
+GET /admin/scripts
 PATCH /admin/scripts/:id
 GET /admin/catalog-requests
 PATCH /admin/catalog-requests/:id
@@ -406,6 +409,8 @@ POST /entity-claims
 
 ## 6. D3：管理员资料录入
 
+D3已按spec方式执行，后续开发以 [D3 Requirements](../specs/d3-admin-catalog/requirements.md)、[D3 Design](../specs/d3-admin-catalog/design.md)、[D3 Tasks](../specs/d3-admin-catalog/tasks.md) 为准。
+
 ### 阶段工作
 
 - 小程序内增加管理员入口：
@@ -424,6 +429,8 @@ POST /entity-claims
   - 无剧透简介，可选。
   - 默认座位模板，可选。
   - 状态：可用、下架。
+- 剧本数据新增字段：
+  - `default_seat_template_json`：D4建车座位模板的预填来源。
 - 管理员审核新增资料申请：
   - 查看车头提交的店家/剧本名称。
   - 通过后创建正式资料。
@@ -451,6 +458,13 @@ POST /entity-claims
 - 车头建车时能搜索到管理员录入的店家和剧本。
 - 车头找不到资料时能提交新增申请。
 - 管理员通过申请后，资料能出现在车头选择列表里。
+- D3本地和Docker验收命令：
+  - `npm run check`
+  - `npm run migrate`
+  - `npm run build:mp-weixin`
+  - `npm run d3:smoke`
+  - `docker compose build api`
+  - `docker compose up -d api`
 
 ## 7. D4：车头建车流程
 

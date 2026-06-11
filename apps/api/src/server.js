@@ -19,6 +19,8 @@ import {
   createStore,
   createSubscriptionRequest,
   getSession,
+  listAdminScripts,
+  listAdminStores,
   listActiveScripts,
   listActiveStores,
   listCatalogRequests,
@@ -180,12 +182,28 @@ async function route(request, response) {
   }
 
   if (request.method === "GET" && url.pathname === "/api/stores") {
-    jsonResponse(response, 200, { ok: true, data: await listActiveStores() });
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listActiveStores(Object.fromEntries(url.searchParams))
+    });
     return;
   }
 
   if (request.method === "GET" && url.pathname === "/api/scripts") {
-    jsonResponse(response, 200, { ok: true, data: await listActiveScripts() });
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listActiveScripts(Object.fromEntries(url.searchParams))
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/admin/stores") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listAdminStores(Object.fromEntries(url.searchParams))
+    });
     return;
   }
 
@@ -211,6 +229,16 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/admin/scripts") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listAdminScripts(Object.fromEntries(url.searchParams))
+    });
+    return;
+  }
+
   const adminScriptId = idMatch(url.pathname, /^\/api\/admin\/scripts\/(\d+)$/);
   if (request.method === "PATCH" && adminScriptId) {
     const user = await getAuthUser(request);
@@ -225,7 +253,10 @@ async function route(request, response) {
   if (request.method === "GET" && url.pathname === "/api/admin/catalog-requests") {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
-    jsonResponse(response, 200, { ok: true, data: await listCatalogRequests() });
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listCatalogRequests(Object.fromEntries(url.searchParams))
+    });
     return;
   }
 

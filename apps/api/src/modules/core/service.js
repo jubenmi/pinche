@@ -39,6 +39,32 @@ function jsonText(value) {
   return Array.isArray(value) ? JSON.stringify(value) : String(value);
 }
 
+function jsonColumn(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    try {
+      JSON.parse(value);
+    } catch (error) {
+      throw badRequest("Expected valid JSON value");
+    }
+    return value;
+  }
+
+  return JSON.stringify(value);
+}
+
+function likeKeyword(value) {
+  return `%${String(value).trim()}%`;
+}
+
+function limitValue(value, fallback = 50) {
+  const parsed = intValue(value, fallback);
+  return Math.min(Math.max(parsed, 1), 100);
+}
+
 function normalizeRequestType(value) {
   if (!["store", "script"].includes(value)) {
     throw badRequest("requestType must be store or script");
@@ -141,19 +167,89 @@ async function requireSignupOwner(connection, signupId, user) {
   return signup;
 }
 
-export async function listActiveStores() {
+export async function listActiveStores(filters = {}) {
   return withDatabaseConnection(async (connection) => {
+    const where = ["status = 'active'"];
+    const values = [];
+
+    if (filters.keyword) {
+      where.push("(name LIKE ? OR city LIKE ? OR district LIKE ?)");
+      const keyword = likeKeyword(filters.keyword);
+      values.push(keyword, keyword, keyword);
+    }
+    if (filters.city) {
+      where.push("city = ?");
+      values.push(String(filters.city));
+    }
+
     const [rows] = await connection.query(
-      "SELECT * FROM stores WHERE status = 'active' ORDER BY id DESC"
+      `SELECT * FROM stores WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
+      values
     );
     return rows;
   });
 }
 
-export async function listActiveScripts() {
+export async function listActiveScripts(filters = {}) {
   return withDatabaseConnection(async (connection) => {
+    const where = ["status = 'active'"];
+    const values = [];
+
+    if (filters.keyword) {
+      where.push("(name LIKE ? OR type_tags LIKE ?)");
+      const keyword = likeKeyword(filters.keyword);
+      values.push(keyword, keyword);
+    }
+
     const [rows] = await connection.query(
-      "SELECT * FROM scripts WHERE status = 'active' ORDER BY id DESC"
+      `SELECT * FROM scripts WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
+      values
+    );
+    return rows;
+  });
+}
+
+export async function listAdminStores(filters = {}) {
+  return withDatabaseConnection(async (connection) => {
+    const where = ["1 = 1"];
+    const values = [];
+
+    if (filters.status) {
+      where.push("status = ?");
+      values.push(String(filters.status));
+    }
+    if (filters.keyword) {
+      where.push("(name LIKE ? OR city LIKE ? OR district LIKE ? OR address LIKE ?)");
+      const keyword = likeKeyword(filters.keyword);
+      values.push(keyword, keyword, keyword, keyword);
+    }
+
+    const [rows] = await connection.query(
+      `SELECT * FROM stores WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
+      values
+    );
+    return rows;
+  });
+}
+
+export async function listAdminScripts(filters = {}) {
+  return withDatabaseConnection(async (connection) => {
+    const where = ["1 = 1"];
+    const values = [];
+
+    if (filters.status) {
+      where.push("status = ?");
+      values.push(String(filters.status));
+    }
+    if (filters.keyword) {
+      where.push("(name LIKE ? OR type_tags LIKE ?)");
+      const keyword = likeKeyword(filters.keyword);
+      values.push(keyword, keyword);
+    }
+
+    const [rows] = await connection.query(
+      `SELECT * FROM scripts WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
+      values
     );
     return rows;
   });
@@ -201,14 +297,18 @@ export async function createScript(user, body) {
     const [result] = await connection.query(
       `
         INSERT INTO scripts
-          (name, type_tags, player_count, summary_no_spoiler, status, claim_status, created_by_admin_user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+          (
+            name, type_tags, player_count, summary_no_spoiler,
+            default_seat_template_json, status, claim_status, created_by_admin_user_id
+          )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         requireValue(body, "name"),
         jsonText(body.typeTags),
         intValue(body.playerCount, 0),
         optionalText(body.summaryNoSpoiler),
+        jsonColumn(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
         body.status || "active",
         body.claimStatus || "unclaimed",
         user.user.id
@@ -222,6 +322,10 @@ export async function updateScript(id, body) {
   const normalized = {
     ...body,
     typeTags: body.typeTags === undefined ? undefined : jsonText(body.typeTags),
+    defaultSeatTemplateJson:
+      body.defaultSeatTemplate === undefined && body.defaultSeatTemplateJson === undefined
+        ? undefined
+        : jsonColumn(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
     playerCount:
       body.playerCount === undefined ? undefined : intValue(body.playerCount, 0)
   };
@@ -232,6 +336,7 @@ export async function updateScript(id, body) {
       ["typeTags", "type_tags"],
       ["playerCount", "player_count"],
       ["summaryNoSpoiler", "summary_no_spoiler"],
+      ["defaultSeatTemplateJson", "default_seat_template_json"],
       ["status", "status"],
       ["claimStatus", "claim_status"]
     ])
@@ -259,10 +364,28 @@ export async function createCatalogRequest(user, body) {
   });
 }
 
-export async function listCatalogRequests() {
+export async function listCatalogRequests(filters = {}) {
   return withDatabaseConnection(async (connection) => {
+    const where = ["1 = 1"];
+    const values = [];
+
+    if (filters.status) {
+      where.push("status = ?");
+      values.push(String(filters.status));
+    }
+    if (filters.requestType) {
+      where.push("request_type = ?");
+      values.push(normalizeRequestType(filters.requestType));
+    }
+    if (filters.keyword) {
+      where.push("(name LIKE ? OR city LIKE ? OR district LIKE ? OR description LIKE ?)");
+      const keyword = likeKeyword(filters.keyword);
+      values.push(keyword, keyword, keyword, keyword);
+    }
+
     const [rows] = await connection.query(
-      "SELECT * FROM catalog_requests ORDER BY id DESC"
+      `SELECT * FROM catalog_requests WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
+      values
     );
     return rows;
   });
@@ -307,14 +430,18 @@ export async function reviewCatalogRequest(admin, id, body) {
         const [result] = await connection.query(
           `
             INSERT INTO scripts
-              (name, type_tags, player_count, summary_no_spoiler, created_by_admin_user_id)
-            VALUES (?, ?, ?, ?, ?)
+              (
+                name, type_tags, player_count, summary_no_spoiler,
+                default_seat_template_json, created_by_admin_user_id
+              )
+            VALUES (?, ?, ?, ?, ?, ?)
           `,
           [
             request.name,
             jsonText(body.typeTags),
             intValue(body.playerCount, 0),
             request.description,
+            jsonColumn(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
             admin.user.id
           ]
         );

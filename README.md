@@ -7,6 +7,7 @@
 - D0：需求冻结，已完成。
 - D1：技术初始化，已完成。
 - D2：身份权限与数据模型，已完成。
+- D3：管理员资料录入，已完成。
 
 ## 工程结构
 
@@ -59,6 +60,7 @@ npm run build:mp-weixin
 npm run migrate
 npm run start:api
 npm run d2:smoke
+npm run d3:smoke
 npm audit --omit=dev
 docker compose config
 docker compose build api
@@ -98,6 +100,7 @@ curl -sS http://localhost:3018/health/db
 - [D0 Requirements Freeze](./specs/d0-requirements-freeze/README.md)
 - [D1 Technical Initialization](./specs/d1-technical-initialization/README.md)
 - [D2 Identity and Data Model](./specs/d2-identity-data-model/README.md)
+- [D3 Admin Catalog](./specs/d3-admin-catalog/README.md)
 
 ## 文档入口
 
