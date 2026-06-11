@@ -33,18 +33,30 @@
         <view class="info-row">原价：{{ formatCents(seat.base_price) }}</view>
         <view class="info-row">调整：{{ formatCents(seat.adjustment) }}</view>
         <view class="info-row strong">实付：{{ formatCents(seat.payable_price) }}</view>
+        <view class="seat-actions">
+          <button
+            v-if="canApplySeat(seat)"
+            class="mini-button"
+            @tap="goApply(seat)"
+          >
+            申请此位
+          </button>
+          <view v-else class="item-sub">当前座位不可申请</view>
+        </view>
       </view>
     </view>
   </view>
 </template>
 
 <script>
-import { dataOf, request } from "../../utils/api";
+import { dataOf, queryString, request } from "../../utils/api";
 
 export default {
   data() {
     return {
       sessionId: "",
+      shareCode: "",
+      source: "",
       session: {},
       loadStatusText: ""
     };
@@ -59,16 +71,25 @@ export default {
   },
   onLoad(options) {
     this.sessionId = options.id || "";
+    this.shareCode = options.shareCode || "";
+    this.source = options.source || "";
     this.loadSession();
+    this.trackShareView();
   },
   onShareAppMessage() {
     const id = this.sessionId || "d1-demo";
+    const shareCode = `s${id}-${Date.now()}`;
+    const query = queryString({
+      id,
+      shareCode,
+      source: "wechat_share"
+    });
     const title = this.session.script_name_snapshot
       ? `${this.session.script_name_snapshot} 发车`
       : "拼车发车";
     return {
       title,
-      path: `/pages/session/detail?id=${id}`
+      path: `/pages/session/detail${query}`
     };
   },
   methods: {
@@ -85,9 +106,43 @@ export default {
         this.loadStatusText = "车详情加载失败，请稍后重试。";
       }
     },
-    goApply() {
+    trackShareView() {
+      if (!this.sessionId || this.sessionId === "d1-demo") {
+        return;
+      }
+      if (!this.shareCode && !this.source) {
+        return;
+      }
+      request({
+        url: "/api/share-events/view",
+        method: "POST",
+        data: {
+          sessionId: Number(this.sessionId),
+          shareCode: this.shareCode,
+          source: this.source || "unknown",
+          path: `/pages/session/detail?id=${this.sessionId}`,
+          rawPayload: {
+            source: this.source,
+            shareCode: this.shareCode
+          }
+        }
+      }).catch(() => {});
+    },
+    goApply(seat) {
       const id = this.sessionId || "d1-demo";
-      uni.navigateTo({ url: `/pages/session/apply?id=${id}` });
+      const query = queryString({
+        id,
+        seatId: seat?.id || "",
+        shareCode: this.shareCode,
+        source: this.source
+      });
+      uni.navigateTo({ url: `/pages/session/apply${query}` });
+    },
+    canApplySeat(seat) {
+      return (
+        this.session.status === "recruiting" &&
+        ["open", "applied"].includes(seat.status)
+      );
     },
     statusLabel(status) {
       const labels = {
@@ -172,6 +227,24 @@ export default {
 .seat-status {
   flex-shrink: 0;
   color: #1f7a68;
+  font-size: 24rpx;
+}
+
+.seat-actions {
+  margin-top: 16rpx;
+}
+
+.mini-button {
+  height: 60rpx;
+  border-radius: 8rpx;
+  background: #1f7a68;
+  color: #ffffff;
+  font-size: 24rpx;
+  line-height: 60rpx;
+}
+
+.item-sub {
+  color: #94a3b8;
   font-size: 24rpx;
 }
 </style>

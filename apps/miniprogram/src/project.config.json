@@ -12,7 +12,7 @@
     "bigPackageSizeSupport": true
   },
   "compileType": "miniprogram",
-  "libVersion": "3.15.2",
+  "libVersion": "3.16.1",
   "appid": "wxe0421039631a9c2a",
   "projectname": "拼车发车",
   "condition": {

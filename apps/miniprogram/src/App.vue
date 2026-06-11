@@ -2,6 +2,7 @@
 export default {
   globalData: {
     apiBaseUrl: "http://localhost:3018",
+    signupResultTemplateId: "",
     token: "",
     user: null,
     roles: []
