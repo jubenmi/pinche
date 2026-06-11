@@ -1,6 +1,12 @@
 import crypto from "node:crypto";
 import https from "node:https";
 import { config } from "../../config/env.js";
+import { createDatabaseConnection } from "../../db/mysql.js";
+import { unauthorized } from "../../http/errors.js";
+import {
+  getUserWithRolesById,
+  upsertWechatUser
+} from "./users.js";
 
 function base64Url(input) {
   return Buffer.from(input)
@@ -14,6 +20,14 @@ function sign(payload) {
   return base64Url(
     crypto.createHmac("sha256", config.sessionSecret).update(payload).digest()
   );
+}
+
+function decodeBase64Url(value) {
+  const padded = value.padEnd(value.length + ((4 - (value.length % 4)) % 4), "=");
+  return Buffer.from(
+    padded.replaceAll("-", "+").replaceAll("_", "/"),
+    "base64"
+  ).toString("utf8");
 }
 
 function tokenFor(payload) {
@@ -94,14 +108,6 @@ async function exchangeCodeForOpenid(code) {
   };
 }
 
-function rolesForOpenid(openid) {
-  const roles = new Set(["player"]);
-  if (config.bootstrapAdminOpenids.includes(openid)) {
-    roles.add("system_admin");
-  }
-  return [...roles];
-}
-
 export async function loginWithWechatCode(code) {
   if (!code || typeof code !== "string") {
     const error = new Error("code is required");
@@ -110,17 +116,39 @@ export async function loginWithWechatCode(code) {
   }
 
   const identity = await exchangeCodeForOpenid(code);
-  const roles = rolesForOpenid(identity.openid);
+  const connection = await createDatabaseConnection();
+  let user;
+  let roles;
+
+  try {
+    await connection.beginTransaction();
+    const result = await upsertWechatUser(
+      connection,
+      identity,
+      config.bootstrapAdminOpenids
+    );
+    await connection.commit();
+    user = result.user;
+    roles = result.roles;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    await connection.end();
+  }
+
   const issuedAt = Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + 60 * 60 * 24 * 7;
   const token = tokenFor({
-    sub: identity.openid,
+    sub: user.id,
+    openid: identity.openid,
     roles,
     iat: issuedAt,
     exp: expiresAt
   });
 
   return {
+    user,
     openid: identity.openid,
     unionid: identity.unionid,
     roles,
@@ -128,4 +156,39 @@ export async function loginWithWechatCode(code) {
     expiresAt,
     mocked: identity.mocked
   };
+}
+
+export async function verifyBusinessToken(token) {
+  if (!token || typeof token !== "string") {
+    throw unauthorized();
+  }
+
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    throw unauthorized("Invalid token");
+  }
+
+  const [header, body, signature] = parts;
+  if (sign(`${header}.${body}`) !== signature) {
+    throw unauthorized("Invalid token signature");
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(decodeBase64Url(body));
+  } catch (error) {
+    throw unauthorized("Invalid token payload");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (!payload.exp || payload.exp < now) {
+    throw unauthorized("Token expired");
+  }
+
+  const result = await getUserWithRolesById(payload.sub);
+  if (!result) {
+    throw unauthorized("User no longer exists");
+  }
+
+  return result;
 }

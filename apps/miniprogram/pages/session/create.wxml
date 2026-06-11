@@ -1,9 +1,0 @@
-<view class="page">
-  <view class="section">
-    <view class="title">建车</view>
-    <view class="text">选择店家、剧本、时间和座位。</view>
-    <view class="actions">
-      <button class="button" bindtap="goDetail">预览车详情</button>
-    </view>
-  </view>
-</view>

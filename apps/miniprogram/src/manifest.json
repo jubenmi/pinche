@@ -1,0 +1,18 @@
+{
+  "name": "拼车发车",
+  "appid": "__UNI__PINCHE",
+  "description": "情感本拼车MVP",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "mp-weixin": {
+    "appid": "touristappid",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "postcss": true,
+      "minified": false
+    },
+    "usingComponents": true
+  }
+}

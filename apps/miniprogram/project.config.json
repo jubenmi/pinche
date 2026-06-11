@@ -2,7 +2,7 @@
   "appid": "touristappid",
   "compileType": "miniprogram",
   "libVersion": "latest",
-  "miniprogramRoot": "./",
+  "miniprogramRoot": "dist/dev/mp-weixin/",
   "projectname": "pinche",
   "setting": {
     "urlCheck": false,

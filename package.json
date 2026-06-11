@@ -5,13 +5,17 @@
   "type": "module",
   "workspaces": [
     "apps/api",
+    "apps/miniprogram",
     "packages/shared"
   ],
   "scripts": {
-    "check": "npm --workspace apps/api run check && node scripts/check-miniprogram.js",
+    "check": "npm --workspace apps/api run check && node --check scripts/d2-smoke-test.js && node scripts/check-miniprogram.js",
+    "dev:mp-weixin": "npm --workspace apps/miniprogram run dev:mp-weixin",
+    "build:mp-weixin": "npm --workspace apps/miniprogram run build:mp-weixin",
     "dev:api": "npm --workspace apps/api run dev",
     "start:api": "npm --workspace apps/api run start",
-    "migrate": "npm --workspace apps/api run migrate"
+    "migrate": "npm --workspace apps/api run migrate",
+    "d2:smoke": "node scripts/d2-smoke-test.js"
   },
   "engines": {
     "node": ">=20"

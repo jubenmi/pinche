@@ -1,0 +1,8 @@
+<template>
+  <view class="page">
+    <view class="section">
+      <view class="title">申请上车</view>
+      <view class="text">填写报名信息和联系方式。</view>
+    </view>
+  </view>
+</template>

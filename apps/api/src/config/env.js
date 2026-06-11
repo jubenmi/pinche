@@ -76,7 +76,7 @@ export const config = {
   appBaseUrl: process.env.APP_BASE_URL || "http://localhost:3018",
   mysql: {
     host: process.env.MYSQL_HOST || "127.0.0.1",
-    port: integerEnv("MYSQL_PORT", 3306),
+    port: integerEnv("MYSQL_PORT", 3307),
     database: process.env.MYSQL_DATABASE || "pinche",
     user: process.env.MYSQL_USER || "pinche",
     password: process.env.MYSQL_PASSWORD || "pinche_dev_password"

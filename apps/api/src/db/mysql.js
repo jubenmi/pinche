@@ -26,6 +26,29 @@ export async function createDatabaseConnection() {
   return mysql.createConnection(databaseConnectionOptions());
 }
 
+export async function withDatabaseConnection(work) {
+  const connection = await createDatabaseConnection();
+  try {
+    return await work(connection);
+  } finally {
+    await connection.end();
+  }
+}
+
+export async function withTransaction(work) {
+  return withDatabaseConnection(async (connection) => {
+    await connection.beginTransaction();
+    try {
+      const result = await work(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    }
+  });
+}
+
 export async function checkDatabaseConnection() {
   const connection = await createDatabaseConnection();
   try {

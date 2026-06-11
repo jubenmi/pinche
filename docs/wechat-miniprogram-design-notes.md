@@ -130,17 +130,18 @@ openid
 - 不上传剧本正文、剧透角色内容或现实陪伴承诺。
 - 发布前按官方运营规范重新检查一次，因为运营规范是动态文档。
 
-## 3. MVP页面与 `app.json`
+## 3. MVP页面与 UniApp `pages.json`
 
-MVP页面建议压到6个：
+MVP页面建议压到7个：
 
 ```text
 pages/index/index
+pages/mine/index
+pages/admin/catalog
 pages/session/create
 pages/session/detail
 pages/session/apply
 pages/session/manage
-pages/mine/index
 ```
 
 可选法律页面：
@@ -150,22 +151,59 @@ pages/legal/privacy
 pages/legal/agreement
 ```
 
-全局配置建议：
+UniApp `src/pages.json` 全局配置建议：
 
 ```json
 {
   "pages": [
-    "pages/index/index",
-    "pages/session/create",
-    "pages/session/detail",
-    "pages/session/apply",
-    "pages/session/manage",
-    "pages/mine/index"
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "拼车发车"
+      }
+    },
+    {
+      "path": "pages/mine/index",
+      "style": {
+        "navigationBarTitleText": "我的"
+      }
+    },
+    {
+      "path": "pages/admin/catalog",
+      "style": {
+        "navigationBarTitleText": "资料管理"
+      }
+    },
+    {
+      "path": "pages/session/create",
+      "style": {
+        "navigationBarTitleText": "建车"
+      }
+    },
+    {
+      "path": "pages/session/detail",
+      "style": {
+        "navigationBarTitleText": "车详情"
+      }
+    },
+    {
+      "path": "pages/session/apply",
+      "style": {
+        "navigationBarTitleText": "申请上车"
+      }
+    },
+    {
+      "path": "pages/session/manage",
+      "style": {
+        "navigationBarTitleText": "车头管理"
+      }
+    }
   ],
-  "window": {
+  "globalStyle": {
     "navigationBarTitleText": "拼车发车",
     "navigationBarBackgroundColor": "#ffffff",
-    "navigationBarTextStyle": "black"
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f7f7f7"
   },
   "networkTimeout": {
     "request": 10000

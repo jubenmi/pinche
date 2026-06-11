@@ -26,9 +26,9 @@ D1只做技术初始化，不做业务数据模型和业务流程实现。
 
 #### Acceptance Criteria
 
-1. WHEN D1完成 THEN `apps/miniprogram/app.json` SHALL 声明MVP页面路径。
-2. WHEN 页面路径被声明 THEN 每个页面 SHALL 至少包含 `.js`、`.json`、`.wxml`、`.wxss` 文件。
-3. WHEN 开发者打开微信开发者工具 THEN SHALL 可以选择 `apps/miniprogram` 作为小程序项目目录。
+1. WHEN D1完成 THEN `apps/miniprogram/src/pages.json` SHALL 声明MVP页面路径。
+2. WHEN 页面路径被声明 THEN 每个页面 SHALL 至少包含对应 `.vue` 文件。
+3. WHEN 开发者打开微信开发者工具 THEN SHALL 可以选择 UniApp 生成的 `apps/miniprogram/dist/dev/mp-weixin` 作为小程序项目目录。
 4. WHEN 小程序发起API请求 THEN SHALL 通过统一配置读取 API base URL。
 5. WHEN 页面展示占位内容 THEN SHALL 避免红包、返现、提现、现实陪伴承诺等违规表达。
 
@@ -86,7 +86,7 @@ D1只做技术初始化，不做业务数据模型和业务流程实现。
 #### Acceptance Criteria
 
 1. WHEN 执行 `npm run check` THEN SHALL 检查API JavaScript语法和小程序页面文件完整性。
-2. WHEN 执行小程序检查脚本 THEN SHALL 验证 `app.json` 中声明的页面文件都存在。
+2. WHEN 执行小程序检查脚本 THEN SHALL 验证 UniApp `src/pages.json` 中声明的页面文件都存在。
 3. WHEN 查看 `.env.example` THEN SHALL 包含Node、MySQL、Redis、微信登录、管理员初始化相关变量。
 4. WHEN 查看 `.editorconfig` THEN SHALL 定义基础缩进和换行规则。
 
