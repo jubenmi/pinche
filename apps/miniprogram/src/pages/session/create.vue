@@ -3,6 +3,7 @@
     <view class="section">
       <view class="title">建车</view>
       <view class="text">选择店家、剧本、时间和座位。</view>
+      <view v-if="catalogLoadStatus" class="notice">{{ catalogLoadStatus }}</view>
       <view class="actions">
         <button class="button" @tap="goDetail">预览车详情</button>
       </view>
@@ -83,10 +84,10 @@ const selectedStoreId = ref("");
 const selectedScriptId = ref("");
 const requestForm = ref(defaultRequestForm());
 const submitStatusText = ref("");
+const catalogLoadStatus = ref("");
 
 onMounted(() => {
-  loadStores();
-  loadScripts();
+  loadInitialCatalog();
 });
 
 function defaultRequestForm() {
@@ -119,17 +120,32 @@ function displayTags(value) {
 }
 
 async function loadStores() {
-  const response = await request({
-    url: "/api/stores" + queryString({ keyword: storeKeyword.value, limit: 20 })
-  });
-  stores.value = dataOf(response) || [];
+  try {
+    const response = await request({
+      url: "/api/stores" + queryString({ keyword: storeKeyword.value, limit: 20 })
+    });
+    stores.value = dataOf(response) || [];
+  } catch (error) {
+    catalogLoadStatus.value = "店家加载失败，请稍后重试。";
+    showMessage("店家加载失败");
+  }
 }
 
 async function loadScripts() {
-  const response = await request({
-    url: "/api/scripts" + queryString({ keyword: scriptKeyword.value, limit: 20 })
-  });
-  scripts.value = dataOf(response) || [];
+  try {
+    const response = await request({
+      url: "/api/scripts" + queryString({ keyword: scriptKeyword.value, limit: 20 })
+    });
+    scripts.value = dataOf(response) || [];
+  } catch (error) {
+    catalogLoadStatus.value = "剧本加载失败，请稍后重试。";
+    showMessage("剧本加载失败");
+  }
+}
+
+async function loadInitialCatalog() {
+  catalogLoadStatus.value = "";
+  await Promise.allSettled([loadStores(), loadScripts()]);
 }
 
 function selectStore(store) {
