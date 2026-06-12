@@ -103,9 +103,13 @@ export function request(options) {
         resolve(response);
       },
       fail(error) {
+        const errMsg = error?.errMsg || "request failed";
         reject({
           statusCode: 0,
-          errMsg: error?.errMsg || "request failed",
+          errMsg,
+          userMessage: errMsg.includes("timeout")
+            ? "请求超时，请确认本地后端已启动。"
+            : "网络请求失败，请稍后重试。",
           originalError: error
         });
       }

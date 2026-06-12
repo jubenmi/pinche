@@ -4,9 +4,29 @@
       <view class="title">{{ session.script_name_snapshot || "车详情" }}</view>
       <view class="text">{{ summaryText }}</view>
       <view v-if="loadStatusText" class="notice">{{ loadStatusText }}</view>
+      <view v-if="copyStatusText" class="notice">{{ copyStatusText }}</view>
       <view class="actions">
         <button class="button" @tap="goApply">申请上车</button>
         <button class="button secondary" open-type="share">分享</button>
+        <button class="button secondary" @tap="copyRecruitmentText">复制文案</button>
+      </view>
+    </view>
+
+    <view v-if="session.id" class="section">
+      <view class="section-title">招募统计</view>
+      <view class="stats-grid">
+        <view class="stat-item">
+          <view class="stat-value">{{ shareStats.view_count || 0 }}</view>
+          <view class="stat-label">浏览</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-value">{{ shareStats.signup_count || 0 }}</view>
+          <view class="stat-label">申请</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-value">{{ shareStats.convert_count || 0 }}</view>
+          <view class="stat-label">转化</view>
+        </view>
       </view>
     </view>
 
@@ -23,7 +43,12 @@
 
     <view v-if="session.seats && session.seats.length" class="section">
       <view class="section-title">座位</view>
-      <view v-for="seat in session.seats" :key="seat.id" class="seat-card">
+      <view
+        v-for="seat in session.seats"
+        :key="seat.id"
+        class="seat-card"
+        :class="{ focused: isFocusedSeat(seat) }"
+      >
         <view class="seat-header">
           <view class="seat-title">{{ seat.name }}</view>
           <view class="seat-status">{{ seatStatusLabel(seat.status) }}</view>
@@ -33,6 +58,9 @@
         <view class="info-row">原价：{{ formatCents(seat.base_price) }}</view>
         <view class="info-row">调整：{{ formatCents(seat.adjustment) }}</view>
         <view class="info-row strong">实付：{{ formatCents(seat.payable_price) }}</view>
+        <view v-if="seatShareStats(seat)" class="info-row">
+          统计：{{ seatShareStats(seat).view_count || 0 }}浏览 · {{ seatShareStats(seat).signup_count || 0 }}申请
+        </view>
         <view class="seat-actions">
           <button
             v-if="canApplySeat(seat)"
@@ -42,6 +70,13 @@
             申请此位
           </button>
           <view v-else class="item-sub">当前座位不可申请</view>
+          <button
+            class="mini-button ghost"
+            open-type="share"
+            :data-seat-id="seat.id"
+          >
+            分享此位
+          </button>
         </view>
       </view>
     </view>
@@ -57,8 +92,11 @@ export default {
       sessionId: "",
       shareCode: "",
       source: "",
+      focusedSeatId: "",
       session: {},
-      loadStatusText: ""
+      shareStats: {},
+      loadStatusText: "",
+      copyStatusText: ""
     };
   },
   computed: {
@@ -67,25 +105,35 @@ export default {
         return "座位、价格调整和申请状态。";
       }
       return `${this.session.store_name_snapshot} / ${this.session.start_at}`;
+    },
+    focusedSeat() {
+      return (this.session.seats || []).find(
+        (seat) => Number(seat.id) === Number(this.focusedSeatId)
+      );
     }
   },
   onLoad(options) {
     this.sessionId = options.id || "";
     this.shareCode = options.shareCode || "";
     this.source = options.source || "";
+    this.focusedSeatId = options.seatId || "";
     this.loadSession();
+    this.loadShareStats();
     this.trackShareView();
   },
-  onShareAppMessage() {
+  onShareAppMessage(options) {
     const id = this.sessionId || "d1-demo";
     const shareCode = `s${id}-${Date.now()}`;
+    const seatId = options?.target?.dataset?.seatId || "";
+    const seat = this.seatById(seatId);
     const query = queryString({
       id,
       shareCode,
+      seatId,
       source: "wechat_share"
     });
     const title = this.session.script_name_snapshot
-      ? `${this.session.script_name_snapshot} 发车`
+      ? `${this.session.script_name_snapshot}${seat ? ` ${seat.name}` : ""} 发车`
       : "拼车发车";
     return {
       title,
@@ -102,8 +150,22 @@ export default {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
         this.session = dataOf(response) || {};
         this.loadStatusText = "";
+        if (this.focusedSeatId && this.focusedSeat) {
+          this.loadStatusText = "已定位到分享指定座位。";
+        }
       } catch (error) {
         this.loadStatusText = "车详情加载失败，请稍后重试。";
+      }
+    },
+    async loadShareStats() {
+      if (!this.sessionId || this.sessionId === "d1-demo") {
+        return;
+      }
+      try {
+        const response = await request({ url: `/api/sessions/${this.sessionId}/share-stats` });
+        this.shareStats = dataOf(response) || {};
+      } catch (error) {
+        this.shareStats = {};
       }
     },
     trackShareView() {
@@ -121,22 +183,101 @@ export default {
           shareCode: this.shareCode,
           source: this.source || "unknown",
           path: `/pages/session/detail?id=${this.sessionId}`,
+          seatId: this.focusedSeatId || null,
           rawPayload: {
             source: this.source,
-            shareCode: this.shareCode
+            shareCode: this.shareCode,
+            seatId: this.focusedSeatId
           }
         }
-      }).catch(() => {});
+      })
+        .then(() => this.loadShareStats())
+        .catch(() => {});
     },
     goApply(seat) {
       const id = this.sessionId || "d1-demo";
+      const selectedSeat = seat || this.focusedSeat;
       const query = queryString({
         id,
-        seatId: seat?.id || "",
+        seatId: selectedSeat?.id || "",
         shareCode: this.shareCode,
         source: this.source
       });
       uni.navigateTo({ url: `/pages/session/apply${query}` });
+    },
+    copyRecruitmentText() {
+      const text = this.recruitmentText();
+      const riskWord = this.firstRiskWord(text);
+      if (riskWord) {
+        this.copyStatusText = `文案包含高风险词「${riskWord}」，请先改写。`;
+        return;
+      }
+
+      uni.setClipboardData({
+        data: text,
+        success: () => {
+          this.copyStatusText = "招募文案已复制。";
+        },
+        fail: () => {
+          this.copyStatusText = "复制失败，请稍后重试。";
+        }
+      });
+    },
+    recruitmentText() {
+      const seats = (this.session.seats || []).filter((seat) => this.canApplySeat(seat));
+      const seatLines = seats.length
+        ? seats.map((seat) => {
+            const role = seat.role_name ? `｜${seat.role_name}` : "";
+            return `- ${seat.name}${role}｜实付${this.formatCents(seat.payable_price)}`;
+          })
+        : ["- 当前暂无可申请座位"];
+      return [
+        `${this.session.script_name_snapshot || "拼车发车"}`,
+        `店家：${this.session.store_name_snapshot || "待确认"}`,
+        `时间：${this.session.start_at || "待确认"}`,
+        "座位：",
+        ...seatLines,
+        "可在小程序内选择座位并提交申请，车头审核后确认。"
+      ].join("\n");
+    },
+    firstRiskWord(text) {
+      const riskWords = [
+        "红包",
+        "返现",
+        "提现",
+        "现金奖励",
+        "返利",
+        "佣金",
+        "分享得",
+        "分享奖励",
+        "拉人奖励",
+        "拉新奖励",
+        "抽奖",
+        "优先锁座",
+        "现实陪伴",
+        "线下陪伴",
+        "联系方式",
+        "手机号",
+        "微信号",
+        "加微信"
+      ];
+      const keyword = riskWords.find((word) => text.includes(word));
+      if (keyword) {
+        return keyword;
+      }
+      if (/1[3-9]\d{9}/.test(text)) {
+        return "手机号";
+      }
+      return "";
+    },
+    seatById(seatId) {
+      return (this.session.seats || []).find((seat) => Number(seat.id) === Number(seatId));
+    },
+    isFocusedSeat(seat) {
+      return this.focusedSeatId && Number(seat.id) === Number(this.focusedSeatId);
+    },
+    seatShareStats(seat) {
+      return (this.shareStats.seats || []).find((item) => Number(item.id) === Number(seat.id));
     },
     canApplySeat(seat) {
       return (
@@ -203,12 +344,42 @@ export default {
   font-weight: 600;
 }
 
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12rpx;
+}
+
+.stat-item {
+  padding: 18rpx;
+  border: 1rpx solid #e6e8eb;
+  border-radius: 8rpx;
+  background: #fbfcfd;
+}
+
+.stat-value {
+  color: #1f2933;
+  font-size: 32rpx;
+  font-weight: 600;
+}
+
+.stat-label {
+  margin-top: 6rpx;
+  color: #64748b;
+  font-size: 24rpx;
+}
+
 .seat-card {
   margin-top: 18rpx;
   padding: 20rpx;
   border: 1rpx solid #e6e8eb;
   border-radius: 8rpx;
   background: #fbfcfd;
+}
+
+.seat-card.focused {
+  border-color: #1f7a68;
+  background: #f1fbf8;
 }
 
 .seat-header {
@@ -231,6 +402,9 @@ export default {
 }
 
 .seat-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12rpx;
   margin-top: 16rpx;
 }
 
@@ -241,6 +415,11 @@ export default {
   color: #ffffff;
   font-size: 24rpx;
   line-height: 60rpx;
+}
+
+.mini-button.ghost {
+  background: #eef2f7;
+  color: #334155;
 }
 
 .item-sub {

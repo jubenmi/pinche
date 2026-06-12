@@ -19,6 +19,7 @@ import {
   createStore,
   createSubscriptionRequest,
   getSession,
+  getSessionShareStats,
   listAdminScripts,
   listAdminStores,
   listActiveScripts,
@@ -318,6 +319,18 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await updateSession(user, sessionId, body)
+    });
+    return;
+  }
+
+  const shareStatsSessionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/share-stats$/
+  );
+  if (request.method === "GET" && shareStatsSessionId) {
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await getSessionShareStats(shareStatsSessionId)
     });
     return;
   }

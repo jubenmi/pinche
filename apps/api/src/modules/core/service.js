@@ -572,6 +572,87 @@ export async function getSession(id) {
   });
 }
 
+export async function getSessionShareStats(sessionId) {
+  return withDatabaseConnection(async (connection) => {
+    const session = await findById(connection, "sessions", sessionId);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+
+    const [eventRows] = await connection.query(
+      `
+        SELECT
+          SUM(CASE WHEN event_type = 'view' THEN 1 ELSE 0 END) AS view_count,
+          SUM(CASE WHEN event_type = 'convert' THEN 1 ELSE 0 END) AS convert_count,
+          COUNT(DISTINCT CASE WHEN converted_signup_id IS NOT NULL THEN converted_signup_id END) AS converted_signup_count
+        FROM share_events
+        WHERE session_id = ?
+      `,
+      [sessionId]
+    );
+    const [signupRows] = await connection.query(
+      `
+        SELECT
+          COUNT(*) AS signup_count,
+          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_signup_count,
+          SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_signup_count
+        FROM signups
+        WHERE session_id = ?
+      `,
+      [sessionId]
+    );
+    const [seatRows] = await connection.query(
+      `
+        SELECT
+          seat.id,
+          seat.name,
+          seat.status,
+          COALESCE(event_stats.view_count, 0) AS view_count,
+          COALESCE(event_stats.convert_count, 0) AS convert_count,
+          COALESCE(signup_stats.signup_count, 0) AS signup_count
+        FROM session_seats seat
+        LEFT JOIN (
+          SELECT
+            seat_id,
+            SUM(CASE WHEN event_type = 'view' THEN 1 ELSE 0 END) AS view_count,
+            SUM(CASE WHEN event_type = 'convert' THEN 1 ELSE 0 END) AS convert_count
+          FROM share_events
+          WHERE session_id = ?
+          GROUP BY seat_id
+        ) event_stats ON event_stats.seat_id = seat.id
+        LEFT JOIN (
+          SELECT seat_id, COUNT(*) AS signup_count
+          FROM signups
+          WHERE session_id = ?
+          GROUP BY seat_id
+        ) signup_stats ON signup_stats.seat_id = seat.id
+        WHERE seat.session_id = ?
+        ORDER BY seat.id
+      `,
+      [sessionId, sessionId, sessionId]
+    );
+
+    const eventStats = eventRows[0] || {};
+    const signupStats = signupRows[0] || {};
+
+    return {
+      session_id: Number(sessionId),
+      view_count: Number(eventStats.view_count || 0),
+      convert_count: Number(eventStats.convert_count || 0),
+      converted_signup_count: Number(eventStats.converted_signup_count || 0),
+      signup_count: Number(signupStats.signup_count || 0),
+      pending_signup_count: Number(signupStats.pending_signup_count || 0),
+      approved_signup_count: Number(signupStats.approved_signup_count || 0),
+      seats: seatRows.map((seat) => ({
+        ...seat,
+        view_count: Number(seat.view_count || 0),
+        convert_count: Number(seat.convert_count || 0),
+        signup_count: Number(seat.signup_count || 0)
+      }))
+    };
+  });
+}
+
 export async function listMySessions(user, filters = {}) {
   return withDatabaseConnection(async (connection) => {
     const where = ["session.organizer_user_id = ?"];

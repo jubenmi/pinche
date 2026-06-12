@@ -1,7 +1,7 @@
 <script>
 export default {
   globalData: {
-    apiBaseUrl: "http://localhost:3018",
+    apiBaseUrl: "http://127.0.0.1:3018",
     signupResultTemplateId: "",
     token: "",
     user: null,

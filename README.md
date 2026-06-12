@@ -11,6 +11,7 @@
 - D4：车头建车流程，已完成。
 - D5：分享报名流程，已完成。
 - D6：车头管理流程，已完成。
+- D7：分享与埋点流程，已完成。
 
 ## 工程结构
 
@@ -48,6 +49,12 @@ API默认端口：
 http://localhost:3018
 ```
 
+微信开发者工具内的小程序开发态请求地址固定为：
+
+```text
+http://127.0.0.1:3018
+```
+
 本地服务端口：
 
 - API：`3018`
@@ -67,6 +74,7 @@ npm run d3:smoke
 npm run d4:smoke
 npm run d5:smoke
 npm run d6:smoke
+npm run d7:smoke
 npm audit --omit=dev
 docker compose config
 docker compose build api
@@ -136,6 +144,7 @@ apps/miniprogram/dist/dev/mp-weixin
 ```
 
 用微信开发者工具打开上面的生成目录，进行预览、真机调试、上传体验版和提交审核。
+热重载期间微信工具可能短暂打印 `app.json doesn't exist`；等待 UniApp 重新生成完成并出现 `webview page ready` 后再判断结果。
 
 发布构建：
 
