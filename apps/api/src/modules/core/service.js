@@ -572,6 +572,37 @@ export async function getSession(id) {
   });
 }
 
+export async function listMySessions(user, filters = {}) {
+  return withDatabaseConnection(async (connection) => {
+    const where = ["session.organizer_user_id = ?"];
+    const values = [user.user.id];
+
+    if (filters.status) {
+      where.push("session.status = ?");
+      values.push(String(filters.status));
+    }
+
+    const [rows] = await connection.query(
+      `
+        SELECT
+          session.*,
+          COUNT(DISTINCT seat.id) AS seat_count,
+          COUNT(DISTINCT signup.id) AS signup_count,
+          SUM(CASE WHEN signup.status = 'pending' THEN 1 ELSE 0 END) AS pending_signup_count
+        FROM sessions session
+        LEFT JOIN session_seats seat ON seat.session_id = session.id
+        LEFT JOIN signups signup ON signup.session_id = session.id
+        WHERE ${where.join(" AND ")}
+        GROUP BY session.id
+        ORDER BY session.start_at DESC, session.id DESC
+        LIMIT ${limitValue(filters.limit)}
+      `,
+      values
+    );
+    return rows;
+  });
+}
+
 export async function updateSession(user, id, body) {
   return withDatabaseConnection(async (connection) => {
     await requireSessionOwner(connection, id, user);
@@ -790,11 +821,31 @@ export async function approveSignup(user, signupId) {
 }
 
 export async function rejectSignup(user, signupId) {
-  return withDatabaseConnection(async (connection) => {
-    await requireSignupOwner(connection, signupId, user);
+  return withTransaction(async (connection) => {
+    const signup = await requireSignupOwner(connection, signupId, user);
     await connection.query("UPDATE signups SET status = 'rejected' WHERE id = ?", [
       signupId
     ]);
+
+    const [activeRows] = await connection.query(
+      `
+        SELECT COUNT(*) AS active_count
+        FROM signups
+        WHERE seat_id = ? AND status IN ('pending', 'approved')
+      `,
+      [signup.seat_id]
+    );
+    if (Number(activeRows[0]?.active_count || 0) === 0) {
+      await connection.query(
+        `
+          UPDATE session_seats
+          SET status = 'open'
+          WHERE id = ? AND status = 'applied'
+        `,
+        [signup.seat_id]
+      );
+    }
+
     return findById(connection, "signups", signupId);
   });
 }

@@ -25,6 +25,7 @@ import {
   listActiveStores,
   listCatalogRequests,
   listMySignups,
+  listMySessions,
   listSessionSignups,
   lockSeat,
   publishSession,
@@ -367,6 +368,15 @@ async function route(request, response) {
   if (request.method === "GET" && url.pathname === "/api/users/me/signups") {
     const user = await getAuthUser(request);
     jsonResponse(response, 200, { ok: true, data: await listMySignups(user) });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/users/me/sessions") {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listMySessions(user, Object.fromEntries(url.searchParams))
+    });
     return;
   }
 

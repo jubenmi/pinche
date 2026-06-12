@@ -9,6 +9,8 @@
 - D2：身份权限与数据模型，已完成。
 - D3：管理员资料录入，已完成。
 - D4：车头建车流程，已完成。
+- D5：分享报名流程，已完成。
+- D6：车头管理流程，已完成。
 
 ## 工程结构
 
@@ -62,6 +64,9 @@ npm run migrate
 npm run start:api
 npm run d2:smoke
 npm run d3:smoke
+npm run d4:smoke
+npm run d5:smoke
+npm run d6:smoke
 npm audit --omit=dev
 docker compose config
 docker compose build api

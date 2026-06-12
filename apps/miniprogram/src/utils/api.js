@@ -93,6 +93,7 @@ export function request(options) {
       method: options.method || "GET",
       data: options.data || {},
       header: headers,
+      timeout: options.timeout || 8000,
       success(response) {
         const responseData = response.data || {};
         if (response.statusCode >= 400 || responseData.ok === false) {
@@ -101,7 +102,13 @@ export function request(options) {
         }
         resolve(response);
       },
-      fail: reject
+      fail(error) {
+        reject({
+          statusCode: 0,
+          errMsg: error?.errMsg || "request failed",
+          originalError: error
+        });
+      }
     });
   });
 }
