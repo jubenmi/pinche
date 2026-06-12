@@ -21,7 +21,8 @@
     "d5:smoke": "node scripts/d5-smoke-test.js",
     "d6:smoke": "node scripts/d6-smoke-test.js",
     "d7:smoke": "node scripts/d7-smoke-test.js",
-    "d8:qa": "node scripts/d8-qa-check.js"
+    "d8:qa": "node scripts/d8-qa-check.js",
+    "d9:release-check": "node scripts/d9-release-check.js"
   },
   "engines": {
     "node": ">=20"

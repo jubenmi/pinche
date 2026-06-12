@@ -55,8 +55,9 @@ async function assertStaticChecks() {
   const apiSource = await readSource("apps/api/src/modules/core/service.js");
 
   assert(
-    appSource.includes('apiBaseUrl: "http://127.0.0.1:3018"'),
-    "miniprogram dev API base should use 127.0.0.1"
+    appSource.includes("VITE_API_BASE_URL") &&
+      appSource.includes('"http://127.0.0.1:3018"'),
+    "miniprogram API base should support release env and default to 127.0.0.1"
   );
   assert(
     !detailSource.includes("session.note"),

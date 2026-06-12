@@ -77,6 +77,7 @@ npm run d5:smoke
 npm run d6:smoke
 npm run d7:smoke
 npm run d8:qa
+npm run d9:release-check
 npm audit --omit=dev
 docker compose config
 docker compose build api
