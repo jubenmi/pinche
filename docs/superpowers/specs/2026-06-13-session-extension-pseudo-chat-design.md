@@ -13,12 +13,16 @@
 - 小程序管理页的置顶信息编辑。
 - 取消车、踢出座位时写入系统消息。
 
-这些逻辑现在分散在 `core/service.js`、`server.js`、`detail.vue` 和 `manage.vue`。本次目标是把伪聊天提取成项目内第一个 session extension，让它作为“小程序扩展系统”的样板存在。
+这些逻辑现在分散在 `core/service.js`、`server.js`、`detail.vue` 和 `manage.vue`。本次目标是把伪聊天提取成项目内第一个 session extension，让它作为“小程序扩展系统”的样板存在。扩展源码放入 Git submodule：
+
+```text
+packages/talk -> git@github.com:jubenmi/talk.git
+```
 
 ## 目标
 
 1. 建立轻量 session extension 机制，支持宿主按扩展注册表挂载详情页和管理页能力。
-2. 将伪聊天拆成独立扩展模块，保留现有业务行为和 API 语义。
+2. 将伪聊天拆成 `packages/talk` Git submodule 中的独立扩展模块，保留现有业务行为和 API 语义。
 3. 保持当前数据库结构和 D10 聊天隔离规则，不引入新数据模型风险。
 4. 让后续扩展，例如公告板、投票、任务卡，可以沿用同一注册和挂载方式。
 5. 降低 `detail.vue`、`manage.vue`、`core/service.js` 的聊天耦合。
@@ -28,6 +32,7 @@
 - 不做微信小程序原生插件。
 - 不做远程动态加载扩展。
 - 不做完整插件权限沙箱、生命周期市场或热插拔平台。
+- 不把 `jubenmi/talk` 做成独立后端服务；它仍以包/源码模块形式被当前项目加载。
 - 不改成 WebSocket，继续保留当前轮询策略。
 - 不新增图片、语音、撤回、已读回执等聊天功能。
 - 不重做 D10 数据库语义。
@@ -36,7 +41,7 @@
 
 采用轻量项目内扩展注册表。
 
-后端将聊天房间、消息、置顶和系统消息移动到 `session-pseudo-chat` 扩展模块。API 路由仍保持：
+后端将聊天房间、消息、置顶和系统消息移动到 `packages/talk` 提供的 `session-pseudo-chat` 扩展模块。API 路由仍保持：
 
 ```text
 GET /api/sessions/:id/chat
@@ -45,22 +50,37 @@ POST /api/sessions/:id/messages
 PATCH /api/sessions/:id/chat/pin
 ```
 
-前端将聊天入口、弹窗、轮询和管理页置顶编辑移动到扩展组件。宿主页面只负责传入 `session`、`sessionId` 和用户上下文，并渲染扩展挂载点。
+前端将聊天入口、弹窗、轮询和管理页置顶编辑移动到 `packages/talk` 的扩展组件。宿主页面只负责传入 `session`、`sessionId` 和用户上下文，并渲染扩展挂载点。
 
 这个方案比只抽组件更有扩展价值，也比完整插件运行时更适合当前 MVP。
 
 ## 后端设计
 
+### Submodule 位置
+
+主仓库新增 Git submodule：
+
+```text
+packages/talk
+```
+
+`.gitmodules` 指向：
+
+```text
+git@github.com:jubenmi/talk.git
+```
+
+`packages/talk` 是 talk 扩展源码的来源。主仓库内保留薄适配层，用来注册扩展、稳定导入路径，并隔离未来 submodule 内部结构变化。
+
 ### 文件结构
 
-建议新增：
+主仓库建议新增：
 
 ```text
 apps/api/src/modules/extensions/registry.js
 apps/api/src/modules/extensions/session-pseudo-chat/index.js
-apps/api/src/modules/extensions/session-pseudo-chat/service.js
-apps/api/src/modules/extensions/session-pseudo-chat/routes.js
 apps/api/src/modules/core/session-access.js
+packages/talk
 ```
 
 `session-access.js` 放宿主和扩展都会用到的最小核心能力：
@@ -70,7 +90,35 @@ apps/api/src/modules/core/session-access.js
 - `requireSessionParticipant(connection, sessionId, user)`
 - `findSessionById(connection, sessionId)`
 
-`session-pseudo-chat/service.js` 放聊天私有能力：
+`packages/talk` 建议提供：
+
+```text
+packages/talk/package.json
+packages/talk/api/index.js
+packages/talk/api/service.js
+packages/talk/api/routes.js
+packages/talk/miniprogram/index.js
+packages/talk/miniprogram/api.js
+packages/talk/miniprogram/ChatEntry.vue
+packages/talk/miniprogram/ManagePinnedMessage.vue
+```
+
+`packages/talk/package.json` 建议使用稳定包名，例如：
+
+```json
+{
+  "name": "@jubenmi/talk",
+  "type": "module",
+  "exports": {
+    "./api": "./api/index.js",
+    "./miniprogram": "./miniprogram/index.js"
+  }
+}
+```
+
+主仓库根 `package.json` 的 workspaces 后续应包含 `packages/talk`，让 API 和小程序都通过 `@jubenmi/talk` 的导出入口引用扩展。若 submodule 初始还没有 package metadata，实施时先在 submodule 中补齐最小 `package.json`。
+
+`packages/talk/api/service.js` 放聊天私有能力：
 
 - `ensureSessionChatRoom(connection, sessionId)`
 - `getSessionChat(user, sessionId)`
@@ -80,7 +128,9 @@ apps/api/src/modules/core/session-access.js
 - `createSystemSessionMessage(connection, sessionId, senderUserId, content)`
 - `ensureDefaultPinnedMessage(connection, session, pinnedMessageText)`
 
-`session-pseudo-chat/routes.js` 负责把聊天 API 挂到服务器路由，不让 `server.js` 直接 import 一堆聊天函数。
+`packages/talk/api/routes.js` 负责把聊天 API 挂到服务器路由，不让 `server.js` 直接 import 一堆聊天函数。
+
+`apps/api/src/modules/extensions/session-pseudo-chat/index.js` 只负责从 `@jubenmi/talk/api` 导入并导出扩展定义。它是主仓库稳定入口，不承载聊天业务实现。
 
 ### 注册表
 
@@ -147,20 +197,27 @@ for (const extension of sessionExtensions) {
 
 ### 文件结构
 
-建议新增：
+主仓库建议新增：
 
 ```text
 apps/miniprogram/src/extensions/sessionExtensions.js
-apps/miniprogram/src/extensions/session-pseudo-chat/api.js
-apps/miniprogram/src/extensions/session-pseudo-chat/ChatEntry.vue
-apps/miniprogram/src/extensions/session-pseudo-chat/ManagePinnedMessage.vue
+apps/miniprogram/src/extensions/session-pseudo-chat/index.js
 ```
+
+聊天前端实现放在 submodule：
+
+```text
+packages/talk/miniprogram/api.js
+packages/talk/miniprogram/ChatEntry.vue
+packages/talk/miniprogram/ManagePinnedMessage.vue
+```
+
+`apps/miniprogram/src/extensions/session-pseudo-chat/index.js` 只做薄适配，从 `@jubenmi/talk/miniprogram` 导出 talk submodule 的组件和元信息。
 
 `sessionExtensions.js` 暴露详情页和管理页扩展清单：
 
 ```js
-import ChatEntry from "./session-pseudo-chat/ChatEntry.vue";
-import ManagePinnedMessage from "./session-pseudo-chat/ManagePinnedMessage.vue";
+import { ChatEntry, ManagePinnedMessage } from "./session-pseudo-chat/index.js";
 
 export const sessionDetailExtensions = [
   {
@@ -265,10 +322,11 @@ export const sessionManageExtensions = [
 
 更新 `scripts/d10-pseudo-chat-check.js`：
 
+- 确认 `.gitmodules` 包含 `packages/talk` 和 `git@github.com:jubenmi/talk.git`。
 - 确认聊天服务不再留在 `core/service.js` 的大段内联实现中。
 - 确认 `detail.vue` 不再包含聊天弹窗 DOM 和轮询实现。
 - 确认 `manage.vue` 不再直接调用 `/chat/pin`。
-- 确认存在 `session-pseudo-chat` 后端和前端扩展文件。
+- 确认存在 `packages/talk/api`、`packages/talk/miniprogram`、主仓库后端适配层和前端适配层。
 - 继续禁止前端读取 `pinned_message_text`。
 
 ### JS 检查
@@ -299,20 +357,26 @@ export const sessionManageExtensions = [
 
 API 路径保持兼容，前端扩展内部继续调用原路径。这样抽取后不会影响现有 smoke 脚本和外部调用者。
 
+主仓库通过 Git submodule 固定 `packages/talk` 的提交。后续修改 talk 扩展时，应在 `packages/talk` 内提交并推送，再在主仓库更新 submodule 指针。
+
 ## 实施顺序
 
-1. 建立后端扩展目录和 `session-access.js`，移动聊天相关 helper。
-2. 接入后端扩展路由，保持 API 返回 shape 不变。
-3. 将创建车局、踢人、取消车的聊天副作用改为扩展 hooks。
-4. 建立前端扩展注册表。
-5. 从 `detail.vue` 抽出 `ChatEntry.vue`。
-6. 从 `manage.vue` 抽出 `ManagePinnedMessage.vue`。
-7. 更新静态检查和 smoke 检查。
-8. 运行 `npm run check`，必要时运行 `npm run d10:smoke`。
+1. 添加 Git submodule：`packages/talk -> git@github.com:jubenmi/talk.git`。
+2. 在 `packages/talk` 建立最小 package metadata 和 `api`、`miniprogram` 目录。
+3. 建立后端扩展目录和 `session-access.js`，移动聊天相关 helper 到 `packages/talk/api`。
+4. 接入后端扩展路由，保持 API 返回 shape 不变。
+5. 将创建车局、踢人、取消车的聊天副作用改为扩展 hooks。
+6. 建立前端扩展注册表和主仓库薄适配层。
+7. 从 `detail.vue` 抽出 `ChatEntry.vue` 到 `packages/talk/miniprogram`。
+8. 从 `manage.vue` 抽出 `ManagePinnedMessage.vue` 到 `packages/talk/miniprogram`。
+9. 更新静态检查和 smoke 检查。
+10. 运行 `npm run check`，必要时运行 `npm run d10:smoke`。
 
 ## 验收标准
 
 - 聊天表现与抽取前一致。
+- 主仓库包含 `.gitmodules`，`packages/talk` 指向 `git@github.com:jubenmi/talk.git`。
+- `packages/talk` 暴露 `@jubenmi/talk/api` 和 `@jubenmi/talk/miniprogram`。
 - `detail.vue` 和 `manage.vue` 只通过扩展挂载使用伪聊天。
 - `core/service.js` 不再直接承载聊天房间和消息实现。
 - 所有聊天 API 路径和返回结构保持兼容。
