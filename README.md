@@ -12,6 +12,7 @@
 - D5：分享报名流程，已完成。
 - D6：车头管理流程，已完成。
 - D7：分享与埋点流程，已完成。
+- D8：QA与内测修复，已完成。
 
 ## 工程结构
 
@@ -75,6 +76,7 @@ npm run d4:smoke
 npm run d5:smoke
 npm run d6:smoke
 npm run d7:smoke
+npm run d8:qa
 npm audit --omit=dev
 docker compose config
 docker compose build api

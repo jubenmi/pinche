@@ -3,9 +3,9 @@ const suffix = Date.now();
 
 const seatTemplate = [
   {
-    name: "恋陪位",
+    name: "情感沉浸位",
     seatType: "love_companion",
-    roleName: "爱D对位",
+    roleName: "主线互动位",
     basePrice: 58000,
     adjustment: 20000
   },
@@ -105,7 +105,7 @@ async function createScripts(adminToken, marker) {
       "/api/admin/scripts",
       {
         name: `${marker}剧本${index}`,
-        typeTags: ["情感", index % 2 === 0 ? "恋陪" : "都市"],
+        typeTags: ["情感", index % 2 === 0 ? "沉浸" : "都市"],
         playerCount: index % 5 === 0 ? 5 : 6,
         summaryNoSpoiler: `D3自动化无剧透简介${index}`,
         defaultSeatTemplate: seatTemplate,
@@ -255,7 +255,7 @@ async function main() {
     {
       status: "approved",
       reviewNote: "通过",
-      typeTags: ["情感", "恋陪"],
+      typeTags: ["情感", "沉浸"],
       playerCount: 6,
       defaultSeatTemplate: seatTemplate
     },

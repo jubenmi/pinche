@@ -9,3 +9,6 @@ D8目标是系统化跑完主链路、权限、异常、合规和真机兼容，
 - [Requirements](./requirements.md)
 - [Design](./design.md)
 - [Tasks](./tasks.md)
+- [QA Checklist](./qa-checklist.md)
+- [Issues And Fixes](./issues.md)
+- [Submission Notes Draft](./submission-notes-draft.md)

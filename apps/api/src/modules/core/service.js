@@ -87,6 +87,109 @@ function assertPayable(basePrice, adjustment) {
   return payablePrice;
 }
 
+const PUBLIC_TEXT_REPLACEMENTS = [
+  ["恋陪位", "情感沉浸位"],
+  ["恋陪", "沉浸"],
+  ["爱D", "指定DM/NPC"],
+  ["主陪位", "主线互动位"]
+];
+const PUBLIC_TEXT_RISK_WORDS = [
+  "红包",
+  "返现",
+  "提现",
+  "现金奖励",
+  "分享奖励",
+  "拉人奖励",
+  "拉新奖励",
+  "抽奖",
+  "优先锁座",
+  "现实陪伴",
+  "线下陪伴",
+  "联系方式",
+  "手机号",
+  "微信号",
+  "加微信",
+  "牵手",
+  "小黑屋",
+  "恋陪",
+  "爱D"
+];
+
+function publicText(value) {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  return PUBLIC_TEXT_REPLACEMENTS.reduce(
+    (text, [from, to]) => text.replaceAll(from, to),
+    String(value)
+  );
+}
+
+function sanitizePublicValue(item) {
+  if (typeof item === "string") {
+    return publicText(item);
+  }
+  if (Array.isArray(item)) {
+    return item.map(sanitizePublicValue);
+  }
+  if (item && typeof item === "object") {
+    return Object.fromEntries(
+      Object.entries(item).map(([key, entryValue]) => [
+        key,
+        sanitizePublicValue(entryValue)
+      ])
+    );
+  }
+  return item;
+}
+
+function publicJsonText(value) {
+  if (value === undefined || value === null || value === "") {
+    return value;
+  }
+  if (Array.isArray(value) || typeof value === "object") {
+    return JSON.stringify(sanitizePublicValue(value));
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return JSON.stringify(sanitizePublicValue(parsed));
+  } catch (error) {
+    return publicText(value);
+  }
+}
+
+function publicScriptRow(row) {
+  return {
+    ...row,
+    type_tags: publicJsonText(row.type_tags),
+    summary_no_spoiler: publicText(row.summary_no_spoiler),
+    default_seat_template_json: publicJsonText(row.default_seat_template_json)
+  };
+}
+
+function publicTextRiskWord(value) {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  const text = String(value);
+  const keyword = PUBLIC_TEXT_RISK_WORDS.find((word) => text.includes(word));
+  if (keyword) {
+    return keyword;
+  }
+  if (/(^|[^\d])1[3-9]\d{9}($|[^\d])/.test(text)) {
+    return "手机号";
+  }
+  return "";
+}
+
+function assertPublicTextSafe(label, value) {
+  const riskWord = publicTextRiskWord(value);
+  if (riskWord) {
+    throw badRequest(`${label} contains public risk text: ${riskWord}`);
+  }
+}
+
 async function findById(connection, table, id) {
   const [rows] = await connection.query(`SELECT * FROM ${table} WHERE id = ?`, [id]);
   return rows[0] || null;
@@ -205,7 +308,7 @@ export async function listActiveScripts(filters = {}) {
       `SELECT * FROM scripts WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return rows;
+    return rows.map(publicScriptRow);
   });
 }
 
@@ -515,6 +618,9 @@ export async function createEntityClaim(user, body) {
 
 export async function createSession(user, body) {
   return withTransaction(async (connection) => {
+    assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
+    assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
+
     const store = await findById(connection, "stores", requireValue(body, "storeId"));
     const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
     if (!store || store.status !== "active") {
@@ -568,7 +674,8 @@ export async function getSession(id) {
       "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id",
       [id]
     );
-    return { ...session, seats };
+    const { note, ...publicSession } = session;
+    return { ...publicSession, seats };
   });
 }
 
@@ -687,6 +794,8 @@ export async function listMySessions(user, filters = {}) {
 export async function updateSession(user, id, body) {
   return withDatabaseConnection(async (connection) => {
     await requireSessionOwner(connection, id, user);
+    assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
+    assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
     return updateAllowed(connection, "sessions", id, body, [
       ["startAt", "start_at"],
       ["dmUserId", "dm_user_id"],
@@ -704,6 +813,8 @@ export async function updateSession(user, id, body) {
 export async function createSeat(user, sessionId, body) {
   return withDatabaseConnection(async (connection) => {
     await requireSessionOwner(connection, sessionId, user);
+    assertPublicTextSafe("seatName", body.name);
+    assertPublicTextSafe("roleName", body.roleName);
     const basePrice = intValue(body.basePrice, 0);
     const adjustment = intValue(body.adjustment, 0);
     const payablePrice = assertPayable(basePrice, adjustment);
@@ -731,6 +842,8 @@ export async function createSeat(user, sessionId, body) {
 export async function updateSeat(user, seatId, body) {
   return withDatabaseConnection(async (connection) => {
     const current = await requireSeatOwner(connection, seatId, user);
+    assertPublicTextSafe("seatName", body.name);
+    assertPublicTextSafe("roleName", body.roleName);
     const basePrice =
       body.basePrice === undefined ? current.base_price : intValue(body.basePrice, 0);
     const adjustment =

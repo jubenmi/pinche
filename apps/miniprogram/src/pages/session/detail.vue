@@ -38,7 +38,6 @@
       <view class="info-row">指定NPC：{{ session.npc_name_snapshot || "未指定" }}</view>
       <view class="info-row">押金：{{ formatCents(session.deposit_amount || 0) }}</view>
       <view class="info-row">状态：{{ statusLabel(session.status) }}</view>
-      <view v-if="session.note" class="info-row">备注：{{ session.note }}</view>
     </view>
 
     <view v-if="session.seats && session.seats.length" class="section">
@@ -265,7 +264,7 @@ export default {
       if (keyword) {
         return keyword;
       }
-      if (/1[3-9]\d{9}/.test(text)) {
+      if (/(^|[^\d])1[3-9]\d{9}($|[^\d])/.test(text)) {
         return "手机号";
       }
       return "";

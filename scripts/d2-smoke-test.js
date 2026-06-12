@@ -78,7 +78,7 @@ async function main() {
     "/api/admin/scripts",
     {
       name: `D2测试本-${suffix}`,
-      typeTags: ["情感", "恋陪"],
+      typeTags: ["情感", "沉浸"],
       playerCount: 6,
       summaryNoSpoiler: "无剧透简介"
     },
@@ -144,7 +144,7 @@ async function main() {
     "POST",
     `/api/sessions/${session.data.id}/seats`,
     {
-      name: "恋陪位",
+      name: "情感沉浸位",
       seatType: "love_companion",
       basePrice: 50000,
       adjustment: 10000

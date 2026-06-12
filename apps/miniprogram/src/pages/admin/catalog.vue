@@ -223,9 +223,9 @@ const requestStatusFilters = [
 const defaultSeatTemplate = JSON.stringify(
   [
     {
-      name: "恋陪位",
+      name: "情感沉浸位",
       seatType: "love_companion",
-      roleName: "爱D对位",
+      roleName: "主线互动位",
       basePrice: 58000,
       adjustment: 20000
     },
@@ -304,7 +304,7 @@ function defaultStoreForm() {
 function defaultScriptForm() {
   return {
     name: "",
-    typeTagsText: "情感,恋陪",
+    typeTagsText: "情感,沉浸",
     playerCount: "6",
     summaryNoSpoiler: "",
     defaultSeatTemplateText: defaultSeatTemplate,

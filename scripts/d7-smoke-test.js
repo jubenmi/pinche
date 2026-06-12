@@ -117,7 +117,7 @@ async function createPublishedSession(admin, owner) {
     "/api/admin/scripts",
     {
       name: `D7测试本-${suffix}`,
-      typeTags: ["情感", "恋陪"],
+      typeTags: ["情感", "沉浸"],
       playerCount: 5,
       summaryNoSpoiler: "D7 smoke script",
       defaultSeatTemplate: seatTemplate

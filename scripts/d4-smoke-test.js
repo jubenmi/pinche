@@ -108,7 +108,7 @@ async function main() {
     "/api/admin/scripts",
     {
       name: `D4测试本-${suffix}`,
-      typeTags: ["情感", "恋陪"],
+      typeTags: ["情感", "沉浸"],
       playerCount: 5,
       summaryNoSpoiler: "D4 smoke script",
       defaultSeatTemplate: balancedTemplate

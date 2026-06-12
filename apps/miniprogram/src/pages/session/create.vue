@@ -49,7 +49,7 @@
         <input v-model="sessionForm.npcNameSnapshot" class="field half" placeholder="指定NPC，可不填" />
       </view>
       <input v-model="sessionForm.depositAmountYuan" class="field" placeholder="线下锁位押金，元，可填0" />
-      <textarea v-model="sessionForm.note" class="textarea" placeholder="备注，不填写联系方式、红包或现实陪伴承诺" />
+      <textarea v-model="sessionForm.note" class="textarea" placeholder="备注，不填写联系方式或高风险承诺" />
     </view>
 
     <view class="section">
@@ -210,6 +210,10 @@ const validationMessages = computed(() => {
   if (hasNegativePayable.value) {
     messages.push("座位实付价不能小于0。");
   }
+  const risk = findPublicTextRisk();
+  if (risk) {
+    messages.push(`公开展示字段包含高风险词「${risk.word}」，请改写${risk.label}。`);
+  }
   return messages;
 });
 const canPublish = computed(() => validationMessages.value.length === 0 && !publishBusy.value);
@@ -271,6 +275,61 @@ function parseJson(value, fallback) {
   } catch (error) {
     return fallback;
   }
+}
+
+function firstRiskWord(value) {
+  if (!value) {
+    return "";
+  }
+  const riskWords = [
+    "红包",
+    "返现",
+    "提现",
+    "现金奖励",
+    "分享奖励",
+    "拉人奖励",
+    "拉新奖励",
+    "抽奖",
+    "优先锁座",
+    "现实陪伴",
+    "线下陪伴",
+    "联系方式",
+    "手机号",
+    "微信号",
+    "加微信",
+    "牵手",
+    "小黑屋",
+    "恋陪",
+    "爱D"
+  ];
+  const text = String(value);
+  const keyword = riskWords.find((word) => text.includes(word));
+  if (keyword) {
+    return keyword;
+  }
+  if (/(^|[^\d])1[3-9]\d{9}($|[^\d])/.test(text)) {
+    return "手机号";
+  }
+  return "";
+}
+
+function findPublicTextRisk() {
+  const fields = [
+    { label: "指定DM", value: sessionForm.value.dmNameSnapshot },
+    { label: "指定NPC", value: sessionForm.value.npcNameSnapshot }
+  ];
+  seats.value.forEach((seat, index) => {
+    fields.push({ label: `第${index + 1}个座位名`, value: seat.name });
+    fields.push({ label: `第${index + 1}个角色说明`, value: seat.roleName });
+  });
+
+  for (const field of fields) {
+    const word = firstRiskWord(field.value);
+    if (word) {
+      return { ...field, word };
+    }
+  }
+  return null;
 }
 
 function normalizeSeat(item = {}, index = 0) {
