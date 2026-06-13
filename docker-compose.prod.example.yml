@@ -1,6 +1,7 @@
 services:
   api:
     image: hkccr.ccs.tencentyun.com/murder/pinche:latest
+    pull_policy: always
     env_file:
       - .env.production
     expose:
@@ -28,6 +29,7 @@ services:
 
   migrate:
     image: hkccr.ccs.tencentyun.com/murder/pinche:latest
+    pull_policy: always
     env_file:
       - .env.production
     command: npm run migrate
