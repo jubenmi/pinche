@@ -11,8 +11,8 @@
   - 已有脚本：`npm run d9:release-check`。
 
 - [ ] D9.2 收集发布输入信息。
-  - 进行中：已登录 Portainer，正在确认 Docker 环境和部署入口。
-  - [ ] 填写生产 HTTPS API 域名。
+  - 进行中：已登录 Portainer，正在确认 Docker 环境和部署入口；生产 API 域名修正为 `https://api.pinche.jubenmi.com`。
+  - [x] 填写生产 HTTPS API 域名：`https://api.pinche.jubenmi.com`。
   - [ ] 确认服务器公网 IP、登录方式和部署目录。
   - [ ] 确认服务器可运行 Docker Compose。
   - [ ] 准备微信 AppSecret。
@@ -40,24 +40,34 @@
   - [x] `publish` 分支额外发布 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
 
 - [ ] D9.5 准备服务器 Docker Compose 生产配置。
-  - 进行中：已进入 Portainer `local` 环境的 Add stack 页面，准备配置 `pinche` stack。
-  - [ ] 在 Portainer 或服务器 Docker 中配置 `hkccr.ccs.tencentyun.com` 私有镜像仓库登录凭据。
-  - [ ] DNS 解析生产 API 域名到服务器公网 IP。
-  - [ ] 准备 HTTPS 证书和反向代理。
-  - [ ] 在服务器创建 `.env.production`，不提交仓库。
-  - [ ] 在服务器创建 `docker-compose.prod.yml`，不提交仓库。
-  - [ ] 运行 `docker compose -f docker-compose.prod.yml config`。
-  - [ ] 确认 MySQL 使用持久化 volume。
+  - 进行中：已将 Portainer `pinche` stack 调整为 Traefik `proxy` 外部网络模式；Host 规则已修正为 `api.pinche.jubenmi.com`。
+  - [x] 在 Portainer 或服务器 Docker 中配置 `hkccr.ccs.tencentyun.com` 私有镜像仓库登录凭据。
+  - [x] DNS 解析生产 API 域名到服务器公网 IP。
+    - 当前：Google DNS 与 Cloudflare DNS 均返回 `api.pinche.jubenmi.com -> 175.27.169.6`，与 Portainer/Traefik 当前入口一致。
+  - [x] 准备 HTTPS 证书和反向代理。
+    - 当前：Traefik labels 已应用，严格 HTTPS 校验已通过。
+  - [x] 在服务器创建 `.env.production`，不提交仓库。
+    - 通过 Portainer stack environment variables 保存，未写入仓库。
+  - [x] 在服务器创建 `docker-compose.prod.yml`，不提交仓库。
+    - 通过 Portainer stack web editor 保存，镜像为 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
+  - [x] 运行 `docker compose -f docker-compose.prod.yml config`。
+    - 等价校验：`docker-compose.prod.example.yml` 已更新为 Traefik 模式并通过 YAML 解析；Portainer stack file 已应用并重建容器。
+  - [x] 确认 MySQL 使用持久化 volume。
 
 - [ ] D9.6 部署后端并执行数据库迁移。
-  - [ ] 确认 `docker-compose.prod.yml` 使用 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
-  - [ ] 运行 `docker compose -f docker-compose.prod.yml up -d mysql redis`。
-  - [ ] 等待 MySQL healthcheck 通过。
+  - [x] 确认 `docker-compose.prod.yml` 使用 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
+  - [x] 运行 `docker compose -f docker-compose.prod.yml up -d mysql redis`。
+    - 通过 Portainer stack 部署，`pinche-mysql-1`、`pinche-redis-1` 已创建。
+  - [x] 等待 MySQL healthcheck 通过。
   - [ ] 运行 `docker compose -f docker-compose.prod.yml run --rm api npm run migrate`。
-  - [ ] 运行 `docker compose -f docker-compose.prod.yml up -d api`。
+  - [x] 运行 `docker compose -f docker-compose.prod.yml up -d api`。
+    - 通过 Portainer stack 部署，`pinche-api-1` 已创建并运行。
   - [ ] 检查 `curl -sS http://127.0.0.1:3018/health`。
-  - [ ] 检查 `curl -sS <生产HTTPS API域名>/health`。
-  - [ ] 检查 `curl -sS <生产HTTPS API域名>/health/db`。
+    - Traefik 模式下 API 不再发布 host port；改用 Traefik route 检查。
+  - [x] 检查 `curl -sS <生产HTTPS API域名>/health`。
+    - 通过：`curl --resolve api.pinche.jubenmi.com:443:175.27.169.6 https://api.pinche.jubenmi.com/health` 返回 OK。
+  - [x] 检查 `curl -sS <生产HTTPS API域名>/health/db`。
+    - 通过：`curl --resolve api.pinche.jubenmi.com:443:175.27.169.6 https://api.pinche.jubenmi.com/health/db` 返回 OK。
 
 - [ ] D9.7 配置微信小程序后台。
   - [ ] 配置 request 合法域名为生产 HTTPS API 域名。

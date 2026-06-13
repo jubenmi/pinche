@@ -8,13 +8,13 @@
 
 | 信息 | 状态 | 说明 |
 | --- | --- | --- |
-| 生产 HTTPS API 域名 | 等待用户提供 | 例如小程序最终访问的 API origin，必须是 HTTPS |
-| API 域名 DNS 状态 | 等待用户确认 | 域名应解析到生产服务器 |
-| 服务器公网 IP | 等待用户提供 | 用于 DNS 和连通性确认 |
+| 生产 HTTPS API 域名 | 已确认：`https://api.pinche.jubenmi.com` | 小程序最终访问的 API origin，必须是 HTTPS |
+| API 域名 DNS 状态 | 已确认 | Google/Cloudflare DNS 查询 `api.pinche.jubenmi.com` 返回 `175.27.169.6` |
+| 服务器公网 IP | 已确认：`175.27.169.6` | 与 `port.7dgame.com` 当前 A 记录一致 |
 | 服务器部署目录 | 等待用户提供 | 例如后端代码和 compose 文件所在目录 |
 | Docker Compose 可用性 | 等待用户确认 | 服务器需可运行 `docker compose version` |
-| HTTPS 反向代理方式 | 等待用户确认 | Nginx、Caddy、Traefik、云厂商负载均衡均可 |
-| 微信小程序 AppID | 已在仓库配置 | 当前 manifest 使用 `wxe0421039631a9c2a` |
+| HTTPS 反向代理方式 | 已确认：Traefik | 服务器现有 stack 使用外部网络 `proxy`、entrypoint `websecure`、certresolver `letsencrypt` |
+| 微信小程序 AppID | 已在仓库配置 | 当前 manifest 使用 `wx2675a606d3bd242c` |
 | 微信后台登录状态 | 等待用户确认 | 需要能配置合法域名、隐私、类目、体验成员 |
 | 微信开发者工具登录状态 | 等待用户确认 | 需要能上传目标小程序 |
 | 体验成员 | 等待用户确认 | 用于体验版真机测试 |

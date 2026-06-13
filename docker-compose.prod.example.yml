@@ -3,8 +3,20 @@ services:
     image: hkccr.ccs.tencentyun.com/murder/pinche:latest
     env_file:
       - .env.production
-    ports:
-      - "3018:3018"
+    expose:
+      - "3018"
+    networks:
+      - proxy
+      - internal
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.pinche-api.rule=Host(`api.pinche.jubenmi.com`)
+      - traefik.http.routers.pinche-api.entrypoints=websecure
+      - traefik.http.routers.pinche-api.tls=true
+      - traefik.http.routers.pinche-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.pinche-api.service=pinche-api
+      - traefik.http.services.pinche-api.loadbalancer.server.port=3018
     depends_on:
       mysql:
         condition: service_healthy
@@ -21,6 +33,8 @@ services:
       MYSQL_PASSWORD: replace-with-production-mysql-password
     volumes:
       - pinche_mysql_data:/var/lib/mysql
+    networks:
+      - internal
     healthcheck:
       test:
         [
@@ -34,7 +48,14 @@ services:
 
   redis:
     image: redis:7-alpine
+    networks:
+      - internal
     restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+  internal:
 
 volumes:
   pinche_mysql_data:
