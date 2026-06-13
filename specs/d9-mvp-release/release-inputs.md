@@ -36,8 +36,8 @@
 | `SESSION_SECRET` | 创建 `.env.production` 时 | 不记录明文 |
 | `CONTACT_ENCRYPTION_KEY` | 创建 `.env.production` 时 | 不记录明文 |
 | 首批管理员 OpenID | 创建 `.env.production` 时 | 不记录明文，除非用户明确允许记录 |
-| `TCR_USERNAME` | 配置 GitHub Actions secrets 时 | 不记录明文 |
-| `TCR_PASSWORD` | 配置 GitHub Actions secrets 时 | 不记录明文 |
+| `TENCENT_REGISTRY_USER` | 配置 GitHub Actions secrets 时 | 不记录明文 |
+| `TENCENT_REGISTRY_PASSWORD` | 配置 GitHub Actions secrets 时 | 不记录明文 |
 | Portainer 镜像仓库用户名 | 配置 Portainer registry 时 | 不记录明文 |
 | Portainer 镜像仓库密码 | 配置 Portainer registry 时 | 不记录明文 |
 

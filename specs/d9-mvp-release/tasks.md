@@ -31,8 +31,8 @@
   - [ ] 记录本地验证结果。
 
 - [ ] D9.4 配置 CI 并发布 Docker 镜像。
-  - [ ] 配置 GitHub Secrets：`TCR_USERNAME`。
-  - [ ] 配置 GitHub Secrets：`TCR_PASSWORD`。
+  - [ ] 配置 GitHub Secrets：`TENCENT_REGISTRY_USER`。
+  - [ ] 配置 GitHub Secrets：`TENCENT_REGISTRY_PASSWORD`。
   - [ ] 确认 GitHub Actions 使用上述凭据可登录 `hkccr.ccs.tencentyun.com`。
   - [ ] `main` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:main`。
   - [ ] `develop` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:develop`。

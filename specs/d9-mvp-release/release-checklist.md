@@ -16,7 +16,7 @@
 
 | 检查项 | 通过条件 |
 | --- | --- |
-| GitHub Secrets | 已配置 `TCR_USERNAME` 和 `TCR_PASSWORD` |
+| GitHub Secrets | 已配置 `TENCENT_REGISTRY_USER` 和 `TENCENT_REGISTRY_PASSWORD` |
 | main镜像 | `main` push 后发布 `hkccr.ccs.tencentyun.com/murder/pinche:main` |
 | develop镜像 | `develop` push 后发布 `hkccr.ccs.tencentyun.com/murder/pinche:develop` |
 | publish镜像 | `publish` push 后发布 `hkccr.ccs.tencentyun.com/murder/pinche:publish` |
@@ -28,7 +28,7 @@
 
 | 检查项 | 通过条件 |
 | --- | --- |
-| GitHub push 凭据 | GitHub Secrets 已保存 `TCR_USERNAME` 和 `TCR_PASSWORD` |
+| GitHub push 凭据 | GitHub Secrets 已保存 `TENCENT_REGISTRY_USER` 和 `TENCENT_REGISTRY_PASSWORD` |
 | Portainer pull 凭据 | Portainer Registries 已保存 `hkccr.ccs.tencentyun.com` 登录凭据 |
 | 镜像拉取 | Portainer 创建 stack 时可以拉取 `hkccr.ccs.tencentyun.com/murder/pinche:latest` |
 
