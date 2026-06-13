@@ -20,6 +20,10 @@
 | 体验成员 | 等待用户确认 | 用于体验版真机测试 |
 | 服务类目 | 等待用户确认 | 选择与真实服务最匹配的类目 |
 | 审核说明 | 草稿已准备 | 见 `review-materials.md` |
+| Docker 镜像仓库 | 已确认 | `hkccr.ccs.tencentyun.com/murder/pinche` |
+| main 分支镜像 tag | 已确认 | `hkccr.ccs.tencentyun.com/murder/pinche:main` |
+| develop 分支镜像 tag | 已确认 | `hkccr.ccs.tencentyun.com/murder/pinche:develop` |
+| publish 分支镜像 tag | 已确认 | `hkccr.ccs.tencentyun.com/murder/pinche:publish` 和 `:latest` |
 
 ## 执行时提供的敏感信息
 
@@ -32,6 +36,8 @@
 | `SESSION_SECRET` | 创建 `.env.production` 时 | 不记录明文 |
 | `CONTACT_ENCRYPTION_KEY` | 创建 `.env.production` 时 | 不记录明文 |
 | 首批管理员 OpenID | 创建 `.env.production` 时 | 不记录明文，除非用户明确允许记录 |
+| `TCR_USERNAME` | 配置 GitHub Actions secrets 时 | 不记录明文 |
+| `TCR_PASSWORD` | 配置 GitHub Actions secrets 时 | 不记录明文 |
 
 ## 推荐执行顺序
 

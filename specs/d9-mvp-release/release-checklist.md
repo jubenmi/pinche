@@ -12,6 +12,18 @@
 | 发布检查脚本 | 已准备 `npm run d9:release-check` |
 | D9发布输入 | 等待填写 `release-inputs.md` |
 
+## CI镜像发布门禁
+
+| 检查项 | 通过条件 |
+| --- | --- |
+| GitHub Secrets | 已配置 `TCR_USERNAME` 和 `TCR_PASSWORD` |
+| main镜像 | `main` push 后发布 `hkccr.ccs.tencentyun.com/murder/pinche:main` |
+| develop镜像 | `develop` push 后发布 `hkccr.ccs.tencentyun.com/murder/pinche:develop` |
+| publish镜像 | `publish` push 后发布 `hkccr.ccs.tencentyun.com/murder/pinche:publish` |
+| latest镜像 | 仅 `publish` push 后发布 `hkccr.ccs.tencentyun.com/murder/pinche:latest` |
+| 检查步骤 | CI 中 `npm run check` 通过后才允许推镜像 |
+| Submodule | CI checkout 使用 recursive submodules |
+
 ## 用户必须提供或确认
 
 - 生产 HTTPS API 域名。
@@ -34,7 +46,7 @@
 | DNS | 生产 API 域名解析到服务器 |
 | HTTPS | API 域名可通过 HTTPS 访问 |
 | Compose配置 | `docker compose -f docker-compose.prod.yml config` 通过 |
-| API镜像 | `docker compose -f docker-compose.prod.yml build api` 通过 |
+| API镜像 | compose 使用 `hkccr.ccs.tencentyun.com/murder/pinche:latest` |
 | MySQL/Redis | `docker compose -f docker-compose.prod.yml up -d mysql redis` 后服务可用 |
 | 数据库迁移 | `docker compose -f docker-compose.prod.yml run --rm api npm run migrate` 输出成功 |
 | API启动 | `docker compose -f docker-compose.prod.yml up -d api` 后容器运行 |

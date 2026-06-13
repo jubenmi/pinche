@@ -1,8 +1,6 @@
 services:
   api:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+    image: hkccr.ccs.tencentyun.com/murder/pinche:latest
     env_file:
       - .env.production
     ports:

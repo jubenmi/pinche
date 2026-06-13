@@ -30,7 +30,15 @@
   - [ ] 运行 `docker compose build api`。
   - [ ] 记录本地验证结果。
 
-- [ ] D9.4 准备服务器 Docker Compose 生产配置。
+- [ ] D9.4 配置 CI 并发布 Docker 镜像。
+  - [ ] 配置 GitHub Secrets：`TCR_USERNAME`。
+  - [ ] 配置 GitHub Secrets：`TCR_PASSWORD`。
+  - [ ] `main` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:main`。
+  - [ ] `develop` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:develop`。
+  - [ ] `publish` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:publish`。
+  - [ ] `publish` 分支额外发布 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
+
+- [ ] D9.5 准备服务器 Docker Compose 生产配置。
   - [ ] DNS 解析生产 API 域名到服务器公网 IP。
   - [ ] 准备 HTTPS 证书和反向代理。
   - [ ] 在服务器创建 `.env.production`，不提交仓库。
@@ -38,8 +46,8 @@
   - [ ] 运行 `docker compose -f docker-compose.prod.yml config`。
   - [ ] 确认 MySQL 使用持久化 volume。
 
-- [ ] D9.5 部署后端并执行数据库迁移。
-  - [ ] 运行 `docker compose -f docker-compose.prod.yml build api`。
+- [ ] D9.6 部署后端并执行数据库迁移。
+  - [ ] 确认 `docker-compose.prod.yml` 使用 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
   - [ ] 运行 `docker compose -f docker-compose.prod.yml up -d mysql redis`。
   - [ ] 等待 MySQL healthcheck 通过。
   - [ ] 运行 `docker compose -f docker-compose.prod.yml run --rm api npm run migrate`。
@@ -48,7 +56,7 @@
   - [ ] 检查 `curl -sS <生产HTTPS API域名>/health`。
   - [ ] 检查 `curl -sS <生产HTTPS API域名>/health/db`。
 
-- [ ] D9.6 配置微信小程序后台。
+- [ ] D9.7 配置微信小程序后台。
   - [ ] 配置 request 合法域名为生产 HTTPS API 域名。
   - [ ] 配置小程序名称、头像、简介。
   - [ ] 配置真实服务类目。
@@ -56,20 +64,20 @@
   - [ ] 配置体验成员。
   - [ ] 确认审核说明和主链路体验路径。
 
-- [ ] D9.7 构建小程序生产包。
+- [ ] D9.8 构建小程序生产包。
   - [ ] 运行 `VITE_API_BASE_URL=<生产HTTPS API域名> npm run build:mp-weixin`。
   - [ ] 运行 `RELEASE_API_BASE_URL=<生产HTTPS API域名> npm run d9:release-check`。
   - [ ] 确认输出包含 `uploadReady: true`。
   - [ ] 确认上传目录为 `apps/miniprogram/dist/build/mp-weixin`。
 
-- [ ] D9.8 微信开发者工具上传体验版。
+- [ ] D9.9 微信开发者工具上传体验版。
   - [ ] 暂停，请用户登录或确认微信开发者工具。
   - [ ] 打开 `apps/miniprogram/dist/build/mp-weixin`。
   - [ ] 上传版本，版本号建议与仓库版本一致。
   - [ ] 在小程序后台设置为体验版。
   - [ ] 保存体验版二维码或截图。
 
-- [ ] D9.9 体验版真机测试。
+- [ ] D9.10 体验版真机测试。
   - [ ] iOS 微信打开体验版。
   - [ ] Android 微信打开体验版。
   - [ ] 测试微信登录。
@@ -79,21 +87,21 @@
   - [ ] 测试车头审核和锁座。
   - [ ] 确认真机没有请求本地 API 地址。
 
-- [ ] D9.10 提交微信审核。
+- [ ] D9.11 提交微信审核。
   - [ ] 暂停，请用户确认审核材料。
   - [ ] 填写审核说明。
   - [ ] 上传主链路截图或录屏。
   - [ ] 提交审核。
   - [ ] 记录审核提交时间。
 
-- [ ] D9.11 审核反馈处理和线上发布。
+- [ ] D9.12 审核反馈处理和线上发布。
   - [ ] 如审核拒绝，记录拒绝原因、页面路径和截图。
   - [ ] 如需修改代码或材料，回到对应任务重新构建和上传。
   - [ ] 审核通过后暂停，请用户确认发布线上版。
   - [ ] 发布线上版。
   - [ ] 发布后真机打开线上版并跑主链路烟测。
 
-- [ ] D9.12 发布后交接。
+- [ ] D9.13 发布后交接。
   - [ ] 记录发布版本号和 Git 提交标识。
   - [ ] 记录生产 API 域名。
   - [ ] 记录 `/health` 和 `/health/db` 结果。

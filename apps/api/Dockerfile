@@ -5,11 +5,13 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/miniprogram/package.json apps/miniprogram/package.json
+COPY packages/talk/package.json packages/talk/package.json
 COPY packages/shared/package.json packages/shared/package.json
 
 RUN npm install --omit=dev --workspace apps/api
 
 COPY apps/api apps/api
+COPY packages/talk packages/talk
 COPY packages/shared packages/shared
 
 WORKDIR /app/apps/api

@@ -37,6 +37,21 @@ D9覆盖从发布候选版本冻结到小程序线上版发布完成的完整流
 
 生产环境使用单台可运行 Docker Compose 的服务器。`api`、`mysql`、`redis` 由 `docker-compose.prod.yml` 编排；MySQL 使用持久化 volume；API、MySQL、Redis 使用 `restart: unless-stopped` 或等价自动重启策略。
 
+API 镜像不在 Portainer 服务器上从源码构建。GitHub Actions 在 `main`、`develop`、`publish` 三条分支 push 时构建并推送镜像到：
+
+```text
+hkccr.ccs.tencentyun.com/murder/pinche
+```
+
+镜像 tag 规则：
+
+```text
+main    -> hkccr.ccs.tencentyun.com/murder/pinche:main
+develop -> hkccr.ccs.tencentyun.com/murder/pinche:develop
+publish -> hkccr.ccs.tencentyun.com/murder/pinche:publish
+publish -> hkccr.ccs.tencentyun.com/murder/pinche:latest
+```
+
 HTTPS 由服务器上的反向代理或同机反向代理容器提供。反向代理把生产 API 域名转发到 `127.0.0.1:3018` 或 Docker 网络内的 `api:3018`。微信小程序只访问 HTTPS 域名，不直接访问服务器 IP 或 HTTP 地址。
 
 ## Config And Secrets
@@ -69,9 +84,9 @@ BOOTSTRAP_ADMIN_OPENIDS=<执行时由用户提供>
 
 ```text
 冻结发布候选版本
+  -> GitHub Actions 构建并发布 Docker 镜像
   -> 准备服务器、域名、HTTPS
   -> 创建 .env.production 和 docker-compose.prod.yml
-  -> docker compose build api
   -> docker compose up -d mysql redis
   -> docker compose run --rm api npm run migrate
   -> docker compose up -d api
@@ -131,6 +146,13 @@ apps/miniprogram/dist/build/mp-weixin
 npm run check
 npm run build:mp-weixin
 docker compose build api
+```
+
+CI 镜像发布验证：
+
+```text
+GitHub Actions / Docker Publish 通过
+对应分支镜像 tag 已推送到 hkccr.ccs.tencentyun.com/murder/pinche
 ```
 
 线上后端验证：
