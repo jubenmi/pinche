@@ -1,6 +1,6 @@
 import http from "node:http";
 import { config, publicConfig } from "./config/env.js";
-import { checkDatabaseConnection } from "./db/mysql.js";
+import { checkDatabaseReadiness } from "./db/mysql.js";
 import { AppError, badRequest, forbidden, unauthorized } from "./http/errors.js";
 import { updateUserGender, updateUserPhone } from "./modules/auth/users.js";
 import {
@@ -143,20 +143,26 @@ async function route(request, response) {
   const body = await bodyFor(request);
 
   if (request.method === "GET" && url.pathname === "/health") {
-    jsonResponse(response, 200, {
-      ok: true,
+    const database = await checkDatabaseReadiness();
+    jsonResponse(response, database.ok ? 200 : 503, {
+      ok: database.ok,
       service: "pinche-api",
       config: publicConfig(),
+      database,
       now: new Date().toISOString()
     });
     return;
   }
 
   if (request.method === "GET" && url.pathname === "/health/db") {
-    const connected = await checkDatabaseConnection();
-    jsonResponse(response, connected ? 200 : 503, {
-      ok: connected,
-      database: config.mysql.database
+    const database = await checkDatabaseReadiness();
+    jsonResponse(response, database.ok ? 200 : 503, {
+      ok: database.ok,
+      database: config.mysql.database,
+      connected: database.connected,
+      schemaReady: database.schemaReady,
+      missingTables: database.missingTables,
+      ...(database.error ? { error: database.error } : {})
     });
     return;
   }

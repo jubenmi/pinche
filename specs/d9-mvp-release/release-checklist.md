@@ -56,11 +56,12 @@
 | Compose配置 | `docker compose -f docker-compose.prod.yml config` 通过 |
 | API镜像 | compose 使用 `hkccr.ccs.tencentyun.com/murder/pinche:latest` |
 | MySQL/Redis | `docker compose -f docker-compose.prod.yml up -d mysql redis` 后服务可用 |
-| 数据库迁移 | `docker compose -f docker-compose.prod.yml run --rm api npm run migrate` 输出成功 |
+| 数据库迁移 | `docker compose -f docker-compose.prod.yml run --rm migrate` 输出成功；若服务器仍是旧 compose，可临时用 `docker compose -f docker-compose.prod.yml run --rm api npm run migrate` |
 | API启动 | `docker compose -f docker-compose.prod.yml up -d api` 后容器运行 |
 | 本机健康检查 | `http://127.0.0.1:3018/health` 返回 `ok: true` |
 | 线上健康检查 | `<生产HTTPS API域名>/health` 返回 `ok: true` |
 | 线上数据库检查 | `<生产HTTPS API域名>/health/db` 返回 `ok: true` |
+| 线上业务表检查 | `<生产HTTPS API域名>/api/stores` 和 `/api/scripts` 返回 `ok: true` |
 | 生产登录配置 | `/health` 中 `wechatMockLogin` 为 `false` |
 
 ## 微信后台门禁
@@ -112,6 +113,7 @@ apps/miniprogram/dist/build/mp-weixin
 
 - 后端线上 `/health` 返回 `ok: true`。
 - 后端线上 `/health/db` 返回 `ok: true`。
+- 后端线上 `/api/stores` 和 `/api/scripts` 返回 `ok: true`。
 - 生产登录配置 `/health` 中 `wechatMockLogin` 为 `false`。
 - iOS 微信主链路通过。
 - Android 微信主链路通过。

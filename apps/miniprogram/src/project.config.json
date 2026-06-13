@@ -7,13 +7,13 @@
     "urlCheck": false,
     "es6": true,
     "postcss": true,
-    "minified": false,
+    "minified": true,
     "newFeature": true,
     "bigPackageSizeSupport": true
   },
   "compileType": "miniprogram",
   "libVersion": "3.13.1",
-  "appid": "wxe0421039631a9c2a",
+  "appid": "wx2675a606d3bd242c",
   "projectname": "剧本迷·拼车",
   "condition": {
     "search": {

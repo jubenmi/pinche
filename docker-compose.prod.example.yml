@@ -18,11 +18,25 @@ services:
       - traefik.http.routers.pinche-api.service=pinche-api
       - traefik.http.services.pinche-api.loadbalancer.server.port=3018
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       redis:
         condition: service_started
     restart: unless-stopped
+
+  migrate:
+    image: hkccr.ccs.tencentyun.com/murder/pinche:latest
+    env_file:
+      - .env.production
+    command: npm run migrate
+    networks:
+      - internal
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
 
   mysql:
     image: mysql:8.4

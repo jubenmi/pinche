@@ -1,5 +1,5 @@
 {
-  "appid": "wxe0421039631a9c2a",
+  "appid": "wx2675a606d3bd242c",
   "compileType": "miniprogram",
   "libVersion": "3.13.1",
   "miniprogramRoot": "dist/dev/mp-weixin/",
@@ -8,7 +8,7 @@
     "urlCheck": false,
     "es6": true,
     "postcss": true,
-    "minified": false,
+    "minified": true,
     "compileWorklet": false,
     "uglifyFileName": false,
     "uploadWithSourceMap": true,
