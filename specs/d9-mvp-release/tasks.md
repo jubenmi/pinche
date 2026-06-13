@@ -30,14 +30,14 @@
   - [ ] 运行 `docker compose build api`。
   - [ ] 记录本地验证结果。
 
-- [ ] D9.4 配置 CI 并发布 Docker 镜像。
-  - [ ] 配置 GitHub Secrets：`TENCENT_REGISTRY_USER`。
-  - [ ] 配置 GitHub Secrets：`TENCENT_REGISTRY_PASSWORD`。
-  - [ ] 确认 GitHub Actions 使用上述凭据可登录 `hkccr.ccs.tencentyun.com`。
-  - [ ] `main` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:main`。
-  - [ ] `develop` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:develop`。
-  - [ ] `publish` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:publish`。
-  - [ ] `publish` 分支额外发布 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
+- [x] D9.4 配置 CI 并发布 Docker 镜像。
+  - [x] 配置 GitHub Secrets：`TENCENT_REGISTRY_USER`。
+  - [x] 配置 GitHub Secrets：`TENCENT_REGISTRY_PASSWORD`。
+  - [x] 确认 GitHub Actions 使用上述凭据可登录 `hkccr.ccs.tencentyun.com`。
+  - [x] `main` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:main`。
+  - [x] `develop` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:develop`。
+  - [x] `publish` 分支发布 `hkccr.ccs.tencentyun.com/murder/pinche:publish`。
+  - [x] `publish` 分支额外发布 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
 
 - [ ] D9.5 准备服务器 Docker Compose 生产配置。
   - [ ] 在 Portainer 或服务器 Docker 中配置 `hkccr.ccs.tencentyun.com` 私有镜像仓库登录凭据。
