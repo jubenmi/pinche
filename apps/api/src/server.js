@@ -2,13 +2,16 @@ import http from "node:http";
 import { config, publicConfig } from "./config/env.js";
 import { checkDatabaseConnection } from "./db/mysql.js";
 import { AppError, badRequest, forbidden, unauthorized } from "./http/errors.js";
-import { updateUserPhone } from "./modules/auth/users.js";
+import { updateUserGender, updateUserPhone } from "./modules/auth/users.js";
 import {
   loginWithWechatCode,
   verifyBusinessToken
 } from "./modules/auth/wechat.js";
+import { routeExtensions } from "./modules/extensions/registry.js";
 import {
   approveSignup,
+  cancelSession,
+  claimSessionSeat,
   createCatalogRequest,
   createEntityClaim,
   createScript,
@@ -20,6 +23,7 @@ import {
   createSubscriptionRequest,
   getSession,
   getSessionShareStats,
+  kickSessionSeat,
   listAdminScripts,
   listAdminStores,
   listActiveScripts,
@@ -183,6 +187,19 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "PATCH" && url.pathname === "/api/users/me") {
+    const user = await getAuthUser(request);
+    const updatedUser = await updateUserGender(user.user.id, body.gender);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        user: updatedUser,
+        roles: user.roles
+      }
+    });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/stores") {
     jsonResponse(response, 200, {
       ok: true,
@@ -323,6 +340,30 @@ async function route(request, response) {
     return;
   }
 
+  if (
+    await routeExtensions({
+      body,
+      getAuthUser,
+      idMatch,
+      jsonResponse,
+      request,
+      response,
+      url
+    })
+  ) {
+    return;
+  }
+
+  const cancelSessionId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/cancel$/);
+  if (request.method === "PATCH" && cancelSessionId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await cancelSession(user, cancelSessionId, body)
+    });
+    return;
+  }
+
   const shareStatsSessionId = idMatch(
     url.pathname,
     /^\/api\/sessions\/(\d+)\/share-stats$/
@@ -369,6 +410,26 @@ async function route(request, response) {
   if (request.method === "POST" && lockSeatId) {
     const user = await getAuthUser(request);
     jsonResponse(response, 200, { ok: true, data: await lockSeat(user, lockSeatId) });
+    return;
+  }
+
+  const claimSeatId = idMatch(url.pathname, /^\/api\/session-seats\/(\d+)\/claim$/);
+  if (request.method === "POST" && claimSeatId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await claimSessionSeat(user, claimSeatId, body)
+    });
+    return;
+  }
+
+  const kickSeatId = idMatch(url.pathname, /^\/api\/session-seats\/(\d+)\/kick$/);
+  if (request.method === "PATCH" && kickSeatId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await kickSessionSeat(user, kickSeatId, body)
+    });
     return;
   }
 

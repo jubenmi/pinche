@@ -1,0 +1,3 @@
+[submodule "packages/talk"]
+	path = packages/talk
+	url = git@github.com:jubenmi/talk.git

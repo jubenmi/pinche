@@ -15,35 +15,39 @@ export default {
 
 <style>
 page {
-  background: #f7f7f7;
-  color: #1f2933;
-  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  background-color: #fbfaf6;
+  color: #183d34;
+  font-family: "Songti SC", "STSong", "PingFang SC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
 }
 
 .page {
   min-height: 100vh;
-  padding: 32rpx;
+  padding: 36rpx 30rpx 48rpx;
   box-sizing: border-box;
+  background: linear-gradient(180deg, rgba(255, 255, 253, 0.9) 0%, rgba(251, 250, 246, 0.72) 62%, rgba(251, 250, 246, 0.36) 100%);
 }
 
 .section {
   margin-bottom: 24rpx;
-  padding: 28rpx;
-  background: #ffffff;
-  border: 1rpx solid #e6e8eb;
-  border-radius: 8rpx;
+  padding: 32rpx;
+  background: rgba(255, 255, 252, 0.94);
+  border: 1rpx solid rgba(222, 215, 202, 0.9);
+  border-radius: 18rpx;
+  box-shadow: 0 18rpx 48rpx rgba(51, 69, 59, 0.06);
 }
 
 .title {
-  margin-bottom: 12rpx;
-  font-size: 36rpx;
+  margin-bottom: 14rpx;
+  color: #12382f;
+  font-size: 42rpx;
   font-weight: 600;
+  letter-spacing: 0;
 }
 
 .text {
-  color: #52616f;
+  color: #738078;
   font-size: 28rpx;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
 .actions {
@@ -53,16 +57,71 @@ page {
 }
 
 .button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14rpx;
   flex: 1;
-  height: 80rpx;
-  border-radius: 8rpx;
-  background: #1f7a68;
+  height: 88rpx;
+  min-width: 0;
+  padding: 0 28rpx;
+  box-sizing: border-box;
+  border-radius: 14rpx;
+  background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%);
   color: #ffffff;
   font-size: 28rpx;
-  line-height: 80rpx;
+  font-weight: 500;
+  line-height: 1.2;
+  box-shadow: 0 16rpx 34rpx rgba(31, 111, 91, 0.22);
 }
 
 .button.secondary {
-  background: #455a64;
+  background: rgba(255, 255, 252, 0.96);
+  color: #193d35;
+  border: 1rpx solid #ded8ca;
+  box-shadow: none;
+}
+
+.button.compact {
+  flex: 0 0 128rpx;
+  width: 128rpx;
+  height: 64rpx;
+  padding: 0 18rpx;
+  border-radius: 12rpx;
+  font-size: 24rpx;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.button.disabled {
+  background: #aeb8b1;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+.button-icon,
+.inline-icon {
+  display: block;
+  flex-shrink: 0;
+  width: 34rpx;
+  height: 34rpx;
+}
+
+.bottom-action {
+  position: fixed;
+  right: 30rpx;
+  bottom: 42rpx;
+  left: 30rpx;
+  z-index: 5;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16rpx;
+}
+
+button::after {
+  border: none;
 }
 </style>

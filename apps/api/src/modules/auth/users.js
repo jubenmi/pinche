@@ -1,4 +1,13 @@
 import { withDatabaseConnection } from "../../db/mysql.js";
+import { badRequest } from "../../http/errors.js";
+
+function normalizeUserGender(value) {
+  const gender = String(value || "").trim();
+  if (!["male", "female"].includes(gender)) {
+    throw badRequest("gender must be male or female");
+  }
+  return gender;
+}
 
 export function publicUser(row) {
   if (!row) {
@@ -11,6 +20,7 @@ export function publicUser(row) {
     unionid: row.union_id,
     nickname: row.nickname,
     avatarUrl: row.avatar_url,
+    gender: row.gender || "",
     phoneVerifiedAt: row.phone_verified_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -89,6 +99,23 @@ export async function updateUserPhone(userId, phoneEncrypted) {
         WHERE id = ?
       `,
       [phoneEncrypted, userId]
+    );
+
+    const [rows] = await connection.query("SELECT * FROM users WHERE id = ?", [userId]);
+    return publicUser(rows[0]);
+  });
+}
+
+export async function updateUserGender(userId, gender) {
+  const normalizedGender = normalizeUserGender(gender);
+  return withDatabaseConnection(async (connection) => {
+    await connection.query(
+      `
+        UPDATE users
+        SET gender = ?
+        WHERE id = ?
+      `,
+      [normalizedGender, userId]
     );
 
     const [rows] = await connection.query("SELECT * FROM users WHERE id = ?", [userId]);

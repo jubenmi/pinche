@@ -1,12 +1,14 @@
 <template>
-  <view class="page">
+  <view class="page manage-page">
+    <AuthIdentityBar />
+
     <view class="section">
       <view class="title">{{ session.script_name_snapshot || "车头管理" }}</view>
       <view class="text">{{ summaryText }}</view>
       <view v-if="statusText" class="notice">{{ statusText }}</view>
       <view class="actions">
-        <button class="button" @tap="reload">刷新</button>
-        <button class="button secondary" @tap="goDetail">车详情</button>
+        <button class="button" @click="reload">刷新</button>
+        <button class="button secondary" @click="goDetail">车局详情</button>
       </view>
     </view>
 
@@ -15,9 +17,19 @@
       <view class="info-row">店家：{{ session.store_name_snapshot }}</view>
       <view class="info-row">时间：{{ session.start_at }}</view>
       <view class="info-row">状态：{{ sessionStatusLabel(session.status) }}</view>
-      <view class="info-row">押金：{{ formatCents(session.deposit_amount || 0) }}</view>
       <view class="info-row">座位：{{ seatSummary }}</view>
     </view>
+
+    <ManagePinnedMessage
+      v-for="extension in sessionManageExtensions"
+      :key="extension.id"
+      :session-id="sessionId"
+      :session="session"
+      :busy="busyAction"
+      :auth-tools="authTools"
+      @status="setStatus"
+      @updated="reload"
+    />
 
     <view v-if="session.seats && session.seats.length" class="section">
       <view class="section-title">座位状态</view>
@@ -26,104 +38,108 @@
           <view class="seat-title">{{ seat.name }}</view>
           <view class="seat-status">{{ seatStatusLabel(seat.status) }}</view>
         </view>
-        <view class="info-row">类型：{{ seat.seat_type }}</view>
         <view class="info-row">角色：{{ seat.role_name || "未标注" }}</view>
-        <view class="info-row">实付：{{ formatCents(seat.payable_price) }}</view>
+        <view class="info-row">类型：{{ seatTypeLabel(seat.seat_type) }}</view>
+        <view v-if="canKickSeat(seat)" class="actions compact">
+          <button class="mini-button muted" :disabled="busyAction" @click="kickSeat(seat)">
+            踢出/释放
+          </button>
+        </view>
       </view>
     </view>
 
     <view v-if="session.id" class="section">
-      <view class="section-title">申请列表</view>
+      <view class="section-title">上车申请</view>
       <view v-if="signups.length === 0" class="empty">暂无申请。</view>
       <view v-for="signup in signups" :key="signup.id" class="signup-card">
         <view class="seat-header">
           <view class="seat-title">{{ seatName(signup.seat_id) }}</view>
           <view class="seat-status">{{ signupStatusLabel(signup.status) }}</view>
         </view>
-        <view class="info-row">联系方式：{{ signup.contact_text || "未填写" }}</view>
+        <view class="info-row">申请信息：{{ signup.contact_text || "车内聊天沟通" }}</view>
         <view v-if="signup.note" class="info-row">备注：{{ signup.note }}</view>
-        <view class="info-row">押金状态：{{ depositStatusLabel(signup.deposit_status) }}</view>
         <view class="info-row">座位状态：{{ seatStatusLabel(seatStatus(signup.seat_id)) }}</view>
 
         <view v-if="signup.status === 'pending'" class="actions compact">
-          <button
-            class="mini-button"
-            :disabled="busyAction"
-            @tap="approve(signup)"
-          >
+          <button class="mini-button" :disabled="busyAction" @click="approve(signup)">
             通过
           </button>
-          <button
-            class="mini-button muted"
-            :disabled="busyAction"
-            @tap="reject(signup)"
-          >
+          <button class="mini-button muted" :disabled="busyAction" @click="reject(signup)">
             拒绝
           </button>
         </view>
+      </view>
+    </view>
 
-        <view v-if="signup.status === 'approved'" class="deposit-grid">
-          <button
-            v-for="item in depositStatuses"
-            :key="item.value"
-            class="deposit-button"
-            :class="{ active: signup.deposit_status === item.value }"
-            :disabled="busyAction"
-            @tap="updateDepositStatus(signup, item.value)"
-          >
-            {{ item.label }}
-          </button>
-        </view>
-
-        <view v-if="canLock(signup)" class="actions compact">
-          <button
-            class="mini-button"
-            :disabled="busyAction"
-            @tap="lock(signup)"
-          >
-            锁座
-          </button>
-        </view>
+    <view v-if="session.id" class="section danger-section">
+      <view class="section-title">取消车</view>
+      <view class="section-note">取消后座位会全部关闭，车内留言会留下取消通知。</view>
+      <textarea
+        v-model="cancelReason"
+        class="textarea"
+        maxlength="200"
+        placeholder="可选：写一句取消原因"
+        placeholder-class="placeholder"
+      />
+      <view class="actions">
+        <button
+          class="button danger"
+          :disabled="busyAction || session.status === 'cancelled'"
+          @click="cancelSession"
+        >
+          取消本车
+        </button>
       </view>
     </view>
   </view>
 </template>
 
 <script>
-import { dataOf, request } from "../../utils/api";
+import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinnedMessage.vue";
+import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
+import { dataOf, ensureLoggedIn, request } from "../../utils/api";
 
 export default {
+  components: { AuthIdentityBar, ManagePinnedMessage },
   data() {
     return {
       sessionId: "",
       session: {},
       signups: [],
+      sessionManageExtensions,
       statusText: "",
       busyAction: false,
-      depositStatuses: [
-        { value: "unpaid", label: "未付" },
-        { value: "pending_confirm", label: "待确认" },
-        { value: "confirmed", label: "已确认" },
-        { value: "refunded", label: "已退" }
-      ]
+      cancelReason: ""
     };
   },
   computed: {
     summaryText() {
       if (!this.session.id) {
-        return "审核申请、记录押金和锁座。";
+        return "置顶信息、处理上车、释放座位和取消车。";
       }
       return `${this.session.store_name_snapshot} / ${this.session.start_at}`;
     },
     seatSummary() {
       const seats = this.session.seats || [];
-      const pending = seats.filter((seat) => seat.status === "applied").length;
+      const open = seats.filter((seat) => seat.status === "open").length;
+      const applied = seats.filter((seat) => seat.status === "applied").length;
       const confirmed = seats.filter((seat) => seat.status === "confirmed").length;
       const locked = seats.filter((seat) => seat.status === "locked").length;
-      return `${seats.length}位，${pending}待审，${confirmed}已确认，${locked}已锁座`;
+      return `${seats.length}位，${open}空位，${applied}待审，${confirmed + locked}已上车`;
+    },
+    authTools() {
+      return { dataOf, request };
     }
   },
-  onLoad(options) {
+  async onLoad(options) {
+    const auth = await ensureLoggedIn({
+      content: "登录后继续管理你创建的车。"
+    });
+    if (!auth) {
+      this.statusText = "登录后可继续管理发车。";
+      return;
+    }
     this.sessionId = options.id || "";
     this.reload();
   },
@@ -151,7 +167,7 @@ export default {
         this.statusText = "";
       } catch (error) {
         if (error?.statusCode === 403) {
-          this.statusText = "只有车头可以查看联系方式和审核申请。";
+          this.statusText = "只有车头可以管理本车。";
         } else if (error?.statusCode === 401) {
           this.statusText = "请先登录后再管理发车。";
         } else {
@@ -160,8 +176,11 @@ export default {
         this.signups = [];
       }
     },
+    setStatus(statusText) {
+      this.statusText = statusText;
+    },
     async approve(signup) {
-      await this.runAction("已通过申请。", {
+      await this.runAction("已通过申请，玩家可进入车内聊天。", {
         url: `/api/signups/${signup.id}/approve`,
         method: "PATCH"
       });
@@ -172,17 +191,36 @@ export default {
         method: "PATCH"
       });
     },
-    async updateDepositStatus(signup, depositStatus) {
-      await this.runAction("押金状态已更新。", {
-        url: `/api/signups/${signup.id}/deposit`,
-        method: "PATCH",
-        data: { depositStatus }
+    kickSeat(seat) {
+      this.confirmAction(`确认释放「${seat.name}」吗？`, async () => {
+        await this.runAction("座位已释放。", {
+          url: `/api/session-seats/${seat.id}/kick`,
+          method: "PATCH"
+        });
       });
     },
-    async lock(signup) {
-      await this.runAction("已锁座。", {
-        url: `/api/session-seats/${signup.seat_id}/lock`,
-        method: "POST"
+    cancelSession() {
+      this.confirmAction("确认取消本车吗？", async () => {
+        await this.runAction("本车已取消。", {
+          url: `/api/sessions/${this.sessionId}/cancel`,
+          method: "PATCH",
+          data: {
+            reason: this.cancelReason.trim()
+          }
+        });
+      });
+    },
+    confirmAction(content, onConfirm) {
+      uni.showModal({
+        title: "确认操作",
+        content,
+        confirmText: "确认",
+        cancelText: "再想想",
+        success: (result) => {
+          if (result.confirm) {
+            onConfirm();
+          }
+        }
       });
     },
     async runAction(successText, options) {
@@ -222,8 +260,8 @@ export default {
     seatStatus(seatId) {
       return this.seatById(seatId)?.status || "";
     },
-    canLock(signup) {
-      return signup.status === "approved" && this.seatStatus(signup.seat_id) === "confirmed";
+    canKickSeat(seat) {
+      return ["applied", "confirmed", "locked"].includes(seat.status);
     },
     sessionStatusLabel(status) {
       const labels = {
@@ -238,8 +276,8 @@ export default {
       const labels = {
         open: "开放",
         applied: "待审核",
-        confirmed: "已确认",
-        locked: "已锁座",
+        confirmed: "已上车",
+        locked: "已锁定",
         cancelled: "已取消"
       };
       return labels[status] || status || "未知";
@@ -253,31 +291,41 @@ export default {
       };
       return labels[status] || status || "未知";
     },
-    depositStatusLabel(status) {
+    seatTypeLabel(type) {
       const labels = {
-        unpaid: "未付",
-        pending_confirm: "待确认",
-        confirmed: "已确认",
-        refunded: "已退"
+        love_companion: "情感沉浸位",
+        f4: "互动位",
+        normal: "普通位"
       };
-      return labels[status] || status || "未知";
-    },
-    formatCents(value) {
-      const cents = Number(value || 0);
-      const prefix = cents < 0 ? "-¥" : "¥";
-      const absolute = Math.abs(cents);
-      const yuan = absolute % 100 === 0 ? String(absolute / 100) : (absolute / 100).toFixed(2);
-      return `${prefix}${yuan}`;
+      return labels[type] || type || "普通位";
     }
   }
 };
 </script>
 
 <style scoped>
+.manage-page {
+  padding-bottom: 64rpx;
+}
+
 .section-title {
   margin-bottom: 18rpx;
+  color: #153f34;
   font-size: 30rpx;
   font-weight: 600;
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.section-note {
+  color: #738078;
+  font-size: 24rpx;
+  line-height: 1.45;
 }
 
 .notice,
@@ -303,13 +351,30 @@ export default {
   line-height: 1.5;
 }
 
+.textarea {
+  width: 100%;
+  height: 132rpx;
+  margin-top: 18rpx;
+  padding: 20rpx 22rpx;
+  box-sizing: border-box;
+  border-radius: 14rpx;
+  background: #f4f1ea;
+  color: #183d34;
+  font-size: 26rpx;
+  line-height: 1.45;
+}
+
+.placeholder {
+  color: #9ba39c;
+}
+
 .seat-card,
 .signup-card {
   margin-top: 18rpx;
-  padding: 20rpx;
-  border: 1rpx solid #e6e8eb;
+  padding: 22rpx;
+  border: 1rpx solid #e6e0d2;
   border-radius: 8rpx;
-  background: #fbfcfd;
+  background: #fffefb;
 }
 
 .signup-card {
@@ -324,15 +389,16 @@ export default {
 }
 
 .seat-title {
-  color: #1f2933;
+  color: #153f34;
   font-size: 28rpx;
   font-weight: 600;
 }
 
 .seat-status {
   flex-shrink: 0;
-  color: #1f7a68;
+  color: #1f6f5b;
   font-size: 24rpx;
+  font-weight: 600;
 }
 
 .actions.compact {
@@ -340,31 +406,27 @@ export default {
   margin-top: 18rpx;
 }
 
-.mini-button,
-.deposit-button {
-  height: 60rpx;
+.mini-button {
+  height: 64rpx;
   border-radius: 8rpx;
-  background: #1f7a68;
+  background: #1f6f5b;
   color: #ffffff;
   font-size: 24rpx;
-  line-height: 60rpx;
+  line-height: 64rpx;
 }
 
-.mini-button.muted,
-.deposit-button {
-  background: #eef2f7;
-  color: #334155;
+.mini-button.muted {
+  background: #ffffff;
+  color: #193d35;
+  border: 1rpx solid #ded8ca;
 }
 
-.deposit-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10rpx;
-  margin-top: 18rpx;
+.button.danger {
+  background: #9f3f33;
+  box-shadow: 0 12rpx 28rpx rgba(159, 63, 51, 0.18);
 }
 
-.deposit-button.active {
-  background: #1f7a68;
-  color: #ffffff;
+.danger-section {
+  border-color: #ead2ca;
 }
 </style>

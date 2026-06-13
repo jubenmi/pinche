@@ -1,5 +1,7 @@
 <template>
   <view class="page">
+    <AuthIdentityBar />
+
     <view class="section">
       <view class="title">我的</view>
       <view class="text">{{ statusText }}</view>
@@ -8,6 +10,27 @@
         <button class="button" @tap="login">微信登录</button>
         <button v-if="isAdmin" class="button secondary" @tap="goAdmin">管理员</button>
         <button v-if="hasLogin" class="button ghost" @tap="logout">退出</button>
+      </view>
+    </view>
+
+    <view v-if="hasLogin" class="section">
+      <view class="section-title">我的性别</view>
+      <view class="text">当前：{{ genderText }}</view>
+      <view class="gender-actions">
+        <button
+          class="gender-toggle"
+          :class="{ active: gender === 'male' }"
+          @click="saveGender('male')"
+        >
+          男
+        </button>
+        <button
+          class="gender-toggle"
+          :class="{ active: gender === 'female' }"
+          @click="saveGender('female')"
+        >
+          女
+        </button>
       </view>
     </view>
 
@@ -34,68 +57,87 @@
 </template>
 
 <script setup>
+import { onLoad } from "@dcloudio/uni-app";
 import { computed, ref } from "vue";
-import { dataOf, clearAuth, getCurrentUser, request, setAuth } from "../../utils/api";
+import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import {
+  dataOf,
+  clearAuth,
+  ensureLoggedIn,
+  getCurrentUser,
+  request,
+  updateUserGender,
+  userGenderLabel
+} from "../../utils/api";
 
 const statusText = ref("未登录");
 const roles = ref([]);
 const hasLogin = ref(false);
 const sessions = ref([]);
 const sessionStatusText = ref("");
+const gender = ref("");
 
 const isAdmin = computed(() => roles.value.includes("system_admin"));
 const rolesText = computed(() => roles.value.join(", "));
+const genderText = computed(() => userGenderLabel(gender.value));
 
 hydrateAuth();
+
+onLoad(async () => {
+  await ensureLoggedIn({
+    devCode: "dev-admin-openid",
+    content: "登录后查看你的发车、报名和管理入口。"
+  });
+  hydrateAuth();
+});
 
 function hydrateAuth() {
   const auth = getCurrentUser();
   roles.value = auth.roles || [];
   hasLogin.value = Boolean(auth.user);
+  gender.value = auth.user?.gender || "";
   statusText.value = auth.user ? loginName(auth.user) : "未登录";
   if (hasLogin.value) {
     loadMySessions();
   }
 }
 
-function login() {
-  uni.login({
-    provider: "weixin",
-    success(loginResult) {
-      request({
-        url: "/api/auth/wechat/login",
-        method: "POST",
-        data: {
-          code: loginResult.code || "dev-admin-openid"
-        }
-      })
-        .then((response) => {
-          const data = dataOf(response);
-          if (!data) {
-            statusText.value = "登录失败";
-            return;
-          }
-
-          setAuth(data);
-          roles.value = data.roles || [];
-          hasLogin.value = true;
-          statusText.value = loginName(data.user);
-          loadMySessions();
-        })
-        .catch(() => {
-          statusText.value = "登录失败";
-        });
-    }
+async function login() {
+  const auth = await ensureLoggedIn({
+    devCode: "dev-admin-openid",
+    content: "登录后查看你的发车、报名和管理入口。"
   });
+  if (!auth) {
+    statusText.value = "登录失败";
+    return;
+  }
+  hydrateAuth();
 }
 
 function logout() {
   clearAuth();
   roles.value = [];
   hasLogin.value = false;
+  gender.value = "";
   statusText.value = "未登录";
   sessions.value = [];
   sessionStatusText.value = "";
+}
+
+async function saveGender(nextGender) {
+  if (!hasLogin.value || gender.value === nextGender) {
+    return;
+  }
+  try {
+    const auth = await updateUserGender(nextGender);
+    if (!auth?.user) {
+      throw new Error("Missing updated user");
+    }
+    hydrateAuth();
+    uni.showToast({ title: "性别已更新", icon: "none" });
+  } catch (error) {
+    uni.showToast({ title: "性别保存失败", icon: "none" });
+  }
 }
 
 function goAdmin() {
@@ -153,6 +195,28 @@ function loginName(user) {
   background: #ffffff;
   color: #455a64;
   border: 1rpx solid #cbd5e1;
+}
+
+.gender-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16rpx;
+  margin-top: 22rpx;
+}
+
+.gender-toggle {
+  height: 72rpx;
+  border-radius: 10rpx;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 26rpx;
+  line-height: 72rpx;
+}
+
+.gender-toggle.active {
+  background: #1f7a68;
+  color: #ffffff;
+  font-weight: 600;
 }
 
 .notice,

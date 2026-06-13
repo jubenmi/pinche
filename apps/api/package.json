@@ -10,6 +10,7 @@
     "migrate": "node src/db/migrate.js"
   },
   "dependencies": {
+    "@jubenmi/talk": "file:../../packages/talk",
     "mysql2": "^3.11.5"
   }
 }

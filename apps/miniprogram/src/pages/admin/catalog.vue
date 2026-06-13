@@ -1,5 +1,7 @@
 <template>
   <view class="page">
+    <AuthIdentityBar />
+
     <view v-if="!isAdmin" class="section">
       <view class="title">资料管理</view>
       <view class="text">当前微信账号没有系统管理员权限。</view>
@@ -200,8 +202,10 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
-import { dataOf, getCurrentUser, queryString, request } from "../../utils/api";
+import { onLoad } from "@dcloudio/uni-app";
+import { computed, ref } from "vue";
+import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import { dataOf, ensureLoggedIn, getCurrentUser, queryString, request } from "../../utils/api";
 
 const tabs = [
   { key: "stores", label: "店家" },
@@ -226,6 +230,7 @@ const defaultSeatTemplate = JSON.stringify(
       name: "情感沉浸位",
       seatType: "love_companion",
       roleName: "主线互动位",
+      roleGender: "unlimited",
       basePrice: 58000,
       adjustment: 20000
     },
@@ -233,6 +238,7 @@ const defaultSeatTemplate = JSON.stringify(
       name: "F4-1",
       seatType: "f4",
       roleName: "玩家CP",
+      roleGender: "male",
       basePrice: 58000,
       adjustment: -5000
     },
@@ -240,6 +246,7 @@ const defaultSeatTemplate = JSON.stringify(
       name: "F4-2",
       seatType: "f4",
       roleName: "玩家CP",
+      roleGender: "female",
       basePrice: 58000,
       adjustment: -5000
     },
@@ -247,6 +254,7 @@ const defaultSeatTemplate = JSON.stringify(
       name: "F4-3",
       seatType: "f4",
       roleName: "玩家CP",
+      roleGender: "male",
       basePrice: 58000,
       adjustment: -5000
     },
@@ -254,6 +262,7 @@ const defaultSeatTemplate = JSON.stringify(
       name: "F4-4",
       seatType: "f4",
       roleName: "玩家CP",
+      roleGender: "female",
       basePrice: 58000,
       adjustment: -5000
     }
@@ -263,8 +272,8 @@ const defaultSeatTemplate = JSON.stringify(
 );
 
 const activeTab = ref("stores");
-const auth = getCurrentUser();
-const isAdmin = computed(() => (auth.roles || []).includes("system_admin"));
+const roles = ref(getCurrentUser().roles || []);
+const isAdmin = computed(() => roles.value.includes("system_admin"));
 
 const stores = ref([]);
 const storeKeyword = ref("");
@@ -283,7 +292,12 @@ const requestKeyword = ref("");
 const requestStatus = ref("pending");
 const reviewNote = ref("");
 
-onMounted(() => {
+onLoad(async () => {
+  const auth = await ensureLoggedIn({
+    devCode: "dev-admin-openid",
+    content: "登录后继续进入资料管理。"
+  });
+  roles.value = auth?.roles || getCurrentUser().roles || [];
   if (isAdmin.value) {
     loadStores();
     loadScripts();

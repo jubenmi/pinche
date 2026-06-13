@@ -14,3 +14,4 @@ coverage/
 tmp/
 docker-data/
 apps/miniprogram/project.private.config.json
+apps/miniprogram/src/project.private.config.json

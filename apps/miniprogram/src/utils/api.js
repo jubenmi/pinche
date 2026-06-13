@@ -1,6 +1,24 @@
 const TOKEN_KEY = "pinche_token";
 const USER_KEY = "pinche_user";
 const ROLES_KEY = "pinche_roles";
+export const AUTH_CHANGE_EVENT = "pinche-auth-change";
+export const AUTH_PROFILE_REQUEST_EVENT = "pinche-auth-profile-request";
+export const AUTH_PROFILE_ACK_EVENT = "pinche-auth-profile-ack";
+export const AUTH_PROFILE_RESPONSE_EVENT = "pinche-auth-profile-response";
+
+function notifyAuthChange() {
+  if (typeof uni !== "undefined" && typeof uni.$emit === "function") {
+    uni.$emit(AUTH_CHANGE_EVENT, getCurrentUser());
+  }
+}
+
+function currentPageRoute() {
+  if (typeof getCurrentPages !== "function") {
+    return "";
+  }
+  const pages = getCurrentPages();
+  return pages.length > 0 ? pages[pages.length - 1].route || "" : "";
+}
 
 export function getApiBaseUrl() {
   const app = getApp();
@@ -29,12 +47,13 @@ export function getToken() {
 }
 
 export function setAuth(auth) {
-  setToken(auth.token);
+  setToken(auth.token || getToken());
   const app = getApp();
   app.globalData.user = auth.user || null;
   app.globalData.roles = auth.roles || [];
   uni.setStorageSync(USER_KEY, auth.user || null);
   uni.setStorageSync(ROLES_KEY, auth.roles || []);
+  notifyAuthChange();
 }
 
 export function getCurrentUser() {
@@ -58,6 +77,242 @@ export function clearAuth() {
   uni.removeStorageSync(TOKEN_KEY);
   uni.removeStorageSync(USER_KEY);
   uni.removeStorageSync(ROLES_KEY);
+  notifyAuthChange();
+}
+
+function confirmLogin(options = {}) {
+  if (options.prompt === false || typeof uni.showModal !== "function") {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    uni.showModal({
+      title: options.title || "微信登录",
+      content: options.content || "登录后继续使用剧本迷·拼车。",
+      confirmText: options.confirmText || "登录",
+      cancelText: options.cancelText || "取消",
+      success(result) {
+        resolve(Boolean(result.confirm));
+      },
+      fail() {
+        resolve(true);
+      }
+    });
+  });
+}
+
+function chooseUserGender() {
+  return new Promise((resolve) => {
+    if (typeof uni.showActionSheet !== "function") {
+      uni.showModal({
+        title: "请选择你的性别",
+        content: "该信息会长期保存到账号资料，可在“我的”页修改。",
+        confirmText: "男",
+        cancelText: "女",
+        success(result) {
+          resolve(result.confirm ? "male" : "female");
+        },
+        fail() {
+          resolve("");
+        }
+      });
+      return;
+    }
+
+    uni.showActionSheet({
+      itemList: ["男", "女"],
+      success(result) {
+        resolve(result.tapIndex === 0 ? "male" : "female");
+      },
+      fail() {
+        resolve("");
+      }
+    });
+  });
+}
+
+async function requestUserGenderWithFallback(options = {}) {
+  const gender = await chooseUserGender();
+  if (!gender) {
+    if (options.showToast !== false) {
+      uni.showToast({ title: "请选择性别后继续", icon: "none" });
+    }
+    return null;
+  }
+
+  try {
+    return await updateUserGender(gender);
+  } catch (error) {
+    if (options.showToast !== false) {
+      uni.showToast({ title: "性别保存失败", icon: "none" });
+    }
+    return null;
+  }
+}
+
+export function requestUserGenderFromProfileModal(auth, options = {}) {
+  const canUseProfileModal =
+    typeof uni !== "undefined" &&
+    typeof uni.$emit === "function" &&
+    typeof uni.$on === "function" &&
+    typeof uni.$off === "function";
+
+  if (!canUseProfileModal) {
+    return requestUserGenderWithFallback(options);
+  }
+
+  return new Promise((resolve) => {
+    const requestId = `profile-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let acknowledged = false;
+    let settled = false;
+    let fallbackTimer = null;
+
+    const cleanup = () => {
+      uni.$off(AUTH_PROFILE_ACK_EVENT, handleAck);
+      uni.$off(AUTH_PROFILE_RESPONSE_EVENT, handleResponse);
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+      }
+    };
+
+    const finish = (nextAuth) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(nextAuth || null);
+    };
+
+    const handleAck = (payload = {}) => {
+      if (payload.requestId === requestId) {
+        acknowledged = true;
+      }
+    };
+
+    const handleResponse = (payload = {}) => {
+      if (payload.requestId === requestId) {
+        finish(payload.auth || null);
+      }
+    };
+
+    uni.$on(AUTH_PROFILE_ACK_EVENT, handleAck);
+    uni.$on(AUTH_PROFILE_RESPONSE_EVENT, handleResponse);
+    uni.$emit(AUTH_PROFILE_REQUEST_EVENT, {
+      requestId,
+      required: true,
+      auth,
+      route: currentPageRoute()
+    });
+
+    fallbackTimer = setTimeout(async () => {
+      if (settled || acknowledged) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(await requestUserGenderWithFallback(options));
+    }, 300);
+  });
+}
+
+export function userGenderLabel(gender) {
+  const labels = {
+    male: "男",
+    female: "女"
+  };
+  return labels[gender] || "未选择";
+}
+
+export async function updateUserGender(gender) {
+  const response = await request({
+    url: "/api/users/me",
+    method: "PATCH",
+    data: { gender }
+  });
+  const data = dataOf(response);
+  if (!data?.user) {
+    return null;
+  }
+
+  const current = getCurrentUser();
+  const nextAuth = {
+    token: getToken(),
+    user: data.user,
+    roles: data.roles || current.roles || []
+  };
+  setAuth(nextAuth);
+  return nextAuth;
+}
+
+export async function ensureUserGender(auth, options = {}) {
+  if (options.requireGender === false || auth?.user?.gender) {
+    return auth;
+  }
+
+  return requestUserGenderFromProfileModal(auth, options);
+}
+
+export function loginWithWechat(options = {}) {
+  return new Promise((resolve, reject) => {
+    uni.login({
+      provider: "weixin",
+      success(loginResult) {
+        request({
+          url: "/api/auth/wechat/login",
+          method: "POST",
+          data: {
+            code: loginResult.code || options.devCode || "dev-player-openid"
+          }
+        })
+          .then((response) => {
+            const data = dataOf(response);
+            if (data) {
+              setAuth(data);
+            }
+            resolve(data);
+          })
+          .catch(reject);
+      },
+      fail: reject
+    });
+  });
+}
+
+export async function ensureLoggedIn(options = {}) {
+  const auth = getCurrentUser();
+  const token = getToken();
+  if (auth.user && token) {
+    return ensureUserGender({ ...auth, token }, options);
+  }
+  if (auth.user && !token) {
+    clearAuth();
+  }
+
+  const confirmed = await confirmLogin(options);
+  if (!confirmed) {
+    return null;
+  }
+
+  try {
+    const data = await loginWithWechat(options);
+    if (!data) {
+      throw new Error("Missing auth data");
+    }
+    return ensureUserGender({
+      user: data.user || null,
+      roles: data.roles || [],
+      token: data.token || ""
+    }, options);
+  } catch (error) {
+    if (options.showToast !== false) {
+      uni.showToast({
+        title: options.failTitle || "登录失败",
+        icon: "none"
+      });
+    }
+    return null;
+  }
 }
 
 export function dataOf(response) {

@@ -1,10 +1,8 @@
 import { withDatabaseConnection, withTransaction } from "../../db/mysql.js";
 import { badRequest, conflict, forbidden, notFound } from "../../http/errors.js";
 import { ensureRole } from "../auth/users.js";
-
-function isAdmin(user) {
-  return user.roles.includes("system_admin");
-}
+import { isAdmin, requireSessionOwner } from "./session-access.js";
+import { runSessionExtensionHook } from "../extensions/registry.js";
 
 function requireValue(body, key) {
   const value = body[key];
@@ -79,6 +77,14 @@ function normalizeEntityType(value) {
   return value;
 }
 
+function normalizeRoleGender(value) {
+  const roleGender = String(value || "unlimited").trim();
+  if (!["male", "female", "unlimited"].includes(roleGender)) {
+    throw badRequest("roleGender must be male, female, or unlimited");
+  }
+  return roleGender;
+}
+
 function assertPayable(basePrice, adjustment) {
   const payablePrice = basePrice + adjustment;
   if (payablePrice < 0) {
@@ -113,6 +119,18 @@ const PUBLIC_TEXT_RISK_WORDS = [
   "小黑屋",
   "恋陪",
   "爱D"
+];
+const MESSAGE_TEXT_RISK_WORDS = [
+  "红包",
+  "返现",
+  "提现",
+  "现金奖励",
+  "分享奖励",
+  "拉人奖励",
+  "拉新奖励",
+  "抽奖",
+  "收款码",
+  "平台代收"
 ];
 
 function publicText(value) {
@@ -190,6 +208,17 @@ function assertPublicTextSafe(label, value) {
   }
 }
 
+function assertMessageTextSafe(label, value) {
+  if (value === undefined || value === null || value === "") {
+    return;
+  }
+  const text = String(value);
+  const riskWord = MESSAGE_TEXT_RISK_WORDS.find((word) => text.includes(word));
+  if (riskWord) {
+    throw badRequest(`${label} contains transaction risk text: ${riskWord}`);
+  }
+}
+
 async function findById(connection, table, id) {
   const [rows] = await connection.query(`SELECT * FROM ${table} WHERE id = ?`, [id]);
   return rows[0] || null;
@@ -217,17 +246,6 @@ async function updateAllowed(connection, table, id, body, fields) {
   values.push(id);
   await connection.query(`UPDATE ${table} SET ${sets.join(", ")} WHERE id = ?`, values);
   return findById(connection, table, id);
-}
-
-async function requireSessionOwner(connection, sessionId, user) {
-  const session = await findById(connection, "sessions", sessionId);
-  if (!session) {
-    throw notFound("Session not found");
-  }
-  if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
-    throw forbidden("Only the session organizer can perform this action");
-  }
-  return session;
 }
 
 async function requireSeatOwner(connection, seatId, user) {
@@ -268,6 +286,92 @@ async function requireSignupOwner(connection, signupId, user) {
     throw forbidden("Only the session organizer can perform this action");
   }
   return signup;
+}
+
+async function lockSessionSeats(connection, sessionId) {
+  await connection.query(
+    `
+      SELECT id
+      FROM session_seats
+      WHERE session_id = ?
+      ORDER BY id
+      FOR UPDATE
+    `,
+    [sessionId]
+  );
+}
+
+async function releaseUserOtherConfirmedSeats(
+  connection,
+  sessionId,
+  userId,
+  seatId
+) {
+  const [lockedRows] = await connection.query(
+    `
+      SELECT id, name
+      FROM session_seats
+      WHERE session_id = ?
+        AND confirmed_user_id = ?
+        AND id <> ?
+        AND status = 'locked'
+      LIMIT 1
+    `,
+    [sessionId, userId, seatId]
+  );
+  if (lockedRows.length > 0) {
+    throw conflict("User already has a locked seat in this session", {
+      seatId: lockedRows[0].id,
+      seatName: lockedRows[0].name
+    });
+  }
+
+  const [confirmedRows] = await connection.query(
+    `
+      SELECT id, name
+      FROM session_seats
+      WHERE session_id = ?
+        AND confirmed_user_id = ?
+        AND id <> ?
+        AND status = 'confirmed'
+    `,
+    [sessionId, userId, seatId]
+  );
+  if (confirmedRows.length === 0) {
+    return [];
+  }
+
+  await connection.query(
+    `
+      UPDATE signups
+      SET status = 'cancelled'
+      WHERE user_id = ?
+        AND status IN ('pending', 'approved')
+        AND seat_id IN (
+          SELECT id
+          FROM session_seats
+          WHERE session_id = ?
+            AND confirmed_user_id = ?
+            AND id <> ?
+            AND status = 'confirmed'
+        )
+    `,
+    [userId, sessionId, userId, seatId]
+  );
+  await connection.query(
+    `
+      UPDATE session_seats
+      SET status = 'open',
+          confirmed_user_id = NULL
+      WHERE session_id = ?
+        AND confirmed_user_id = ?
+        AND id <> ?
+        AND status = 'confirmed'
+    `,
+    [sessionId, userId, seatId]
+  );
+
+  return confirmedRows;
 }
 
 export async function listActiveStores(filters = {}) {
@@ -659,7 +763,13 @@ export async function createSession(user, body) {
       ]
     );
 
-    return findById(connection, "sessions", result.insertId);
+    const session = await findById(connection, "sessions", result.insertId);
+    await runSessionExtensionHook("afterSessionCreated", {
+      connection,
+      session,
+      pinnedMessageText: body.pinnedMessageText
+    });
+    return session;
   });
 }
 
@@ -674,7 +784,7 @@ export async function getSession(id) {
       "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id",
       [id]
     );
-    const { note, ...publicSession } = session;
+    const { note, cancelled_by_user_id: _cancelledByUserId, ...publicSession } = session;
     return { ...publicSession, seats };
   });
 }
@@ -822,14 +932,18 @@ export async function createSeat(user, sessionId, body) {
     const [result] = await connection.query(
       `
         INSERT INTO session_seats
-          (session_id, name, seat_type, role_name, base_price, adjustment, payable_price)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+          (
+            session_id, name, seat_type, role_name, role_gender,
+            base_price, adjustment, payable_price
+          )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         sessionId,
         requireValue(body, "name"),
         body.seatType || "normal",
         optionalText(body.roleName),
+        normalizeRoleGender(body.roleGender),
         basePrice,
         adjustment,
         payablePrice
@@ -858,12 +972,15 @@ export async function updateSeat(user, seatId, body) {
         ...body,
         basePrice,
         adjustment,
-        payablePrice
+        payablePrice,
+        roleGender:
+          body.roleGender === undefined ? undefined : normalizeRoleGender(body.roleGender)
       },
       [
         ["name", "name"],
         ["seatType", "seat_type"],
         ["roleName", "role_name"],
+        ["roleGender", "role_gender"],
         ["basePrice", "base_price"],
         ["adjustment", "adjustment"],
         ["payablePrice", "payable_price"],
@@ -950,6 +1067,95 @@ export async function createSignup(user, body) {
   });
 }
 
+export async function claimSessionSeat(user, seatId, body = {}) {
+  return withTransaction(async (connection) => {
+    const [seatRefs] = await connection.query(
+      "SELECT session_id FROM session_seats WHERE id = ?",
+      [seatId]
+    );
+    const seatRef = seatRefs[0];
+    if (!seatRef) {
+      throw notFound("Seat not found");
+    }
+
+    await lockSessionSeats(connection, seatRef.session_id);
+
+    const [rows] = await connection.query(
+      `
+        SELECT seat.*, session.status AS session_status
+        FROM session_seats seat
+        JOIN sessions session ON session.id = seat.session_id
+        WHERE seat.id = ?
+      `,
+      [seatId]
+    );
+    const seat = rows[0];
+    if (!seat) {
+      throw notFound("Seat not found");
+    }
+    if (seat.session_status !== "recruiting") {
+      throw badRequest("Session is not recruiting");
+    }
+    if (seat.status === "cancelled") {
+      throw conflict("Seat is not open for claim");
+    }
+    if (
+      seat.confirmed_user_id &&
+      Number(seat.confirmed_user_id) !== Number(user.user.id)
+    ) {
+      throw conflict("Seat already has a confirmed user");
+    }
+    if (seat.status === "locked") {
+      throw conflict("Seat is locked");
+    }
+    await releaseUserOtherConfirmedSeats(
+      connection,
+      seat.session_id,
+      user.user.id,
+      seat.id
+    );
+
+    await connection.query(
+      `
+        INSERT INTO signups (session_id, seat_id, user_id, contact_text, note, status)
+        VALUES (?, ?, ?, ?, ?, 'approved')
+        ON DUPLICATE KEY UPDATE
+          status = 'approved',
+          contact_text = VALUES(contact_text),
+          note = VALUES(note)
+      `,
+      [
+        seat.session_id,
+        seat.id,
+        user.user.id,
+        optionalText(body.contactText),
+        optionalText(body.note)
+      ]
+    );
+    await connection.query(
+      `
+        UPDATE signups
+        SET status = 'rejected'
+        WHERE seat_id = ?
+          AND user_id <> ?
+          AND status = 'pending'
+      `,
+      [seat.id, user.user.id]
+    );
+    await connection.query(
+      `
+        UPDATE session_seats
+        SET status = 'confirmed',
+            confirmed_user_id = ?
+        WHERE id = ?
+      `,
+      [user.user.id, seat.id]
+    );
+
+    return findById(connection, "session_seats", seat.id);
+  });
+}
+
 export async function listMySignups(user) {
   return withDatabaseConnection(async (connection) => {
     const [rows] = await connection.query(
@@ -978,8 +1184,10 @@ export async function approveSignup(user, signupId) {
       throw badRequest("Only pending signup can be approved");
     }
 
+    await lockSessionSeats(connection, signup.session_id);
+
     const [seatRows] = await connection.query(
-      "SELECT * FROM session_seats WHERE id = ? FOR UPDATE",
+      "SELECT * FROM session_seats WHERE id = ?",
       [signup.seat_id]
     );
     const seat = seatRows[0];
@@ -989,6 +1197,12 @@ export async function approveSignup(user, signupId) {
     if (seat.confirmed_user_id && Number(seat.confirmed_user_id) !== Number(signup.user_id)) {
       throw conflict("Seat already has a confirmed user");
     }
+    await releaseUserOtherConfirmedSeats(
+      connection,
+      signup.session_id,
+      signup.user_id,
+      signup.seat_id
+    );
 
     await connection.query(
       `
@@ -1071,6 +1285,105 @@ export async function lockSeat(user, seatId) {
       seatId
     ]);
     return findById(connection, "session_seats", seatId);
+  });
+}
+
+export async function kickSessionSeat(user, seatId, body = {}) {
+  return withTransaction(async (connection) => {
+    const [rows] = await connection.query(
+      `
+        SELECT seat.*, session.organizer_user_id, session.status AS session_status
+        FROM session_seats seat
+        JOIN sessions session ON session.id = seat.session_id
+        WHERE seat.id = ?
+        FOR UPDATE
+      `,
+      [seatId]
+    );
+    const seat = rows[0];
+    if (!seat) {
+      throw notFound("Seat not found");
+    }
+    if (!isAdmin(user) && Number(seat.organizer_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the session organizer can perform this action");
+    }
+    if (seat.session_status === "cancelled") {
+      throw badRequest("Cancelled session cannot be changed");
+    }
+
+    await connection.query(
+      `
+        UPDATE signups
+        SET status = 'cancelled'
+        WHERE seat_id = ? AND status IN ('pending', 'approved')
+      `,
+      [seatId]
+    );
+    await connection.query(
+      `
+        UPDATE session_seats
+        SET status = 'open',
+            confirmed_user_id = NULL
+        WHERE id = ?
+      `,
+      [seatId]
+    );
+
+    const reason = optionalText(body.reason);
+    const content = reason
+      ? `车头已释放「${seat.name}」：${reason}`
+      : `车头已释放「${seat.name}」`;
+    assertMessageTextSafe("reason", reason);
+    await runSessionExtensionHook("afterSessionSeatKicked", {
+      connection,
+      sessionId: seat.session_id,
+      senderUserId: user.user.id,
+      content
+    });
+
+    return findById(connection, "session_seats", seatId);
+  });
+}
+
+export async function cancelSession(user, sessionId, body = {}) {
+  return withTransaction(async (connection) => {
+    const session = await requireSessionOwner(connection, sessionId, user);
+    if (session.status === "cancelled") {
+      return session;
+    }
+
+    const reason = optionalText(body.reason);
+    assertMessageTextSafe("reason", reason);
+    await connection.query(
+      `
+        UPDATE sessions
+        SET status = 'cancelled',
+            cancelled_by_user_id = ?,
+            cancelled_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      [user.user.id, sessionId]
+    );
+    await connection.query(
+      "UPDATE session_seats SET status = 'cancelled' WHERE session_id = ?",
+      [sessionId]
+    );
+    await connection.query(
+      `
+        UPDATE signups
+        SET status = 'cancelled'
+        WHERE session_id = ? AND status IN ('pending', 'approved')
+      `,
+      [sessionId]
+    );
+    const content = reason ? `车头已取消本车：${reason}` : "车头已取消本车";
+    await runSessionExtensionHook("afterSessionCancelled", {
+      connection,
+      sessionId,
+      senderUserId: user.user.id,
+      content
+    });
+    return findById(connection, "sessions", sessionId);
   });
 }
 

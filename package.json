@@ -6,12 +6,14 @@
   "workspaces": [
     "apps/api",
     "apps/miniprogram",
+    "packages/talk",
     "packages/shared"
   ],
   "scripts": {
-    "check": "npm --workspace apps/api run check && node --check scripts/d2-smoke-test.js && node --check scripts/d3-smoke-test.js && node --check scripts/d4-smoke-test.js && node --check scripts/d5-smoke-test.js && node --check scripts/d6-smoke-test.js && node --check scripts/d7-smoke-test.js && node --check scripts/d8-qa-check.js && node scripts/check-miniprogram.js",
+    "check": "npm --workspace apps/api run check && node --check scripts/d2-smoke-test.js && node --check scripts/d3-smoke-test.js && node --check scripts/d4-smoke-test.js && node --check scripts/d5-smoke-test.js && node --check scripts/d6-smoke-test.js && node --check scripts/d7-smoke-test.js && node --check scripts/d8-qa-check.js && node --check scripts/d10-pseudo-chat-check.js && node --check scripts/d10-pseudo-chat-smoke.js && node scripts/check-miniprogram.js && node scripts/d11-gender-check.js && node scripts/d10-pseudo-chat-check.js",
     "dev:mp-weixin": "npm --workspace apps/miniprogram run dev:mp-weixin",
     "build:mp-weixin": "npm --workspace apps/miniprogram run build:mp-weixin",
+    "devtools:refresh": "node scripts/devtools-refresh-hook.js --force",
     "dev:api": "npm --workspace apps/api run dev",
     "start:api": "npm --workspace apps/api run start",
     "migrate": "npm --workspace apps/api run migrate",
@@ -21,6 +23,7 @@
     "d5:smoke": "node scripts/d5-smoke-test.js",
     "d6:smoke": "node scripts/d6-smoke-test.js",
     "d7:smoke": "node scripts/d7-smoke-test.js",
+    "d10:smoke": "node scripts/d10-pseudo-chat-smoke.js",
     "d8:qa": "node scripts/d8-qa-check.js",
     "d9:release-check": "node scripts/d9-release-check.js"
   },

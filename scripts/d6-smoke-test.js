@@ -270,6 +270,51 @@ async function main() {
     "seat confirmed user should match approved player"
   );
 
+  const switchSeat = seats.find((seat) => seat.name === "F4-3");
+  const switchedSeat = await request(
+    "POST",
+    `/api/session-seats/${switchSeat.id}/claim`,
+    { note: "same player switches to a second seat" },
+    playerA.token
+  );
+  assert(
+    Number(switchedSeat.data.confirmed_user_id) === Number(playerA.user.id),
+    "switched seat confirmed user should match player"
+  );
+
+  const afterSwitchDetail = await request("GET", `/api/sessions/${session.id}`);
+  const releasedOriginalSeat = afterSwitchDetail.data.seats.find(
+    (seat) => seat.id === targetSeat.id
+  );
+  assert(releasedOriginalSeat.status === "open", "original seat should reopen after switch");
+  assert(
+    !releasedOriginalSeat.confirmed_user_id,
+    "original seat confirmed user should be cleared after switch"
+  );
+
+  await request(
+    "POST",
+    `/api/session-seats/${targetSeat.id}/claim`,
+    { note: "same player switches back to original seat" },
+    playerA.token
+  );
+  const afterSwitchBackDetail = await request("GET", `/api/sessions/${session.id}`);
+  const releasedSwitchSeat = afterSwitchBackDetail.data.seats.find(
+    (seat) => seat.id === switchSeat.id
+  );
+  const reconfirmedOriginalSeat = afterSwitchBackDetail.data.seats.find(
+    (seat) => seat.id === targetSeat.id
+  );
+  assert(releasedSwitchSeat.status === "open", "switch seat should reopen after switching back");
+  assert(
+    !releasedSwitchSeat.confirmed_user_id,
+    "switch seat confirmed user should be cleared after switching back"
+  );
+  assert(
+    Number(reconfirmedOriginalSeat.confirmed_user_id) === Number(playerA.user.id),
+    "original seat should be confirmed again after switching back"
+  );
+
   await request(
     "PATCH",
     `/api/signups/${signupB.data.id}/approve`,
