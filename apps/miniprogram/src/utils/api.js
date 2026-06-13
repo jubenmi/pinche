@@ -5,11 +5,47 @@ export const AUTH_CHANGE_EVENT = "pinche-auth-change";
 export const AUTH_PROFILE_REQUEST_EVENT = "pinche-auth-profile-request";
 export const AUTH_PROFILE_ACK_EVENT = "pinche-auth-profile-ack";
 export const AUTH_PROFILE_RESPONSE_EVENT = "pinche-auth-profile-response";
+export const BACKEND_STATUS_CHANGE_EVENT = "pinche-backend-status-change";
+
+const BACKEND_HEALTH_TIMEOUT = 3000;
+const MAINTENANCE_USER_MESSAGE = "服务正在上线维护中，请稍后再试。";
+const backendStatus = {
+  checking: false,
+  available: null,
+  maintenance: false,
+  lastCheckedAt: "",
+  lastErrorMessage: ""
+};
 
 function notifyAuthChange() {
   if (typeof uni !== "undefined" && typeof uni.$emit === "function") {
     uni.$emit(AUTH_CHANGE_EVENT, getCurrentUser());
   }
+}
+
+function copyBackendStatus() {
+  return { ...backendStatus };
+}
+
+function notifyBackendStatusChange() {
+  if (typeof uni !== "undefined" && typeof uni.$emit === "function") {
+    uni.$emit(BACKEND_STATUS_CHANGE_EVENT, copyBackendStatus());
+  }
+}
+
+function friendlyBackendError(error) {
+  const message = error?.userMessage || error?.errMsg || error?.message || "";
+  if (message.includes("timeout")) {
+    return "当前连接超时，服务可能正在上线中。";
+  }
+  return "当前连接暂不可用。";
+}
+
+function redirectToMaintenanceHome() {
+  if (typeof uni === "undefined" || typeof uni.reLaunch !== "function") {
+    return;
+  }
+  uni.reLaunch({ url: "/pages/index/index?maintenance=1" });
 }
 
 function currentPageRoute() {
@@ -23,6 +59,69 @@ function currentPageRoute() {
 export function getApiBaseUrl() {
   const app = getApp();
   return app.globalData.apiBaseUrl;
+}
+
+export function getBackendStatus() {
+  return copyBackendStatus();
+}
+
+export function shouldBlockBusinessRequests() {
+  return backendStatus.maintenance === true;
+}
+
+export function markBackendMaintenance(error = {}) {
+  const wasMaintenance = backendStatus.maintenance;
+  backendStatus.checking = false;
+  backendStatus.available = false;
+  backendStatus.maintenance = true;
+  backendStatus.lastCheckedAt = new Date().toISOString();
+  backendStatus.lastErrorMessage = friendlyBackendError(error);
+  notifyBackendStatusChange();
+  if (!wasMaintenance) {
+    redirectToMaintenanceHome();
+  }
+  return copyBackendStatus();
+}
+
+export function clearBackendMaintenance() {
+  backendStatus.checking = false;
+  backendStatus.available = true;
+  backendStatus.maintenance = false;
+  backendStatus.lastCheckedAt = new Date().toISOString();
+  backendStatus.lastErrorMessage = "";
+  notifyBackendStatusChange();
+  return copyBackendStatus();
+}
+
+export function checkBackendHealth(options = {}) {
+  backendStatus.checking = true;
+  notifyBackendStatusChange();
+
+  return new Promise((resolve) => {
+    uni.request({
+      url: getApiBaseUrl() + "/health",
+      method: "GET",
+      data: {},
+      header: {},
+      timeout: options.timeout || BACKEND_HEALTH_TIMEOUT,
+      success(response) {
+        const responseData = response.data || {};
+        if (response.statusCode >= 200 && response.statusCode < 300 && responseData.ok === true) {
+          resolve(clearBackendMaintenance());
+          return;
+        }
+        resolve(
+          markBackendMaintenance({
+            errMsg: `health check failed: ${response.statusCode}`,
+            userMessage: "当前连接暂不可用。"
+          })
+        );
+      },
+      fail(error) {
+        resolve(markBackendMaintenance(error));
+      }
+    });
+  });
 }
 
 export function setToken(token) {
@@ -335,7 +434,16 @@ export function queryString(params) {
   );
 }
 
-export function request(options) {
+export function request(options = {}) {
+  if (shouldBlockBusinessRequests() && options.allowDuringMaintenance !== true) {
+    return Promise.reject({
+      statusCode: 0,
+      maintenance: true,
+      errMsg: "backend maintenance",
+      userMessage: MAINTENANCE_USER_MESSAGE
+    });
+  }
+
   const headers = Object.assign({}, options.header || {});
   const token = getToken();
   if (token) {
@@ -359,8 +467,10 @@ export function request(options) {
       },
       fail(error) {
         const errMsg = error?.errMsg || "request failed";
+        markBackendMaintenance(error);
         reject({
           statusCode: 0,
+          maintenance: true,
           errMsg,
           userMessage: errMsg.includes("timeout")
             ? "请求超时，请确认本地后端已启动。"

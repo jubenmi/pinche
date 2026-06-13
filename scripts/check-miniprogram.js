@@ -81,6 +81,26 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`Entry page must expose the simple first choice: ${requiredText}`);
     }
   }
+  for (const requiredMaintenanceText of [
+    "backendStatus.maintenance",
+    "服务正在上线维护中",
+    "我们正在准备后端服务，稍后会自动恢复。",
+    "retryBackend",
+    "startMaintenancePolling",
+    "stopMaintenancePolling",
+    "BACKEND_STATUS_CHANGE_EVENT",
+    "checkBackendHealth"
+  ]) {
+    if (!indexSource.includes(requiredMaintenanceText)) {
+      fail(`Entry page maintenance mode is missing ${requiredMaintenanceText}`);
+    }
+  }
+  if (!/<view v-if="backendStatus\.maintenance" class="maintenance-state">/.test(indexSource)) {
+    fail("Entry page must render a dedicated maintenance state before normal homepage content");
+  }
+  if (!/<view v-else class="home-normal">/.test(indexSource)) {
+    fail("Entry page must hide normal homepage content while maintenance mode is active");
+  }
   if (!indexSource.includes("buildVersion") || !indexSource.includes("__PINCHE_BUILD_TIME__")) {
     fail("Entry page must display the injected build-time version label");
   }
@@ -258,6 +278,21 @@ if (!fs.existsSync(pagesJsonPath)) {
   ]) {
     if (!apiSource.includes(requiredAuthGuardText)) {
       fail(`Shared auth guard is missing ${requiredAuthGuardText}`);
+    }
+  }
+  for (const requiredBackendStatusText of [
+    "BACKEND_STATUS_CHANGE_EVENT",
+    "export function getBackendStatus",
+    "export function checkBackendHealth",
+    "export function markBackendMaintenance",
+    "export function clearBackendMaintenance",
+    "export function shouldBlockBusinessRequests",
+    "allowDuringMaintenance",
+    "/health",
+    "maintenance: true"
+  ]) {
+    if (!apiSource.includes(requiredBackendStatusText)) {
+      fail(`Backend maintenance status support is missing ${requiredBackendStatusText}`);
     }
   }
 

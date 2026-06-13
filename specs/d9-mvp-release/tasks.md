@@ -40,6 +40,7 @@
   - [x] `publish` 分支额外发布 `hkccr.ccs.tencentyun.com/murder/pinche:latest`。
 
 - [ ] D9.5 准备服务器 Docker Compose 生产配置。
+  - 进行中：已进入 Portainer `local` 环境的 Add stack 页面，准备配置 `pinche` stack。
   - [ ] 在 Portainer 或服务器 Docker 中配置 `hkccr.ccs.tencentyun.com` 私有镜像仓库登录凭据。
   - [ ] DNS 解析生产 API 域名到服务器公网 IP。
   - [ ] 准备 HTTPS 证书和反向代理。

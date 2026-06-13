@@ -1,41 +1,137 @@
 <template>
   <view class="page home-page">
     <AuthIdentityBar />
-    <image class="home-landscape" src="/static/art/ink-home-landscape.png" mode="widthFix" />
 
-    <view class="home-main">
-      <view class="home-copy">
-        <view class="hero-title">剧本迷·拼车</view>
-        <view class="hero-subtitle">一起玩好本 · 轻松出发</view>
+    <view v-if="backendStatus.maintenance" class="maintenance-state">
+      <image class="maintenance-art" src="/static/art/ticket-landscape.png" mode="widthFix" />
+      <view class="maintenance-title">服务正在上线维护中</view>
+      <view class="maintenance-text">我们正在准备后端服务，稍后会自动恢复。</view>
+      <view v-if="backendStatus.lastCheckedAt" class="maintenance-meta">
+        最近检查：{{ backendStatus.lastCheckedAt }}
       </view>
-
-      <view class="home-panel">
-        <button class="primary-action" @click="goCreate">
-          <image class="action-icon create-icon" src="/static/icons/user-plus-white.png" mode="aspectFit" />
-          <text class="action-title">创建</text>
-        </button>
-        <button class="secondary-action" @click="goMine">
-          <image class="action-icon" src="/static/icons/user.png" mode="aspectFit" />
-          <text class="action-title">我的</text>
-        </button>
+      <view v-if="backendStatus.lastErrorMessage" class="maintenance-meta">
+        {{ backendStatus.lastErrorMessage }}
       </view>
+      <button
+        class="maintenance-retry"
+        :class="{ disabled: backendStatus.checking }"
+        :disabled="backendStatus.checking"
+        @click="retryBackend"
+      >
+        {{ retryButtonText }}
+      </button>
+    </view>
 
-      <view class="quiet-line">简单五步，快速创建并分享你的剧本局</view>
-      <view class="build-version">{{ buildVersion }}</view>
+    <view v-else class="home-normal">
+      <image class="home-landscape" src="/static/art/ink-home-landscape.png" mode="widthFix" />
+
+      <view class="home-main">
+        <view class="home-copy">
+          <view class="hero-title">剧本迷·拼车</view>
+          <view class="hero-subtitle">一起玩好本 · 轻松出发</view>
+        </view>
+
+        <view class="home-panel">
+          <button class="primary-action" @click="goCreate">
+            <image class="action-icon create-icon" src="/static/icons/user-plus-white.png" mode="aspectFit" />
+            <text class="action-title">创建</text>
+          </button>
+          <button class="secondary-action" @click="goMine">
+            <image class="action-icon" src="/static/icons/user.png" mode="aspectFit" />
+            <text class="action-title">我的</text>
+          </button>
+        </view>
+
+        <view class="quiet-line">简单五步，快速创建并分享你的剧本局</view>
+        <view class="build-version">{{ buildVersion }}</view>
+      </view>
     </view>
   </view>
 </template>
 
 <script setup>
-import { onLoad } from "@dcloudio/uni-app";
+import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
+import { computed, reactive, ref } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
-import { ensureLoggedIn } from "../../utils/api";
+import {
+  BACKEND_STATUS_CHANGE_EVENT,
+  checkBackendHealth,
+  ensureLoggedIn,
+  getBackendStatus
+} from "../../utils/api";
 import { clearCreateFlow } from "../../utils/createFlow";
 
 const buildVersion = `版本 ${__PINCHE_BUILD_TIME__}`;
+const backendStatus = reactive(getBackendStatus());
+const hasStartedLogin = ref(false);
+let maintenanceTimer = null;
+
+const retryButtonText = computed(() => (backendStatus.checking ? "检查中..." : "重试"));
+
+function syncBackendStatus(status = getBackendStatus()) {
+  Object.assign(backendStatus, status);
+  if (backendStatus.maintenance) {
+    startMaintenancePolling();
+    return;
+  }
+  stopMaintenancePolling();
+  runLoginWhenReady();
+}
+
+async function refreshBackendStatus() {
+  const status = await checkBackendHealth();
+  syncBackendStatus(status);
+}
+
+function runLoginWhenReady() {
+  if (backendStatus.maintenance || backendStatus.available !== true || hasStartedLogin.value) {
+    return;
+  }
+  hasStartedLogin.value = true;
+  ensureLoggedIn();
+}
+
+function startMaintenancePolling() {
+  if (maintenanceTimer) {
+    return;
+  }
+  maintenanceTimer = setInterval(refreshBackendStatus, 5000);
+}
+
+function stopMaintenancePolling() {
+  if (!maintenanceTimer) {
+    return;
+  }
+  clearInterval(maintenanceTimer);
+  maintenanceTimer = null;
+}
+
+function retryBackend() {
+  if (backendStatus.checking) {
+    return;
+  }
+  refreshBackendStatus();
+}
 
 onLoad(() => {
-  ensureLoggedIn();
+  if (typeof uni.$on === "function") {
+    uni.$on(BACKEND_STATUS_CHANGE_EVENT, syncBackendStatus);
+  }
+  refreshBackendStatus();
+});
+
+onShow(() => {
+  syncBackendStatus();
+  if (backendStatus.available !== true) {
+    refreshBackendStatus();
+  }
+});
+
+onUnload(() => {
+  stopMaintenancePolling();
+  if (typeof uni.$off === "function") {
+    uni.$off(BACKEND_STATUS_CHANGE_EVENT, syncBackendStatus);
+  }
 });
 
 function goCreate() {
@@ -57,6 +153,13 @@ function goMine() {
   min-height: 100vh;
   padding-top: 72rpx;
   padding-bottom: 72rpx;
+}
+
+.home-normal {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
 }
 
 .home-main {
@@ -174,5 +277,71 @@ function goMine() {
   font-size: 20rpx;
   line-height: 1.4;
   text-align: center;
+}
+
+.maintenance-state {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 760rpx;
+  padding: 72rpx 24rpx;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.maintenance-art {
+  width: 420rpx;
+  max-width: 100%;
+  margin-bottom: 42rpx;
+}
+
+.maintenance-title {
+  color: #153f34;
+  font-size: 42rpx;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.maintenance-text {
+  width: 540rpx;
+  max-width: 100%;
+  margin-top: 20rpx;
+  color: #6f7b73;
+  font-size: 28rpx;
+  line-height: 1.65;
+}
+
+.maintenance-meta {
+  width: 540rpx;
+  max-width: 100%;
+  margin-top: 14rpx;
+  color: #9aa19b;
+  font-size: 22rpx;
+  line-height: 1.5;
+}
+
+.maintenance-retry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 280rpx;
+  height: 82rpx;
+  margin-top: 36rpx;
+  border-radius: 14rpx;
+  background: linear-gradient(145deg, #1a5d4d 0%, #2c775f 100%);
+  color: #ffffff;
+  font-size: 28rpx;
+  font-weight: 600;
+  line-height: 1.2;
+  box-shadow: 0 16rpx 34rpx rgba(31, 111, 91, 0.2);
+}
+
+.maintenance-retry.disabled {
+  background: #aeb8b1;
+  box-shadow: none;
 }
 </style>

@@ -99,14 +99,23 @@ apps/miniprogram/dist/build/mp-weixin
 
 微信开发者工具上传前，项目应指向上面的生产构建目录。
 
-## 上传前门禁
+## 小程序先发布上传门禁
 
-- 后端线上 `/health` 和 `/health/db` 通过。
-- 微信后台 request 合法域名已配置。
+- 微信后台 request 合法域名已配置为生产 HTTPS API 域名。
 - 生产构建已注入真实 HTTPS API 域名。
+- 小程序维护态已通过 `npm run check` 静态检查。
 - `d9:release-check` 输出 `uploadReady: true`。
 - 用户已登录微信开发者工具目标小程序账号。
 - 用户确认可以上传体验版。
+
+## 后端上线后门禁
+
+- 后端线上 `/health` 返回 `ok: true`。
+- 后端线上 `/health/db` 返回 `ok: true`。
+- 生产登录配置 `/health` 中 `wechatMockLogin` 为 `false`。
+- iOS 微信主链路通过。
+- Android 微信主链路通过。
+- 主链路覆盖登录、建车、分享、报名、审核、锁座。
 
 ## 提审前门禁
 
