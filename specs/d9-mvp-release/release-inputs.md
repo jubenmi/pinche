@@ -38,6 +38,8 @@
 | 首批管理员 OpenID | 创建 `.env.production` 时 | 不记录明文，除非用户明确允许记录 |
 | `TCR_USERNAME` | 配置 GitHub Actions secrets 时 | 不记录明文 |
 | `TCR_PASSWORD` | 配置 GitHub Actions secrets 时 | 不记录明文 |
+| Portainer 镜像仓库用户名 | 配置 Portainer registry 时 | 不记录明文 |
+| Portainer 镜像仓库密码 | 配置 Portainer registry 时 | 不记录明文 |
 
 ## 推荐执行顺序
 
@@ -46,8 +48,10 @@
 3. 确认域名 DNS 能解析到服务器。
 4. 准备 HTTPS 反向代理。
 5. 执行到创建 `.env.production` 时再提供敏感值。
-6. 后端健康检查通过后，再配置微信后台合法域名。
-7. 微信后台配置完成后，再构建和上传小程序体验版。
+6. 配置 GitHub Actions secrets，用于推送镜像。
+7. 配置 Portainer registry 凭据，用于服务器拉取镜像。
+8. 后端健康检查通过后，再配置微信后台合法域名。
+9. 微信后台配置完成后，再构建和上传小程序体验版。
 
 ## 当前需要用户先确认
 

@@ -24,6 +24,14 @@
 | 检查步骤 | CI 中 `npm run check` 通过后才允许推镜像 |
 | Submodule | CI checkout 使用 recursive submodules |
 
+## 私有镜像仓库门禁
+
+| 检查项 | 通过条件 |
+| --- | --- |
+| GitHub push 凭据 | GitHub Secrets 已保存 `TCR_USERNAME` 和 `TCR_PASSWORD` |
+| Portainer pull 凭据 | Portainer Registries 已保存 `hkccr.ccs.tencentyun.com` 登录凭据 |
+| 镜像拉取 | Portainer 创建 stack 时可以拉取 `hkccr.ccs.tencentyun.com/murder/pinche:latest` |
+
 ## 用户必须提供或确认
 
 - 生产 HTTPS API 域名。
