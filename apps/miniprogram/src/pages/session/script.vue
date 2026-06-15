@@ -14,7 +14,7 @@
         v-for="script in scripts"
         :key="script.id"
         class="script-row"
-        :class="{ selected: selectedScript && selectedScript.id === script.id }"
+        :class="{ selected: isSelectedScript(script) }"
         @tap="selectScript(script)"
       >
         <view class="script-main">
@@ -27,7 +27,7 @@
         </view>
         <image
           class="script-status-icon"
-          :src="selectedScript && selectedScript.id === script.id ? '/static/icons/check.png' : '/static/icons/chevron.png'"
+          :src="isSelectedScript(script) ? '/static/icons/check.png' : '/static/icons/chevron.png'"
           mode="aspectFit"
         />
       </view>
@@ -123,6 +123,16 @@ export default {
     this.loadScripts();
   },
   methods: {
+    async ensureScriptStepLogin() {
+      const auth = await ensureLoggedIn({
+        content: "登录后创建的车会归到你的账号下。"
+      });
+      if (!auth) {
+        this.statusText = "登录后可继续选择剧本。";
+        return null;
+      }
+      return auth;
+    },
     safeDecode(value) {
       if (!value) {
         return "";
@@ -141,23 +151,49 @@ export default {
     },
     async loadScripts() {
       this.statusText = "正在加载剧本...";
+      const storeId = this.store?.id;
       try {
         const response = await request({
-          url: "/api/scripts" + queryString({ keyword: this.keyword, limit: 30 })
+          url: "/api/scripts" + queryString({ keyword: this.keyword, storeId: this.store?.id, limit: 30 })
         });
         const scripts = dataOf(response) || [];
-        this.scripts = scripts.length > 0 ? scripts : FALLBACK_SCRIPTS;
-        this.statusText = "";
+        if (scripts.length > 0) {
+          this.scripts = scripts;
+          this.statusText = "";
+          return;
+        }
+        this.scripts = storeId ? [] : FALLBACK_SCRIPTS;
+        this.statusText = storeId ? "这家店暂未关联可玩的剧本。" : "";
       } catch (error) {
-        this.scripts = FALLBACK_SCRIPTS;
-        this.statusText = "已展示演示剧本，本地服务启动后会显示真实数据。";
+        this.scripts = storeId ? [] : FALLBACK_SCRIPTS;
+        this.statusText = storeId
+          ? "剧本加载失败，稍后再试。"
+          : "已展示演示剧本，本地服务启动后会显示真实数据。";
       }
     },
-    selectScript(script) {
+    async selectScript(script) {
+      const auth = await this.ensureScriptStepLogin();
+      if (!auth) {
+        return;
+      }
+      if (this.isSelectedScript(script)) {
+        await this.goNext();
+        return;
+      }
       this.selectedScript = script;
       writeCreateFlow({ script, role: null });
     },
-    goNext() {
+    isSelectedScript(script) {
+      return (
+        this.selectedScript &&
+        String(this.selectedScript.id) === String(script.id)
+      );
+    },
+    async goNext() {
+      const auth = await this.ensureScriptStepLogin();
+      if (!auth) {
+        return;
+      }
       if (!this.selectedScript) {
         uni.showToast({ title: "先选择一个剧本", icon: "none" });
         return;

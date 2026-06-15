@@ -18,11 +18,45 @@ services:
       - traefik.http.routers.pinche-api.service=pinche-api
       - traefik.http.services.pinche-api.loadbalancer.server.port=3018
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       redis:
         condition: service_started
     restart: unless-stopped
+
+  admin-web:
+    image: hkccr.ccs.tencentyun.com/murder/pinche-admin-web:latest
+    expose:
+      - "8080"
+    networks:
+      - proxy
+      - internal
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.pinche-admin-web.rule=Host(`admin.pinche.jubenmi.com`)
+      - traefik.http.routers.pinche-admin-web.entrypoints=websecure
+      - traefik.http.routers.pinche-admin-web.tls=true
+      - traefik.http.routers.pinche-admin-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.pinche-admin-web.service=pinche-admin-web
+      - traefik.http.services.pinche-admin-web.loadbalancer.server.port=8080
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  migrate:
+    image: hkccr.ccs.tencentyun.com/murder/pinche:latest
+    env_file:
+      - .env.production
+    command: npm run migrate
+    networks:
+      - internal
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
 
   mysql:
     image: mysql:8.4

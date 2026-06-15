@@ -1,5 +1,5 @@
 import { withDatabaseConnection, withTransaction } from "../../db/mysql.js";
-import { badRequest, conflict, forbidden, notFound } from "../../http/errors.js";
+import { AppError, badRequest, conflict, forbidden, notFound } from "../../http/errors.js";
 import { ensureRole } from "../auth/users.js";
 import { isAdmin, requireSessionOwner } from "./session-access.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
@@ -61,6 +61,36 @@ function likeKeyword(value) {
 function limitValue(value, fallback = 50) {
   const parsed = intValue(value, fallback);
   return Math.min(Math.max(parsed, 1), 100);
+}
+
+function positiveId(value, label = "id") {
+  const parsed = intValue(value);
+  if (parsed <= 0) {
+    throw badRequest(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function uniquePositiveIds(values, label = "ids") {
+  if (!Array.isArray(values)) {
+    throw badRequest(`${label} must be an array`);
+  }
+
+  const seen = new Set();
+  const ids = [];
+  for (const value of values) {
+    const id = positiveId(value, label);
+    if (!seen.has(id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+async function countRows(connection, sql, values) {
+  const [rows] = await connection.query(sql, values);
+  return Number(rows[0]?.count || rows[0]?.COUNT || 0);
 }
 
 function normalizeRequestType(value) {
@@ -402,6 +432,13 @@ export async function listActiveScripts(filters = {}) {
     const where = ["status = 'active'"];
     const values = [];
 
+    if (filters.storeId !== undefined && filters.storeId !== null && filters.storeId !== "") {
+      where.push(
+        "EXISTS (SELECT 1 FROM store_scripts ss WHERE ss.script_id = scripts.id AND ss.store_id = ?)"
+      );
+      values.push(positiveId(filters.storeId, "storeId"));
+    }
+
     if (filters.keyword) {
       where.push("(name LIKE ? OR type_tags LIKE ?)");
       const keyword = likeKeyword(filters.keyword);
@@ -462,6 +499,66 @@ export async function listAdminScripts(filters = {}) {
   });
 }
 
+export async function listStoreScripts(storeId) {
+  const id = positiveId(storeId, "storeId");
+  return withDatabaseConnection(async (connection) => {
+    const store = await findById(connection, "stores", id);
+    if (!store) {
+      throw notFound("Store not found");
+    }
+
+    const [rows] = await connection.query(
+      `
+        SELECT scripts.*
+        FROM store_scripts
+          INNER JOIN scripts ON scripts.id = store_scripts.script_id
+        WHERE store_scripts.store_id = ?
+        ORDER BY scripts.id DESC
+      `,
+      [id]
+    );
+    return rows;
+  });
+}
+
+export async function replaceStoreScripts(storeId, body = {}) {
+  const id = positiveId(storeId, "storeId");
+  const scriptIds = uniquePositiveIds(body.scriptIds ?? [], "scriptIds");
+
+  return withTransaction(async (connection) => {
+    const store = await findById(connection, "stores", id);
+    if (!store) {
+      throw notFound("Store not found");
+    }
+
+    if (scriptIds.length > 0) {
+      const placeholders = scriptIds.map(() => "?").join(", ");
+      const [rows] = await connection.query(
+        `SELECT id FROM scripts WHERE id IN (${placeholders})`,
+        scriptIds
+      );
+      const existingIds = new Set(rows.map((row) => Number(row.id)));
+      const missingIds = scriptIds.filter((scriptId) => !existingIds.has(scriptId));
+      if (missingIds.length > 0) {
+        throw badRequest(`Unknown scriptIds: ${missingIds.join(", ")}`);
+      }
+    }
+
+    await connection.query("DELETE FROM store_scripts WHERE store_id = ?", [id]);
+
+    if (scriptIds.length > 0) {
+      const values = scriptIds.flatMap((scriptId) => [id, scriptId]);
+      const placeholders = scriptIds.map(() => "(?, ?)").join(", ");
+      await connection.query(
+        `INSERT INTO store_scripts (store_id, script_id) VALUES ${placeholders}`,
+        values
+      );
+    }
+
+    return { storeId: id, scriptIds };
+  });
+}
+
 export async function createStore(user, body) {
   return withDatabaseConnection(async (connection) => {
     const [result] = await connection.query(
@@ -496,6 +593,47 @@ export async function updateStore(id, body) {
       ["status", "status"],
       ["claimStatus", "claim_status"]
     ])
+  );
+}
+
+async function hardDeleteCatalogEntity(
+  connection,
+  deleteSql,
+  id,
+  referenceSql,
+  label,
+  cleanupSqls = []
+) {
+  const entityId = positiveId(id, `${label} id`);
+  const references = await countRows(connection, referenceSql, [entityId]);
+  if (references > 0) {
+    throw new AppError(409, "RESOURCE_IN_USE", `${label} is used by existing sessions`, {
+      sessionCount: references
+    });
+  }
+
+  for (const cleanupSql of cleanupSqls) {
+    await connection.query(cleanupSql, [entityId]);
+  }
+
+  const [result] = await connection.query(deleteSql, [entityId]);
+  if (result.affectedRows === 0) {
+    throw notFound(`${label} not found`);
+  }
+
+  return { id: entityId, deleted: true };
+}
+
+export async function deleteStore(id) {
+  return withTransaction((connection) =>
+    hardDeleteCatalogEntity(
+      connection,
+      "DELETE FROM stores WHERE id = ?",
+      id,
+      "SELECT COUNT(*) AS count FROM sessions WHERE store_id = ?",
+      "Store",
+      ["DELETE FROM store_scripts WHERE store_id = ?"]
+    )
   );
 }
 
@@ -547,6 +685,19 @@ export async function updateScript(id, body) {
       ["status", "status"],
       ["claimStatus", "claim_status"]
     ])
+  );
+}
+
+export async function deleteScript(id) {
+  return withTransaction((connection) =>
+    hardDeleteCatalogEntity(
+      connection,
+      "DELETE FROM scripts WHERE id = ?",
+      id,
+      "SELECT COUNT(*) AS count FROM sessions WHERE script_id = ?",
+      "Script",
+      ["DELETE FROM store_scripts WHERE script_id = ?"]
+    )
   );
 }
 

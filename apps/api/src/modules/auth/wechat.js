@@ -37,6 +37,20 @@ function tokenFor(payload) {
   return `${header}.${body}.${signature}`;
 }
 
+export function issueBusinessToken(user, roles, identity = {}) {
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresAt = issuedAt + 60 * 60 * 24 * 7;
+  const token = tokenFor({
+    sub: user.id,
+    openid: identity.openid || user.openid || user.open_id,
+    roles,
+    iat: issuedAt,
+    exp: expiresAt
+  });
+
+  return { token, expiresAt };
+}
+
 function mockOpenidFromCode(code) {
   if (code.startsWith("dev-")) {
     return code;
@@ -137,23 +151,15 @@ export async function loginWithWechatCode(code) {
     await connection.end();
   }
 
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const expiresAt = issuedAt + 60 * 60 * 24 * 7;
-  const token = tokenFor({
-    sub: user.id,
-    openid: identity.openid,
-    roles,
-    iat: issuedAt,
-    exp: expiresAt
-  });
+  const issued = issueBusinessToken(user, roles, { openid: identity.openid });
 
   return {
     user,
     openid: identity.openid,
     unionid: identity.unionid,
     roles,
-    token,
-    expiresAt,
+    token: issued.token,
+    expiresAt: issued.expiresAt,
     mocked: identity.mocked
   };
 }
