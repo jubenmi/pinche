@@ -14,6 +14,9 @@
       <view class="section">
         <view class="title">资料管理</view>
         <view class="text">维护店家、剧本和缺资料申请。</view>
+        <view class="actions">
+          <button class="button secondary" @tap="scanAdminWebLogin">扫码登录 Web 后台</button>
+        </view>
         <view class="tabs">
           <button
             v-for="tab in tabs"
@@ -332,6 +335,72 @@ function showMessage(title) {
 
 function goMine() {
   uni.navigateTo({ url: "/pages/mine/index" });
+}
+
+function parseAdminWebLoginQr(rawValue) {
+  const value = String(rawValue || "");
+  const prefix = "pinche-admin-login://ticket/";
+  if (!value.startsWith(prefix)) {
+    return null;
+  }
+
+  const withoutPrefix = value.slice(prefix.length);
+  const [ticketId, queryText = ""] = withoutPrefix.split("?");
+  const secretPair = queryText
+    .split("&")
+    .map((item) => item.split("="))
+    .find(([key]) => key === "secret");
+  const secret = secretPair ? decodeURIComponent(secretPair[1] || "") : "";
+  if (!ticketId || !secret) {
+    return null;
+  }
+
+  return { ticketId, secret };
+}
+
+function confirmAdminWebLogin() {
+  return new Promise((resolve) => {
+    uni.showModal({
+      title: "Web 后台登录",
+      content: "确认登录 Web 管理后台？",
+      confirmText: "确认登录",
+      cancelText: "取消",
+      success(result) {
+        resolve(Boolean(result.confirm));
+      },
+      fail() {
+        resolve(false);
+      }
+    });
+  });
+}
+
+async function scanAdminWebLogin() {
+  const result = await new Promise((resolve, reject) => {
+    uni.scanCode({
+      onlyFromCamera: false,
+      success: resolve,
+      fail: reject
+    });
+  }).catch(() => null);
+
+  const parsed = parseAdminWebLoginQr(result?.result);
+  if (!parsed) {
+    showMessage("请扫描 Web 后台登录二维码");
+    return;
+  }
+
+  const confirmed = await confirmAdminWebLogin();
+  if (!confirmed) {
+    return;
+  }
+
+  await request({
+    url: `/api/admin/web-login/tickets/${parsed.ticketId}/approve`,
+    method: "POST",
+    data: { secret: parsed.secret }
+  });
+  showMessage("Web 后台已登录");
 }
 
 function displayTags(value) {

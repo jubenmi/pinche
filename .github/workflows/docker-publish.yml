@@ -9,11 +9,12 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: hkccr.ccs.tencentyun.com/murder/pinche
+  API_IMAGE_NAME: hkccr.ccs.tencentyun.com/murder/pinche
+  ADMIN_WEB_IMAGE_NAME: hkccr.ccs.tencentyun.com/murder/pinche-admin-web
 
 jobs:
-  publish-api:
-    name: Publish API image
+  publish-images:
+    name: Publish Docker images
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,11 +43,14 @@ jobs:
         shell: bash
         run: |
           BRANCH_NAME="${GITHUB_REF_NAME}"
-          TAGS="${IMAGE_NAME}:${BRANCH_NAME}"
+          API_TAGS="${API_IMAGE_NAME}:${BRANCH_NAME}"
+          ADMIN_WEB_TAGS="${ADMIN_WEB_IMAGE_NAME}:${BRANCH_NAME}"
           if [ "${BRANCH_NAME}" = "publish" ]; then
-            TAGS="${TAGS},${IMAGE_NAME}:latest"
+            API_TAGS="${API_TAGS},${API_IMAGE_NAME}:latest"
+            ADMIN_WEB_TAGS="${ADMIN_WEB_TAGS},${ADMIN_WEB_IMAGE_NAME}:latest"
           fi
-          echo "tags=${TAGS}" >> "${GITHUB_OUTPUT}"
+          echo "api_tags=${API_TAGS}" >> "${GITHUB_OUTPUT}"
+          echo "admin_web_tags=${ADMIN_WEB_TAGS}" >> "${GITHUB_OUTPUT}"
 
       - name: Login to Tencent Cloud Container Registry
         uses: docker/login-action@v3
@@ -64,4 +68,12 @@ jobs:
           context: .
           file: apps/api/Dockerfile
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ steps.tags.outputs.api_tags }}
+
+      - name: Build and push admin web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/admin-web/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.admin_web_tags }}

@@ -4,6 +4,11 @@ import { checkDatabaseReadiness } from "./db/mysql.js";
 import { AppError, badRequest, forbidden, unauthorized } from "./http/errors.js";
 import { updateUserGender, updateUserPhone } from "./modules/auth/users.js";
 import {
+  approveAdminWebLoginTicket,
+  createAdminWebLoginTicket,
+  pollAdminWebLoginTicket
+} from "./modules/auth/admin-web-login.js";
+import {
   loginWithWechatCode,
   verifyBusinessToken
 } from "./modules/auth/wechat.js";
@@ -21,6 +26,8 @@ import {
   createSignup,
   createStore,
   createSubscriptionRequest,
+  deleteScript,
+  deleteStore,
   getSession,
   getSessionShareStats,
   kickSessionSeat,
@@ -32,9 +39,11 @@ import {
   listMySignups,
   listMySessions,
   listSessionSignups,
+  listStoreScripts,
   lockSeat,
   publishSession,
   rejectSignup,
+  replaceStoreScripts,
   reviewCatalogRequest,
   updateDeposit,
   updateScript,
@@ -176,6 +185,42 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/admin/web-login/tickets") {
+    jsonResponse(response, 201, {
+      ok: true,
+      data: await createAdminWebLoginTicket({
+        userAgent: request.headers["user-agent"] || body.userAgent
+      })
+    });
+    return;
+  }
+
+  const adminWebLoginTicketId = url.pathname.match(
+    /^\/api\/admin\/web-login\/tickets\/([^/]+)$/
+  )?.[1];
+  if (request.method === "GET" && adminWebLoginTicketId) {
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await pollAdminWebLoginTicket(
+        adminWebLoginTicketId,
+        url.searchParams.get("secret")
+      )
+    });
+    return;
+  }
+
+  const adminWebLoginApproveId = url.pathname.match(
+    /^\/api\/admin\/web-login\/tickets\/([^/]+)\/approve$/
+  )?.[1];
+  if (request.method === "POST" && adminWebLoginApproveId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await approveAdminWebLoginTicket(user, adminWebLoginApproveId, body)
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/auth/wechat/phone") {
     const user = await getAuthUser(request);
     const phoneEncrypted = body.phoneEncrypted || body.phone;
@@ -239,11 +284,39 @@ async function route(request, response) {
     return;
   }
 
+  const adminStoreScriptsId = idMatch(url.pathname, /^\/api\/admin\/stores\/(\d+)\/scripts$/);
+  if (request.method === "GET" && adminStoreScriptsId) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listStoreScripts(adminStoreScriptsId)
+    });
+    return;
+  }
+
+  if (request.method === "PUT" && adminStoreScriptsId) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await replaceStoreScripts(adminStoreScriptsId, body)
+    });
+    return;
+  }
+
   const adminStoreId = idMatch(url.pathname, /^\/api\/admin\/stores\/(\d+)$/);
   if (request.method === "PATCH" && adminStoreId) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     jsonResponse(response, 200, { ok: true, data: await updateStore(adminStoreId, body) });
+    return;
+  }
+
+  if (request.method === "DELETE" && adminStoreId) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, { ok: true, data: await deleteStore(adminStoreId) });
     return;
   }
 
@@ -271,6 +344,16 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await updateScript(adminScriptId, body)
+    });
+    return;
+  }
+
+  if (request.method === "DELETE" && adminScriptId) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await deleteScript(adminScriptId)
     });
     return;
   }

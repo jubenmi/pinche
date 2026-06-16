@@ -6,7 +6,9 @@ export const requiredSchemaTables = Object.freeze([
   "users",
   "user_roles",
   "stores",
-  "scripts"
+  "scripts",
+  "admin_web_login_tickets",
+  "store_scripts"
 ]);
 
 export function serverConnectionOptions() {
