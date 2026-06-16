@@ -8,7 +8,8 @@ export const requiredSchemaTables = Object.freeze([
   "stores",
   "scripts",
   "admin_web_login_tickets",
-  "store_scripts"
+  "store_scripts",
+  "wechat_identities"
 ]);
 
 export function serverConnectionOptions() {
