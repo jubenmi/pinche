@@ -1,152 +1,152 @@
-# Login Phone Prompt and Ride Action Gate Design
+# 登录后手机号提示与上车动作门禁设计
 
-## Summary
+## 概述
 
-After WeChat login, the mini program prompts the user to authorize a phone number, but the prompt must be skippable during passive browsing and profile use. A verified phone number becomes mandatory only when the user is about to organize or join a ride: publishing a session, claiming a role, or switching into another role.
+用户完成微信登录后，小程序会提示用户授权手机号，但这个提示在浏览、查看资料、进入非上车流程时可以跳过。手机号只在用户准备组织或参与一车时变成必填：发布车、申请上车、确认角色、或换选到另一个角色。
 
-This keeps browsing lightweight while ensuring every active rider or organizer has a phone number before they enter the operational ride flow.
+这样可以让浏览体验保持轻量，同时确保真正进入车局运营流程的车头和玩家都已经留下可验证手机号。
 
-## Goals
+## 目标
 
-- Let users log in, browse sessions, inspect details, and use non-ride actions without being blocked by phone authorization.
-- Prompt for phone authorization after a fresh login when it is missing, with clear copy that it will be required before creating or joining a ride.
-- Require a verified phone before session publishing and seat claiming.
-- Use WeChat's required `button open-type="getPhoneNumber"` interaction for phone authorization.
-- Add backend enforcement so API calls cannot bypass the mini program phone gate.
+- 用户可以登录、浏览车局、查看详情、使用非上车动作，而不会被手机号授权阻断。
+- 用户在本次新登录后如果缺少手机号，小程序提示授权，并明确说明创建车或上车前会强制需要手机号。
+- 发布车和确认上车前必须有已验证手机号。
+- 手机号授权必须使用微信要求的 `button open-type="getPhoneNumber"` 交互。
+- 后端增加兜底校验，避免绕过小程序前端直接调用接口完成创建车或上车。
 
-## Non-Goals
+## 非目标
 
-- Do not require phone authorization for browsing session detail or share pages.
-- Do not require phone authorization just to open the mine page or inspect account state.
-- Do not expose phone numbers in public session, share, or profile surfaces.
-- Do not replace the existing gender completion flow.
-- Do not build a manual contact fallback in this change.
+- 不在浏览车局详情页或分享页时强制授权手机号。
+- 不因为用户打开“我的”页或查看账号状态而强制授权手机号。
+- 不在公开车局、分享页、个人信息条等界面展示手机号。
+- 不替换现有性别补全流程。
+- 本次不实现手动填写联系方式兜底。
 
-## Existing Context
+## 现有上下文
 
-The mini program already centralizes login in `apps/miniprogram/src/utils/api.js` through `ensureLoggedIn()`, which handles `wx.login`, backend auth, local auth cache, and missing gender completion. The shared `AuthIdentityBar` already responds to auth/profile events and opens a required profile modal for missing gender.
+小程序当前已经通过 `apps/miniprogram/src/utils/api.js` 里的 `ensureLoggedIn()` 集中处理登录，包括 `wx.login`、后端登录、本地 auth 缓存、以及缺少性别时的补全流程。共享组件 `AuthIdentityBar` 已经监听 auth/profile 事件，并能在缺少性别时打开必填资料弹窗。
 
-The backend already exposes `POST /api/auth/wechat/phone`, and `publicUser()` includes `phoneVerifiedAt`. The current phone endpoint stores a submitted phone placeholder and sets `phone_verified_at`, but the protected ride endpoints do not yet enforce phone verification.
+后端当前已经有 `POST /api/auth/wechat/phone`，并且 `publicUser()` 返回 `phoneVerifiedAt`。现有手机号接口会保存提交的手机号占位值并设置 `phone_verified_at`，但创建车和上车相关接口还没有强制检查手机号。
 
-Existing product notes prefer collecting phone/contact information at action time rather than while browsing. This design follows that direction.
+现有产品文档倾向于在用户发生关键动作时收集联系方式，而不是浏览阶段就强制收集。本设计沿用这个方向：登录后提示、可跳过；上车相关动作前强制。
 
-## User Flow
+## 用户流程
 
-### Login Without Blocking
+### 登录不阻塞
 
-1. User taps a login-protected but non-ride action.
-2. `ensureLoggedIn()` performs WeChat login if needed.
-3. If the user has no `phoneVerifiedAt`, the app shows a skippable phone prompt after this fresh login.
-4. If the user skips, login still succeeds and the original non-ride action may continue.
-5. Existing missing-gender handling still runs according to current requirements.
+1. 用户点击需要登录但不属于上车流程的操作。
+2. `ensureLoggedIn()` 在需要时执行微信登录。
+3. 如果用户没有 `phoneVerifiedAt`，小程序在本次新登录后展示一个可跳过的手机号授权提示。
+4. 如果用户跳过，登录仍然成功，原本的非上车操作可以继续。
+5. 现有缺少性别时的处理仍按当前要求执行。
 
-### Creating a Ride
+### 创建车
 
-1. User reaches the final publish step on `pages/session/setup`.
-2. `createPublishedSession()` calls `ensureLoggedIn({ requirePhone: true })`.
-3. If the user lacks `phoneVerifiedAt`, the app opens a required phone authorization prompt.
-4. The prompt uses a WeChat phone authorization button.
-5. If authorization succeeds, the app updates auth cache and continues publishing.
-6. If the user rejects or closes the prompt, publishing stops and the draft remains on the page.
+1. 用户进入 `pages/session/setup` 的最终发布步骤。
+2. `createPublishedSession()` 调用 `ensureLoggedIn({ requirePhone: true })`。
+3. 如果用户缺少 `phoneVerifiedAt`，小程序打开必填手机号授权提示。
+4. 提示里的授权按钮使用微信手机号授权按钮。
+5. 授权成功后，小程序更新 auth 缓存，并继续发布车。
+6. 用户拒绝授权或关闭提示时，本次发布停止，草稿仍保留在当前页面。
 
-### Joining or Switching Roles
+### 申请上车或换角色
 
-1. User chooses and confirms a role on `pages/session/share`.
-2. The final claim path calls `ensureLoggedIn({ requirePhone: true })`.
-3. If phone authorization succeeds, the app calls `POST /api/session-seats/:id/claim`.
-4. If phone authorization is rejected, no local role state is committed and no claim request is sent.
+1. 用户在 `pages/session/share` 选择并确认角色。
+2. 最终确认上车路径调用 `ensureLoggedIn({ requirePhone: true })`。
+3. 手机号授权成功后，小程序调用 `POST /api/session-seats/:id/claim`。
+4. 用户拒绝手机号授权时，不提交上车请求，也不提交本地角色状态。
 
-## Frontend Design
+## 前端设计
 
-### Shared Phone Helpers
+### 共享手机号助手
 
-Add shared phone helpers to `apps/miniprogram/src/utils/api.js`:
+在 `apps/miniprogram/src/utils/api.js` 增加共享手机号助手：
 
-- `updateUserPhoneFromWechatPhoneCode(code)` calls `POST /api/auth/wechat/phone`.
-- `requestUserPhoneFromPhoneModal(auth, options)` emits phone-profile events and waits for the visible component to respond.
-- `ensureUserPhone(auth, options)` returns the current auth if `auth.user.phoneVerifiedAt` exists. If `options.requirePhone === true`, it requests phone authorization and returns `null` when the user does not complete it. If phone is optional after a fresh login, it prompts once and still returns the original auth when skipped.
+- `updateUserPhoneFromWechatPhoneCode(code)` 调用 `POST /api/auth/wechat/phone`。
+- `requestUserPhoneFromPhoneModal(auth, options)` 发出手机号资料事件，并等待当前可见组件响应。
+- `ensureUserPhone(auth, options)` 在 `auth.user.phoneVerifiedAt` 已存在时直接返回当前 auth。如果 `options.requirePhone === true`，则请求手机号授权，用户没有完成授权时返回 `null`。如果是本次新登录后的可选手机号提示，则只提示一次；用户跳过时仍返回原 auth。
 
-The default `ensureLoggedIn()` behavior remains login-first and non-blocking for phone. It shows the optional phone prompt after fresh login, avoids repeatedly nagging cached sessions, and only enforces phone when passed `requirePhone: true`.
+`ensureLoggedIn()` 的默认行为仍然是先完成登录，不因为缺少手机号而阻塞。它会在本次新登录后展示可跳过的手机号提示，避免对缓存登录状态反复打扰；只有传入 `requirePhone: true` 时才强制手机号。
 
-### UI Component
+### UI 组件
 
-Extend `AuthIdentityBar.vue` with a phone authorization modal or a second modal mode:
+扩展 `AuthIdentityBar.vue`，增加手机号授权弹窗，或在现有资料弹窗中增加第二种弹窗模式：
 
-- Optional mode copy: phone authorization is recommended now and required before creating or joining a ride.
-- Required mode copy: phone authorization is required before creating or joining a ride.
-- Optional mode has a skip/cancel action.
-- Required mode has no successful bypass; closing or rejecting returns `null` to the waiting guard.
-- The authorization control is a `button` with `open-type="getPhoneNumber"`.
-- The handler reads the dynamic phone authorization `code` from the WeChat event and sends it to the shared API helper.
+- 可选模式文案：现在建议授权手机号，创建车或上车前会强制需要。
+- 必填模式文案：创建车或上车前必须授权手机号。
+- 可选模式提供跳过或取消动作。
+- 必填模式没有成功绕过路径；关闭、拒绝授权都会向等待中的 guard 返回 `null`。
+- 授权控件必须是带 `open-type="getPhoneNumber"` 的 `button`。
+- 事件处理从微信返回事件中读取动态手机号授权 `code`，然后交给共享 API 助手保存。
 
-The phone prompt should not use a normal modal confirm button as the authorization action, because WeChat phone authorization must be initiated by a user click on the dedicated open-type button.
+手机号提示不能用普通 `uni.showModal` 的确认按钮伪装成授权按钮，因为微信手机号授权必须由用户点击专用 open-type 按钮触发。
 
-### Action Gates
+### 动作门禁
 
-Update these frontend gates:
+更新这些前端门禁：
 
 - `apps/miniprogram/src/pages/session/setup.vue`
-  - `createPublishedSession()` calls `ensureLoggedIn({ requirePhone: true, ... })` before setting `busyAction` or creating the session.
+  - `createPublishedSession()` 在设置 `busyAction` 或创建车之前，调用 `ensureLoggedIn({ requirePhone: true, ... })`。
 - `apps/miniprogram/src/pages/session/share.vue`
-  - `confirmRole()` calls `ensureSeatSelectionLogin({ requirePhone: true })`, or the local wrapper always requires phone for final confirmation.
-  - Role browsing and tentative selection can remain available after normal login, but the final claim must be gated.
+  - `confirmRole()` 调用 `ensureSeatSelectionLogin({ requirePhone: true })`，或者让本地登录包装方法在最终确认角色时始终要求手机号。
+  - 浏览角色和临时选择角色仍可在普通登录后继续，但最终提交上车必须经过手机号门禁。
 
-Other pages continue to use normal `ensureLoggedIn()` unless they create or join a ride.
+其它页面继续使用普通 `ensureLoggedIn()`，除非它们新增了创建车或上车相关动作。
 
-## Backend Design
+## 后端设计
 
-### Phone Authorization Endpoint
+### 手机号授权接口
 
-Keep `POST /api/auth/wechat/phone` authenticated. Accept the WeChat phone authorization `code` from the frontend.
+保持 `POST /api/auth/wechat/phone` 为登录后接口。前端向它提交微信手机号授权 `code`。
 
-For local mock login or current development mode, the endpoint may persist a deterministic placeholder value and set `phone_verified_at`, preserving testability. For production, the endpoint should exchange the phone authorization `code` with WeChat's phone number API server-side and never rely on the mini program to submit a raw phone number as proof.
+本地 mock 登录或当前开发模式下，接口可以保存确定性的占位值并设置 `phone_verified_at`，保持测试可运行。生产环境下，后端应使用这个手机号授权 `code` 服务端调用微信手机号接口换取手机号，不能把小程序端提交的裸手机号当作已验证凭据。
 
-The response returns `{ user, roles }` or enough data for the frontend to refresh the auth cache consistently with existing user update flows.
+接口响应返回 `{ user, roles }`，或返回足够数据让前端按现有用户更新流程刷新 auth 缓存。
 
-### Ride Action Enforcement
+### 上车动作强制校验
 
-Add a backend guard that rejects ride actions when `user.user.phoneVerifiedAt` is missing:
+增加后端 guard：当 `user.user.phoneVerifiedAt` 缺失时拒绝上车相关动作。
 
 - `POST /api/sessions`
 - `POST /api/session-seats/:id/claim`
 
-The error should be explicit, for example code `PHONE_REQUIRED` with a user-safe message such as `Phone authorization is required before creating or joining a ride`. The frontend should still gate before the request, but this backend check is the source of truth.
+错误应清晰可识别，例如错误码 `PHONE_REQUIRED`，用户可读文案可为 `创建车或上车前需要授权手机号`。前端仍应在请求前先做门禁，但后端校验是最终兜底。
 
-## Data Flow
+## 数据流
 
 ```text
 wx.login
   -> POST /api/auth/wechat/login
-  -> auth cache updated
-  -> optional phone prompt appears after fresh login if phone is missing
-  -> user may skip
+  -> 更新 auth 缓存
+  -> 如果缺少手机号，本次新登录后出现可跳过手机号提示
+  -> 用户可以跳过
 
-publish or claim action
+发布车或确认上车
   -> ensureLoggedIn({ requirePhone: true })
-  -> AuthIdentityBar phone modal
+  -> AuthIdentityBar 手机号弹窗
   -> button open-type="getPhoneNumber"
   -> POST /api/auth/wechat/phone { code }
-  -> users.phone_verified_at set
-  -> auth cache updated
-  -> original publish or claim continues
+  -> users.phone_verified_at 被设置
+  -> 更新 auth 缓存
+  -> 继续原本的发布车或上车动作
 ```
 
-## Error Handling
+## 错误处理
 
-- User skips optional prompt: keep logged-in auth and continue non-ride action.
-- User rejects required phone authorization: stop the protected action and show a short toast.
-- Phone endpoint fails: keep the current page state, stop the protected action, and show a retryable error.
-- Backend returns `PHONE_REQUIRED`: frontend should surface the same phone authorization prompt if possible; otherwise show a clear toast.
-- Missing or malformed phone authorization code returns a validation error.
+- 用户跳过可选提示：保留已登录 auth，继续非上车动作。
+- 用户拒绝必填手机号授权：停止当前受保护动作，并展示短 toast。
+- 手机号接口失败：保持当前页面状态，停止受保护动作，并展示可重试错误。
+- 后端返回 `PHONE_REQUIRED`：前端应尽量拉起同一个手机号授权提示；无法拉起时展示清晰 toast。
+- 缺少或格式错误的手机号授权 code 返回参数校验错误。
 
-## Testing
+## 测试
 
-- Add focused checks to prove optional login does not require phone.
-- Add frontend source checks that publish and claim paths pass `requirePhone: true` before side effects.
-- Add backend smoke coverage that `POST /api/sessions` and `POST /api/session-seats/:id/claim` reject users without `phoneVerifiedAt`.
-- Add backend smoke coverage that phone authorization updates `phoneVerifiedAt`, after which the same ride action succeeds.
-- Keep existing gender, share, maintenance, and miniprogram checks passing.
+- 增加聚焦检查，证明普通登录不会因为缺少手机号而失败。
+- 增加前端源码检查，证明发布车和确认上车路径在副作用前传入 `requirePhone: true`。
+- 增加后端 smoke 覆盖：没有 `phoneVerifiedAt` 的用户调用 `POST /api/sessions` 和 `POST /api/session-seats/:id/claim` 会被拒绝。
+- 增加后端 smoke 覆盖：手机号授权会更新 `phoneVerifiedAt`，随后同一个上车动作可以成功。
+- 保持现有性别、分享、维护模式、小程序检查通过。
 
-## Rollout Notes
+## 发布前注意
 
-Before production release, confirm the mini program privacy guide declares phone number collection and that the production backend exchanges WeChat phone authorization codes server-side. Public pages and share images must continue to avoid exposing phone numbers.
+生产发布前，需要确认小程序隐私保护指引已经声明手机号收集用途，并确认生产后端会在服务端用微信手机号授权 code 换取手机号。公开页面和分享图片仍不得展示手机号。
