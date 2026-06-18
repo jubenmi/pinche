@@ -43,6 +43,7 @@ export function issueBusinessToken(user, roles, identity = {}) {
   const token = tokenFor({
     sub: user.id,
     openid: identity.openid || user.openid || user.open_id,
+    unionid: identity.unionid || user.unionid || user.union_id || undefined,
     roles,
     iat: issuedAt,
     exp: expiresAt
@@ -129,7 +130,10 @@ export async function loginWithWechatCode(code) {
     throw error;
   }
 
-  const identity = await exchangeCodeForOpenid(code);
+  const identity = {
+    ...(await exchangeCodeForOpenid(code)),
+    appId: config.wechat.appId
+  };
   const connection = await createDatabaseConnection();
   let user;
   let roles;
@@ -139,7 +143,8 @@ export async function loginWithWechatCode(code) {
     const result = await upsertWechatUser(
       connection,
       identity,
-      config.bootstrapAdminOpenids
+      config.bootstrapAdminOpenids,
+      config.bootstrapAdminUnionids
     );
     await connection.commit();
     user = result.user;
@@ -151,7 +156,10 @@ export async function loginWithWechatCode(code) {
     await connection.end();
   }
 
-  const issued = issueBusinessToken(user, roles, { openid: identity.openid });
+  const issued = issueBusinessToken(user, roles, {
+    openid: identity.openid,
+    unionid: identity.unionid
+  });
 
   return {
     user,

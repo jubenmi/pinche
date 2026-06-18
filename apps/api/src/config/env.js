@@ -93,7 +93,8 @@ export const config = {
   sessionSecret:
     process.env.SESSION_SECRET ||
     "local-development-session-secret-change-before-production",
-  bootstrapAdminOpenids: listEnv("BOOTSTRAP_ADMIN_OPENIDS")
+  bootstrapAdminOpenids: listEnv("BOOTSTRAP_ADMIN_OPENIDS"),
+  bootstrapAdminUnionids: listEnv("BOOTSTRAP_ADMIN_UNIONIDS")
 };
 
 export function publicConfig() {

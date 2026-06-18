@@ -59,7 +59,10 @@
   - [x] 运行 `docker compose -f docker-compose.prod.yml up -d mysql redis`。
     - 通过 Portainer stack 部署，`pinche-mysql-1`、`pinche-redis-1` 已创建。
   - [x] 等待 MySQL healthcheck 通过。
-  - [ ] 运行 `docker compose -f docker-compose.prod.yml run --rm api npm run migrate`。
+  - [ ] 运行 `docker compose -f docker-compose.prod.yml run --rm migrate`。
+    - 如果 Portainer 当前 stack 还没有 `migrate` 服务，先临时运行兼容命令：`docker compose -f docker-compose.prod.yml run --rm api npm run migrate`。
+    - 阻塞登录根因：2026-06-13 体验版测试时，生产 `/health` 与 `/health/db` 均通过，但 `/api/stores`、`/api/scripts` 返回 `Table 'pinche.stores/scripts' doesn't exist`，说明生产库尚未执行迁移。
+    - 已补强：`docker-compose.prod.example.yml` 新增 `migrate` 一次性服务；`RELEASE_API_BASE_URL=https://api.pinche.jubenmi.com npm run d9:release-check` 会在业务表缺失时失败。
   - [x] 运行 `docker compose -f docker-compose.prod.yml up -d api`。
     - 通过 Portainer stack 部署，`pinche-api-1` 已创建并运行。
   - [ ] 检查 `curl -sS http://127.0.0.1:3018/health`。
@@ -68,9 +71,12 @@
     - 通过：`curl --resolve api.pinche.jubenmi.com:443:175.27.169.6 https://api.pinche.jubenmi.com/health` 返回 OK。
   - [x] 检查 `curl -sS <生产HTTPS API域名>/health/db`。
     - 通过：`curl --resolve api.pinche.jubenmi.com:443:175.27.169.6 https://api.pinche.jubenmi.com/health/db` 返回 OK。
+  - [ ] 检查 `curl -sS <生产HTTPS API域名>/api/stores` 和 `/api/scripts`。
+    - 当前失败：两者均返回业务表不存在；迁移完成后必须返回 `ok: true`。
 
 - [ ] D9.7 配置微信小程序后台。
-  - [ ] 配置 request 合法域名为生产 HTTPS API 域名。
+  - [x] 配置 request 合法域名为生产 HTTPS API 域名。
+    - 通过微信小程序后台截图确认：`https://api.pinche.jubenmi.com` 已是唯一 request 合法域名。
   - [ ] 配置小程序名称、头像、简介。
   - [ ] 配置真实服务类目。
   - [ ] 配置隐私保护指引。
@@ -78,22 +84,31 @@
   - [ ] 确认审核说明和主链路体验路径。
 
 - [ ] D9.8 构建小程序生产包。
-  - [ ] 运行 `VITE_API_BASE_URL=<生产HTTPS API域名> npm run build:mp-weixin`。
-  - [ ] 运行 `RELEASE_API_BASE_URL=<生产HTTPS API域名> npm run d9:release-check`。
-  - [ ] 确认输出包含 `uploadReady: true`。
-  - [ ] 确认上传目录为 `apps/miniprogram/dist/build/mp-weixin`。
+  - [x] 运行 `VITE_API_BASE_URL=<生产HTTPS API域名> npm run build:mp-weixin`。
+    - 通过：`VITE_API_BASE_URL=https://api.pinche.jubenmi.com npm run build:mp-weixin` 退出码 0，生成 mp-weixin 构建产物。
+  - [x] 运行 `RELEASE_API_BASE_URL=<生产HTTPS API域名> npm run d9:release-check`。
+    - 通过：`RELEASE_API_BASE_URL=https://api.pinche.jubenmi.com npm run d9:release-check` 退出码 0。
+    - 注意：该通过记录来自新增线上业务表检查之前；当前新检查会在生产库未迁移时失败，需完成 D9.6 后重新执行。
+  - [x] 确认输出包含 `uploadReady: true`。
+    - 输出包含：`"uploadReady": true`，`"placeholderDomain": false`。
+  - [x] 确认上传目录为 `apps/miniprogram/dist/build/mp-weixin`。
 
 - [ ] D9.9 微信开发者工具上传体验版。
-  - [ ] 暂停，请用户登录或确认微信开发者工具。
-  - [ ] 打开 `apps/miniprogram/dist/build/mp-weixin`。
-  - [ ] 上传版本，版本号建议与仓库版本一致。
-  - [ ] 在小程序后台设置为体验版。
+  - 进行中：代码已上传成功，等待保存体验版二维码或截图。
+  - [x] 暂停，请用户登录或确认微信开发者工具。
+    - 用户已确认上传；CLI 服务端口仍提示关闭，实际通过微信开发者工具 UI 上传。
+  - [x] 打开 `apps/miniprogram/dist/build/mp-weixin`。
+  - [x] 上传版本，版本号建议与仓库版本一致。
+    - 通过：微信开发者工具显示“代码上传成功”。线上版本显示 `1.1.8`，工具预填并实际上传版本号为 `2.1.8`。
+  - [x] 在小程序后台设置为体验版。
+    - 通过：上传前工具提示上次提交已设为体验版，本次上传会覆盖体验版；确认后上传成功。
   - [ ] 保存体验版二维码或截图。
 
 - [ ] D9.10 体验版真机测试。
   - [ ] iOS 微信打开体验版。
   - [ ] Android 微信打开体验版。
   - [ ] 测试微信登录。
+    - 当前阻塞：生产数据库未迁移，登录写入/读取用户表前后的业务接口不可用；先执行 D9.6 迁移并重新检查 `/api/stores`、`/api/scripts`。
   - [ ] 测试管理员资料录入或查看。
   - [ ] 测试建车、发布、分享。
   - [ ] 测试玩家报名。

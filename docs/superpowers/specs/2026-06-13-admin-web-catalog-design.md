@@ -18,12 +18,14 @@
 6. 管理端支持剧本角色模板的查看、创建、编辑和删除。
 7. 删除店家或剧本使用物理删除；如果已有历史车局引用，删除被阻止并返回清晰错误。
 8. 复用现有 `system_admin` 权限模型，普通用户不能登录或调用管理接口。
+9. 店家和剧本通过显式关联控制可见性；用户选择店家后，只展示该店家已关联的剧本，未关联剧本不显示。
 
 ## 非目标
 
 - 不重做小程序现有建车、分享、报名、聊天流程。
 - 不把历史车局、报名、座位记录一起级联删除。
 - 不新增独立角色表；第一版继续使用 `scripts.default_seat_template_json` 作为剧本角色模板来源。
+- 不把店家归属写进 `scripts` 主表；剧本可以被多个店家关联，第一版不维护店家维度的价格、库存或上下架时间。
 - 不接入微信开放平台 PC 扫码 OAuth；本项目使用“小程序扫描 Web 二维码并确认”的登录方式。
 - 不做复杂组织、多租户、细粒度 RBAC 或审计后台。
 
@@ -31,6 +33,8 @@
 
 - 删除是数据库硬删除，不是 `status=inactive` 软删除。
 - 硬删除不级联历史车局。若 `sessions.store_id` 或 `sessions.script_id` 已引用该记录，API 返回 `409 CONFLICT`，提示无法删除已被车局使用的资料。
+- 店家和剧本使用 `store_scripts` 关联表。小程序在店家上下文中请求剧本时必须带 `storeId`，后端只返回该店已关联且上架的剧本；不带 `storeId` 的公共剧本列表保持原有全局上架列表语义。
+- 删除未被历史车局引用的店家或剧本时，先物理删除对应 `store_scripts` 关联行，再物理删除主表记录。
 - 剧本角色不新增独立表。角色 CRUD 操作更新 `default_seat_template_json` 数组；删除角色表示该角色对象从 JSON 数组中移除。
 - Web 登录二维码由后台登录票据驱动，小程序扫码确认后，浏览器轮询获得管理员 token。
 
@@ -83,6 +87,28 @@ CREATE TABLE IF NOT EXISTS admin_web_login_tickets (
 
 票据 secret 只存 SHA-256 hash。二维码中包含 `id` 和一次性 `secret`。票据默认 5 分钟过期。
 
+新增 migration：`apps/api/migrations/0008_store_script_links.sql`。
+
+创建 `store_scripts`：
+
+```sql
+CREATE TABLE IF NOT EXISTS store_scripts (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  store_id BIGINT UNSIGNED NOT NULL,
+  script_id BIGINT UNSIGNED NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_store_script (store_id, script_id),
+  INDEX idx_store_scripts_store (store_id),
+  INDEX idx_store_scripts_script (script_id),
+  CONSTRAINT fk_store_scripts_store
+    FOREIGN KEY (store_id) REFERENCES stores(id),
+  CONSTRAINT fk_store_scripts_script
+    FOREIGN KEY (script_id) REFERENCES scripts(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+关联表只表达“这个店可玩这个剧本”。上下架仍读取 `stores.status` 和 `scripts.status`，店家维度的特殊价格或状态不在第一版范围。
+
 ### 登录接口
 
 新增路由：
@@ -127,6 +153,8 @@ Web 轮询规则：
 | --- | --- | --- | --- |
 | `DELETE` | `/api/admin/stores/:id` | `system_admin` | 数据库硬删除店家 |
 | `DELETE` | `/api/admin/scripts/:id` | `system_admin` | 数据库硬删除剧本 |
+| `GET` | `/api/admin/stores/:id/scripts` | `system_admin` | 查看店家已关联剧本 |
+| `PUT` | `/api/admin/stores/:id/scripts` | `system_admin` | 覆盖保存店家关联剧本 ID 列表 |
 
 删除前检查引用：
 
@@ -146,7 +174,38 @@ Web 轮询规则：
 }
 ```
 
-如果没有引用，执行真正的 `DELETE FROM stores WHERE id = ?` 或 `DELETE FROM scripts WHERE id = ?`。不存在的记录返回 `404`。
+如果没有引用，先删除关联表中的行，再执行真正的 `DELETE FROM stores WHERE id = ?` 或 `DELETE FROM scripts WHERE id = ?`。不存在的记录返回 `404`。
+
+### 店家剧本可见性
+
+公共剧本列表继续使用：
+
+```text
+GET /api/scripts?keyword=&limit=
+```
+
+当小程序已经选择店家时，必须调用：
+
+```text
+GET /api/scripts?storeId=123&keyword=&limit=
+```
+
+后端筛选规则：
+
+- `scripts.status = 'active'`
+- 存在 `store_scripts.store_id = storeId AND store_scripts.script_id = scripts.id`
+- 若传入 `keyword`，继续按剧本名称和标签模糊搜索
+
+管理端关联接口：
+
+```json
+PUT /api/admin/stores/123/scripts
+{
+  "scriptIds": [1, 2, 3]
+}
+```
+
+保存语义是覆盖式保存：请求中的 `scriptIds` 去重并校验为整数，先清空该店旧关联，再写入新关联。`scriptIds: []` 表示该店暂不展示任何剧本。
 
 ### 角色模板接口策略
 
@@ -180,6 +239,7 @@ Web 轮询规则：
 - 扫码后展示确认弹窗：`确认登录 Web 管理后台？`
 - 用户确认后调用 `/api/admin/web-login/tickets/:id/approve`。
 - 普通用户或非管理员进入该页时仍展示无权限。
+- 创建车局流程在选择店家后进入剧本页时携带 `storeId`，剧本页请求 `/api/scripts?storeId=<id>`。未关联到该店的剧本不展示；若店家暂未关联剧本，页面展示空状态或演示兜底。
 
 后续也可以在“我的”页新增独立入口，但第一版不强制。
 
@@ -225,6 +285,7 @@ Web 轮询规则：
 - 搜索：关键词、状态。
 - 创建：抽屉表单。
 - 编辑：抽屉表单。
+- 关联剧本：在店家抽屉中选择该店可玩的剧本并保存。
 - 删除：危险操作二次确认，调用 DELETE。
 - 删除失败：展示已被车局引用的提示。
 
@@ -343,6 +404,9 @@ API 烟测扩展：
 - 管理员创建店家后 DELETE 成功，随后列表不可见。
 - 管理员创建剧本后 DELETE 成功，随后列表不可见。
 - 已被 session 引用的店家/剧本 DELETE 返回 409。
+- 店家关联剧本后，`GET /api/scripts?storeId=` 只返回该店关联剧本。
+- 覆盖保存店家关联后，旧关联不再出现在该店剧本列表。
+- 删除未被引用的店家或剧本会同步清理 `store_scripts` 关联行。
 - 非管理员不能 approve Web 登录票据。
 - 管理员 approve 后 Web 轮询拿到 token。
 
@@ -364,7 +428,9 @@ docker compose -f docker-compose.prod.example.yml config
 - `apps/api/src/modules/auth/users.js` 或新增 admin web login module
 - `apps/api/src/modules/core/service.js`
 - `apps/api/migrations/0007_admin_web_login.sql`
+- `apps/api/migrations/0008_store_script_links.sql`
 - `apps/miniprogram/src/pages/admin/catalog.vue`
+- `apps/miniprogram/src/pages/session/script.vue`
 - `docker-compose.prod.example.yml`
 - 根 `package.json`
 - `scripts/d12-admin-web-check.js`

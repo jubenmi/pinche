@@ -11,7 +11,7 @@
     "packages/shared"
   ],
   "scripts": {
-    "check": "npm --workspace apps/api run check && node --check scripts/d2-smoke-test.js && node --check scripts/d3-smoke-test.js && node --check scripts/d4-smoke-test.js && node --check scripts/d5-smoke-test.js && node --check scripts/d6-smoke-test.js && node --check scripts/d7-smoke-test.js && node --check scripts/d8-qa-check.js && node --check scripts/d10-pseudo-chat-check.js && node --check scripts/d10-pseudo-chat-smoke.js && node scripts/check-api-health.js && node scripts/d12-admin-web-check.js && node scripts/check-miniprogram.js && node scripts/check-maintenance-mode.js && node scripts/d11-gender-check.js && node scripts/d10-pseudo-chat-check.js",
+    "check": "npm --workspace apps/api run check && node --check scripts/d2-smoke-test.js && node --check scripts/d3-smoke-test.js && node --check scripts/d4-smoke-test.js && node --check scripts/d5-smoke-test.js && node --check scripts/d6-smoke-test.js && node --check scripts/d7-smoke-test.js && node --check scripts/d8-qa-check.js && node --check scripts/d10-pseudo-chat-check.js && node --check scripts/d10-pseudo-chat-smoke.js && node scripts/check-api-health.js && node scripts/d12-admin-web-check.js && node scripts/d13-cross-app-identity-check.js && node scripts/check-miniprogram.js && node scripts/check-maintenance-mode.js && node scripts/d11-gender-check.js && node scripts/d14-profile-check.js && node scripts/d10-pseudo-chat-check.js",
     "dev:mp-weixin": "npm --workspace apps/miniprogram run dev:mp-weixin",
     "build:mp-weixin": "npm --workspace apps/miniprogram run build:mp-weixin",
     "dev:admin-web": "npm --workspace apps/admin-web run dev",

@@ -1,5 +1,12 @@
 import { withDatabaseConnection, withTransaction } from "../../db/mysql.js";
-import { AppError, badRequest, conflict, forbidden, notFound } from "../../http/errors.js";
+import {
+  AppError,
+  badRequest,
+  conflict,
+  forbidden,
+  notFound,
+  phoneRequired
+} from "../../http/errors.js";
 import { ensureRole } from "../auth/users.js";
 import { isAdmin, requireSessionOwner } from "./session-access.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
@@ -121,6 +128,12 @@ function assertPayable(basePrice, adjustment) {
     throw badRequest("payable_price cannot be negative");
   }
   return payablePrice;
+}
+
+function requireVerifiedPhone(user) {
+  if (!user?.user?.phoneVerifiedAt) {
+    throw phoneRequired();
+  }
 }
 
 const PUBLIC_TEXT_REPLACEMENTS = [
@@ -872,6 +885,8 @@ export async function createEntityClaim(user, body) {
 }
 
 export async function createSession(user, body) {
+  requireVerifiedPhone(user);
+
   return withTransaction(async (connection) => {
     assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
     assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
@@ -1219,6 +1234,8 @@ export async function createSignup(user, body) {
 }
 
 export async function claimSessionSeat(user, seatId, body = {}) {
+  requireVerifiedPhone(user);
+
   return withTransaction(async (connection) => {
     const [seatRefs] = await connection.query(
       "SELECT session_id FROM session_seats WHERE id = ?",

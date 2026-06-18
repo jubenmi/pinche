@@ -7,11 +7,14 @@ work-log/
 .env.*
 !.env.example
 !.env.production.example
+!apps/miniprogram/.env.development
+!apps/miniprogram/.env.production
 dist/
 coverage/
 .idea/
 .vscode/
 tmp/
 docker-data/
+apps/api/uploads/
 apps/miniprogram/project.private.config.json
 apps/miniprogram/src/project.private.config.json

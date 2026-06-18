@@ -14,6 +14,13 @@ export default {
 </script>
 
 <style>
+@font-face {
+  font-family: "PincheBrand";
+  src: url("/static/fonts/pinche-brand.ttf");
+  font-weight: 600;
+  font-style: normal;
+}
+
 page {
   background-color: #fbfaf6;
   color: #183d34;
@@ -39,6 +46,7 @@ page {
 .title {
   margin-bottom: 14rpx;
   color: #12382f;
+  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
   font-size: 42rpx;
   font-weight: 600;
   letter-spacing: 0;

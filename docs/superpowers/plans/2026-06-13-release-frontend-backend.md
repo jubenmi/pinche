@@ -191,10 +191,16 @@ Expected: MySQL healthcheck becomes healthy.
 Run on the server:
 
 ```bash
-docker compose -f docker-compose.prod.yml run --rm api npm run migrate
+docker compose -f docker-compose.prod.yml run --rm migrate
 ```
 
 Expected: JSON output contains `"ok": true`; `executed` lists newly applied migration files or an empty array.
+
+If the server has not yet been updated with the dedicated `migrate` service, use this one-time compatibility command instead:
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm api npm run migrate
+```
 
 - [ ] **Step 4: Start API**
 
@@ -223,9 +229,11 @@ Run from a local machine:
 ```bash
 curl -sS "$PINCHE_API_BASE_URL/health"
 curl -sS "$PINCHE_API_BASE_URL/health/db"
+curl -sS "$PINCHE_API_BASE_URL/api/stores"
+curl -sS "$PINCHE_API_BASE_URL/api/scripts"
 ```
 
-Expected: Both responses contain `"ok": true`.
+Expected: All responses contain `"ok": true`.
 
 ## Task 4: Configure WeChat Mini Program Console
 
@@ -299,7 +307,7 @@ Open this directory in WeChat DevTools:
 apps/miniprogram/dist/build/mp-weixin
 ```
 
-Expected: The project AppID is `wxe0421039631a9c2a`, and the app can compile without local API requests.
+Expected: The project AppID is `wx2675a606d3bd242c`, and the app can compile without local API requests.
 
 ## Task 6: Upload Experience Version
 

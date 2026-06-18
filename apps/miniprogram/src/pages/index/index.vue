@@ -3,7 +3,7 @@
     <AuthIdentityBar />
 
     <view v-if="backendStatus.maintenance" class="maintenance-state">
-      <image class="maintenance-art" src="/static/art/ticket-landscape.png" mode="widthFix" />
+      <image class="maintenance-art" src="/static/art/maintenance-landscape.jpg" mode="widthFix" />
       <view class="maintenance-title">服务正在上线维护中</view>
       <view class="maintenance-text">我们正在准备后端服务，稍后会自动恢复。</view>
       <view v-if="backendStatus.lastCheckedAt" class="maintenance-meta">
@@ -23,7 +23,7 @@
     </view>
 
     <view v-else class="home-normal">
-      <image class="home-landscape" src="/static/art/ink-home-landscape.png" mode="widthFix" />
+      <image class="home-landscape" src="/static/art/ink-home-landscape.jpg" mode="widthFix" />
 
       <view class="home-main">
         <view class="home-copy">
@@ -51,7 +51,7 @@
 
 <script setup>
 import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
-import { computed, reactive, ref } from "vue";
+import { computed, reactive } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import {
   BACKEND_STATUS_CHANGE_EVENT,
@@ -63,7 +63,6 @@ import { clearCreateFlow } from "../../utils/createFlow";
 
 const buildVersion = `版本 ${__PINCHE_BUILD_TIME__}`;
 const backendStatus = reactive(getBackendStatus());
-const hasStartedLogin = ref(false);
 let maintenanceTimer = null;
 
 const retryButtonText = computed(() => (backendStatus.checking ? "检查中..." : "重试"));
@@ -75,20 +74,11 @@ function syncBackendStatus(status = getBackendStatus()) {
     return;
   }
   stopMaintenancePolling();
-  runLoginWhenReady();
 }
 
 async function refreshBackendStatus() {
   const status = await checkBackendHealth();
   syncBackendStatus(status);
-}
-
-function runLoginWhenReady() {
-  if (backendStatus.maintenance || backendStatus.available !== true || hasStartedLogin.value) {
-    return;
-  }
-  hasStartedLogin.value = true;
-  ensureLoggedIn();
 }
 
 function startMaintenancePolling() {
@@ -134,7 +124,13 @@ onUnload(() => {
   }
 });
 
-function goCreate() {
+async function goCreate() {
+  const auth = await ensureLoggedIn({
+    content: "登录后开始创建剧本局。"
+  });
+  if (!auth) {
+    return;
+  }
   clearCreateFlow();
   uni.navigateTo({ url: "/pages/session/create" });
 }
@@ -190,6 +186,7 @@ function goMine() {
 
 .hero-title {
   color: #153f34;
+  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
   font-size: 58rpx;
   font-weight: 600;
   letter-spacing: 10rpx;
@@ -255,6 +252,7 @@ function goMine() {
 }
 
 .action-title {
+  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
   font-size: 34rpx;
   font-weight: 600;
   line-height: 1.2;
@@ -294,13 +292,15 @@ function goMine() {
 }
 
 .maintenance-art {
-  width: 420rpx;
-  max-width: 100%;
-  margin-bottom: 42rpx;
+  width: 560rpx;
+  max-width: 92%;
+  margin-bottom: 40rpx;
+  opacity: 0.96;
 }
 
 .maintenance-title {
   color: #153f34;
+  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
   font-size: 42rpx;
   font-weight: 600;
   line-height: 1.3;

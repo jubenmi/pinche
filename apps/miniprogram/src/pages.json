@@ -66,5 +66,6 @@
     "navigationBarTitleText": "剧本迷·拼车",
     "navigationBarBackgroundColor": "#ffffff",
     "backgroundColor": "#f7f7f7"
-  }
+  },
+  "lazyCodeLoading": "requiredComponents"
 }

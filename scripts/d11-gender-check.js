@@ -116,17 +116,17 @@ const checks = [
       source.includes("DEFAULT_AVATARS") &&
       source.includes("默认男生头像") &&
       source.includes("默认女生头像") &&
-      source.includes("/static/avatars/default-male.png") &&
-      source.includes("/static/avatars/default-female.png")
+      source.includes("/static/avatars/default-male.jpg") &&
+      source.includes("/static/avatars/default-female.jpg")
   },
   {
     label: "male default avatar image asset exists",
-    file: "apps/miniprogram/src/static/avatars/default-male.png",
+    file: "apps/miniprogram/src/static/avatars/default-male.jpg",
     test: (source) => source.length > 1024
   },
   {
     label: "female default avatar image asset exists",
-    file: "apps/miniprogram/src/static/avatars/default-female.png",
+    file: "apps/miniprogram/src/static/avatars/default-female.jpg",
     test: (source) => source.length > 1024
   },
   {
@@ -136,6 +136,13 @@ const checks = [
       source.includes("updateUserGender") &&
       source.includes("saveProfile") &&
       source.includes("AUTH_PROFILE_RESPONSE_EVENT")
+  },
+  {
+    label: "auth identity avatars use distinct gender colors",
+    file: "apps/miniprogram/src/components/AuthIdentityBar.vue",
+    test: (source) =>
+      source.includes("--avatar-male-surface: #dcece7") &&
+      source.includes("--avatar-female-surface: #f7dde7")
   },
   {
     label: "create flow has cross-cast helper",
@@ -173,6 +180,15 @@ const checks = [
     test: (source) =>
       source.includes("confirmCrossCastRole") &&
       source.includes("反串可能会影响游戏体验，是否确认")
+  },
+  {
+    label: "role page refreshes selected cross-cast after gender update",
+    file: "apps/miniprogram/src/pages/session/role.vue",
+    test: (source) =>
+      source.includes("AUTH_CHANGE_EVENT") &&
+      source.includes("refreshCurrentUserGender") &&
+      source.includes("isSelectedCrossCast") &&
+      source.includes("cross-cast-tag")
   },
   {
     label: "setup sends roleGender when creating seats",
@@ -214,6 +230,14 @@ const checks = [
     test: (source) =>
       source.includes("confirmCrossCastRole") &&
       source.includes("反串可能会影响游戏体验，是否确认")
+  },
+  {
+    label: "share page refreshes selected cross-cast after gender update",
+    file: "apps/miniprogram/src/pages/session/share.vue",
+    test: (source) =>
+      source.includes("AUTH_CHANGE_EVENT") &&
+      source.includes("refreshCurrentUserGender") &&
+      source.includes('this.confirmedCrossCastRoleKey = ""')
   },
   {
     label: "mine page exposes gender editor",

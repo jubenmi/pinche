@@ -26,7 +26,7 @@
         v-for="store in stores"
         :key="store.id"
         class="list-row"
-        :class="{ selected: selectedStore && selectedStore.id === store.id }"
+        :class="{ selected: isSelectedStore(store) }"
         @tap="selectStore(store)"
       >
         <image class="store-icon" src="/static/icons/store.png" mode="aspectFit" />
@@ -36,7 +36,7 @@
         </view>
         <image
           class="row-status-icon"
-          :src="selectedStore && selectedStore.id === store.id ? '/static/icons/check.png' : '/static/icons/pin.png'"
+          :src="isSelectedStore(store) ? '/static/icons/check.png' : '/static/icons/pin.png'"
           mode="aspectFit"
         />
       </view>
@@ -82,6 +82,16 @@ export default {
     this.loadStores();
   },
   methods: {
+    async ensureCreateStepLogin() {
+      const auth = await ensureLoggedIn({
+        content: "登录后创建的车会归到你的账号下。"
+      });
+      if (!auth) {
+        this.statusText = "登录后可继续创建。";
+        return null;
+      }
+      return auth;
+    },
     async loadStores() {
       this.statusText = "正在加载店家...";
       try {
@@ -96,16 +106,34 @@ export default {
         this.statusText = "已展示演示店家，本地服务启动后会显示真实数据。";
       }
     },
-    selectStore(store) {
+    async selectStore(store) {
+      const auth = await this.ensureCreateStepLogin();
+      if (!auth) {
+        return;
+      }
+      if (this.isSelectedStore(store)) {
+        await this.goNext();
+        return;
+      }
       this.selectedStore = store;
       writeCreateFlow({ store, script: null, role: null });
+    },
+    isSelectedStore(store) {
+      return (
+        this.selectedStore &&
+        String(this.selectedStore.id) === String(store.id)
+      );
     },
     storeMeta(store) {
       const district = store.district ? `${store.district}区` : store.city || "位置待定";
       const area = store.area || store.business_area || "商圈待定";
       return [district, area, store.distance].filter(Boolean).join(" · ");
     },
-    goNext() {
+    async goNext() {
+      const auth = await this.ensureCreateStepLogin();
+      if (!auth) {
+        return;
+      }
       if (!this.selectedStore) {
         uni.showToast({ title: "先选择一家店", icon: "none" });
         return;

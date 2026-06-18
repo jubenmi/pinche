@@ -112,13 +112,6 @@ export default {
     }
   },
   async onLoad(options) {
-    const auth = await ensureLoggedIn({
-      content: "登录后查看车局、选择角色和使用车内聊天。"
-    });
-    if (!auth) {
-      this.loadStatusText = "登录后可继续查看车局。";
-      return;
-    }
     this.sessionId = options.id || "";
     this.shareCode = options.shareCode || "";
     this.source = options.source || "";
@@ -161,6 +154,17 @@ export default {
     hydrateUser() {
       const auth = getCurrentUser();
       this.currentUserId = auth.user?.id || "";
+    },
+    async ensureProtectedActionLogin() {
+      const auth = await ensureLoggedIn({
+        content: "登录后继续选择角色或管理车局。"
+      });
+      if (!auth?.user) {
+        this.loadStatusText = "登录后可继续操作。";
+        return null;
+      }
+      this.currentUserId = auth.user.id || "";
+      return auth;
     },
     async loadSession() {
       if (!this.sessionId || this.sessionId === "d1-demo") {
@@ -224,7 +228,11 @@ export default {
         .then(() => this.loadShareStats())
         .catch(() => {});
     },
-    goShare(seat) {
+    async goShare(seat) {
+      const auth = await this.ensureProtectedActionLogin();
+      if (!auth) {
+        return;
+      }
       const id = this.sessionId || "d1-demo";
       const selectedSeat = seat || this.focusedSeat;
       const query = queryString({
@@ -235,7 +243,11 @@ export default {
       });
       uni.navigateTo({ url: `/pages/session/share${query}` });
     },
-    goManage() {
+    async goManage() {
+      const auth = await this.ensureProtectedActionLogin();
+      if (!auth) {
+        return;
+      }
       const id = this.sessionId || "d1-demo";
       uni.navigateTo({ url: `/pages/session/manage?id=${id}` });
     },

@@ -28,8 +28,26 @@
           <view class="profile-preview-copy">
             <view class="profile-name">{{ displayName }}</view>
             <view class="profile-avatar-label">{{ avatarPreview.label }}</view>
+            <button
+              class="avatar-change"
+              :class="{ disabled: avatarChoosing || savingProfile }"
+              :disabled="avatarChoosing || savingProfile"
+              open-type="chooseAvatar"
+              @tap="markAvatarChoosing"
+              @chooseavatar="handleChooseAvatar"
+            >
+              {{ avatarButtonText }}
+            </button>
           </view>
         </view>
+
+        <view class="profile-field-label">昵称</view>
+        <input
+          v-model="draftNickname"
+          class="profile-input"
+          maxlength="32"
+          placeholder="填写昵称"
+        />
 
         <view class="profile-field-label">性别</view>
         <view class="gender-options">
@@ -69,6 +87,35 @@
         >
           {{ saveButtonText }}
         </button>
+        <button class="profile-logout" @tap="logoutProfile">退出登录</button>
+      </view>
+    </view>
+
+    <view v-if="phoneVisible" class="profile-mask" @tap="handlePhoneBackdropTap">
+      <view class="profile-modal phone-modal" @tap.stop>
+        <view class="profile-head">
+          <view>
+            <view class="profile-title">{{ phoneTitle }}</view>
+            <view class="profile-subtitle">{{ phoneSubtitle }}</view>
+          </view>
+          <button v-if="!phoneRequired" class="profile-close" @tap="skipPhoneAuthorization">跳过</button>
+        </view>
+
+        <view class="phone-copy">
+          <view class="phone-copy-title">手机号仅用于车局沟通</view>
+          <view class="phone-copy-text">不会在公开车局、分享页或个人信息条展示。</view>
+        </view>
+
+        <button
+          class="phone-authorize"
+          :class="{ disabled: savingPhone }"
+          :disabled="savingPhone"
+          open-type="getPhoneNumber"
+          @getphonenumber="handlePhoneNumber"
+        >
+          {{ phoneButtonText }}
+        </button>
+        <button v-if="!phoneRequired" class="phone-skip" @tap="skipPhoneAuthorization">稍后再说</button>
       </view>
     </view>
   </view>
@@ -78,21 +125,30 @@
 import { onShow } from "@dcloudio/uni-app";
 import {
   AUTH_CHANGE_EVENT,
+  AUTH_PHONE_ACK_EVENT,
+  AUTH_PHONE_REQUEST_EVENT,
+  AUTH_PHONE_RESPONSE_EVENT,
   AUTH_PROFILE_ACK_EVENT,
   AUTH_PROFILE_REQUEST_EVENT,
   AUTH_PROFILE_RESPONSE_EVENT,
+  assetUrl,
+  clearAuth,
+  ensureLoggedIn,
   getCurrentUser,
+  uploadUserAvatar,
+  updateUserPhoneFromWechatPhoneCode,
   updateUserGender,
+  updateUserProfile,
   userGenderLabel
 } from "../utils/api";
 
 const DEFAULT_AVATARS = {
   male: {
-    src: "/static/avatars/default-male.png",
+    src: "/static/avatars/default-male.jpg",
     label: "默认男生头像"
   },
   female: {
-    src: "/static/avatars/default-female.png",
+    src: "/static/avatars/default-female.jpg",
     label: "默认女生头像"
   },
   unknown: {
@@ -122,7 +178,19 @@ export default {
       profileVisible: false,
       profileRequired: false,
       profileRequestId: "",
+      draftNickname: "",
       draftGender: "",
+      draftAvatarUrl: "",
+      draftAvatarTempPath: "",
+      avatarChoosing: false,
+      avatarChooseTimer: null,
+      phoneVisible: false,
+      phoneRequired: false,
+      phoneRequestId: "",
+      phoneTitleText: "",
+      phoneContentText: "",
+      loginPending: false,
+      savingPhone: false,
       savingProfile: false
     };
   },
@@ -131,7 +199,7 @@ export default {
       if (!this.user) {
         return "等待微信登录";
       }
-      return this.user.open_id || this.user.openid || `用户${this.user.id}`;
+      return this.user.nickname || this.user.open_id || this.user.openid || `用户${this.user.id}`;
     },
     genderText() {
       return this.user?.gender ? userGenderLabel(this.user.gender) : "";
@@ -140,15 +208,39 @@ export default {
       return [this.genderText, ...(this.roles || [])].filter(Boolean).join(" / ");
     },
     barAvatar() {
+      if (this.user?.avatarUrl) {
+        return {
+          src: assetUrl(this.user.avatarUrl),
+          label: "当前头像"
+        };
+      }
       return avatarForGender(this.user?.gender || "");
     },
     barAvatarClass() {
+      if (this.user?.avatarUrl) {
+        return "custom";
+      }
       return this.user?.gender || "unknown";
     },
     avatarPreview() {
+      if (this.draftAvatarTempPath) {
+        return {
+          src: this.draftAvatarTempPath,
+          label: "新头像预览"
+        };
+      }
+      if (this.draftAvatarUrl) {
+        return {
+          src: assetUrl(this.draftAvatarUrl),
+          label: "当前头像"
+        };
+      }
       return avatarForGender(this.draftGender || this.user?.gender || "");
     },
     avatarGenderClass() {
+      if (this.draftAvatarTempPath || this.draftAvatarUrl) {
+        return "custom";
+      }
       return this.draftGender || this.user?.gender || "unknown";
     },
     defaultAvatars() {
@@ -158,13 +250,33 @@ export default {
       return this.profileRequired ? "完善个人信息" : "个人信息";
     },
     profileSubtitle() {
-      return this.profileRequired ? "请选择性别后继续使用。" : "更改性别后会同步更新默认头像。";
+      return this.profileRequired ? "请选择性别后继续使用。" : "昵称和头像会同步到个人资料。";
     },
     canSaveProfile() {
-      return Boolean(this.draftGender) && !this.savingProfile;
+      return (!this.profileRequired || Boolean(this.draftGender)) && !this.savingProfile;
     },
     saveButtonText() {
       return this.savingProfile ? "保存中..." : "保存";
+    },
+    avatarButtonText() {
+      return this.avatarChoosing ? "选择中..." : "更换头像";
+    },
+    phoneTitle() {
+      if (this.phoneTitleText) {
+        return this.phoneTitleText;
+      }
+      return this.phoneRequired ? "授权手机号后继续" : "授权手机号";
+    },
+    phoneSubtitle() {
+      if (this.phoneContentText) {
+        return this.phoneContentText;
+      }
+      return this.phoneRequired
+        ? "创建车或上车前需要授权手机号。"
+        : "现在可以跳过，创建车或上车前会再次要求授权。";
+    },
+    phoneButtonText() {
+      return this.savingPhone ? "授权中..." : "授权手机号";
     }
   },
   created() {
@@ -172,14 +284,17 @@ export default {
     this.refreshIdentity();
     if (typeof uni.$on === "function") {
       uni.$on(AUTH_CHANGE_EVENT, this.refreshIdentity);
+      uni.$on(AUTH_PHONE_REQUEST_EVENT, this.handlePhoneRequest);
       uni.$on(AUTH_PROFILE_REQUEST_EVENT, this.handleProfileRequest);
     }
   },
   unmounted() {
     if (typeof uni.$off === "function") {
       uni.$off(AUTH_CHANGE_EVENT, this.refreshIdentity);
+      uni.$off(AUTH_PHONE_REQUEST_EVENT, this.handlePhoneRequest);
       uni.$off(AUTH_PROFILE_REQUEST_EVENT, this.handleProfileRequest);
     }
+    this.clearAvatarChoosing();
   },
   setup() {
     onShow(() => {
@@ -190,13 +305,42 @@ export default {
     });
   },
   methods: {
+    syncProfileDrafts() {
+      this.draftNickname = this.user?.nickname || "";
+      this.draftGender = this.user?.gender || "";
+      this.draftAvatarUrl = this.user?.avatarUrl || "";
+      this.draftAvatarTempPath = "";
+      this.clearAvatarChoosing();
+    },
+    clearAvatarChoosing() {
+      this.avatarChoosing = false;
+      if (this.avatarChooseTimer) {
+        clearTimeout(this.avatarChooseTimer);
+        this.avatarChooseTimer = null;
+      }
+    },
     refreshIdentity() {
       const auth = getCurrentUser();
       this.user = auth.user || null;
       this.roles = auth.roles || [];
-      if (!this.profileVisible) {
-        this.draftGender = this.user?.gender || "";
+      if (!this.profileVisible && !this.phoneVisible) {
+        this.syncProfileDrafts();
       }
+    },
+    handlePhoneRequest(payload = {}) {
+      if (payload.route && this.ownerRoute && payload.route !== this.ownerRoute) {
+        return;
+      }
+
+      this.refreshIdentity();
+      this.phoneRequired = Boolean(payload.required);
+      this.phoneRequestId = payload.requestId || "";
+      this.phoneTitleText = payload.title || "";
+      this.phoneContentText = payload.content || "";
+      if (typeof uni.$emit === "function" && payload.requestId) {
+        uni.$emit(AUTH_PHONE_ACK_EVENT, { requestId: payload.requestId });
+      }
+      this.openPhoneModal(this.phoneRequired);
     },
     handleProfileRequest(payload = {}) {
       if (payload.route && this.ownerRoute && payload.route !== this.ownerRoute) {
@@ -211,17 +355,97 @@ export default {
       }
       this.openProfileModal(this.profileRequired);
     },
-    openProfileModal(required = false) {
+    async openProfileModal(required = false) {
       if (!this.user) {
         if (!required) {
-          uni.showToast({ title: "请先登录", icon: "none" });
+          await this.loginFromIdentityBar();
         }
         return;
       }
 
       this.profileRequired = Boolean(required);
       this.profileVisible = true;
-      this.draftGender = this.user.gender || "";
+      this.syncProfileDrafts();
+    },
+    openPhoneModal(required = false) {
+      if (!this.user) {
+        this.finishPhoneRequest(null);
+        return;
+      }
+
+      this.phoneRequired = Boolean(required);
+      this.phoneVisible = true;
+    },
+    async loginFromIdentityBar() {
+      if (this.loginPending) {
+        return;
+      }
+
+      this.loginPending = true;
+      try {
+        const auth = await ensureLoggedIn({
+          content: "登录后可以查看和修改个人信息。"
+        });
+        if (auth?.user) {
+          this.user = auth.user;
+          this.roles = auth.roles || [];
+          this.syncProfileDrafts();
+        }
+      } finally {
+        this.loginPending = false;
+      }
+    },
+    handlePhoneBackdropTap() {
+      if (this.phoneRequired) {
+        this.finishPhoneRequest(null);
+        uni.showToast({ title: "授权手机号后继续", icon: "none" });
+        return;
+      }
+
+      this.skipPhoneAuthorization();
+    },
+    skipPhoneAuthorization() {
+      this.finishPhoneRequest(getCurrentUser());
+    },
+    finishPhoneRequest(auth) {
+      const requestId = this.phoneRequestId;
+      this.phoneVisible = false;
+      this.phoneRequired = false;
+      this.phoneRequestId = "";
+      this.phoneTitleText = "";
+      this.phoneContentText = "";
+      this.savingPhone = false;
+      if (requestId && typeof uni.$emit === "function") {
+        uni.$emit(AUTH_PHONE_RESPONSE_EVENT, { requestId, auth });
+      }
+    },
+    async handlePhoneNumber(event = {}) {
+      const code = event.detail?.code || "";
+      if (!code) {
+        if (this.phoneRequired) {
+          this.finishPhoneRequest(null);
+          uni.showToast({ title: "授权手机号后继续", icon: "none" });
+        } else {
+          this.skipPhoneAuthorization();
+        }
+        return;
+      }
+
+      this.savingPhone = true;
+      try {
+        const auth = await updateUserPhoneFromWechatPhoneCode(code);
+        if (!auth?.user) {
+          throw new Error("Missing updated user");
+        }
+        this.user = auth.user;
+        this.roles = auth.roles || [];
+        this.finishPhoneRequest(auth);
+        uni.showToast({ title: "手机号已授权", icon: "none" });
+      } catch (error) {
+        uni.showToast({ title: "手机号授权失败，请重试", icon: "none" });
+      } finally {
+        this.savingPhone = false;
+      }
     },
     handleProfileBackdropTap() {
       if (!this.profileRequired) {
@@ -236,10 +460,30 @@ export default {
 
       this.profileVisible = false;
       this.profileRequestId = "";
-      this.draftGender = this.user?.gender || "";
+      this.syncProfileDrafts();
     },
     selectGender(gender) {
       this.draftGender = gender;
+    },
+    markAvatarChoosing() {
+      if (this.avatarChoosing || this.savingProfile) {
+        return;
+      }
+      this.avatarChoosing = true;
+      if (this.avatarChooseTimer) {
+        clearTimeout(this.avatarChooseTimer);
+      }
+      this.avatarChooseTimer = setTimeout(() => {
+        this.avatarChoosing = false;
+        this.avatarChooseTimer = null;
+      }, 1500);
+    },
+    handleChooseAvatar(event = {}) {
+      this.clearAvatarChoosing();
+      const avatarUrl = event.detail?.avatarUrl || "";
+      if (avatarUrl) {
+        this.draftAvatarTempPath = avatarUrl;
+      }
     },
     async saveProfile() {
       if (!this.canSaveProfile) {
@@ -248,15 +492,33 @@ export default {
         }
         return;
       }
+      if ((this.draftNickname || "").trim().length > 32) {
+        uni.showToast({ title: "昵称最多32个字", icon: "none" });
+        return;
+      }
 
       this.savingProfile = true;
       try {
-        const auth = await updateUserGender(this.draftGender);
+        let avatarUrl = this.draftAvatarUrl || "";
+        if (this.draftAvatarTempPath) {
+          avatarUrl = await uploadUserAvatar(this.draftAvatarTempPath);
+        }
+
+        const patch = {
+          nickname: this.draftNickname,
+          avatarUrl
+        };
+        if (this.draftGender) {
+          patch.gender = this.draftGender;
+        }
+
+        const auth = await updateUserProfile(patch);
         if (!auth?.user) {
           throw new Error("Missing updated user");
         }
         this.user = auth.user;
         this.roles = auth.roles || [];
+        this.syncProfileDrafts();
         this.profileVisible = false;
         this.profileRequired = false;
         const requestId = this.profileRequestId;
@@ -270,6 +532,25 @@ export default {
       } finally {
         this.savingProfile = false;
       }
+    },
+    logoutProfile() {
+      const requestId = this.profileRequestId;
+      clearAuth();
+      this.user = null;
+      this.roles = [];
+      this.profileVisible = false;
+      this.profileRequired = false;
+      this.profileRequestId = "";
+      this.draftGender = "";
+      this.draftNickname = "";
+      this.draftAvatarUrl = "";
+      this.draftAvatarTempPath = "";
+      this.clearAvatarChoosing();
+      this.savingProfile = false;
+      if (requestId && typeof uni.$emit === "function") {
+        uni.$emit(AUTH_PROFILE_RESPONSE_EVENT, { requestId, auth: null });
+      }
+      uni.showToast({ title: "已退出登录", icon: "none" });
     }
   }
 };
@@ -277,6 +558,9 @@ export default {
 
 <style scoped>
 .auth-identity {
+  --avatar-male-surface: #dcece7;
+  --avatar-female-surface: #f7dde7;
+
   position: relative;
   z-index: 8;
   margin-bottom: 24rpx;
@@ -315,15 +599,19 @@ export default {
 }
 
 .auth-avatar.male {
-  background: #e9eadf;
+  background: var(--avatar-male-surface);
 }
 
 .auth-avatar.female {
-  background: #f0e3de;
+  background: var(--avatar-female-surface);
 }
 
 .auth-avatar.unknown {
   background: #eef1eb;
+}
+
+.auth-avatar.custom {
+  background: #ffffff;
 }
 
 .auth-avatar-image {
@@ -451,16 +739,20 @@ export default {
 
 .profile-avatar.male,
 .gender-option.male .option-avatar {
-  background: #e9eadf;
+  background: var(--avatar-male-surface);
 }
 
 .profile-avatar.female,
 .gender-option.female .option-avatar {
-  background: #f0e3de;
+  background: var(--avatar-female-surface);
 }
 
 .profile-avatar.unknown {
   background: #eef1eb;
+}
+
+.profile-avatar.custom {
+  background: #ffffff;
 }
 
 .profile-avatar-image {
@@ -490,11 +782,42 @@ export default {
   line-height: 1.4;
 }
 
+.avatar-change {
+  width: 156rpx;
+  height: 52rpx;
+  margin: 14rpx 0 0;
+  padding: 0;
+  border: 1rpx solid #d9cfbc;
+  border-radius: 10rpx;
+  background: #ffffff;
+  color: #1f6f5b;
+  font-size: 23rpx;
+  font-weight: 600;
+  line-height: 52rpx;
+}
+
+.avatar-change.disabled {
+  color: #8f9a93;
+  background: #f4f6f3;
+}
+
 .profile-field-label {
   margin-top: 28rpx;
   color: #314d45;
   font-size: 25rpx;
   font-weight: 600;
+}
+
+.profile-input {
+  height: 72rpx;
+  margin-top: 14rpx;
+  padding: 0 20rpx;
+  box-sizing: border-box;
+  border: 1rpx solid #e4ddcf;
+  border-radius: 12rpx;
+  background: #ffffff;
+  color: #183d34;
+  font-size: 26rpx;
 }
 
 .gender-options {
@@ -578,5 +901,73 @@ export default {
 
 .profile-save.disabled {
   background: #aeb8b1;
+}
+
+.profile-logout {
+  height: 70rpx;
+  width: 100%;
+  margin: 18rpx 0 0;
+  border: 1rpx solid #e5dece;
+  border-radius: 14rpx;
+  background: #ffffff;
+  color: #7d4b42;
+  font-size: 26rpx;
+  font-weight: 600;
+  line-height: 70rpx;
+}
+
+.phone-modal {
+  padding-bottom: 30rpx;
+}
+
+.phone-copy {
+  margin-top: 30rpx;
+  padding: 24rpx;
+  border: 1rpx solid #e8dfcc;
+  border-radius: 14rpx;
+  background: #f8f4e9;
+}
+
+.phone-copy-title {
+  color: #183d34;
+  font-size: 27rpx;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.phone-copy-text {
+  margin-top: 8rpx;
+  color: #6f7b73;
+  font-size: 23rpx;
+  line-height: 1.45;
+}
+
+.phone-authorize {
+  height: 78rpx;
+  width: 100%;
+  margin: 30rpx 0 0;
+  border-radius: 14rpx;
+  background: #1f6f5b;
+  color: #ffffff;
+  font-size: 28rpx;
+  font-weight: 700;
+  line-height: 78rpx;
+}
+
+.phone-authorize.disabled {
+  background: #aeb8b1;
+}
+
+.phone-skip {
+  height: 70rpx;
+  width: 100%;
+  margin: 18rpx 0 0;
+  border: 1rpx solid #e5dece;
+  border-radius: 14rpx;
+  background: #ffffff;
+  color: #526159;
+  font-size: 26rpx;
+  font-weight: 600;
+  line-height: 70rpx;
 }
 </style>

@@ -1,8 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { defineConfig } from "vite";
 import uniPlugin from "@dcloudio/vite-plugin-uni";
 
 const uni = typeof uniPlugin === "function" ? uniPlugin : uniPlugin.default;
 const buildTime = formatBuildTime();
+const componentLazyCodeLoading = "requiredComponents";
 
 function formatBuildTime(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
@@ -17,5 +20,84 @@ export default defineConfig({
   define: {
     __PINCHE_BUILD_TIME__: JSON.stringify(buildTime)
   },
-  plugins: [uni()]
+  plugins: [uni(), miniprogramQualityJsonPlugin(), stripDcloudPreloadAssetPlugin()]
 });
+
+function miniprogramQualityJsonPlugin() {
+  return {
+    name: "pinche:miniprogram-quality-json",
+    generateBundle(_outputOptions, bundle) {
+      const appJsonAsset = bundle["app.json"];
+      if (!appJsonAsset || appJsonAsset.type !== "asset") {
+        return;
+      }
+      appJsonAsset.source = withComponentLazyCodeLoading(appJsonAsset.source);
+    },
+    writeBundle(outputOptions) {
+      if (!outputOptions.dir) {
+        return;
+      }
+      const appJsonPath = path.join(outputOptions.dir, "app.json");
+      if (!fs.existsSync(appJsonPath)) {
+        return;
+      }
+      fs.writeFileSync(appJsonPath, withComponentLazyCodeLoading(fs.readFileSync(appJsonPath, "utf8")));
+    }
+  };
+}
+
+function withComponentLazyCodeLoading(source) {
+  const appJson = JSON.parse(Buffer.isBuffer(source) ? source.toString("utf8") : source);
+  appJson.lazyCodeLoading = componentLazyCodeLoading;
+  return `${JSON.stringify(appJson, null, 2)}\n`;
+}
+
+function stripDcloudPreloadAssetPlugin() {
+  return {
+    name: "pinche:strip-dcloud-preload-asset",
+    generateBundle(_outputOptions, bundle) {
+      for (const entry of Object.values(bundle)) {
+        if (entry.type === "chunk") {
+          entry.code = withoutDcloudPreloadAsset(entry.code);
+        } else if (entry.type === "asset" && isTextAsset(entry.fileName)) {
+          entry.source = withoutDcloudPreloadAsset(entry.source);
+        }
+      }
+    },
+    writeBundle(outputOptions) {
+      if (!outputOptions.dir) {
+        return;
+      }
+      for (const file of walkOutputFiles(outputOptions.dir)) {
+        if (!/\.js$/i.test(file)) {
+          continue;
+        }
+        const source = fs.readFileSync(file, "utf8");
+        const stripped = withoutDcloudPreloadAsset(source);
+        if (stripped !== source) {
+          fs.writeFileSync(file, stripped);
+        }
+      }
+    }
+  };
+}
+
+function withoutDcloudPreloadAsset(source) {
+  const code = Buffer.isBuffer(source) ? source.toString("utf8") : String(source);
+  return code.replace(
+    /!function\(\)\{if\([\s\S]{0,120}?wx\.preloadAssets[\s\S]*?shadow-grey\.png[\s\S]*?\}\}\(\),?/g,
+    ""
+  );
+}
+
+function isTextAsset(fileName) {
+  return /\.(?:js|json|wxml|wxss|css)$/i.test(fileName);
+}
+
+function walkOutputFiles(dir) {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  return entries.flatMap((entry) => {
+    const file = path.join(dir, entry.name);
+    return entry.isDirectory() ? walkOutputFiles(file) : [file];
+  });
+}
