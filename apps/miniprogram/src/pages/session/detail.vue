@@ -52,6 +52,47 @@
       </view>
     </view>
 
+    <view v-if="session.id" class="section">
+      <view class="section-head">
+        <view class="section-title">车友记录</view>
+        <button
+          v-if="myReviewState.can_review"
+          class="review-edit"
+          @click="goReview"
+        >
+          {{ myReviewState.review ? "编辑记录" : "写记录" }}
+        </button>
+      </view>
+      <view v-if="reviewStatusText" class="notice">{{ reviewStatusText }}</view>
+      <view v-if="reviews.length === 0 && !reviewStatusText" class="empty">还没有车友记录。</view>
+      <view v-for="review in reviews" :key="review.id" class="review-card">
+        <view class="review-head">
+          <image
+            class="review-avatar"
+            :src="review.user_avatar_url ? assetUrl(review.user_avatar_url) : '/static/icons/user.png'"
+            mode="aspectFill"
+          />
+          <view class="review-main">
+            <view class="review-name">{{ reviewAuthorName(review) }}</view>
+            <view class="review-meta">
+              {{ review.seat_name || "座位" }} · {{ review.seat_role_name || "角色" }}
+            </view>
+          </view>
+          <view class="review-stars">{{ starText(review.rating) }}</view>
+        </view>
+        <view v-if="review.content" class="review-content">{{ review.content }}</view>
+        <view v-if="review.photos && review.photos.length" class="review-photos">
+          <image
+            v-for="photo in review.photos"
+            :key="photo"
+            class="review-photo"
+            :src="assetUrl(photo)"
+            mode="aspectFill"
+          />
+        </view>
+      </view>
+    </view>
+
     <ChatEntry
       v-for="extension in sessionDetailExtensions"
       :key="extension.id"
@@ -70,6 +111,7 @@ import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import ChatEntry from "../../extensions/session-pseudo-chat/ChatEntry.vue";
 import { sessionDetailExtensions } from "../../extensions/sessionExtensions.js";
 import {
+  assetUrl,
   dataOf,
   ensureLoggedIn,
   getCurrentUser,
@@ -92,7 +134,10 @@ export default {
       copyStatusText: "",
       currentUserId: "",
       focusChatOnLoad: false,
-      sessionDetailExtensionRefs: []
+      sessionDetailExtensionRefs: [],
+      reviews: [],
+      myReviewState: { can_review: false, review: null },
+      reviewStatusText: ""
     };
   },
   computed: {
@@ -119,11 +164,17 @@ export default {
     this.focusChatOnLoad = options.chat === "1";
     this.hydrateUser();
     this.loadSession();
+    this.loadSessionReviews();
+    this.loadMyReviewState();
     this.loadShareStats();
     this.trackShareView();
   },
   onShow() {
     this.hydrateUser();
+    if (this.sessionId) {
+      this.loadSessionReviews();
+      this.loadMyReviewState();
+    }
   },
   onHide() {
     this.stopDetailExtensions();
@@ -151,6 +202,7 @@ export default {
     };
   },
   methods: {
+    assetUrl,
     hydrateUser() {
       const auth = getCurrentUser();
       this.currentUserId = auth.user?.id || "";
@@ -191,6 +243,30 @@ export default {
         this.shareStats = dataOf(response) || {};
       } catch (error) {
         this.shareStats = {};
+      }
+    },
+    async loadSessionReviews() {
+      if (!this.sessionId || this.sessionId === "d1-demo") {
+        return;
+      }
+      try {
+        const response = await request({ url: `/api/sessions/${this.sessionId}/reviews` });
+        this.reviews = dataOf(response) || [];
+        this.reviewStatusText = "";
+      } catch (error) {
+        this.reviewStatusText = "车友记录加载失败，请稍后重试。";
+      }
+    },
+    async loadMyReviewState() {
+      if (!this.currentUserId || !this.sessionId || this.sessionId === "d1-demo") {
+        this.myReviewState = { can_review: false, review: null };
+        return;
+      }
+      try {
+        const response = await request({ url: `/api/sessions/${this.sessionId}/review` });
+        this.myReviewState = dataOf(response) || { can_review: false, review: null };
+      } catch (error) {
+        this.myReviewState = { can_review: false, review: null };
       }
     },
     stopDetailExtensions() {
@@ -251,6 +327,17 @@ export default {
       const id = this.sessionId || "d1-demo";
       uni.navigateTo({ url: `/pages/session/manage?id=${id}` });
     },
+    goReview() {
+      const id = this.sessionId || "d1-demo";
+      uni.navigateTo({ url: `/pages/session/review?id=${id}` });
+    },
+    starText(rating) {
+      const value = Math.max(0, Math.min(5, Number(rating || 0)));
+      return "★★★★★".slice(0, value) + "☆☆☆☆☆".slice(0, 5 - value);
+    },
+    reviewAuthorName(review) {
+      return review.user_nickname || review.user_open_id || "车友";
+    },
     seatById(seatId) {
       return (this.session.seats || []).find((seat) => Number(seat.id) === Number(seatId));
     },
@@ -304,6 +391,18 @@ export default {
   color: #153f34;
   font-size: 30rpx;
   font-weight: 600;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 18rpx;
+}
+
+.section-head .section-title {
+  margin-bottom: 0;
 }
 
 .notice,
@@ -390,6 +489,78 @@ export default {
   background: #ffffff;
   color: #193d35;
   border: 1rpx solid #ded8ca;
+}
+
+.review-edit {
+  width: 132rpx;
+  height: 56rpx;
+  margin: 0;
+  border-radius: 8rpx;
+  background: #1f7a68;
+  color: #ffffff;
+  font-size: 24rpx;
+  line-height: 56rpx;
+}
+
+.review-card {
+  padding: 22rpx 0;
+  border-top: 1rpx solid #edf1f5;
+}
+
+.review-head {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.review-avatar {
+  width: 64rpx;
+  height: 64rpx;
+  border-radius: 50%;
+  background: #eef2f7;
+}
+
+.review-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.review-name {
+  color: #1f2933;
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.review-meta {
+  margin-top: 4rpx;
+  color: #64748b;
+  font-size: 22rpx;
+}
+
+.review-stars {
+  color: #d97706;
+  font-size: 24rpx;
+}
+
+.review-content {
+  margin-top: 16rpx;
+  color: #334155;
+  font-size: 25rpx;
+  line-height: 1.55;
+}
+
+.review-photos {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10rpx;
+  margin-top: 16rpx;
+}
+
+.review-photo {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8rpx;
+  background: #f1f5f9;
 }
 
 .item-sub {

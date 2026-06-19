@@ -55,6 +55,12 @@
       }
     },
     {
+      "path": "pages/session/review",
+      "style": {
+        "navigationBarTitleText": "写记录"
+      }
+    },
+    {
       "path": "pages/session/manage",
       "style": {
         "navigationBarTitleText": "车头管理"
