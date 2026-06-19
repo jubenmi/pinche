@@ -175,6 +175,45 @@ const MESSAGE_TEXT_RISK_WORDS = [
   "收款码",
   "平台代收"
 ];
+const MAX_SESSION_REVIEW_PHOTOS = 9;
+const SESSION_REVIEW_PHOTO_PREFIX = "/uploads/session-reviews/";
+
+function reviewRating(value) {
+  const rating = intValue(value);
+  if (rating < 1 || rating > 5) {
+    throw badRequest("rating must be between 1 and 5");
+  }
+  return rating;
+}
+
+function reviewContent(value) {
+  const content = optionalText(value);
+  if (content && content.length > 500) {
+    throw badRequest("content must be 500 characters or fewer");
+  }
+  assertPublicTextSafe("content", content);
+  return content;
+}
+
+function assertSessionReviewPhotoUrls(photoUrls) {
+  const urls = photoUrls === undefined ? [] : photoUrls;
+  if (!Array.isArray(urls)) {
+    throw badRequest("photoUrls must be an array");
+  }
+  if (urls.length > MAX_SESSION_REVIEW_PHOTOS) {
+    throw badRequest(`photoUrls cannot contain more than ${MAX_SESSION_REVIEW_PHOTOS} photos`);
+  }
+  return urls.map((url) => {
+    const text = String(url || "").trim();
+    if (!text.startsWith(SESSION_REVIEW_PHOTO_PREFIX)) {
+      throw badRequest("photoUrls must contain uploaded session review photos");
+    }
+    if (!/^\/uploads\/session-reviews\/[A-Za-z0-9._-]+$/.test(text)) {
+      throw badRequest("photoUrls contains an invalid file path");
+    }
+    return text;
+  });
+}
 
 function publicText(value) {
   if (value === undefined || value === null) {
@@ -401,6 +440,9 @@ async function releaseUserOtherConfirmedSeats(
     `,
     [userId, sessionId, userId, seatId]
   );
+  for (const confirmedRow of confirmedRows) {
+    await clearPreStartReviewEligibilityForSeat(connection, confirmedRow.id);
+  }
   await connection.query(
     `
       UPDATE session_seats
@@ -415,6 +457,79 @@ async function releaseUserOtherConfirmedSeats(
   );
 
   return confirmedRows;
+}
+
+function reviewWindowSql() {
+  return `
+    session.start_at <= CURRENT_TIMESTAMP
+    AND (
+      session.status <> 'cancelled'
+      OR session.cancelled_at IS NULL
+      OR session.cancelled_at >= session.start_at
+    )
+  `;
+}
+
+async function currentEligibleSignup(connection, sessionId, userId) {
+  const [rows] = await connection.query(
+    `
+      SELECT
+        signup.*,
+        seat.name AS seat_name,
+        seat.role_name AS seat_role_name,
+        session.start_at,
+        session.status AS session_status,
+        session.cancelled_at
+      FROM signups signup
+      JOIN sessions session ON session.id = signup.session_id
+      LEFT JOIN session_seats seat ON seat.id = signup.seat_id
+      WHERE signup.session_id = ?
+        AND signup.user_id = ?
+        AND signup.review_eligible_at IS NOT NULL
+        AND ${reviewWindowSql()}
+      ORDER BY signup.review_eligible_at DESC, signup.id DESC
+      LIMIT 1
+    `,
+    [sessionId, userId]
+  );
+  return rows[0] || null;
+}
+
+async function markSignupReviewEligible(connection, signupId) {
+  await connection.query(
+    `
+      UPDATE signups
+      SET review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP)
+      WHERE id = ?
+    `,
+    [signupId]
+  );
+}
+
+async function clearPreStartReviewEligibilityForSeat(connection, seatId) {
+  await connection.query(
+    `
+      UPDATE signups signup
+      JOIN sessions session ON session.id = signup.session_id
+      SET signup.review_eligible_at = NULL
+      WHERE signup.seat_id = ?
+        AND session.start_at > CURRENT_TIMESTAMP
+    `,
+    [seatId]
+  );
+}
+
+async function clearPreStartReviewEligibilityForSession(connection, sessionId) {
+  await connection.query(
+    `
+      UPDATE signups signup
+      JOIN sessions session ON session.id = signup.session_id
+      SET signup.review_eligible_at = NULL
+      WHERE signup.session_id = ?
+        AND session.start_at > CURRENT_TIMESTAMP
+    `,
+    [sessionId]
+  );
 }
 
 export async function listActiveStores(filters = {}) {
@@ -1285,12 +1400,14 @@ export async function claimSessionSeat(user, seatId, body = {}) {
 
     await connection.query(
       `
-        INSERT INTO signups (session_id, seat_id, user_id, contact_text, note, status)
-        VALUES (?, ?, ?, ?, ?, 'approved')
+        INSERT INTO signups
+          (session_id, seat_id, user_id, contact_text, note, status, review_eligible_at)
+        VALUES (?, ?, ?, ?, ?, 'approved', CURRENT_TIMESTAMP)
         ON DUPLICATE KEY UPDATE
           status = 'approved',
           contact_text = VALUES(contact_text),
-          note = VALUES(note)
+          note = VALUES(note),
+          review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP)
       `,
       [
         seat.session_id,
@@ -1383,6 +1500,7 @@ export async function approveSignup(user, signupId) {
     await connection.query("UPDATE signups SET status = 'approved' WHERE id = ?", [
       signupId
     ]);
+    await markSignupReviewEligible(connection, signupId);
     await connection.query(
       `
         UPDATE session_seats
@@ -1487,6 +1605,7 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       `,
       [seatId]
     );
+    await clearPreStartReviewEligibilityForSeat(connection, seatId);
     await connection.query(
       `
         UPDATE session_seats
@@ -1544,6 +1663,7 @@ export async function cancelSession(user, sessionId, body = {}) {
       `,
       [sessionId]
     );
+    await clearPreStartReviewEligibilityForSession(connection, sessionId);
     const content = reason ? `车头已取消本车：${reason}` : "车头已取消本车";
     await runSessionExtensionHook("afterSessionCancelled", {
       connection,
