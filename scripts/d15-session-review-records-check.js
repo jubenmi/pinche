@@ -34,8 +34,16 @@ assert(server.includes("sessionReviewUploadDir"), "server must define review upl
 assert(server.includes("saveUploadedSessionReviewPhoto"), "server must save review photos");
 assert(server.includes("/uploads/session-reviews/"), "server must serve review photo uploads");
 assert(server.includes("/api/session-reviews/photos"), "server must route review photo upload");
-assert(server.includes("/api/sessions/") && server.includes("/reviews"), "server must route public session reviews");
-assert(server.includes("/review"), "server must route current user review endpoints");
+assert(
+  server.includes("sessionReviewsId") && server.includes("listSessionReviews"),
+  "server must route public session reviews"
+);
+assert(
+  server.includes("mySessionReviewId") &&
+    server.includes("getMySessionReview") &&
+    server.includes("upsertMySessionReview"),
+  "server must route current user review endpoints"
+);
 
 const api = read("apps/miniprogram/src/utils/api.js");
 assert(api.includes("export async function uploadSessionReviewPhoto"), "miniprogram API must upload review photos");

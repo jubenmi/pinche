@@ -1444,10 +1444,41 @@ export async function claimSessionSeat(user, seatId, body = {}) {
 export async function listMySignups(user) {
   return withDatabaseConnection(async (connection) => {
     const [rows] = await connection.query(
-      "SELECT * FROM signups WHERE user_id = ? ORDER BY id DESC",
+      `
+        SELECT
+          signup.*,
+          session.script_name_snapshot,
+          session.store_name_snapshot,
+          session.start_at,
+          session.status AS session_status,
+          session.cancelled_at,
+          seat.name AS seat_name,
+          seat.role_name AS seat_role_name,
+          seat.status AS seat_status,
+          EXISTS (
+            SELECT 1
+            FROM session_reviews review
+            WHERE review.session_id = signup.session_id
+              AND review.user_id = signup.user_id
+              AND review.status = 'active'
+          ) AS has_review,
+          (
+            signup.review_eligible_at IS NOT NULL
+            AND ${reviewWindowSql()}
+          ) AS can_review
+        FROM signups signup
+        JOIN sessions session ON session.id = signup.session_id
+        LEFT JOIN session_seats seat ON seat.id = signup.seat_id
+        WHERE signup.user_id = ?
+        ORDER BY session.start_at DESC, signup.id DESC
+      `,
       [user.user.id]
     );
-    return rows;
+    return rows.map((row) => ({
+      ...row,
+      can_review: Boolean(row.can_review),
+      has_review: Boolean(row.has_review)
+    }));
   });
 }
 
@@ -1672,6 +1703,151 @@ export async function cancelSession(user, sessionId, body = {}) {
       content
     });
     return findById(connection, "sessions", sessionId);
+  });
+}
+
+async function reviewPhotos(connection, reviewIds) {
+  if (reviewIds.length === 0) {
+    return new Map();
+  }
+  const placeholders = reviewIds.map(() => "?").join(", ");
+  const [rows] = await connection.query(
+    `
+      SELECT review_id, photo_url
+      FROM session_review_photos
+      WHERE review_id IN (${placeholders})
+      ORDER BY review_id, sort_order, id
+    `,
+    reviewIds
+  );
+  const photosByReview = new Map();
+  for (const row of rows) {
+    const list = photosByReview.get(Number(row.review_id)) || [];
+    list.push(row.photo_url);
+    photosByReview.set(Number(row.review_id), list);
+  }
+  return photosByReview;
+}
+
+export async function listSessionReviews(sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await findById(connection, "sessions", id);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    const [rows] = await connection.query(
+      `
+        SELECT
+          review.*,
+          user.nickname AS user_nickname,
+          user.avatar_url AS user_avatar_url,
+          user.open_id AS user_open_id,
+          seat.name AS seat_name,
+          seat.role_name AS seat_role_name
+        FROM session_reviews review
+        JOIN users user ON user.id = review.user_id
+        LEFT JOIN session_seats seat ON seat.id = review.seat_id
+        WHERE review.session_id = ?
+          AND review.status = 'active'
+        ORDER BY review.updated_at DESC, review.id DESC
+      `,
+      [id]
+    );
+    const photosByReview = await reviewPhotos(connection, rows.map((row) => Number(row.id)));
+    return rows.map((row) => ({
+      ...row,
+      photos: photosByReview.get(Number(row.id)) || []
+    }));
+  });
+}
+
+export async function getMySessionReview(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
+    const [rows] = await connection.query(
+      `
+        SELECT *
+        FROM session_reviews
+        WHERE session_id = ?
+          AND user_id = ?
+          AND status = 'active'
+        LIMIT 1
+      `,
+      [id, user.user.id]
+    );
+    const review = rows[0] || null;
+    const photosByReview = review
+      ? await reviewPhotos(connection, [Number(review.id)])
+      : new Map();
+    return {
+      can_review: Boolean(eligibleSignup),
+      review: review
+        ? {
+            ...review,
+            photos: photosByReview.get(Number(review.id)) || []
+          }
+        : null
+    };
+  });
+}
+
+export async function upsertMySessionReview(user, sessionId, body = {}) {
+  const id = positiveId(sessionId, "sessionId");
+  const rating = reviewRating(body.rating);
+  const content = reviewContent(body.content);
+  const photoUrls = assertSessionReviewPhotoUrls(body.photoUrls);
+
+  return withTransaction(async (connection) => {
+    const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
+    if (!eligibleSignup) {
+      throw forbidden("Only eligible session participants can write a review after start time");
+    }
+
+    await connection.query(
+      `
+        INSERT INTO session_reviews
+          (session_id, user_id, seat_id, rating, content, status)
+        VALUES (?, ?, ?, ?, ?, 'active')
+        ON DUPLICATE KEY UPDATE
+          seat_id = VALUES(seat_id),
+          rating = VALUES(rating),
+          content = VALUES(content),
+          status = 'active'
+      `,
+      [id, user.user.id, eligibleSignup.seat_id || null, rating, content]
+    );
+
+    const [reviewRows] = await connection.query(
+      `
+        SELECT *
+        FROM session_reviews
+        WHERE session_id = ?
+          AND user_id = ?
+        LIMIT 1
+      `,
+      [id, user.user.id]
+    );
+    const review = reviewRows[0];
+    await connection.query("DELETE FROM session_review_photos WHERE review_id = ?", [
+      review.id
+    ]);
+    for (const [index, photoUrl] of photoUrls.entries()) {
+      await connection.query(
+        `
+          INSERT INTO session_review_photos (review_id, photo_url, sort_order)
+          VALUES (?, ?, ?)
+        `,
+        [review.id, photoUrl, index]
+      );
+    }
+    return {
+      ...review,
+      rating,
+      content,
+      photos: photoUrls
+    };
   });
 }
 

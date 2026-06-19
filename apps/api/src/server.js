@@ -34,6 +34,7 @@ import {
   deleteStore,
   getSession,
   getSessionShareStats,
+  getMySessionReview,
   kickSessionSeat,
   listAdminScripts,
   listAdminStores,
@@ -42,6 +43,7 @@ import {
   listCatalogRequests,
   listMySignups,
   listMySessions,
+  listSessionReviews,
   listSessionSignups,
   listStoreScripts,
   lockSeat,
@@ -54,14 +56,18 @@ import {
   updateSeat,
   updateSession,
   updateStore,
+  upsertMySessionReview,
   upsertPerformerProfile
 } from "./modules/core/service.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "..");
 const avatarUploadDir = path.join(apiRoot, "uploads", "avatars");
+const sessionReviewUploadDir = path.join(apiRoot, "uploads", "session-reviews");
 const AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 const AVATAR_MULTIPART_MAX_BYTES = AVATAR_UPLOAD_MAX_BYTES + 64 * 1024;
+const SESSION_REVIEW_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+const SESSION_REVIEW_MULTIPART_MAX_BYTES = SESSION_REVIEW_UPLOAD_MAX_BYTES + 64 * 1024;
 const avatarMimeTypes = {
   "image/jpeg": ".jpg",
   "image/png": ".png"
@@ -188,7 +194,10 @@ function avatarExtensionFromBytes(file) {
   return "";
 }
 
-function parseMultipartAvatarUpload(contentType, body) {
+function parseMultipartImageUpload(contentType, body, options = {}) {
+  const fieldName = options.fieldName || "avatar";
+  const maxBytes = options.maxBytes || AVATAR_UPLOAD_MAX_BYTES;
+  const label = options.label || fieldName;
   const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[1] ||
     contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[2];
   if (!boundary) {
@@ -212,28 +221,36 @@ function parseMultipartAvatarUpload(contentType, body) {
 
     const headersText = part.subarray(0, headerEnd).toString("utf8");
     const disposition = headersText.match(/^content-disposition:\s*(.+)$/im)?.[1] || "";
-    if (!/name="avatar"/.test(disposition) || !/filename="/.test(disposition)) {
+    if (!disposition.includes(`name="${fieldName}"`) || !/filename="/.test(disposition)) {
       continue;
     }
 
     const mimeType = headersText.match(/^content-type:\s*([^\r\n;]+)/im)?.[1]?.trim() || "";
     const file = trimMultipartPayload(part.subarray(headerEnd + 4));
     if (file.length === 0) {
-      throw badRequest("avatar file is required");
+      throw badRequest(`${label} file is required`);
     }
-    if (file.length > AVATAR_UPLOAD_MAX_BYTES) {
-      throw badRequest("avatar file is too large");
+    if (file.length > maxBytes) {
+      throw badRequest(`${label} file is too large`);
     }
 
     const extension = avatarExtensionFromBytes(file) || avatarMimeTypes[mimeType];
     if (!extension) {
-      throw badRequest("avatar must be a JPEG or PNG image");
+      throw badRequest(`${label} must be a JPEG or PNG image`);
     }
 
     return { extension, file, mimeType };
   }
 
-  throw badRequest("avatar file is required");
+  throw badRequest(`${label} file is required`);
+}
+
+function parseMultipartAvatarUpload(contentType, body) {
+  return parseMultipartImageUpload(contentType, body, {
+    fieldName: "avatar",
+    maxBytes: AVATAR_UPLOAD_MAX_BYTES,
+    label: "avatar"
+  });
 }
 
 function avatarContentType(filename) {
@@ -263,6 +280,26 @@ async function saveUploadedAvatar(request, userId) {
   return `/uploads/avatars/${avatarFilename}`;
 }
 
+async function saveUploadedSessionReviewPhoto(request, userId) {
+  const contentType = request.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) {
+    throw badRequest("review photo upload must be multipart/form-data");
+  }
+
+  const body = await readRawBody(request, SESSION_REVIEW_MULTIPART_MAX_BYTES);
+  const { extension, file } = parseMultipartImageUpload(contentType, body, {
+    fieldName: "photo",
+    maxBytes: SESSION_REVIEW_UPLOAD_MAX_BYTES,
+    label: "review photo"
+  });
+  await fs.mkdir(sessionReviewUploadDir, { recursive: true });
+  const photoFilename = `review-${userId}-${Date.now()}-${crypto
+    .randomBytes(8)
+    .toString("hex")}${extension}`;
+  await fs.writeFile(path.join(sessionReviewUploadDir, photoFilename), file);
+  return `/uploads/session-reviews/${photoFilename}`;
+}
+
 async function serveUploadedAvatar(url, response) {
   const requestedName = decodeURIComponent(url.pathname.slice("/uploads/avatars/".length));
   const avatarFilename = path.basename(requestedName);
@@ -282,6 +319,31 @@ async function serveUploadedAvatar(url, response) {
     "cache-control": "public, max-age=31536000, immutable",
     "content-length": file.length,
     "content-type": avatarContentType(avatarFilename)
+  });
+  response.end(file);
+}
+
+async function serveUploadedSessionReviewPhoto(url, response) {
+  const requestedName = decodeURIComponent(
+    url.pathname.slice("/uploads/session-reviews/".length)
+  );
+  const photoFilename = path.basename(requestedName);
+  if (!photoFilename || photoFilename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(photoFilename)) {
+    throw notFound();
+  }
+
+  const filePath = path.join(sessionReviewUploadDir, photoFilename);
+  let file;
+  try {
+    file = await fs.readFile(filePath);
+  } catch (error) {
+    throw notFound();
+  }
+
+  response.writeHead(200, {
+    "cache-control": "public, max-age=31536000, immutable",
+    "content-length": file.length,
+    "content-type": avatarContentType(photoFilename)
   });
   response.end(file);
 }
@@ -322,12 +384,27 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname.startsWith("/uploads/session-reviews/")) {
+    await serveUploadedSessionReviewPhoto(url, response);
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/users/me/avatar") {
     const user = await getAuthUser(request);
     const avatarUrl = await saveUploadedAvatar(request, user.user.id);
     jsonResponse(response, 201, {
       ok: true,
       data: { avatarUrl }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/session-reviews/photos") {
+    const user = await getAuthUser(request);
+    const photoUrl = await saveUploadedSessionReviewPhoto(request, user.user.id);
+    jsonResponse(response, 201, {
+      ok: true,
+      data: { photoUrl }
     });
     return;
   }
@@ -614,6 +691,33 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await updateSession(user, sessionId, body)
+    });
+    return;
+  }
+
+  const sessionReviewsId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/reviews$/);
+  if (request.method === "GET" && sessionReviewsId) {
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listSessionReviews(sessionReviewsId)
+    });
+    return;
+  }
+
+  const mySessionReviewId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/review$/);
+  if (request.method === "GET" && mySessionReviewId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await getMySessionReview(user, mySessionReviewId)
+    });
+    return;
+  }
+  if (request.method === "PUT" && mySessionReviewId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await upsertMySessionReview(user, mySessionReviewId, body)
     });
     return;
   }
