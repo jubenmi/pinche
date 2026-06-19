@@ -49,9 +49,9 @@
     </view>
 
     <view v-if="hasLogin" class="section">
-      <view class="section-title">我的发车</view>
+      <view class="section-title">我发起</view>
       <view v-if="sessionStatusText" class="notice">{{ sessionStatusText }}</view>
-      <view v-if="sessions.length === 0 && !sessionStatusText" class="empty">还没有创建过车。</view>
+      <view v-if="sessions.length === 0 && !sessionStatusText" class="empty">还没有发起过车。</view>
       <view v-for="session in sessions" :key="session.id" class="item">
         <view class="item-main">
           <view class="item-title">{{ session.script_name_snapshot }}</view>
@@ -64,6 +64,32 @@
         <view class="item-actions">
           <button class="mini-button" @tap="goManage(session.id)">管理</button>
           <button class="mini-button muted" @tap="goDetail(session.id)">详情</button>
+        </view>
+      </view>
+    </view>
+
+    <view v-if="hasLogin" class="section">
+      <view class="section-title">我参与</view>
+      <view v-if="signupStatusText" class="notice">{{ signupStatusText }}</view>
+      <view v-if="signups.length === 0 && !signupStatusText" class="empty">还没有参与过车。</view>
+      <view v-for="signup in signups" :key="signup.id" class="item">
+        <view class="item-main">
+          <view class="item-title">{{ signup.script_name_snapshot }}</view>
+          <view class="item-sub">{{ signup.store_name_snapshot }} / {{ signup.start_at }}</view>
+          <view class="item-sub">
+            {{ signupStatusLabel(signup.status) }} · {{ signup.seat_name || "座位" }}
+            <text v-if="signup.seat_role_name"> · {{ signup.seat_role_name }}</text>
+          </view>
+        </view>
+        <view class="item-actions">
+          <button
+            v-if="signup.can_review"
+            class="mini-button"
+            @tap="goReview(signup.session_id)"
+          >
+            {{ signup.has_review ? "编辑记录" : "写记录" }}
+          </button>
+          <button class="mini-button muted" @tap="goDetail(signup.session_id)">详情</button>
         </view>
       </view>
     </view>
@@ -92,6 +118,8 @@ const roles = ref([]);
 const hasLogin = ref(false);
 const sessions = ref([]);
 const sessionStatusText = ref("");
+const signups = ref([]);
+const signupStatusText = ref("");
 const gender = ref("");
 const currentUser = ref(null);
 
@@ -138,6 +166,8 @@ function hydrateAuth() {
     statusText.value = "未登录";
     sessions.value = [];
     sessionStatusText.value = "";
+    signups.value = [];
+    signupStatusText.value = "";
     return;
   }
   roles.value = auth.roles || [];
@@ -147,6 +177,7 @@ function hydrateAuth() {
   statusText.value = auth.user ? loginName(auth.user) : "未登录";
   if (hasLogin.value) {
     loadMySessions();
+    loadMySignups();
   }
 }
 
@@ -172,6 +203,8 @@ function logout() {
   statusText.value = "未登录";
   sessions.value = [];
   sessionStatusText.value = "";
+  signups.value = [];
+  signupStatusText.value = "";
 }
 
 async function saveGender(nextGender) {
@@ -228,6 +261,17 @@ async function loadMySessions() {
   }
 }
 
+async function loadMySignups() {
+  signupStatusText.value = "正在加载我参与的车...";
+  try {
+    const response = await request({ url: "/api/users/me/signups" });
+    signups.value = dataOf(response) || [];
+    signupStatusText.value = "";
+  } catch (error) {
+    signupStatusText.value = "我参与的车加载失败，请稍后重试。";
+  }
+}
+
 function goManage(id) {
   uni.navigateTo({ url: `/pages/session/manage?id=${id}` });
 }
@@ -236,11 +280,25 @@ function goDetail(id) {
   uni.navigateTo({ url: `/pages/session/detail?id=${id}` });
 }
 
+function goReview(id) {
+  uni.navigateTo({ url: `/pages/session/review?id=${id}` });
+}
+
 function statusLabel(status) {
   const labels = {
     draft: "草稿",
     recruiting: "招募中",
     locked: "已锁车",
+    cancelled: "已取消"
+  };
+  return labels[status] || status || "未知";
+}
+
+function signupStatusLabel(status) {
+  const labels = {
+    pending: "待审核",
+    approved: "已上车",
+    rejected: "已拒绝",
     cancelled: "已取消"
   };
   return labels[status] || status || "未知";
