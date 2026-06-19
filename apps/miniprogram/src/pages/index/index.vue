@@ -50,7 +50,7 @@
 </template>
 
 <script setup>
-import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
+import { onLoad, onShareAppMessage, onShareTimeline, onShow, onUnload } from "@dcloudio/uni-app";
 import { computed, reactive } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import {
@@ -62,6 +62,10 @@ import {
 import { clearCreateFlow } from "../../utils/createFlow";
 
 const buildVersion = `版本 ${__PINCHE_BUILD_TIME__}`;
+const HOME_SHARE_FRIEND_TITLE = "剧本迷·拼车";
+const HOME_SHARE_TIMELINE_TITLE = "剧本迷·拼车，一起玩好本";
+const HOME_SHARE_PATH = "/pages/index/index";
+const HOME_SHARE_IMAGE = "/static/art/ink-home-landscape.jpg";
 const backendStatus = reactive(getBackendStatus());
 let maintenanceTimer = null;
 
@@ -103,7 +107,17 @@ function retryBackend() {
   refreshBackendStatus();
 }
 
+function showHomeShareMenus() {
+  if (uni.showShareMenu) {
+    uni.showShareMenu({
+      withShareTicket: true,
+      menus: ["shareAppMessage", "shareTimeline"]
+    });
+  }
+}
+
 onLoad(() => {
+  showHomeShareMenus();
   if (typeof uni.$on === "function") {
     uni.$on(BACKEND_STATUS_CHANGE_EVENT, syncBackendStatus);
   }
@@ -111,6 +125,7 @@ onLoad(() => {
 });
 
 onShow(() => {
+  showHomeShareMenus();
   syncBackendStatus();
   if (backendStatus.available !== true) {
     refreshBackendStatus();
@@ -138,6 +153,18 @@ async function goCreate() {
 function goMine() {
   uni.navigateTo({ url: "/pages/mine/index" });
 }
+
+onShareAppMessage(() => ({
+  title: HOME_SHARE_FRIEND_TITLE,
+  path: HOME_SHARE_PATH,
+  imageUrl: HOME_SHARE_IMAGE
+}));
+
+onShareTimeline(() => ({
+  title: HOME_SHARE_TIMELINE_TITLE,
+  query: "",
+  imageUrl: HOME_SHARE_IMAGE
+}));
 </script>
 
 <style scoped>

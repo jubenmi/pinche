@@ -15,7 +15,7 @@ const miniprogramDevRoot = path.join(miniprogramRoot, "dist/dev/mp-weixin");
 const miniprogramBuildRoot = path.join(miniprogramRoot, "dist/build/mp-weixin");
 const codexHooksPath = path.join(root, ".codex/hooks.json");
 const devtoolsHookPath = path.join(root, "scripts/devtools-refresh-hook.js");
-const localApiBaseUrl = "http://127.0.0.1:3018";
+const developmentApiBaseUrl = "https://api.pinche.jubenmi.com";
 const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
 const mainPackageLimitBytes = Math.floor(1.5 * 1024 * 1024);
 const localMediaLimitBytes = 200 * 1024;
@@ -93,6 +93,11 @@ function methodBody(source, name) {
     }
   }
   return "";
+}
+
+function callbackObjectBody(source, name) {
+  const pattern = new RegExp(`${name}\\s*\\(\\s*\\(\\)\\s*=>\\s*\\(\\{([\\s\\S]*?)\\}\\)\\s*\\)`);
+  return source.match(pattern)?.[1] || "";
 }
 
 function assertBefore(source, first, second, message) {
@@ -364,6 +369,35 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   if (!/<view class="build-version">\{\{ buildVersion \}\}<\/view>/.test(indexSource)) {
     fail("Entry page must render the build-time version label on the first screen");
+  }
+  if (!indexSource.includes('menus: ["shareAppMessage", "shareTimeline"]')) {
+    fail("Entry page share menu must enable both friend/group and Moments sharing");
+  }
+  if (!indexSource.includes("showHomeShareMenus")) {
+    fail("Entry page must enable the WeChat share menu when it loads or becomes visible");
+  }
+  const homeShareAppMessageSource = callbackObjectBody(indexSource, "onShareAppMessage");
+  if (!homeShareAppMessageSource) {
+    fail("Entry page must support friend/group sharing with onShareAppMessage");
+  }
+  if (!homeShareAppMessageSource.includes("path: HOME_SHARE_PATH")) {
+    fail("Entry page friend/group sharing must open the home page path");
+  }
+  if (!homeShareAppMessageSource.includes("imageUrl: HOME_SHARE_IMAGE")) {
+    fail("Entry page friend/group sharing must use the home landscape share image");
+  }
+  const homeShareTimelineSource = callbackObjectBody(indexSource, "onShareTimeline");
+  if (!homeShareTimelineSource) {
+    fail("Entry page must support WeChat Moments sharing with onShareTimeline");
+  }
+  if (!homeShareTimelineSource.includes('query: ""')) {
+    fail("Entry page Moments sharing must return an empty home-page query");
+  }
+  if (homeShareTimelineSource.includes("path:")) {
+    fail("Entry page Moments sharing must use query instead of path");
+  }
+  if (!homeShareTimelineSource.includes("imageUrl: HOME_SHARE_IMAGE")) {
+    fail("Entry page Moments sharing must use the home landscape share image");
   }
   const maintenanceArtPath = path.join(srcRoot, "static/art/maintenance-landscape.jpg");
   if (!fs.existsSync(maintenanceArtPath)) {
@@ -949,8 +983,8 @@ if (!fs.existsSync(pagesJsonPath)) {
   const appSource = fs.readFileSync(path.join(srcRoot, "App.vue"), "utf8");
   if (!fs.existsSync(miniprogramDevEnvPath)) {
     fail("Miniprogram development env is missing: apps/miniprogram/.env.development");
-  } else if (readEnv(miniprogramDevEnvPath).VITE_API_BASE_URL !== localApiBaseUrl) {
-    fail(`Miniprogram development API base URL must be ${localApiBaseUrl}`);
+  } else if (readEnv(miniprogramDevEnvPath).VITE_API_BASE_URL !== developmentApiBaseUrl) {
+    fail(`Miniprogram development API base URL must be ${developmentApiBaseUrl}`);
   }
   if (!fs.existsSync(miniprogramProdEnvPath)) {
     fail("Miniprogram production env is missing: apps/miniprogram/.env.production");
