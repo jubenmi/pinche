@@ -91,7 +91,14 @@
             </template>
             <td class="row-actions">
               <button class="action-button" type="button" @click="openEdit(item)">编辑</button>
-              <button type="button" class="action-button danger" @click="remove(item)">硬删除</button>
+              <button
+                type="button"
+                class="action-button"
+                :class="{ danger: item.status === 'active' }"
+                @click="toggleStatus(item)"
+              >
+                {{ item.status === "active" ? "下架" : "上架" }}
+              </button>
             </td>
           </tr>
           <tr v-if="items.length === 0">
@@ -125,8 +132,6 @@
 <script setup>
 import { onMounted, ref, watch } from "vue";
 import {
-  deleteScript,
-  deleteStore,
   listScripts,
   listStoreScripts,
   listStores,
@@ -261,25 +266,32 @@ async function saveStoreItem(store) {
 }
 
 async function saveScriptItem(script) {
-  await saveScript(script);
-  closeDrawer();
-  await load();
+  error.value = "";
+  try {
+    await saveScript(script);
+    closeDrawer();
+    await load();
+  } catch (err) {
+    error.value = err.message;
+  }
 }
 
-async function remove(item) {
-  if (!window.confirm(`确认硬删除「${item.name}」？该操作不可恢复。`)) {
+async function toggleStatus(item) {
+  const nextStatus = item.status === "active" ? "inactive" : "active";
+  const actionLabel = nextStatus === "inactive" ? "下架" : "上架";
+  if (!window.confirm(`确认${actionLabel}「${item.name}」？`)) {
     return;
   }
   error.value = "";
   try {
     if (tab.value === "stores") {
-      await deleteStore(item.id);
+      await saveStore({ id: item.id, status: nextStatus });
     } else {
-      await deleteScript(item.id);
+      await saveScript({ id: item.id, status: nextStatus });
     }
     await load();
   } catch (err) {
-    error.value = err.code === "RESOURCE_IN_USE" ? "已有历史车局使用，不能硬删除。" : err.message;
+    error.value = err.message;
   }
 }
 

@@ -49,8 +49,8 @@ assert(
 
 const server = read("apps/api/src/server.js");
 assert(server.includes("/api/admin/web-login/tickets"), "server should expose admin web login routes");
-assert(server.includes("deleteStore"), "server should route store hard delete");
-assert(server.includes("deleteScript"), "server should route script hard delete");
+assert(server.includes("deleteStore"), "server should retain store hard delete route");
+assert(server.includes("deleteScript"), "server should retain script hard delete route");
 assert(
   server.includes("adminStoreScriptsId") &&
     server.includes("listStoreScripts") &&
@@ -59,8 +59,8 @@ assert(
 );
 
 const service = read("apps/api/src/modules/core/service.js");
-assert(service.includes("export async function deleteStore"), "service should export deleteStore");
-assert(service.includes("export async function deleteScript"), "service should export deleteScript");
+assert(service.includes("export async function deleteStore"), "service should retain deleteStore");
+assert(service.includes("export async function deleteScript"), "service should retain deleteScript");
 assert(
   service.includes("export async function listStoreScripts"),
   "service should export listStoreScripts"
@@ -115,8 +115,8 @@ assert(
 const webApi = read("apps/admin-web/src/api.js");
 assert(webApi.includes("createLoginTicket"), "web API should create login tickets");
 assert(webApi.includes("pollLoginTicket"), "web API should poll login tickets");
-assert(webApi.includes("deleteStore"), "web API should call store DELETE");
-assert(webApi.includes("deleteScript"), "web API should call script DELETE");
+assert(!webApi.includes("deleteStore"), "web API should not expose store hard delete");
+assert(!webApi.includes("deleteScript"), "web API should not expose script hard delete");
 assert(webApi.includes("listStoreScripts"), "web API should list store-script links");
 assert(webApi.includes("saveStoreScripts"), "web API should save store-script links");
 
@@ -163,6 +163,18 @@ for (const token of [
 ]) {
   assert(catalogWorkspace.includes(token), `catalog workspace should include ${token}`);
 }
+assert(
+  catalogWorkspace.includes("toggleStatus"),
+  "catalog workspace should provide status-based archive toggle"
+);
+assert(
+  catalogWorkspace.includes("saveStore") && catalogWorkspace.includes("saveScript"),
+  "catalog workspace should archive through PATCH save APIs"
+);
+assert(
+  !catalogWorkspace.includes("硬删除"),
+  "catalog workspace should not expose hard delete copy"
+);
 
 const scriptDrawer = read("apps/admin-web/src/components/ScriptDrawer.vue");
 for (const token of ["addRole", "removeRole", "roleGender", "defaultSeatTemplate"]) {
