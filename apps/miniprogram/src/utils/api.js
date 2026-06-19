@@ -412,6 +412,79 @@ export async function uploadUserAvatar(filePath) {
   });
 }
 
+export async function uploadSessionReviewPhoto(filePath) {
+  if (shouldBlockBusinessRequests()) {
+    return Promise.reject({
+      statusCode: 0,
+      maintenance: true,
+      errMsg: "backend maintenance",
+      userMessage: MAINTENANCE_USER_MESSAGE
+    });
+  }
+
+  const headers = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+
+  return new Promise((resolve, reject) => {
+    uni.uploadFile({
+      url: getApiBaseUrl() + "/api/session-reviews/photos",
+      filePath,
+      name: "photo",
+      header: headers,
+      success(response) {
+        let responseData = response.data || {};
+        if (typeof responseData === "string") {
+          try {
+            responseData = JSON.parse(responseData);
+          } catch (error) {
+            reject({
+              statusCode: response.statusCode,
+              errMsg: "invalid upload response",
+              originalError: error
+            });
+            return;
+          }
+        }
+
+        if (response.statusCode >= 400 || responseData.ok === false) {
+          reject({
+            statusCode: response.statusCode,
+            data: responseData
+          });
+          return;
+        }
+
+        const photoUrl = responseData.data?.photoUrl || "";
+        if (!photoUrl) {
+          reject({
+            statusCode: response.statusCode,
+            errMsg: "missing photoUrl"
+          });
+          return;
+        }
+
+        resolve(photoUrl);
+      },
+      fail(error) {
+        const errMsg = error?.errMsg || "upload failed";
+        markBackendMaintenance(error);
+        reject({
+          statusCode: 0,
+          maintenance: true,
+          errMsg,
+          userMessage: errMsg.includes("timeout")
+            ? "照片上传超时，请确认本地后端已启动。"
+            : "照片上传失败，请稍后重试。",
+          originalError: error
+        });
+      }
+    });
+  });
+}
+
 export async function updateUserProfile(patch) {
   const response = await request({
     url: "/api/users/me",
