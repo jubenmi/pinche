@@ -18,6 +18,12 @@ import {
 } from "./modules/auth/wechat.js";
 import { routeExtensions } from "./modules/extensions/registry.js";
 import {
+  cosObjectKeyFromUploadPath,
+  cosStorageEnabled,
+  getCosObject,
+  putCosObject
+} from "./storage/cos.js";
+import {
   approveSignup,
   cancelSession,
   claimSessionSeat,
@@ -264,6 +270,26 @@ function avatarContentType(filename) {
   return "application/octet-stream";
 }
 
+function isCosUploadStorageEnabled() {
+  return cosStorageEnabled(config.cos);
+}
+
+async function saveUploadedObject({ key, filename, file, contentType, localDir }) {
+  if (isCosUploadStorageEnabled()) {
+    await putCosObject({
+      key,
+      body: file,
+      contentType,
+      config: config.cos
+    });
+    return `/${key}`;
+  }
+
+  await fs.mkdir(localDir, { recursive: true });
+  await fs.writeFile(path.join(localDir, filename), file);
+  return `/${key}`;
+}
+
 async function saveUploadedAvatar(request, userId) {
   const contentType = request.headers["content-type"] || "";
   if (!contentType.includes("multipart/form-data")) {
@@ -271,13 +297,17 @@ async function saveUploadedAvatar(request, userId) {
   }
 
   const body = await readRawBody(request, AVATAR_MULTIPART_MAX_BYTES);
-  const { extension, file } = parseMultipartAvatarUpload(contentType, body);
-  await fs.mkdir(avatarUploadDir, { recursive: true });
+  const { extension, file, mimeType } = parseMultipartAvatarUpload(contentType, body);
   const avatarFilename = `user-${userId}-${Date.now()}-${crypto
     .randomBytes(8)
     .toString("hex")}${extension}`;
-  await fs.writeFile(path.join(avatarUploadDir, avatarFilename), file);
-  return `/uploads/avatars/${avatarFilename}`;
+  return saveUploadedObject({
+    key: `uploads/avatars/${avatarFilename}`,
+    filename: avatarFilename,
+    file,
+    contentType: mimeType || avatarContentType(avatarFilename),
+    localDir: avatarUploadDir
+  });
 }
 
 async function saveUploadedSessionReviewPhoto(request, userId) {
@@ -287,65 +317,109 @@ async function saveUploadedSessionReviewPhoto(request, userId) {
   }
 
   const body = await readRawBody(request, SESSION_REVIEW_MULTIPART_MAX_BYTES);
-  const { extension, file } = parseMultipartImageUpload(contentType, body, {
+  const { extension, file, mimeType } = parseMultipartImageUpload(contentType, body, {
     fieldName: "photo",
     maxBytes: SESSION_REVIEW_UPLOAD_MAX_BYTES,
     label: "review photo"
   });
-  await fs.mkdir(sessionReviewUploadDir, { recursive: true });
   const photoFilename = `review-${userId}-${Date.now()}-${crypto
     .randomBytes(8)
     .toString("hex")}${extension}`;
-  await fs.writeFile(path.join(sessionReviewUploadDir, photoFilename), file);
-  return `/uploads/session-reviews/${photoFilename}`;
+  return saveUploadedObject({
+    key: `uploads/session-reviews/${photoFilename}`,
+    filename: photoFilename,
+    file,
+    contentType: mimeType || avatarContentType(photoFilename),
+    localDir: sessionReviewUploadDir
+  });
+}
+
+async function serveLocalUploadedObject({ filePath, filename, response }) {
+  let file;
+  try {
+    file = await fs.readFile(filePath);
+  } catch (error) {
+    throw notFound();
+  }
+
+  response.writeHead(200, {
+    "cache-control": "public, max-age=31536000, immutable",
+    "content-length": file.length,
+    "content-type": avatarContentType(filename)
+  });
+  response.end(file);
+}
+
+async function serveCosUploadedObject({ key, filename, response }) {
+  const object = await getCosObject({
+    key,
+    config: config.cos
+  });
+
+  response.writeHead(200, {
+    "cache-control": "public, max-age=31536000, immutable",
+    "content-length": object.body.length,
+    "content-type": object.headers["content-type"] || avatarContentType(filename)
+  });
+  response.end(object.body);
+}
+
+async function serveUploadedObject({ url, prefix, localDir, response }) {
+  const requestedName = decodeURIComponent(url.pathname.slice(prefix.length));
+  const filename = path.basename(requestedName);
+  if (!filename || filename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(filename)) {
+    throw notFound();
+  }
+
+  const key = cosObjectKeyFromUploadPath(`${prefix}${filename}`, prefix);
+  if (isCosUploadStorageEnabled()) {
+    try {
+      await serveCosUploadedObject({ key, filename, response });
+      return;
+    } catch (error) {
+      if (error.statusCode && error.statusCode !== 404) {
+        throw new AppError(502, "COS_STORAGE_ERROR", "COS storage request failed", error.body);
+      }
+    }
+  }
+
+  await serveLocalUploadedObject({
+    filePath: path.join(localDir, filename),
+    filename,
+    response
+  });
 }
 
 async function serveUploadedAvatar(url, response) {
-  const requestedName = decodeURIComponent(url.pathname.slice("/uploads/avatars/".length));
-  const avatarFilename = path.basename(requestedName);
-  if (!avatarFilename || avatarFilename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(avatarFilename)) {
-    throw notFound();
-  }
-
-  const filePath = path.join(avatarUploadDir, avatarFilename);
-  let file;
   try {
-    file = await fs.readFile(filePath);
+    await serveUploadedObject({
+      url,
+      prefix: "/uploads/avatars/",
+      localDir: avatarUploadDir,
+      response
+    });
   } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
     throw notFound();
   }
-
-  response.writeHead(200, {
-    "cache-control": "public, max-age=31536000, immutable",
-    "content-length": file.length,
-    "content-type": avatarContentType(avatarFilename)
-  });
-  response.end(file);
 }
 
 async function serveUploadedSessionReviewPhoto(url, response) {
-  const requestedName = decodeURIComponent(
-    url.pathname.slice("/uploads/session-reviews/".length)
-  );
-  const photoFilename = path.basename(requestedName);
-  if (!photoFilename || photoFilename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(photoFilename)) {
-    throw notFound();
-  }
-
-  const filePath = path.join(sessionReviewUploadDir, photoFilename);
-  let file;
   try {
-    file = await fs.readFile(filePath);
+    await serveUploadedObject({
+      url,
+      prefix: "/uploads/session-reviews/",
+      localDir: sessionReviewUploadDir,
+      response
+    });
   } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
     throw notFound();
   }
-
-  response.writeHead(200, {
-    "cache-control": "public, max-age=31536000, immutable",
-    "content-length": file.length,
-    "content-type": avatarContentType(photoFilename)
-  });
-  response.end(file);
 }
 
 function idMatch(pathname, pattern) {
