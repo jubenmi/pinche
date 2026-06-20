@@ -30,6 +30,7 @@ const requiredFiles = [
   "apps/admin-web/src/components/ScriptDrawer.vue",
   "apps/admin-web/Dockerfile",
   "apps/admin-web/nginx.conf",
+  "apps/api/docker-entrypoint.sh",
   "apps/api/migrations/0007_admin_web_login.sql",
   "apps/api/migrations/0008_store_script_links.sql",
   "apps/api/migrations/0011_store_script_price.sql",
@@ -157,6 +158,16 @@ assert(
 );
 
 const dockerWorkflow = read(".github/workflows/docker-publish.yml");
+const apiDockerfile = read("apps/api/Dockerfile");
+const apiEntrypoint = read("apps/api/docker-entrypoint.sh");
+assert(
+  apiDockerfile.includes("docker-entrypoint.sh") && apiDockerfile.includes("ENTRYPOINT"),
+  "API Dockerfile should start through an entrypoint"
+);
+assert(
+  apiEntrypoint.includes("npm run migrate") && apiEntrypoint.includes('exec "$@"'),
+  "API entrypoint should run migrations before starting the API process"
+);
 assert(
   dockerWorkflow.includes("API_IMAGE_NAME: hkccr.ccs.tencentyun.com/murder/pinche"),
   "docker workflow should define API image name"
