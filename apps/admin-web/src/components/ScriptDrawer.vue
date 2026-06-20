@@ -45,47 +45,21 @@
               <thead>
                 <tr>
                   <th>角色</th>
-                  <th>类型</th>
-                  <th>定位</th>
+                  <th>角色介绍</th>
                   <th>性别</th>
-                  <th>基础价</th>
-                  <th>调整</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(role, index) in model.defaultSeatTemplate" :key="role.id">
                   <td><input v-model.trim="role.name" :name="`roleName-${index}`" required /></td>
-                  <td>
-                    <select v-model="role.seatType" :name="`roleSeatType-${index}`">
-                      <option value="normal">普通</option>
-                      <option value="love_companion">沉浸</option>
-                      <option value="f4">F4</option>
-                      <option value="cp">CP</option>
-                    </select>
-                  </td>
-                  <td><input v-model.trim="role.roleName" :name="`rolePosition-${index}`" /></td>
+                  <td><input v-model.trim="role.description" :name="`roleDescription-${index}`" /></td>
                   <td>
                     <select v-model="role.roleGender" :name="`roleGender-${index}`">
                       <option value="unlimited">不限</option>
                       <option value="male">男位</option>
                       <option value="female">女位</option>
                     </select>
-                  </td>
-                  <td>
-                    <input
-                      v-model.number="role.basePriceYuan"
-                      :name="`roleBasePrice-${index}`"
-                      type="number"
-                      min="0"
-                    />
-                  </td>
-                  <td>
-                    <input
-                      v-model.number="role.adjustmentYuan"
-                      :name="`roleAdjustment-${index}`"
-                      type="number"
-                    />
                   </td>
                   <td class="row-actions">
                     <button class="action-button" type="button" @click="moveRole(index, -1)">上移</button>
@@ -134,14 +108,18 @@ function parseJsonArray(value) {
 }
 
 function toEditorRole(role = {}, index = 0) {
+  const legacyDescription =
+    role.description ||
+    role.roleDescription ||
+    role.role_description ||
+    role["roleName"] ||
+    role.role_name ||
+    "";
   return {
     id: role.id || `${Date.now()}-${index}`,
-    name: role.name || role.roleName || `角色${index + 1}`,
-    seatType: role.seatType || role.seat_type || "normal",
-    roleName: role.roleName || role.role_name || "",
-    roleGender: role.roleGender || role.role_gender || "unlimited",
-    basePriceYuan: Math.round(Number(role.basePrice || role.base_price || 0) / 100),
-    adjustmentYuan: Math.round(Number(role.adjustment || 0) / 100)
+    name: role.name || role["roleName"] || role.role_name || `角色${index + 1}`,
+    description: legacyDescription,
+    roleGender: role.roleGender || role.role_gender || "unlimited"
   };
 }
 
@@ -209,11 +187,8 @@ function submit() {
     defaultSeatTemplate: model.defaultSeatTemplate.map((role) => ({
       id: role.id,
       name: role.name,
-      seatType: role.seatType,
-      roleName: role.roleName,
-      roleGender: role.roleGender,
-      basePrice: Number(role.basePriceYuan || 0) * 100,
-      adjustment: Number(role.adjustmentYuan || 0) * 100
+      description: role.description,
+      roleGender: role.roleGender
     }))
   });
 }

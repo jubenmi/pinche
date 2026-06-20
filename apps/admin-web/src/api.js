@@ -85,10 +85,12 @@ export function listStoreScripts(storeId) {
   return apiRequest(`/api/admin/stores/${storeId}/scripts`);
 }
 
-export function saveStoreScripts(storeId, scriptIds) {
+export function saveStoreScripts(storeId, scriptLinks) {
+  const normalizedLinks = scriptLinks || [];
+  const hasLinkObjects = normalizedLinks.some((link) => link && typeof link === "object");
   return apiRequest(`/api/admin/stores/${storeId}/scripts`, {
     method: "PUT",
-    body: { scriptIds }
+    body: hasLinkObjects ? { scriptLinks: normalizedLinks } : { scriptIds: normalizedLinks }
   });
 }
 

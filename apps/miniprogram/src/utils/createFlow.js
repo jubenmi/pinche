@@ -57,12 +57,15 @@ export function roleOptionsFromScript(script) {
   const template = parseJsonArray(script?.default_seat_template_json);
   const roles = template.map((item, index) => {
     const name = item.name || item.roleName || `角色${index + 1}`;
-    const note = item.roleName && item.roleName !== name ? item.roleName : roleTypeLabel(item.seatType);
     return {
       id: `${script?.id || "script"}-${index}`,
       name,
-      note,
-      seatType: item.seatType || item.seat_type || "normal",
+      note:
+        item.description ||
+        item.roleDescription ||
+        item.role_description ||
+        (item.roleName && item.roleName !== name ? item.roleName : ""),
+      seatType: "normal",
       roleGender: inferLegacyRoleGender(item, index)
     };
   });

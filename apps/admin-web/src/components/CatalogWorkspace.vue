@@ -116,6 +116,7 @@
       v-if="drawer === 'store'"
       :store="selected"
       :available-scripts="availableScripts"
+      :linked-scripts="linkedScripts"
       :linked-script-ids="linkedScriptIds"
       @save="saveStoreItem"
       @close="closeDrawer"
@@ -149,6 +150,7 @@ const items = ref([]);
 const drawer = ref("");
 const selected = ref({});
 const availableScripts = ref([]);
+const linkedScripts = ref([]);
 const linkedScriptIds = ref([]);
 const error = ref("");
 
@@ -212,6 +214,7 @@ async function refreshScriptOptions() {
 
 async function openCreate() {
   selected.value = {};
+  linkedScripts.value = [];
   linkedScriptIds.value = [];
   if (tab.value === "stores") {
     error.value = "";
@@ -233,6 +236,7 @@ async function openEdit(item) {
     try {
       await refreshScriptOptions();
       const scripts = await listStoreScripts(item.id);
+      linkedScripts.value = scripts;
       linkedScriptIds.value = scripts.map((script) => Number(script.id));
       drawer.value = "store";
     } catch (err) {
@@ -246,15 +250,16 @@ async function openEdit(item) {
 function closeDrawer() {
   drawer.value = "";
   selected.value = {};
+  linkedScripts.value = [];
   linkedScriptIds.value = [];
 }
 
 async function saveStoreItem(store) {
   error.value = "";
-  const { scriptIds = [], ...payload } = store;
+  const { scriptIds = [], scriptLinks = [], storeScriptPriceYuanById, ...payload } = store;
   try {
     const saved = await saveStore(payload);
-    await saveStoreScripts(saved.id, scriptIds);
+    await saveStoreScripts(saved.id, scriptLinks.length > 0 ? scriptLinks : scriptIds);
     closeDrawer();
     await load();
   } catch (err) {

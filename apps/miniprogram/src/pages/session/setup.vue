@@ -128,6 +128,9 @@ export default {
     startText() {
       return `${this.dateValue} ${this.timeValue}`;
     },
+    storeScriptPrice() {
+      return Number(this.script?.price_per_player || this.script?.pricePerPlayer || 0);
+    },
     defaultPinnedMessage() {
       return `置顶：${this.scriptName} ${this.startText}，${this.storeName}集合。`;
     },
@@ -176,7 +179,7 @@ export default {
         seatType: role.seatType || "normal",
         roleName: role.note || role.name,
         roleGender: role.roleGender || "unlimited",
-        basePrice: 0,
+        basePrice: this.storeScriptPrice,
         adjustment: 0
       };
     },

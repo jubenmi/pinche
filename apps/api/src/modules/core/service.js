@@ -122,6 +122,66 @@ function normalizeRoleGender(value) {
   return roleGender;
 }
 
+function nonNegativeIntValue(value, label) {
+  const parsed = intValue(value, 0);
+  if (parsed < 0) {
+    throw badRequest(`${label} cannot be negative`);
+  }
+  return parsed;
+}
+
+function parseRoleTemplate(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch (error) {
+      throw badRequest("defaultSeatTemplate must be a valid JSON array");
+    }
+  }
+
+  throw badRequest("defaultSeatTemplate must be an array");
+}
+
+function normalizeRoleTemplateItem(role = {}, index = 0) {
+  const name = String(
+    role.name || role.roleName || role.role_name || `角色${index + 1}`
+  ).trim();
+  const description = String(
+    role.description ||
+      role.roleDescription ||
+      role.role_description ||
+      role.roleName ||
+      role.role_name ||
+      ""
+  ).trim();
+
+  return {
+    ...(role.id ? { id: String(role.id) } : {}),
+    name: name || `角色${index + 1}`,
+    description,
+    roleGender: normalizeRoleGender(role.roleGender || role.role_gender)
+  };
+}
+
+function roleTemplateJson(value) {
+  const parsed = parseRoleTemplate(value);
+  if (parsed === null) {
+    return null;
+  }
+  return JSON.stringify(parsed.map(normalizeRoleTemplateItem));
+}
+
 function assertPayable(basePrice, adjustment) {
   const payablePrice = basePrice + adjustment;
   if (payablePrice < 0) {
@@ -557,24 +617,26 @@ export async function listActiveStores(filters = {}) {
 
 export async function listActiveScripts(filters = {}) {
   return withDatabaseConnection(async (connection) => {
-    const where = ["status = 'active'"];
+    const where = ["scripts.status = 'active'"];
     const values = [];
+    let from = "scripts";
+    let select = "scripts.*";
 
     if (filters.storeId !== undefined && filters.storeId !== null && filters.storeId !== "") {
-      where.push(
-        "EXISTS (SELECT 1 FROM store_scripts ss WHERE ss.script_id = scripts.id AND ss.store_id = ?)"
-      );
+      from = "scripts INNER JOIN store_scripts ss ON ss.script_id = scripts.id";
+      select = "scripts.*, ss.price_per_player";
+      where.push("ss.store_id = ?");
       values.push(positiveId(filters.storeId, "storeId"));
     }
 
     if (filters.keyword) {
-      where.push("(name LIKE ? OR type_tags LIKE ?)");
+      where.push("(scripts.name LIKE ? OR scripts.type_tags LIKE ?)");
       const keyword = likeKeyword(filters.keyword);
       values.push(keyword, keyword);
     }
 
     const [rows] = await connection.query(
-      `SELECT * FROM scripts WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
+      `SELECT ${select} FROM ${from} WHERE ${where.join(" AND ")} ORDER BY scripts.id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
     return rows.map(publicScriptRow);
@@ -627,6 +689,42 @@ export async function listAdminScripts(filters = {}) {
   });
 }
 
+function normalizeStoreScriptLinks(body = {}) {
+  const sourceLinks =
+    body.scriptLinks !== undefined
+      ? body.scriptLinks
+      : body.scripts !== undefined
+        ? body.scripts
+        : (body.scriptIds ?? []).map((scriptId) => ({ scriptId, pricePerPlayer: 0 }));
+
+  if (!Array.isArray(sourceLinks)) {
+    throw badRequest("scriptLinks must be an array");
+  }
+
+  const seen = new Set();
+  const links = [];
+  for (const sourceLink of sourceLinks) {
+    const isObject = sourceLink && typeof sourceLink === "object";
+    const scriptId = positiveId(
+      isObject ? sourceLink.scriptId ?? sourceLink.id : sourceLink,
+      "scriptId"
+    );
+    if (seen.has(scriptId)) {
+      continue;
+    }
+    seen.add(scriptId);
+    links.push({
+      scriptId,
+      pricePerPlayer: nonNegativeIntValue(
+        isObject ? sourceLink.pricePerPlayer ?? sourceLink.price_per_player : 0,
+        "pricePerPlayer"
+      )
+    });
+  }
+
+  return links;
+}
+
 export async function listStoreScripts(storeId) {
   const id = positiveId(storeId, "storeId");
   return withDatabaseConnection(async (connection) => {
@@ -637,7 +735,7 @@ export async function listStoreScripts(storeId) {
 
     const [rows] = await connection.query(
       `
-        SELECT scripts.*
+        SELECT scripts.*, store_scripts.price_per_player
         FROM store_scripts
           INNER JOIN scripts ON scripts.id = store_scripts.script_id
         WHERE store_scripts.store_id = ?
@@ -652,7 +750,8 @@ export async function listStoreScripts(storeId) {
 
 export async function replaceStoreScripts(storeId, body = {}) {
   const id = positiveId(storeId, "storeId");
-  const scriptIds = uniquePositiveIds(body.scriptIds ?? [], "scriptIds");
+  const scriptLinks = normalizeStoreScriptLinks(body);
+  const scriptIds = scriptLinks.map((scriptLink) => scriptLink.scriptId);
 
   return withTransaction(async (connection) => {
     const store = await findById(connection, "stores", id);
@@ -676,15 +775,19 @@ export async function replaceStoreScripts(storeId, body = {}) {
     await connection.query("DELETE FROM store_scripts WHERE store_id = ?", [id]);
 
     if (scriptIds.length > 0) {
-      const values = scriptIds.flatMap((scriptId) => [id, scriptId]);
-      const placeholders = scriptIds.map(() => "(?, ?)").join(", ");
+      const values = scriptLinks.flatMap((scriptLink) => [
+        id,
+        scriptLink.scriptId,
+        scriptLink.pricePerPlayer
+      ]);
+      const placeholders = scriptLinks.map(() => "(?, ?, ?)").join(", ");
       await connection.query(
-        `INSERT INTO store_scripts (store_id, script_id) VALUES ${placeholders}`,
+        `INSERT INTO store_scripts (store_id, script_id, price_per_player) VALUES ${placeholders}`,
         values
       );
     }
 
-    return { storeId: id, scriptIds };
+    return { storeId: id, scriptIds, scriptLinks };
   });
 }
 
@@ -782,7 +885,7 @@ export async function createScript(user, body) {
         jsonText(body.typeTags),
         intValue(body.playerCount, 0),
         optionalText(body.summaryNoSpoiler),
-        jsonColumn(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
+        roleTemplateJson(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
         body.status || "active",
         body.claimStatus || "unclaimed",
         user.user.id
@@ -799,7 +902,7 @@ export async function updateScript(id, body) {
     defaultSeatTemplateJson:
       body.defaultSeatTemplate === undefined && body.defaultSeatTemplateJson === undefined
         ? undefined
-        : jsonColumn(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
+        : roleTemplateJson(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
     playerCount:
       body.playerCount === undefined ? undefined : intValue(body.playerCount, 0)
   };
@@ -928,7 +1031,7 @@ export async function reviewCatalogRequest(admin, id, body) {
             jsonText(body.typeTags),
             intValue(body.playerCount, 0),
             request.description,
-            jsonColumn(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
+            roleTemplateJson(body.defaultSeatTemplate ?? body.defaultSeatTemplateJson),
             admin.user.id
           ]
         );

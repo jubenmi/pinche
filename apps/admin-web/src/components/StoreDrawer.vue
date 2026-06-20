@@ -50,17 +50,30 @@
             placeholder="搜索剧本名称"
           />
           <div class="script-choice-list">
-            <label
+            <div
               v-for="script in filteredScripts"
               :key="script.id"
               class="script-choice"
+              :class="{ selected: isScriptSelected(script.id) }"
             >
-              <input v-model="model.scriptIds" type="checkbox" :value="Number(script.id)" />
-              <span>
-                <strong>{{ script.name }}</strong>
-                <small>{{ displayTags(script.type_tags) }}</small>
-              </span>
-            </label>
+              <label class="script-choice-main">
+                <input v-model="model.scriptIds" type="checkbox" :value="Number(script.id)" />
+                <span>
+                  <strong>{{ script.name }}</strong>
+                  <small>{{ displayTags(script.type_tags) }}</small>
+                </span>
+              </label>
+              <label v-if="isScriptSelected(script.id)" class="store-script-price">
+                <span>统一价（元/人）</span>
+                <input
+                  v-model.number="model.storeScriptPriceYuanById[Number(script.id)]"
+                  :name="`storeScriptPrice-${script.id}`"
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                />
+              </label>
+            </div>
             <p v-if="filteredScripts.length === 0" class="script-empty">没有匹配的剧本</p>
           </div>
         </fieldset>
@@ -80,6 +93,7 @@ import { computed, reactive, ref, watch } from "vue";
 const props = defineProps({
   store: { type: Object, required: true },
   availableScripts: { type: Array, default: () => [] },
+  linkedScripts: { type: Array, default: () => [] },
   linkedScriptIds: { type: Array, default: () => [] }
 });
 const emit = defineEmits(["save", "close"]);
@@ -119,9 +133,40 @@ const filteredScripts = computed(() => {
   });
 });
 
+function centsToYuan(value) {
+  return Math.round(Number(value || 0) / 100);
+}
+
+function linkScriptId(link) {
+  if (link && typeof link === "object") {
+    return Number(link.scriptId || link.id);
+  }
+  return Number(link);
+}
+
+function linkPriceYuan(link) {
+  if (!link || typeof link !== "object") {
+    return 0;
+  }
+  return centsToYuan(link.pricePerPlayer ?? link.price_per_player);
+}
+
+function isScriptSelected(scriptId) {
+  return (model.scriptIds || []).includes(Number(scriptId));
+}
+
 watch(
-  [() => props.store, () => props.linkedScriptIds],
-  ([store, linkedScriptIds]) => {
+  [() => props.store, () => props.linkedScripts, () => props.linkedScriptIds],
+  ([store, linkedScripts, linkedScriptIds]) => {
+    const linkedSource =
+      linkedScripts.length > 0 ? linkedScripts : store.scriptLinks || linkedScriptIds || [];
+    const storeScriptPriceYuanById = {};
+    linkedSource.forEach((link) => {
+      const scriptId = linkScriptId(link);
+      if (scriptId) {
+        storeScriptPriceYuanById[scriptId] = linkPriceYuan(link);
+      }
+    });
     Object.assign(model, {
       id: store.id,
       name: store.name || "",
@@ -130,7 +175,8 @@ watch(
       address: store.address || "",
       contactNote: store.contact_note || store.contactNote || "",
       status: store.status || "active",
-      scriptIds: (linkedScriptIds || store.scriptIds || []).map((id) => Number(id))
+      scriptIds: linkedSource.map(linkScriptId).filter(Boolean),
+      storeScriptPriceYuanById
     });
     scriptKeyword.value = "";
   },
@@ -138,7 +184,11 @@ watch(
 );
 
 function submit() {
-  emit("save", { ...model });
+  const scriptLinks = (model.scriptIds || []).map((scriptId) => ({
+    scriptId: Number(scriptId),
+    pricePerPlayer: Number(model.storeScriptPriceYuanById?.[Number(scriptId)] || 0) * 100
+  }));
+  emit("save", { ...model, scriptLinks });
 }
 </script>
 
@@ -173,20 +223,28 @@ function submit() {
 }
 
 .script-choice {
-  display: flex !important;
-  grid-template-columns: none !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 160px;
   align-items: center;
-  gap: 10px !important;
+  gap: 12px !important;
   padding: 10px 0;
   border-bottom: 1px solid #edf2f0;
 }
 
-.script-choice input {
+.script-choice-main {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 10px !important;
+  min-width: 0;
+}
+
+.script-choice-main input {
   width: 18px;
   height: 18px;
 }
 
-.script-choice span {
+.script-choice-main span {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -195,6 +253,22 @@ function submit() {
 .script-choice strong {
   color: #17211f;
   font-size: 14px;
+}
+
+.store-script-price {
+  display: grid !important;
+  grid-template-columns: none !important;
+  gap: 4px !important;
+}
+
+.store-script-price span {
+  color: #63716d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.store-script-price input {
+  width: 100%;
 }
 
 .script-empty {

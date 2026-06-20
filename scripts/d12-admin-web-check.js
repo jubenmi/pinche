@@ -32,6 +32,7 @@ const requiredFiles = [
   "apps/admin-web/nginx.conf",
   "apps/api/migrations/0007_admin_web_login.sql",
   "apps/api/migrations/0008_store_script_links.sql",
+  "apps/api/migrations/0011_store_script_price.sql",
   "apps/api/src/modules/auth/admin-web-login.js"
 ];
 
@@ -91,6 +92,18 @@ assert(linkMigration.includes("store_scripts"), "migration should create store_s
 assert(linkMigration.includes("UNIQUE KEY uniq_store_script"), "store_scripts should be unique by pair");
 assert(linkMigration.includes("FOREIGN KEY (store_id)"), "store_scripts should reference stores");
 assert(linkMigration.includes("FOREIGN KEY (script_id)"), "store_scripts should reference scripts");
+
+const storeScriptPriceMigration = read("apps/api/migrations/0011_store_script_price.sql");
+assert(
+  storeScriptPriceMigration.includes("price_per_player"),
+  "store-script migration should add a per-store script price"
+);
+assert(
+  storeScriptPriceMigration.includes("default_seat_template_json") &&
+    storeScriptPriceMigration.includes("GROUP_CONCAT") &&
+    storeScriptPriceMigration.includes("description"),
+  "store-script migration should clean legacy role template fields into role descriptions"
+);
 
 const mysql = read("apps/api/src/db/mysql.js");
 assert(mysql.includes("store_scripts"), "database readiness should require store_scripts");
@@ -219,6 +232,23 @@ assert(
   /SELECT id FROM scripts WHERE id IN \(\$\{placeholders\}\) AND status = 'active'/.test(service),
   "store-script replacement should only accept active script ids"
 );
+assert(
+  /store_scripts\.price_per_player/.test(service),
+  "store-script list should expose the per-store script price"
+);
+assert(
+  service.includes("scriptLinks") && service.includes("pricePerPlayer"),
+  "store-script replacement should accept scriptLinks with pricePerPlayer"
+);
+assert(
+  /INSERT INTO store_scripts \(store_id, script_id, price_per_player\)/.test(service),
+  "store-script replacement should persist the per-store script price"
+);
+assert(
+  /ss\.price_per_player|store_scripts\.price_per_player/.test(service) &&
+    service.includes("filters.storeId"),
+  "active script list should include the store-script price when filtered by store"
+);
 
 const scriptDrawer = read("apps/admin-web/src/components/ScriptDrawer.vue");
 for (const token of ["addRole", "removeRole", "roleGender", "defaultSeatTemplate"]) {
@@ -227,13 +257,55 @@ for (const token of ["addRole", "removeRole", "roleGender", "defaultSeatTemplate
 for (const token of ["drawer-body", "drawer-footer", "secondary-action", "role-table-wrap"]) {
   assert(scriptDrawer.includes(token), `script drawer should use operator drawer ${token}`);
 }
+assert(scriptDrawer.includes("角色介绍"), "script roles should use a role introduction field");
+for (const removedRoleToken of [
+  "<th>类型</th>",
+  "<th>定位</th>",
+  "<th>基础价</th>",
+  "<th>调整</th>",
+  "roleSeatType",
+  "rolePosition",
+  "roleBasePrice",
+  "roleAdjustment",
+  "basePriceYuan",
+  "adjustmentYuan"
+]) {
+  assert(
+    !scriptDrawer.includes(removedRoleToken),
+    `script roles should not expose legacy role field ${removedRoleToken}`
+  );
+}
+assert(
+  !/defaultSeatTemplate:[\s\S]*seatType:/.test(scriptDrawer) &&
+    !/defaultSeatTemplate:[\s\S]*roleName:/.test(scriptDrawer) &&
+    !/defaultSeatTemplate:[\s\S]*basePrice:/.test(scriptDrawer) &&
+    !/defaultSeatTemplate:[\s\S]*adjustment:/.test(scriptDrawer),
+  "script role submissions should not send type, position, base price, or adjustment"
+);
 
 const storeDrawer = read("apps/admin-web/src/components/StoreDrawer.vue");
 assert(storeDrawer.includes("关联剧本"), "store drawer should include script association section");
 assert(storeDrawer.includes("scriptIds"), "store drawer should submit scriptIds");
+assert(storeDrawer.includes("storeScriptPrice"), "store drawer should collect per-script store prices");
+assert(storeDrawer.includes("pricePerPlayer"), "store drawer should submit per-script store prices");
 for (const token of ["drawer-body", "drawer-footer", "secondary-action", "script-link-count"]) {
   assert(storeDrawer.includes(token), `store drawer should use operator drawer ${token}`);
 }
+
+assert(webApi.includes("scriptLinks"), "web API should save store-script link prices");
+
+const setupPage = read("apps/miniprogram/src/pages/session/setup.vue");
+assert(
+  setupPage.includes("storeScriptPrice") && setupPage.includes("price_per_player"),
+  "mini-program session setup should use store-script price for seat base price"
+);
+
+const createFlow = read("apps/miniprogram/src/utils/createFlow.js");
+assert(
+  createFlow.includes("description") &&
+    /note:\s*item\.description/.test(createFlow),
+  "mini-program role options should show script role descriptions instead of role type/position"
+);
 
 const adminStyles = read("apps/admin-web/src/styles.css");
 for (const token of [
