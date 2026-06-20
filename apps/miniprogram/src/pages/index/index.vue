@@ -56,7 +56,6 @@ import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import {
   BACKEND_STATUS_CHANGE_EVENT,
   checkBackendHealth,
-  ensureLoggedIn,
   getBackendStatus
 } from "../../utils/api";
 import { clearCreateFlow } from "../../utils/createFlow";
@@ -139,13 +138,7 @@ onUnload(() => {
   }
 });
 
-async function goCreate() {
-  const auth = await ensureLoggedIn({
-    content: "登录后开始创建剧本局。"
-  });
-  if (!auth) {
-    return;
-  }
+function goCreate() {
   clearCreateFlow();
   uni.navigateTo({ url: "/pages/session/create" });
 }

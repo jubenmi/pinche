@@ -184,8 +184,7 @@ function hydrateAuth() {
 async function login() {
   const auth = await ensureLoggedIn({
     devCode: "dev-admin-openid",
-    content: "登录后查看你的发车、报名和管理入口。",
-    promptPhoneAfterLogin: true
+    content: "登录后查看你的发车、报名和管理入口。"
   });
   if (!auth) {
     statusText.value = "登录失败";

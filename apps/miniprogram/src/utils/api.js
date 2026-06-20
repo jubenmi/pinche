@@ -560,7 +560,7 @@ export async function updateUserPhoneFromWechatPhoneCode(code) {
 }
 
 export async function ensureUserGender(auth, options = {}) {
-  if (options.requireGender === false || auth?.user?.gender) {
+  if (options.requireGender !== true || auth?.user?.gender) {
     return auth;
   }
 
@@ -695,7 +695,7 @@ export async function ensureLoggedIn(options = {}) {
     if (!phoneAuth) {
       return null;
     }
-    return ensureUserGender(phoneAuth, options);
+    return options.requireGender === true ? ensureUserGender(phoneAuth, options) : phoneAuth;
   }
   if (auth.user && !token) {
     clearAuth();
@@ -716,14 +716,11 @@ export async function ensureLoggedIn(options = {}) {
       roles: data.roles || [],
       token: data.token || ""
     };
-    const phoneAuth = await ensureUserPhone(loggedInAuth, {
-      ...options,
-      promptPhoneAfterLogin: true
-    });
+    const phoneAuth = await ensureUserPhone(loggedInAuth, options);
     if (!phoneAuth) {
       return null;
     }
-    return ensureUserGender(phoneAuth, options);
+    return options.requireGender === true ? ensureUserGender(phoneAuth, options) : phoneAuth;
   } catch (error) {
     if (options.showToast !== false) {
       uni.showToast({

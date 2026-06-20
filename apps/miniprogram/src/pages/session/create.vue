@@ -50,7 +50,7 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
-import { dataOf, ensureLoggedIn, queryString, request } from "../../utils/api";
+import { dataOf, queryString, request } from "../../utils/api";
 import { writeCreateFlow } from "../../utils/createFlow";
 
 const FALLBACK_STORES = [
@@ -71,27 +71,10 @@ export default {
       statusText: ""
     };
   },
-  async onLoad() {
-    const auth = await ensureLoggedIn({
-      content: "登录后创建的车会归到你的账号下。"
-    });
-    if (!auth) {
-      this.statusText = "登录后可继续创建。";
-      return;
-    }
+  onLoad() {
     this.loadStores();
   },
   methods: {
-    async ensureCreateStepLogin() {
-      const auth = await ensureLoggedIn({
-        content: "登录后创建的车会归到你的账号下。"
-      });
-      if (!auth) {
-        this.statusText = "登录后可继续创建。";
-        return null;
-      }
-      return auth;
-    },
     async loadStores() {
       this.statusText = "正在加载店家...";
       try {
@@ -107,10 +90,6 @@ export default {
       }
     },
     async selectStore(store) {
-      const auth = await this.ensureCreateStepLogin();
-      if (!auth) {
-        return;
-      }
       if (this.isSelectedStore(store)) {
         await this.goNext();
         return;
@@ -130,10 +109,6 @@ export default {
       return [district, area, store.distance].filter(Boolean).join(" · ");
     },
     async goNext() {
-      const auth = await this.ensureCreateStepLogin();
-      if (!auth) {
-        return;
-      }
       if (!this.selectedStore) {
         uni.showToast({ title: "先选择一家店", icon: "none" });
         return;

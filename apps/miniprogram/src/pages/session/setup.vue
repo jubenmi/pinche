@@ -138,15 +138,7 @@ export default {
       return isNumericId(this.store?.id) && isNumericId(this.script?.id);
     }
   },
-  async onLoad() {
-    const auth = await ensureLoggedIn({
-      content: "登录后创建的车会归到你的账号下。"
-    });
-    if (!auth) {
-      this.statusText = "登录后可继续创建。";
-      return;
-    }
-
+  onLoad() {
     const flow = readCreateFlow();
     this.store = flow.store || null;
     this.script = flow.script || null;

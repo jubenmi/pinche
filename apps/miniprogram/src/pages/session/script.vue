@@ -41,7 +41,7 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
-import { dataOf, ensureLoggedIn, queryString, request } from "../../utils/api";
+import { dataOf, queryString, request } from "../../utils/api";
 import { displayTags, firstTag, readCreateFlow, writeCreateFlow } from "../../utils/createFlow";
 
 const FALLBACK_SCRIPTS = [
@@ -99,14 +99,7 @@ export default {
       return this.store?.name || "当前店家";
     }
   },
-  async onLoad(options) {
-    const auth = await ensureLoggedIn({
-      content: "登录后创建的车会归到你的账号下。"
-    });
-    if (!auth) {
-      this.statusText = "登录后可继续选择剧本。";
-      return;
-    }
+  onLoad(options) {
     const flow = readCreateFlow();
     this.store =
       flow.store ||
@@ -123,16 +116,6 @@ export default {
     this.loadScripts();
   },
   methods: {
-    async ensureScriptStepLogin() {
-      const auth = await ensureLoggedIn({
-        content: "登录后创建的车会归到你的账号下。"
-      });
-      if (!auth) {
-        this.statusText = "登录后可继续选择剧本。";
-        return null;
-      }
-      return auth;
-    },
     safeDecode(value) {
       if (!value) {
         return "";
@@ -172,10 +155,6 @@ export default {
       }
     },
     async selectScript(script) {
-      const auth = await this.ensureScriptStepLogin();
-      if (!auth) {
-        return;
-      }
       if (this.isSelectedScript(script)) {
         await this.goNext();
         return;
@@ -190,10 +169,6 @@ export default {
       );
     },
     async goNext() {
-      const auth = await this.ensureScriptStepLogin();
-      if (!auth) {
-        return;
-      }
       if (!this.selectedScript) {
         uni.showToast({ title: "先选择一个剧本", icon: "none" });
         return;

@@ -41,7 +41,7 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
-import { AUTH_CHANGE_EVENT, ensureLoggedIn, getCurrentUser } from "../../utils/api";
+import { AUTH_CHANGE_EVENT, getCurrentUser } from "../../utils/api";
 import {
   isCrossCast,
   normalizeRoleGender,
@@ -70,15 +70,9 @@ export default {
       return this.script?.name || "剧本待定";
     }
   },
-  async onLoad() {
-    const auth = await ensureLoggedIn({
-      content: "登录后创建的车会归到你的账号下。"
-    });
-    if (!auth) {
-      return;
-    }
+  onLoad() {
     this.bindAuthChangeListener();
-    this.refreshCurrentUserGender(auth);
+    this.refreshCurrentUserGender();
     const flow = readCreateFlow();
     this.store = flow.store || null;
     this.script = flow.script || {
@@ -109,16 +103,6 @@ export default {
       const currentAuth = auth?.user ? auth : getCurrentUser();
       this.currentUserGender = currentAuth.user?.gender || "";
     },
-    async ensureRoleStepLogin() {
-      const auth = await ensureLoggedIn({
-        content: "登录后继续选择你的角色。"
-      });
-      if (!auth) {
-        return null;
-      }
-      this.refreshCurrentUserGender(auth);
-      return auth;
-    },
     roleGenderClass(roleGender) {
       const gender = normalizeRoleGender(roleGender);
       return ["male", "female"].includes(gender) ? gender : "";
@@ -143,10 +127,6 @@ export default {
       });
     },
     async selectRole(role) {
-      const auth = await this.ensureRoleStepLogin();
-      if (!auth) {
-        return;
-      }
       if (this.isSelectedRole(role)) {
         await this.goNext();
         return;
@@ -168,10 +148,6 @@ export default {
       return this.isSelectedRole(role) && isCrossCast(this.currentUserGender, role.roleGender);
     },
     async goNext() {
-      const auth = await this.ensureRoleStepLogin();
-      if (!auth) {
-        return;
-      }
       if (!this.selectedRole) {
         uni.showToast({ title: "先选择一个角色", icon: "none" });
         return;

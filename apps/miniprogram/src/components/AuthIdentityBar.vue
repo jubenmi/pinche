@@ -133,7 +133,6 @@ import {
   AUTH_PROFILE_RESPONSE_EVENT,
   assetUrl,
   clearAuth,
-  ensureLoggedIn,
   getCurrentUser,
   uploadUserAvatar,
   updateUserPhoneFromWechatPhoneCode,
@@ -189,7 +188,6 @@ export default {
       phoneRequestId: "",
       phoneTitleText: "",
       phoneContentText: "",
-      loginPending: false,
       savingPhone: false,
       savingProfile: false
     };
@@ -358,7 +356,7 @@ export default {
     async openProfileModal(required = false) {
       if (!this.user) {
         if (!required) {
-          await this.loginFromIdentityBar();
+          this.goLoginPage();
         }
         return;
       }
@@ -376,24 +374,11 @@ export default {
       this.phoneRequired = Boolean(required);
       this.phoneVisible = true;
     },
-    async loginFromIdentityBar() {
-      if (this.loginPending) {
+    goLoginPage() {
+      if (currentPageRoute() === "pages/mine/index") {
         return;
       }
-
-      this.loginPending = true;
-      try {
-        const auth = await ensureLoggedIn({
-          content: "登录后可以查看和修改个人信息。"
-        });
-        if (auth?.user) {
-          this.user = auth.user;
-          this.roles = auth.roles || [];
-          this.syncProfileDrafts();
-        }
-      } finally {
-        this.loginPending = false;
-      }
+      uni.navigateTo({ url: "/pages/mine/index" });
     },
     handlePhoneBackdropTap() {
       if (this.phoneRequired) {

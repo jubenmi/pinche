@@ -416,20 +416,14 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Entry page action buttons must share one full-width button box model");
   }
   const goCreateSource = methodBody(indexSource, "goCreate");
-  if (!goCreateSource.includes("ensureLoggedIn")) {
-    fail("Entry page Create button must request login before navigating");
+  if (goCreateSource.includes("ensureLoggedIn")) {
+    fail("Entry page Create button must let users browse the creation flow before login");
   }
   assertBefore(
     goCreateSource,
-    "ensureLoggedIn",
     "clearCreateFlow",
-    "Entry page Create button must not clear state before login"
-  );
-  assertBefore(
-    goCreateSource,
-    "ensureLoggedIn",
     "uni.navigateTo",
-    "Entry page Create button must request login before navigating"
+    "Entry page Create button must start a fresh browse flow before navigating"
   );
 
   const mineSource = fs.existsSync(path.join(srcRoot, "pages/mine/index.vue"))
@@ -445,8 +439,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Mine page must not treat cached user data without token as a logged-in session");
   }
   const mineLoginSource = methodBody(mineSource, "login");
-  if (!mineLoginSource.includes("promptPhoneAfterLogin: true")) {
-    fail("Mine page login button must prompt for phone after login even when cached auth is refreshed");
+  if (mineLoginSource.includes("promptPhoneAfterLogin: true")) {
+    fail("Mine page login must not request phone authorization before a protected action");
   }
 
   const createSource = fs.existsSync(firstFlowFiles["store step"])
@@ -468,35 +462,14 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Store selection should confirm and continue when tapping the selected store again");
   }
-  if (!/ensureCreateStepLogin/.test(createSource)) {
-    fail("Store selection step must guard buttons with login before side effects");
-  }
   const selectStoreSource = methodBody(createSource, "selectStore");
   const createGoNextSource = methodBody(createSource, "goNext");
-  assertBefore(
-    selectStoreSource,
-    "ensureCreateStepLogin",
-    "this.goNext",
-    "Store selection must not continue before login"
-  );
-  assertBefore(
-    selectStoreSource,
-    "ensureCreateStepLogin",
-    "this.selectedStore = store",
-    "Store selection must not select before login"
-  );
-  assertBefore(
-    selectStoreSource,
-    "ensureCreateStepLogin",
-    "writeCreateFlow",
-    "Store selection must not write flow before login"
-  );
-  assertBefore(
-    createGoNextSource,
-    "ensureCreateStepLogin",
-    "uni.navigateTo",
-    "Store next button must request login before navigating"
-  );
+  if (createSource.includes("ensureCreateStepLogin") || selectStoreSource.includes("ensureLoggedIn")) {
+    fail("Store selection must be browsable before login");
+  }
+  if (createGoNextSource.includes("ensureLoggedIn")) {
+    fail("Store next button must let users continue browsing before login");
+  }
 
   const scriptSource = fs.existsSync(firstFlowFiles["script step"])
     ? fs.readFileSync(firstFlowFiles["script step"], "utf8")
@@ -506,35 +479,14 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Script selection should confirm and continue when tapping the selected script again");
   }
-  if (!/ensureScriptStepLogin/.test(scriptSource)) {
-    fail("Script selection step must guard buttons with login before side effects");
-  }
   const selectScriptSource = methodBody(scriptSource, "selectScript");
   const scriptGoNextSource = methodBody(scriptSource, "goNext");
-  assertBefore(
-    selectScriptSource,
-    "ensureScriptStepLogin",
-    "this.goNext",
-    "Script selection must not continue before login"
-  );
-  assertBefore(
-    selectScriptSource,
-    "ensureScriptStepLogin",
-    "this.selectedScript = script",
-    "Script selection must not select before login"
-  );
-  assertBefore(
-    selectScriptSource,
-    "ensureScriptStepLogin",
-    "writeCreateFlow",
-    "Script selection must not write flow before login"
-  );
-  assertBefore(
-    scriptGoNextSource,
-    "ensureScriptStepLogin",
-    "uni.navigateTo",
-    "Script next button must request login before navigating"
-  );
+  if (scriptSource.includes("ensureScriptStepLogin") || selectScriptSource.includes("ensureLoggedIn")) {
+    fail("Script selection must be browsable before login");
+  }
+  if (scriptGoNextSource.includes("ensureLoggedIn")) {
+    fail("Script next button must let users continue browsing before login");
+  }
 
   const shareSource = fs.existsSync(firstFlowFiles["share step"])
     ? fs.readFileSync(firstFlowFiles["share step"], "utf8")
@@ -719,41 +671,14 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Role selection should confirm and continue when tapping the selected role again");
   }
-  if (!/ensureRoleStepLogin/.test(roleSource)) {
-    fail("Role selection step must guard buttons with login before side effects");
-  }
   const selectRoleSource = methodBody(roleSource, "selectRole");
   const roleGoNextSource = methodBody(roleSource, "goNext");
-  assertBefore(
-    selectRoleSource,
-    "ensureRoleStepLogin",
-    "this.goNext",
-    "Role selection must not continue before login"
-  );
-  assertBefore(
-    selectRoleSource,
-    "ensureRoleStepLogin",
-    "confirmCrossCastRole",
-    "Role selection must not open confirmation before login"
-  );
-  assertBefore(
-    selectRoleSource,
-    "ensureRoleStepLogin",
-    "writeCreateFlow",
-    "Role selection must not write flow before login"
-  );
-  assertBefore(
-    roleGoNextSource,
-    "ensureRoleStepLogin",
-    "writeCreateFlow",
-    "Role next button must not write flow before login"
-  );
-  assertBefore(
-    roleGoNextSource,
-    "ensureRoleStepLogin",
-    "uni.navigateTo",
-    "Role next button must request login before navigating"
-  );
+  if (roleSource.includes("ensureRoleStepLogin") || selectRoleSource.includes("ensureLoggedIn")) {
+    fail("Role selection must be browsable before login");
+  }
+  if (roleGoNextSource.includes("ensureLoggedIn")) {
+    fail("Role next button must let users continue browsing before login");
+  }
 
   const setupSource = fs.existsSync(firstFlowFiles["setup step"])
     ? fs.readFileSync(firstFlowFiles["setup step"], "utf8")
@@ -916,6 +841,13 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`Shared phone authorization support is missing ${requiredPhoneAuthText}`);
     }
   }
+  const ensureLoggedInSource = methodBody(apiSource, "ensureLoggedIn");
+  if (ensureLoggedInSource.includes("promptPhoneAfterLogin: true")) {
+    fail("Shared login must not force phone authorization immediately after fresh login");
+  }
+  if (!ensureLoggedInSource.includes("options.requireGender === true")) {
+    fail("Shared login must only request profile gender when a protected action explicitly requires it");
+  }
 
   const identityBarPath = path.join(srcRoot, "components/AuthIdentityBar.vue");
   if (!fs.existsSync(identityBarPath)) {
@@ -926,18 +858,20 @@ if (!fs.existsSync(pagesJsonPath)) {
       "已登录",
       "退出登录",
       "clearAuth",
-      "ensureLoggedIn",
-      "loginFromIdentityBar",
       "logoutProfile",
       "rolesText",
       "AUTH_CHANGE_EVENT",
       "getCurrentUser",
+      "goLoginPage",
       "overflow: hidden",
       "white-space: nowrap"
     ]) {
       if (!identityBarSource.includes(requiredIdentityText)) {
         fail(`Auth identity bar must display and refresh identity: ${requiredIdentityText}`);
       }
+    }
+    if (identityBarSource.includes("loginFromIdentityBar") || identityBarSource.includes("ensureLoggedIn")) {
+      fail("Logged-out identity bar must link to the login page instead of opening authorization directly");
     }
     for (const requiredPhoneModalText of [
       "phoneVisible",
@@ -959,7 +893,13 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
   }
 
-  const loginOptionalPages = new Set(["pages/index/index"]);
+  const loginOptionalPages = new Set([
+    "pages/index/index",
+    "pages/session/create",
+    "pages/session/script",
+    "pages/session/role",
+    "pages/admin/catalog"
+  ]);
   for (const pagePath of pagePaths) {
     const source = fs.readFileSync(path.join(srcRoot, `${pagePath}.vue`), "utf8");
     if (!loginOptionalPages.has(pagePath) && !source.includes("ensureLoggedIn")) {
@@ -978,6 +918,23 @@ if (!fs.existsSync(pagesJsonPath)) {
     } else if (rootViewMatch) {
       fail(`Unable to verify root page element for auth identity bar: ${pagePath}`);
     }
+  }
+
+  for (const pagePath of [
+    "pages/session/create",
+    "pages/session/script",
+    "pages/session/role",
+    "pages/session/setup"
+  ]) {
+    const source = fs.readFileSync(path.join(srcRoot, `${pagePath}.vue`), "utf8");
+    const onLoadSource = methodBody(source, "onLoad");
+    if (onLoadSource.includes("ensureLoggedIn")) {
+      fail(`Creation browse page must not request login on load: ${pagePath}`);
+    }
+  }
+  const adminCatalogSource = fs.readFileSync(path.join(srcRoot, "pages/admin/catalog.vue"), "utf8");
+  if (/onLoad\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{[\s\S]*ensureLoggedIn\s*\(/.test(adminCatalogSource)) {
+    fail("Admin catalog page must wait for an explicit login tap before requesting login");
   }
 
   const appSource = fs.readFileSync(path.join(srcRoot, "App.vue"), "utf8");

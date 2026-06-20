@@ -208,7 +208,7 @@
 import { onLoad } from "@dcloudio/uni-app";
 import { computed, ref } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
-import { dataOf, ensureLoggedIn, getCurrentUser, queryString, request } from "../../utils/api";
+import { dataOf, getCurrentUser, queryString, request } from "../../utils/api";
 
 const tabs = [
   { key: "stores", label: "店家" },
@@ -295,12 +295,8 @@ const requestKeyword = ref("");
 const requestStatus = ref("pending");
 const reviewNote = ref("");
 
-onLoad(async () => {
-  const auth = await ensureLoggedIn({
-    devCode: "dev-admin-openid",
-    content: "登录后继续进入资料管理。"
-  });
-  roles.value = auth?.roles || getCurrentUser().roles || [];
+onLoad(() => {
+  roles.value = getCurrentUser().roles || [];
   if (isAdmin.value) {
     loadStores();
     loadScripts();
