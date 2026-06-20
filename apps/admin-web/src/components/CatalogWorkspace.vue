@@ -206,11 +206,8 @@ async function load() {
   }
 }
 
-async function ensureScriptOptions() {
-  if (availableScripts.value.length > 0) {
-    return;
-  }
-  availableScripts.value = await listScripts({ keyword: "", status: "", limit: "100" });
+async function refreshScriptOptions() {
+  availableScripts.value = await listScripts({ keyword: "", status: "active", limit: "100" });
 }
 
 async function openCreate() {
@@ -219,7 +216,7 @@ async function openCreate() {
   if (tab.value === "stores") {
     error.value = "";
     try {
-      await ensureScriptOptions();
+      await refreshScriptOptions();
       drawer.value = "store";
     } catch (err) {
       error.value = err.message;
@@ -234,7 +231,7 @@ async function openEdit(item) {
   if (tab.value === "stores") {
     error.value = "";
     try {
-      await ensureScriptOptions();
+      await refreshScriptOptions();
       const scripts = await listStoreScripts(item.id);
       linkedScriptIds.value = scripts.map((script) => Number(script.id));
       drawer.value = "store";

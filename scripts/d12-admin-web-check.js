@@ -201,6 +201,24 @@ assert(
   !catalogWorkspace.includes("硬删除"),
   "catalog workspace should not expose hard delete copy"
 );
+assert(
+  catalogWorkspace.includes('status: "active"') &&
+    catalogWorkspace.includes("refreshScriptOptions"),
+  "store script picker should always refresh active script options"
+);
+assert(
+  !catalogWorkspace.includes("if (availableScripts.value.length > 0)"),
+  "store script picker should not reuse stale script option cache"
+);
+
+assert(
+  /WHERE store_scripts\.store_id = \?[\s\S]*AND scripts\.status = 'active'/.test(service),
+  "store-script list should only return active linked scripts"
+);
+assert(
+  /SELECT id FROM scripts WHERE id IN \(\$\{placeholders\}\) AND status = 'active'/.test(service),
+  "store-script replacement should only accept active script ids"
+);
 
 const scriptDrawer = read("apps/admin-web/src/components/ScriptDrawer.vue");
 for (const token of ["addRole", "removeRole", "roleGender", "defaultSeatTemplate"]) {

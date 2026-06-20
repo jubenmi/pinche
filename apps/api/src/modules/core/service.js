@@ -641,6 +641,7 @@ export async function listStoreScripts(storeId) {
         FROM store_scripts
           INNER JOIN scripts ON scripts.id = store_scripts.script_id
         WHERE store_scripts.store_id = ?
+          AND scripts.status = 'active'
         ORDER BY scripts.id DESC
       `,
       [id]
@@ -662,13 +663,13 @@ export async function replaceStoreScripts(storeId, body = {}) {
     if (scriptIds.length > 0) {
       const placeholders = scriptIds.map(() => "?").join(", ");
       const [rows] = await connection.query(
-        `SELECT id FROM scripts WHERE id IN (${placeholders})`,
+        `SELECT id FROM scripts WHERE id IN (${placeholders}) AND status = 'active'`,
         scriptIds
       );
       const existingIds = new Set(rows.map((row) => Number(row.id)));
       const missingIds = scriptIds.filter((scriptId) => !existingIds.has(scriptId));
       if (missingIds.length > 0) {
-        throw badRequest(`Unknown scriptIds: ${missingIds.join(", ")}`);
+        throw badRequest(`Unknown or inactive scriptIds: ${missingIds.join(", ")}`);
       }
     }
 
