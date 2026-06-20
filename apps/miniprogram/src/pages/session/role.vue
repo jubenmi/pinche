@@ -13,7 +13,7 @@
         v-for="role in roleOptions"
         :key="role.id"
         class="role-tile"
-        :class="[roleGenderClass(role.roleGender), { selected: selectedRole && selectedRole.id === role.id }]"
+        :class="[roleGenderClass(role.roleGender), { selected: isSelectedRole(role) }]"
         @tap="selectRole(role)"
       >
         <view class="role-name">
@@ -21,10 +21,11 @@
           <text v-if="roleGenderSymbol(role.roleGender)" class="role-gender-symbol">
             {{ roleGenderSymbol(role.roleGender) }}
           </text>
+          <text v-if="isSelectedCrossCast(role)" class="cross-cast-tag">（反串）</text>
         </view>
         <view class="role-note">{{ role.note }}</view>
         <image
-          v-if="selectedRole && selectedRole.id === role.id"
+          v-if="isSelectedRole(role)"
           class="role-check"
           src="/static/icons/check.png"
           mode="aspectFit"
@@ -40,7 +41,7 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
-import { ensureLoggedIn, getCurrentUser } from "../../utils/api";
+import { AUTH_CHANGE_EVENT, getCurrentUser } from "../../utils/api";
 import {
   isCrossCast,
   normalizeRoleGender,
@@ -69,14 +70,9 @@ export default {
       return this.script?.name || "剧本待定";
     }
   },
-  async onLoad() {
-    const auth = await ensureLoggedIn({
-      content: "登录后创建的车会归到你的账号下。"
-    });
-    if (!auth) {
-      return;
-    }
-    this.currentUserGender = getCurrentUser().user?.gender || auth.user?.gender || "";
+  onLoad() {
+    this.bindAuthChangeListener();
+    this.refreshCurrentUserGender();
     const flow = readCreateFlow();
     this.store = flow.store || null;
     this.script = flow.script || {
@@ -88,8 +84,25 @@ export default {
     };
     this.roleOptions = roleOptionsFromScript(this.script);
   },
+  onUnload() {
+    this.unbindAuthChangeListener();
+  },
   methods: {
     roleGenderSymbol,
+    bindAuthChangeListener() {
+      if (typeof uni.$on === "function") {
+        uni.$on(AUTH_CHANGE_EVENT, this.refreshCurrentUserGender);
+      }
+    },
+    unbindAuthChangeListener() {
+      if (typeof uni.$off === "function") {
+        uni.$off(AUTH_CHANGE_EVENT, this.refreshCurrentUserGender);
+      }
+    },
+    refreshCurrentUserGender(auth = null) {
+      const currentAuth = auth?.user ? auth : getCurrentUser();
+      this.currentUserGender = currentAuth.user?.gender || "";
+    },
     roleGenderClass(roleGender) {
       const gender = normalizeRoleGender(roleGender);
       return ["male", "female"].includes(gender) ? gender : "";
@@ -114,6 +127,10 @@ export default {
       });
     },
     async selectRole(role) {
+      if (this.isSelectedRole(role)) {
+        await this.goNext();
+        return;
+      }
       const confirmed = await this.confirmCrossCastRole(role);
       if (!confirmed) {
         return;
@@ -121,7 +138,16 @@ export default {
       this.selectedRole = role;
       writeCreateFlow({ role });
     },
-    goNext() {
+    isSelectedRole(role) {
+      return (
+        this.selectedRole &&
+        String(this.selectedRole.id) === String(role.id)
+      );
+    },
+    isSelectedCrossCast(role) {
+      return this.isSelectedRole(role) && isCrossCast(this.currentUserGender, role.roleGender);
+    },
+    async goNext() {
       if (!this.selectedRole) {
         uni.showToast({ title: "先选择一个角色", icon: "none" });
         return;
@@ -192,8 +218,10 @@ export default {
 
 .role-name {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8rpx;
+  min-width: 0;
   color: #153f34;
   font-size: 30rpx;
   font-weight: 600;
@@ -213,6 +241,13 @@ export default {
 
 .role-tile.female .role-gender-symbol {
   color: #aa7b71;
+}
+
+.cross-cast-tag {
+  flex-shrink: 0;
+  color: #b06b35;
+  font-size: 22rpx;
+  font-weight: 600;
 }
 
 .role-note {

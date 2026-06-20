@@ -22,6 +22,8 @@
   - 验证：`npm run check`、`npm --workspace apps/miniprogram run build:mp-weixin` 均通过。
 - [x] D11.13 设计并接入有质感的男女默认头像 PNG，替换顶部身份条、资料预览和性别选项里的文字圆点头像。
   - 验证：`node scripts/d10-pseudo-chat-check.js`、`node scripts/d11-gender-check.js`、`node scripts/check-miniprogram.js`、`npm --workspace apps/miniprogram run build:mp-weixin` 均通过。
+- [x] D11.14 调整默认头像色彩识别度：男头像加强青绿色，女头像加强粉色，并保持与角色位性别颜色统一。
+  - 验证：`npm run check`、`npm --workspace apps/miniprogram run build:mp-weixin` 均通过。
 
 ## Verification Target
 

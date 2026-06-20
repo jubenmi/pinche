@@ -81,10 +81,6 @@ export function saveStore(store) {
   return apiRequest(path, { method, body: store });
 }
 
-export function deleteStore(id) {
-  return apiRequest(`/api/admin/stores/${id}`, { method: "DELETE" });
-}
-
 export function listStoreScripts(storeId) {
   return apiRequest(`/api/admin/stores/${storeId}/scripts`);
 }
@@ -104,8 +100,4 @@ export function saveScript(script) {
   const method = script.id ? "PATCH" : "POST";
   const path = script.id ? `/api/admin/scripts/${script.id}` : "/api/admin/scripts";
   return apiRequest(path, { method, body: script });
-}
-
-export function deleteScript(id) {
-  return apiRequest(`/api/admin/scripts/${id}`, { method: "DELETE" });
 }

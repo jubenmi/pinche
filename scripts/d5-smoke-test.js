@@ -28,6 +28,18 @@ async function login(code) {
   return payload.data;
 }
 
+async function authorizePhone(auth, label) {
+  const payload = await request(
+    "POST",
+    "/api/auth/wechat/phone",
+    { code: `${label}-${suffix}` },
+    auth.token
+  );
+  auth.user = payload.data.user;
+  auth.roles = payload.data.roles;
+  return auth;
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -159,6 +171,7 @@ async function main() {
 
   const owner = await login(`dev-d5-owner-${suffix}`);
   const player = await login(`dev-d5-player-${suffix}`);
+  await authorizePhone(owner, "d5-owner-phone");
   const { session, seats } = await createPublishedSession(admin, owner);
   const targetSeat = seats.find((seat) => seat.seat_type === "f4");
 

@@ -1,12 +1,46 @@
 import { withDatabaseConnection } from "../../db/mysql.js";
 import { badRequest } from "../../http/errors.js";
 
+const AVATAR_UPLOAD_PREFIX = "/uploads/avatars/";
+
 function normalizeUserGender(value) {
   const gender = String(value || "").trim();
   if (!["male", "female"].includes(gender)) {
     throw badRequest("gender must be male or female");
   }
   return gender;
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+function normalizeUserNickname(value) {
+  const nickname = String(value || "").trim();
+  if (!nickname) {
+    return null;
+  }
+  if (nickname.length > 32) {
+    throw badRequest("nickname must be 32 characters or less");
+  }
+  return nickname;
+}
+
+function normalizeUserAvatarUrl(value) {
+  const avatarUrl = String(value || "").trim();
+  if (!avatarUrl) {
+    return null;
+  }
+  if (avatarUrl.length > 512) {
+    throw badRequest("avatarUrl must be 512 characters or less");
+  }
+  if (
+    !avatarUrl.startsWith(AVATAR_UPLOAD_PREFIX) ||
+    !/^\/uploads\/avatars\/[A-Za-z0-9._-]+$/.test(avatarUrl)
+  ) {
+    throw badRequest("avatarUrl must be an uploaded avatar path");
+  }
+  return avatarUrl;
 }
 
 export function publicUser(row) {
@@ -177,19 +211,44 @@ export async function updateUserPhone(userId, phoneEncrypted) {
   });
 }
 
-export async function updateUserGender(userId, gender) {
-  const normalizedGender = normalizeUserGender(gender);
+export async function updateUserProfile(userId, patch = {}) {
+  const assignments = [];
+  const values = [];
+
+  if (hasOwn(patch, "nickname")) {
+    assignments.push("nickname = ?");
+    values.push(normalizeUserNickname(patch.nickname));
+  }
+
+  if (hasOwn(patch, "avatarUrl")) {
+    assignments.push("avatar_url = ?");
+    values.push(normalizeUserAvatarUrl(patch.avatarUrl));
+  }
+
+  if (hasOwn(patch, "gender")) {
+    assignments.push("gender = ?");
+    values.push(normalizeUserGender(patch.gender));
+  }
+
+  if (assignments.length === 0) {
+    throw badRequest("at least one profile field is required");
+  }
+
   return withDatabaseConnection(async (connection) => {
     await connection.query(
       `
         UPDATE users
-        SET gender = ?
+        SET ${assignments.join(", ")}
         WHERE id = ?
       `,
-      [normalizedGender, userId]
+      [...values, userId]
     );
 
     const [rows] = await connection.query("SELECT * FROM users WHERE id = ?", [userId]);
     return publicUser(rows[0]);
   });
+}
+
+export async function updateUserGender(userId, gender) {
+  return updateUserProfile(userId, { gender });
 }

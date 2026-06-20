@@ -144,7 +144,21 @@ export default {
     this.reload();
   },
   methods: {
+    async ensureManageActionLogin() {
+      const auth = await ensureLoggedIn({
+        content: "登录后继续管理你创建的车。"
+      });
+      if (!auth) {
+        this.statusText = "登录后可继续管理发车。";
+        return null;
+      }
+      return auth;
+    },
     async reload() {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
       if (!this.sessionId || this.sessionId === "d1-demo") {
         this.statusText = "请从我的发车进入管理页。";
         return;
@@ -180,18 +194,30 @@ export default {
       this.statusText = statusText;
     },
     async approve(signup) {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
       await this.runAction("已通过申请，玩家可进入车内聊天。", {
         url: `/api/signups/${signup.id}/approve`,
         method: "PATCH"
       });
     },
     async reject(signup) {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
       await this.runAction("已拒绝申请。", {
         url: `/api/signups/${signup.id}/reject`,
         method: "PATCH"
       });
     },
-    kickSeat(seat) {
+    async kickSeat(seat) {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
       this.confirmAction(`确认释放「${seat.name}」吗？`, async () => {
         await this.runAction("座位已释放。", {
           url: `/api/session-seats/${seat.id}/kick`,
@@ -199,7 +225,11 @@ export default {
         });
       });
     },
-    cancelSession() {
+    async cancelSession() {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
       this.confirmAction("确认取消本车吗？", async () => {
         await this.runAction("本车已取消。", {
           url: `/api/sessions/${this.sessionId}/cancel`,
@@ -247,7 +277,11 @@ export default {
       }
       return "操作失败，请稍后重试。";
     },
-    goDetail() {
+    async goDetail() {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
       const id = this.sessionId || "d1-demo";
       uni.navigateTo({ url: `/pages/session/detail?id=${id}` });
     },

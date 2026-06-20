@@ -126,6 +126,32 @@ async function main() {
     owner.token
   );
 
+  const missingOwnerPhone = await request(
+    "POST",
+    "/api/sessions",
+    {
+      storeId: store.data.id,
+      scriptId: script.data.id,
+      startAt: startAt(),
+      depositAmount: 5000,
+      note: "D2 missing phone session"
+    },
+    owner.token,
+    403
+  );
+  assert(
+    missingOwnerPhone.error?.code === "PHONE_REQUIRED",
+    "session creation should require owner phone"
+  );
+
+  const ownerPhone = await request(
+    "POST",
+    "/api/auth/wechat/phone",
+    { code: `phone-owner-${suffix}` },
+    owner.token
+  );
+  assert(ownerPhone.data.user.phoneVerifiedAt, "owner phone should be verified");
+
   const session = await request(
     "POST",
     "/api/sessions",
@@ -167,6 +193,28 @@ async function main() {
   );
 
   await request("POST", `/api/sessions/${session.data.id}/publish`, {}, owner.token);
+
+  const missingPlayerPhone = await request(
+    "POST",
+    `/api/session-seats/${seatA.data.id}/claim`,
+    {},
+    player.token,
+    403
+  );
+  assert(
+    missingPlayerPhone.error?.code === "PHONE_REQUIRED",
+    "seat claim should require player phone"
+  );
+
+  const playerPhone = await request(
+    "POST",
+    "/api/auth/wechat/phone",
+    { code: `phone-player-${suffix}` },
+    player.token
+  );
+  assert(playerPhone.data.user.phoneVerifiedAt, "player phone should be verified");
+
+  await request("POST", `/api/session-seats/${seatA.data.id}/claim`, {}, player.token);
 
   const signup = await request(
     "POST",

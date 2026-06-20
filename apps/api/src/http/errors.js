@@ -20,6 +20,10 @@ export function forbidden(message = "Permission denied") {
   return new AppError(403, "FORBIDDEN", message);
 }
 
+export function phoneRequired(message = "创建车或上车前需要授权手机号") {
+  return new AppError(403, "PHONE_REQUIRED", message);
+}
+
 export function notFound(message = "Resource not found") {
   return new AppError(404, "NOT_FOUND", message);
 }

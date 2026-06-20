@@ -138,15 +138,7 @@ export default {
       return isNumericId(this.store?.id) && isNumericId(this.script?.id);
     }
   },
-  async onLoad() {
-    const auth = await ensureLoggedIn({
-      content: "登录后创建的车会归到你的账号下。"
-    });
-    if (!auth) {
-      this.statusText = "登录后可继续创建。";
-      return;
-    }
-
+  onLoad() {
     const flow = readCreateFlow();
     this.store = flow.store || null;
     this.script = flow.script || null;
@@ -189,7 +181,20 @@ export default {
       };
     },
     async createPublishedSession() {
-      if (this.busyAction || !this.canSubmit) {
+      if (this.busyAction) {
+        return;
+      }
+      const auth = await ensureLoggedIn({
+        content: "登录后发布并分享你的剧本局。",
+        requirePhone: true,
+        phoneRequiredTitle: "授权手机号后发布",
+        phoneRequiredContent: "创建车前需要授权手机号，方便车局沟通和审核。"
+      });
+      if (!auth) {
+        this.statusText = "登录后可继续发布。";
+        return;
+      }
+      if (!this.canSubmit) {
         return;
       }
       this.busyAction = true;

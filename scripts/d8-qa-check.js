@@ -30,6 +30,18 @@ async function login(code) {
   return payload.data;
 }
 
+async function authorizePhone(auth, label) {
+  const payload = await request(
+    "POST",
+    "/api/auth/wechat/phone",
+    { code: `${label}-${suffix}` },
+    auth.token
+  );
+  auth.user = payload.data.user;
+  auth.roles = payload.data.roles;
+  return auth;
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -94,6 +106,7 @@ async function assertApiChecks() {
   const admin = await login("dev-admin-openid");
   assert(admin.roles.includes("system_admin"), "admin should have system_admin role");
   const owner = await login(`dev-d8-owner-${suffix}`);
+  await authorizePhone(owner, "d8-owner-phone");
 
   const scripts = await request("GET", "/api/scripts?limit=100");
   assertNoPublicSlang(scripts.data, "public script list");

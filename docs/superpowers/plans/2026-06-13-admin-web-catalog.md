@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Docker-deployable Vue3 Web admin frontend with WeChat mini-program scan login and hard-delete CRUD for stores, scripts, and script role templates.
+**Goal:** Build a Docker-deployable Vue3 Web admin frontend with WeChat mini-program scan login, hard-delete CRUD for stores/scripts/script role templates, and explicit store-to-script association so a selected store only shows its own scripts.
 
 **Architecture:** Add a new `apps/admin-web` Vite app served by Nginx in production. Extend the existing Node API with persisted admin Web login tickets and hard-delete routes; keep script roles in `scripts.default_seat_template_json` and expose them through the Web editor. Add a mini-program scan-confirm action on the existing admin catalog page.
 
@@ -22,6 +22,10 @@ This plan covers one deployable feature: an admin Web catalog app. It touches ba
 - Modify `apps/api/src/modules/core/service.js`: add hard-delete functions for stores and scripts.
 - Modify `apps/api/src/server.js`: route Web login and DELETE endpoints.
 - Modify `apps/api/src/db/mysql.js`: add `admin_web_login_tickets` to readiness tables.
+- Create `apps/api/migrations/0008_store_script_links.sql`: explicit store-script association table.
+- Modify `apps/api/src/modules/core/service.js`: add store-script association CRUD and filter public scripts by `storeId`.
+- Modify `apps/api/src/server.js`: route store-script association endpoints.
+- Modify `apps/api/src/db/mysql.js`: add `store_scripts` to readiness tables.
 - Create `scripts/d12-admin-web-check.js`: static and source-level feature gate.
 - Create `scripts/d12-admin-web-smoke.js`: API smoke for login ticket and hard delete.
 - Modify `package.json`: add `apps/admin-web` workspace and scripts.
@@ -39,6 +43,7 @@ This plan covers one deployable feature: an admin Web catalog app. It touches ba
 - Create `apps/admin-web/Dockerfile`: multi-stage build and Nginx runtime.
 - Create `apps/admin-web/nginx.conf`: SPA serving and `/api` reverse proxy.
 - Modify `apps/miniprogram/src/pages/admin/catalog.vue`: add scan-confirm button and handler.
+- Modify `apps/miniprogram/src/pages/session/script.vue`: carry selected store ID into `/api/scripts`.
 - Modify `docker-compose.prod.example.yml`: add `admin-web` service.
 
 ## Task 1: Add Failing Admin Web Checks
@@ -2092,8 +2097,102 @@ git add apps/admin-web package.json package-lock.json scripts/d12-admin-web-chec
 git commit -m "chore: verify admin web catalog"
 ```
 
+## Task 10: Add Store-Script Association Visibility
+
+**Files:**
+- Create: `apps/api/migrations/0008_store_script_links.sql`
+- Modify: `apps/api/src/db/mysql.js`
+- Modify: `apps/api/src/modules/core/service.js`
+- Modify: `apps/api/src/server.js`
+- Modify: `apps/admin-web/src/api.js`
+- Modify: `apps/admin-web/src/components/CatalogWorkspace.vue`
+- Modify: `apps/admin-web/src/components/StoreDrawer.vue`
+- Modify: `apps/miniprogram/src/pages/session/script.vue`
+- Modify: `scripts/d12-admin-web-check.js`
+- Modify: `scripts/d12-admin-web-smoke.js`
+
+- [x] **Step 1: Extend failing checks**
+
+Update `scripts/d12-admin-web-check.js` so it fails unless:
+
+- `apps/api/migrations/0008_store_script_links.sql` exists and creates `store_scripts`.
+- `apps/api/src/db/mysql.js` includes `store_scripts` in readiness tables.
+- `apps/api/src/modules/core/service.js` exports `listStoreScripts` and `replaceStoreScripts`.
+- `listActiveScripts` supports `storeId` filtering through `store_scripts`.
+- `apps/api/src/server.js` exposes `/api/admin/stores/:id/scripts`.
+- `apps/admin-web/src/api.js` exports store-script association helpers.
+- `StoreDrawer.vue` contains a visible `关联剧本` section and emits `scriptIds`.
+- `apps/miniprogram/src/pages/session/script.vue` requests `/api/scripts` with `storeId`.
+
+Run:
+
+```bash
+node scripts/d12-admin-web-check.js
+```
+
+Expected: FAIL on missing `0008_store_script_links.sql`.
+
+- [x] **Step 2: Add database migration**
+
+Create `store_scripts` with `store_id`, `script_id`, unique `(store_id, script_id)`, indexes for both sides, and foreign keys to `stores` and `scripts`.
+
+- [x] **Step 3: Add backend behavior**
+
+Add service functions:
+
+- `listStoreScripts(storeId)`: returns scripts linked to a store.
+- `replaceStoreScripts(storeId, { scriptIds })`: validates IDs, clears current links, inserts the new set.
+
+Update public `listActiveScripts(filters)`:
+
+- Without `storeId`, keep returning all active scripts.
+- With `storeId`, return only active scripts linked through `store_scripts`.
+
+Update hard delete:
+
+- Store delete removes `store_scripts` rows for the store after session-reference checks.
+- Script delete removes `store_scripts` rows for the script after session-reference checks.
+
+- [x] **Step 4: Add admin Web association UI**
+
+Add API helpers:
+
+- `listStoreScripts(storeId)`
+- `saveStoreScripts(storeId, scriptIds)`
+
+In the store drawer, show searchable script checkboxes. Saving a store also saves `scriptIds` via `PUT /api/admin/stores/:id/scripts`.
+
+- [x] **Step 5: Add mini-program store filtering**
+
+Update `apps/miniprogram/src/pages/session/script.vue` so `loadScripts()` includes the selected `storeId` in the query. This makes unassociated scripts invisible after a user has chosen a store.
+
+- [x] **Step 6: Extend smoke coverage**
+
+Update `scripts/d12-admin-web-smoke.js` to:
+
+- Create two stores and multiple scripts.
+- Associate store A with script A, and store B with script B.
+- Assert `GET /api/scripts?storeId=<storeA>` returns script A and not script B or an unassociated script.
+- Replace store A links and assert the old script disappears.
+- Hard-delete an unreferenced linked script and assert its association row is gone.
+
+- [x] **Step 7: Verify**
+
+Run:
+
+```bash
+node scripts/d12-admin-web-check.js
+npm run check
+npm --workspace apps/admin-web run build
+npm run migrate
+node scripts/d12-admin-web-smoke.js
+docker compose -f docker-compose.prod.example.yml config
+```
+
+Expected: all checks pass; smoke proves store-scoped script visibility and association cleanup.
+
 ## Self-Review
 
-- Spec coverage: Tasks 2 and 4 cover WeChat mini-program scan login; Tasks 3 and 7 cover hard-delete CRUD for stores/scripts and role template CRUD; Task 8 covers Docker/Nginx deployment; Task 9 covers verification.
+- Spec coverage: Tasks 2 and 4 cover WeChat mini-program scan login; Tasks 3 and 7 cover hard-delete CRUD for stores/scripts and role template CRUD; Task 8 covers Docker/Nginx deployment; Task 9 covers baseline verification; Task 10 covers store-scoped script visibility.
 - Placeholder scan: this plan contains no unresolved placeholder markers. Every task has concrete file paths, commands, and expected outcomes.
-- Type consistency: ticket APIs use `ticketId`, `ticketSecret`, and `qrText` consistently across backend, smoke, and Web frontend. Role template fields use `name`, `seatType`, `roleName`, `roleGender`, `basePrice`, and `adjustment` consistently.
+- Type consistency: ticket APIs use `ticketId`, `ticketSecret`, and `qrText` consistently across backend, smoke, and Web frontend. Role template fields use `name`, `seatType`, `roleName`, `roleGender`, `basePrice`, and `adjustment` consistently. Store-script association APIs use `storeId` and `scriptIds` consistently.

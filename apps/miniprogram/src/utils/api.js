@@ -5,6 +5,9 @@ export const AUTH_CHANGE_EVENT = "pinche-auth-change";
 export const AUTH_PROFILE_REQUEST_EVENT = "pinche-auth-profile-request";
 export const AUTH_PROFILE_ACK_EVENT = "pinche-auth-profile-ack";
 export const AUTH_PROFILE_RESPONSE_EVENT = "pinche-auth-profile-response";
+export const AUTH_PHONE_REQUEST_EVENT = "pinche-auth-phone-request";
+export const AUTH_PHONE_ACK_EVENT = "pinche-auth-phone-ack";
+export const AUTH_PHONE_RESPONSE_EVENT = "pinche-auth-phone-response";
 export const BACKEND_STATUS_CHANGE_EVENT = "pinche-backend-status-change";
 
 const BACKEND_HEALTH_TIMEOUT = 3000;
@@ -59,6 +62,19 @@ function currentPageRoute() {
 export function getApiBaseUrl() {
   const app = getApp();
   return app.globalData.apiBaseUrl;
+}
+
+export function assetUrl(path) {
+  if (!path) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  if (path.startsWith("/uploads/")) {
+    return getApiBaseUrl() + path;
+  }
+  return path;
 }
 
 export function getBackendStatus() {
@@ -323,11 +339,210 @@ export function userGenderLabel(gender) {
   return labels[gender] || "未选择";
 }
 
-export async function updateUserGender(gender) {
+export async function uploadUserAvatar(filePath) {
+  if (shouldBlockBusinessRequests()) {
+    return Promise.reject({
+      statusCode: 0,
+      maintenance: true,
+      errMsg: "backend maintenance",
+      userMessage: MAINTENANCE_USER_MESSAGE
+    });
+  }
+
+  const headers = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+
+  return new Promise((resolve, reject) => {
+    uni.uploadFile({
+      url: getApiBaseUrl() + "/api/users/me/avatar",
+      filePath,
+      name: "avatar",
+      header: headers,
+      success(response) {
+        let responseData = response.data || {};
+        if (typeof responseData === "string") {
+          try {
+            responseData = JSON.parse(responseData);
+          } catch (error) {
+            reject({
+              statusCode: response.statusCode,
+              errMsg: "invalid upload response",
+              originalError: error
+            });
+            return;
+          }
+        }
+
+        if (response.statusCode >= 400 || responseData.ok === false) {
+          reject({
+            statusCode: response.statusCode,
+            data: responseData
+          });
+          return;
+        }
+
+        const avatarUrl = responseData.data?.avatarUrl || "";
+        if (!avatarUrl) {
+          reject({
+            statusCode: response.statusCode,
+            errMsg: "missing avatarUrl"
+          });
+          return;
+        }
+
+        resolve(avatarUrl);
+      },
+      fail(error) {
+        const errMsg = error?.errMsg || "upload failed";
+        markBackendMaintenance(error);
+        reject({
+          statusCode: 0,
+          maintenance: true,
+          errMsg,
+          userMessage: errMsg.includes("timeout")
+            ? "头像上传超时，请确认本地后端已启动。"
+            : "头像上传失败，请稍后重试。",
+          originalError: error
+        });
+      }
+    });
+  });
+}
+
+export async function uploadSessionReviewPhoto(filePath) {
+  if (shouldBlockBusinessRequests()) {
+    return Promise.reject({
+      statusCode: 0,
+      maintenance: true,
+      errMsg: "backend maintenance",
+      userMessage: MAINTENANCE_USER_MESSAGE
+    });
+  }
+
+  const headers = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+
+  return new Promise((resolve, reject) => {
+    uni.uploadFile({
+      url: getApiBaseUrl() + "/api/session-reviews/photos",
+      filePath,
+      name: "photo",
+      header: headers,
+      success(response) {
+        let responseData = response.data || {};
+        if (typeof responseData === "string") {
+          try {
+            responseData = JSON.parse(responseData);
+          } catch (error) {
+            reject({
+              statusCode: response.statusCode,
+              errMsg: "invalid upload response",
+              originalError: error
+            });
+            return;
+          }
+        }
+
+        if (response.statusCode >= 400 || responseData.ok === false) {
+          reject({
+            statusCode: response.statusCode,
+            data: responseData
+          });
+          return;
+        }
+
+        const photoUrl = responseData.data?.photoUrl || "";
+        if (!photoUrl) {
+          reject({
+            statusCode: response.statusCode,
+            errMsg: "missing photoUrl"
+          });
+          return;
+        }
+
+        resolve(photoUrl);
+      },
+      fail(error) {
+        const errMsg = error?.errMsg || "upload failed";
+        markBackendMaintenance(error);
+        reject({
+          statusCode: 0,
+          maintenance: true,
+          errMsg,
+          userMessage: errMsg.includes("timeout")
+            ? "照片上传超时，请确认本地后端已启动。"
+            : "照片上传失败，请稍后重试。",
+          originalError: error
+        });
+      }
+    });
+  });
+}
+
+export async function updateUserProfile(patch) {
   const response = await request({
     url: "/api/users/me",
     method: "PATCH",
-    data: { gender }
+    data: patch
+  });
+  const data = dataOf(response);
+  if (!data?.user) {
+    return null;
+  }
+
+  const current = getCurrentUser();
+  const nextAuth = {
+    token: getToken(),
+    user: data.user,
+    roles: data.roles || current.roles || []
+  };
+  setAuth(nextAuth);
+  return nextAuth;
+}
+
+export async function updateUserGender(gender) {
+  return updateUserProfile({ gender });
+}
+
+export async function refreshCurrentAuth() {
+  const token = getToken();
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const response = await request({ url: "/api/users/me" });
+    const data = dataOf(response);
+    if (!data?.user) {
+      return null;
+    }
+
+    const nextAuth = {
+      token,
+      user: data.user,
+      roles: data.roles || []
+    };
+    setAuth(nextAuth);
+    return nextAuth;
+  } catch (error) {
+    if (error?.statusCode === 401) {
+      clearAuth();
+    }
+    return null;
+  }
+}
+
+export async function updateUserPhoneFromWechatPhoneCode(code) {
+  const response = await request({
+    url: "/api/auth/wechat/phone",
+    method: "POST",
+    data: { code }
   });
   const data = dataOf(response);
   if (!data?.user) {
@@ -345,11 +560,104 @@ export async function updateUserGender(gender) {
 }
 
 export async function ensureUserGender(auth, options = {}) {
-  if (options.requireGender === false || auth?.user?.gender) {
+  if (options.requireGender !== true || auth?.user?.gender) {
     return auth;
   }
 
   return requestUserGenderFromProfileModal(auth, options);
+}
+
+export function requestUserPhoneFromPhoneModal(auth, options = {}) {
+  const canUsePhoneModal =
+    typeof uni !== "undefined" &&
+    typeof uni.$emit === "function" &&
+    typeof uni.$on === "function" &&
+    typeof uni.$off === "function";
+  const required = options.requirePhone === true;
+
+  if (!canUsePhoneModal) {
+    if (required && options.showToast !== false) {
+      uni.showToast({ title: "授权手机号后继续", icon: "none" });
+    }
+    return Promise.resolve(required ? null : auth);
+  }
+
+  return new Promise((resolve) => {
+    const requestId = `phone-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let acknowledged = false;
+    let settled = false;
+    let fallbackTimer = null;
+
+    const cleanup = () => {
+      uni.$off(AUTH_PHONE_ACK_EVENT, handleAck);
+      uni.$off(AUTH_PHONE_RESPONSE_EVENT, handleResponse);
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+      }
+    };
+
+    const finish = (nextAuth) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(nextAuth || null);
+    };
+
+    const handleAck = (payload = {}) => {
+      if (payload.requestId === requestId) {
+        acknowledged = true;
+      }
+    };
+
+    const handleResponse = (payload = {}) => {
+      if (payload.requestId === requestId) {
+        finish(payload.auth || null);
+      }
+    };
+
+    uni.$on(AUTH_PHONE_ACK_EVENT, handleAck);
+    uni.$on(AUTH_PHONE_RESPONSE_EVENT, handleResponse);
+    uni.$emit(AUTH_PHONE_REQUEST_EVENT, {
+      requestId,
+      required,
+      auth,
+      route: currentPageRoute(),
+      title: required ? options.phoneRequiredTitle : options.phoneOptionalTitle,
+      content: required ? options.phoneRequiredContent : options.phoneOptionalContent
+    });
+
+    fallbackTimer = setTimeout(() => {
+      if (settled || acknowledged) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (required && options.showToast !== false) {
+        uni.showToast({ title: "授权手机号后继续", icon: "none" });
+      }
+      resolve(required ? null : auth);
+    }, 300);
+  });
+}
+
+export async function ensureUserPhone(auth, options = {}) {
+  if (auth?.user?.phoneVerifiedAt) {
+    return auth;
+  }
+
+  const requirePhone = options.requirePhone === true;
+  if (!requirePhone && options.promptPhoneAfterLogin !== true) {
+    return auth;
+  }
+
+  const nextAuth = await requestUserPhoneFromPhoneModal(auth, options);
+  if (nextAuth?.user?.phoneVerifiedAt) {
+    return nextAuth;
+  }
+
+  return requirePhone ? null : auth;
 }
 
 export function loginWithWechat(options = {}) {
@@ -382,7 +690,12 @@ export async function ensureLoggedIn(options = {}) {
   const auth = getCurrentUser();
   const token = getToken();
   if (auth.user && token) {
-    return ensureUserGender({ ...auth, token }, options);
+    const refreshedAuth = await refreshCurrentAuth();
+    const phoneAuth = await ensureUserPhone(refreshedAuth || { ...auth, token }, options);
+    if (!phoneAuth) {
+      return null;
+    }
+    return options.requireGender === true ? ensureUserGender(phoneAuth, options) : phoneAuth;
   }
   if (auth.user && !token) {
     clearAuth();
@@ -398,11 +711,16 @@ export async function ensureLoggedIn(options = {}) {
     if (!data) {
       throw new Error("Missing auth data");
     }
-    return ensureUserGender({
+    const loggedInAuth = {
       user: data.user || null,
       roles: data.roles || [],
       token: data.token || ""
-    }, options);
+    };
+    const phoneAuth = await ensureUserPhone(loggedInAuth, options);
+    if (!phoneAuth) {
+      return null;
+    }
+    return options.requireGender === true ? ensureUserGender(phoneAuth, options) : phoneAuth;
   } catch (error) {
     if (options.showToast !== false) {
       uni.showToast({

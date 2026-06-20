@@ -1,8 +1,12 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { config, publicConfig } from "./config/env.js";
 import { checkDatabaseReadiness } from "./db/mysql.js";
-import { AppError, badRequest, forbidden, unauthorized } from "./http/errors.js";
-import { updateUserGender, updateUserPhone } from "./modules/auth/users.js";
+import { AppError, badRequest, forbidden, notFound, unauthorized } from "./http/errors.js";
+import { updateUserPhone, updateUserProfile } from "./modules/auth/users.js";
 import {
   approveAdminWebLoginTicket,
   createAdminWebLoginTicket,
@@ -30,6 +34,7 @@ import {
   deleteStore,
   getSession,
   getSessionShareStats,
+  getMySessionReview,
   kickSessionSeat,
   listAdminScripts,
   listAdminStores,
@@ -38,6 +43,7 @@ import {
   listCatalogRequests,
   listMySignups,
   listMySessions,
+  listSessionReviews,
   listSessionSignups,
   listStoreScripts,
   lockSeat,
@@ -50,8 +56,22 @@ import {
   updateSeat,
   updateSession,
   updateStore,
+  upsertMySessionReview,
   upsertPerformerProfile
 } from "./modules/core/service.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const apiRoot = path.resolve(__dirname, "..");
+const avatarUploadDir = path.join(apiRoot, "uploads", "avatars");
+const sessionReviewUploadDir = path.join(apiRoot, "uploads", "session-reviews");
+const AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
+const AVATAR_MULTIPART_MAX_BYTES = AVATAR_UPLOAD_MAX_BYTES + 64 * 1024;
+const SESSION_REVIEW_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+const SESSION_REVIEW_MULTIPART_MAX_BYTES = SESSION_REVIEW_UPLOAD_MAX_BYTES + 64 * 1024;
+const avatarMimeTypes = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png"
+};
 
 function jsonResponse(response, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -85,17 +105,31 @@ function normalizeError(error) {
   return new AppError(500, "INTERNAL_ERROR", error.message);
 }
 
-async function readJsonBody(request) {
+async function readRawBody(request, maxBytes = Infinity) {
   const chunks = [];
+  let totalBytes = 0;
   for await (const chunk of request) {
+    totalBytes += chunk.length;
+    if (totalBytes > maxBytes) {
+      throw badRequest("request body is too large");
+    }
     chunks.push(chunk);
   }
 
   if (chunks.length === 0) {
+    return Buffer.alloc(0);
+  }
+
+  return Buffer.concat(chunks);
+}
+
+async function readJsonBody(request) {
+  const rawBody = await readRawBody(request);
+  if (rawBody.length === 0) {
     return {};
   }
 
-  const body = Buffer.concat(chunks).toString("utf8");
+  const body = rawBody.toString("utf8");
   if (!body.trim()) {
     return {};
   }
@@ -117,6 +151,201 @@ async function bodyFor(request) {
   } catch (error) {
     throw new AppError(400, "INVALID_JSON", "Request body must be valid JSON");
   }
+}
+
+function splitBuffer(buffer, separator) {
+  const parts = [];
+  let start = 0;
+  let index = buffer.indexOf(separator, start);
+  while (index !== -1) {
+    parts.push(buffer.subarray(start, index));
+    start = index + separator.length;
+    index = buffer.indexOf(separator, start);
+  }
+  parts.push(buffer.subarray(start));
+  return parts;
+}
+
+function trimMultipartPayload(payload) {
+  let end = payload.length;
+  if (end >= 2 && payload[end - 2] === 13 && payload[end - 1] === 10) {
+    end -= 2;
+  }
+  return payload.subarray(0, end);
+}
+
+function avatarExtensionFromBytes(file) {
+  if (file.length >= 3 && file[0] === 0xff && file[1] === 0xd8 && file[2] === 0xff) {
+    return ".jpg";
+  }
+  if (
+    file.length >= 8 &&
+    file[0] === 0x89 &&
+    file[1] === 0x50 &&
+    file[2] === 0x4e &&
+    file[3] === 0x47 &&
+    file[4] === 0x0d &&
+    file[5] === 0x0a &&
+    file[6] === 0x1a &&
+    file[7] === 0x0a
+  ) {
+    return ".png";
+  }
+  return "";
+}
+
+function parseMultipartImageUpload(contentType, body, options = {}) {
+  const fieldName = options.fieldName || "avatar";
+  const maxBytes = options.maxBytes || AVATAR_UPLOAD_MAX_BYTES;
+  const label = options.label || fieldName;
+  const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[1] ||
+    contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[2];
+  if (!boundary) {
+    throw badRequest("multipart boundary is required");
+  }
+
+  const boundaryBuffer = Buffer.from(`--${boundary}`);
+  for (const rawPart of splitBuffer(body, boundaryBuffer)) {
+    let part = rawPart;
+    if (part.length >= 2 && part[0] === 13 && part[1] === 10) {
+      part = part.subarray(2);
+    }
+    if (part.length === 0 || part.subarray(0, 2).toString() === "--") {
+      continue;
+    }
+
+    const headerEnd = part.indexOf(Buffer.from("\r\n\r\n"));
+    if (headerEnd === -1) {
+      continue;
+    }
+
+    const headersText = part.subarray(0, headerEnd).toString("utf8");
+    const disposition = headersText.match(/^content-disposition:\s*(.+)$/im)?.[1] || "";
+    if (!disposition.includes(`name="${fieldName}"`) || !/filename="/.test(disposition)) {
+      continue;
+    }
+
+    const mimeType = headersText.match(/^content-type:\s*([^\r\n;]+)/im)?.[1]?.trim() || "";
+    const file = trimMultipartPayload(part.subarray(headerEnd + 4));
+    if (file.length === 0) {
+      throw badRequest(`${label} file is required`);
+    }
+    if (file.length > maxBytes) {
+      throw badRequest(`${label} file is too large`);
+    }
+
+    const extension = avatarExtensionFromBytes(file) || avatarMimeTypes[mimeType];
+    if (!extension) {
+      throw badRequest(`${label} must be a JPEG or PNG image`);
+    }
+
+    return { extension, file, mimeType };
+  }
+
+  throw badRequest(`${label} file is required`);
+}
+
+function parseMultipartAvatarUpload(contentType, body) {
+  return parseMultipartImageUpload(contentType, body, {
+    fieldName: "avatar",
+    maxBytes: AVATAR_UPLOAD_MAX_BYTES,
+    label: "avatar"
+  });
+}
+
+function avatarContentType(filename) {
+  const extension = path.extname(filename).toLowerCase();
+  if (extension === ".jpg" || extension === ".jpeg") {
+    return "image/jpeg";
+  }
+  if (extension === ".png") {
+    return "image/png";
+  }
+  return "application/octet-stream";
+}
+
+async function saveUploadedAvatar(request, userId) {
+  const contentType = request.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) {
+    throw badRequest("avatar upload must be multipart/form-data");
+  }
+
+  const body = await readRawBody(request, AVATAR_MULTIPART_MAX_BYTES);
+  const { extension, file } = parseMultipartAvatarUpload(contentType, body);
+  await fs.mkdir(avatarUploadDir, { recursive: true });
+  const avatarFilename = `user-${userId}-${Date.now()}-${crypto
+    .randomBytes(8)
+    .toString("hex")}${extension}`;
+  await fs.writeFile(path.join(avatarUploadDir, avatarFilename), file);
+  return `/uploads/avatars/${avatarFilename}`;
+}
+
+async function saveUploadedSessionReviewPhoto(request, userId) {
+  const contentType = request.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) {
+    throw badRequest("review photo upload must be multipart/form-data");
+  }
+
+  const body = await readRawBody(request, SESSION_REVIEW_MULTIPART_MAX_BYTES);
+  const { extension, file } = parseMultipartImageUpload(contentType, body, {
+    fieldName: "photo",
+    maxBytes: SESSION_REVIEW_UPLOAD_MAX_BYTES,
+    label: "review photo"
+  });
+  await fs.mkdir(sessionReviewUploadDir, { recursive: true });
+  const photoFilename = `review-${userId}-${Date.now()}-${crypto
+    .randomBytes(8)
+    .toString("hex")}${extension}`;
+  await fs.writeFile(path.join(sessionReviewUploadDir, photoFilename), file);
+  return `/uploads/session-reviews/${photoFilename}`;
+}
+
+async function serveUploadedAvatar(url, response) {
+  const requestedName = decodeURIComponent(url.pathname.slice("/uploads/avatars/".length));
+  const avatarFilename = path.basename(requestedName);
+  if (!avatarFilename || avatarFilename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(avatarFilename)) {
+    throw notFound();
+  }
+
+  const filePath = path.join(avatarUploadDir, avatarFilename);
+  let file;
+  try {
+    file = await fs.readFile(filePath);
+  } catch (error) {
+    throw notFound();
+  }
+
+  response.writeHead(200, {
+    "cache-control": "public, max-age=31536000, immutable",
+    "content-length": file.length,
+    "content-type": avatarContentType(avatarFilename)
+  });
+  response.end(file);
+}
+
+async function serveUploadedSessionReviewPhoto(url, response) {
+  const requestedName = decodeURIComponent(
+    url.pathname.slice("/uploads/session-reviews/".length)
+  );
+  const photoFilename = path.basename(requestedName);
+  if (!photoFilename || photoFilename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(photoFilename)) {
+    throw notFound();
+  }
+
+  const filePath = path.join(sessionReviewUploadDir, photoFilename);
+  let file;
+  try {
+    file = await fs.readFile(filePath);
+  } catch (error) {
+    throw notFound();
+  }
+
+  response.writeHead(200, {
+    "cache-control": "public, max-age=31536000, immutable",
+    "content-length": file.length,
+    "content-type": avatarContentType(photoFilename)
+  });
+  response.end(file);
 }
 
 function idMatch(pathname, pattern) {
@@ -149,6 +378,37 @@ function requireRole(user, role) {
 
 async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+
+  if (request.method === "GET" && url.pathname.startsWith("/uploads/avatars/")) {
+    await serveUploadedAvatar(url, response);
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname.startsWith("/uploads/session-reviews/")) {
+    await serveUploadedSessionReviewPhoto(url, response);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/users/me/avatar") {
+    const user = await getAuthUser(request);
+    const avatarUrl = await saveUploadedAvatar(request, user.user.id);
+    jsonResponse(response, 201, {
+      ok: true,
+      data: { avatarUrl }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/session-reviews/photos") {
+    const user = await getAuthUser(request);
+    const photoUrl = await saveUploadedSessionReviewPhoto(request, user.user.id);
+    jsonResponse(response, 201, {
+      ok: true,
+      data: { photoUrl }
+    });
+    return;
+  }
+
   const body = await bodyFor(request);
 
   if (request.method === "GET" && url.pathname === "/health") {
@@ -223,12 +483,18 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/auth/wechat/phone") {
     const user = await getAuthUser(request);
-    const phoneEncrypted = body.phoneEncrypted || body.phone;
-    if (!phoneEncrypted) {
-      throw badRequest("phoneEncrypted is required");
+    const phoneCredential = body.code || body.phoneCode || body.phoneEncrypted || body.phone;
+    if (!phoneCredential) {
+      throw badRequest("phone authorization code is required");
     }
-    const updated = await updateUserPhone(user.user.id, phoneEncrypted);
-    jsonResponse(response, 200, { ok: true, data: updated });
+    const updated = await updateUserPhone(user.user.id, phoneCredential);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        user: updated,
+        roles: user.roles
+      }
+    });
     return;
   }
 
@@ -240,7 +506,7 @@ async function route(request, response) {
 
   if (request.method === "PATCH" && url.pathname === "/api/users/me") {
     const user = await getAuthUser(request);
-    const updatedUser = await updateUserGender(user.user.id, body.gender);
+    const updatedUser = await updateUserProfile(user.user.id, body);
     jsonResponse(response, 200, {
       ok: true,
       data: {
@@ -425,6 +691,33 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await updateSession(user, sessionId, body)
+    });
+    return;
+  }
+
+  const sessionReviewsId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/reviews$/);
+  if (request.method === "GET" && sessionReviewsId) {
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listSessionReviews(sessionReviewsId)
+    });
+    return;
+  }
+
+  const mySessionReviewId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/review$/);
+  if (request.method === "GET" && mySessionReviewId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await getMySessionReview(user, mySessionReviewId)
+    });
+    return;
+  }
+  if (request.method === "PUT" && mySessionReviewId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await upsertMySessionReview(user, mySessionReviewId, body)
     });
     return;
   }

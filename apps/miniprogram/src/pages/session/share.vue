@@ -10,7 +10,7 @@
 
     <view class="ticket-card">
       <image class="ticket-bamboo" src="/static/art/bamboo-corner.png" mode="widthFix" />
-      <image class="ticket-mountains" src="/static/art/ticket-landscape.png" mode="widthFix" />
+      <image class="ticket-mountains" src="/static/art/ticket-landscape.jpg" mode="widthFix" />
       <view class="ticket-title">{{ scriptName }}</view>
       <view class="ticket-tags">{{ scriptTags }} · {{ playerCountText }}</view>
 
@@ -95,7 +95,13 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
-import { dataOf, ensureLoggedIn, getCurrentUser, request } from "../../utils/api";
+import {
+  AUTH_CHANGE_EVENT,
+  dataOf,
+  ensureLoggedIn,
+  getCurrentUser,
+  request
+} from "../../utils/api";
 import {
   displayTags,
   flowToQuery,
@@ -226,16 +232,11 @@ export default {
     }
   },
   async onLoad(options) {
-    const auth = await ensureLoggedIn({
-      content: "登录后可以选择角色、分享和继续上车。"
-    });
-    if (!auth) {
-      return;
-    }
     const stored = readCreateFlow();
     const currentAuth = getCurrentUser();
-    this.currentUserId = currentAuth.user?.id || auth.user?.id || "";
-    this.currentUserGender = currentAuth.user?.gender || auth.user?.gender || "";
+    this.currentUserId = currentAuth.user?.id || "";
+    this.bindAuthChangeListener();
+    this.refreshCurrentUserGender(currentAuth);
     const fromQuery = queryToFlow(options);
     this.sessionId = options.id || fromQuery.sessionId || stored.sessionId || "";
     if (this.sessionId) {
@@ -244,7 +245,7 @@ export default {
         const seatRole = this.roleOptions.find(
           (role) => Number(role.seatId || role.id) === Number(options.seatId)
         );
-        if (seatRole && !seatRole.taken) {
+        if (seatRole && this.currentUserId && !seatRole.taken) {
           this.pendingRole = seatRole;
         } else if (seatRole && this.role && !isSameRole(seatRole, this.role)) {
           this.statusText = `你已选择 ${this.role.name}，确认后会释放原角色。`;
@@ -291,18 +292,28 @@ export default {
     writeCreateFlow(flow);
     this.showShareMenus();
   },
+  onUnload() {
+    this.unbindAuthChangeListener();
+  },
   onShareAppMessage() {
     const flow = this.persistFlow();
+    const title = this.shareCardTitle();
     if (this.sessionId) {
       const shareCode = `s${this.sessionId}-${Date.now()}`;
       return {
-        title: `${this.scriptName} · ${this.availableCount}个角色可选`,
+        title,
         path: `/pages/session/share?id=${this.sessionId}&shareCode=${shareCode}&source=wechat_share`
       };
     }
     return {
-      title: `${this.scriptName} · ${this.availableCount}个角色可选`,
+      title: this.shareCardTitle(),
       path: `/pages/session/share${flowToQuery(flow)}`
+    };
+  },
+  onShareTimeline() {
+    return {
+      title: this.timelineShareTitle(),
+      query: this.shareTimelineQuery()
     };
   },
   methods: {
@@ -320,6 +331,65 @@ export default {
     },
     persistFlow() {
       return writeCreateFlow(this.currentFlow());
+    },
+    shareCardTitle() {
+      return `${this.scriptName}｜${this.storeName}｜${this.startText}`;
+    },
+    timelineShareTitle() {
+      const seatText = this.availableCount > 0
+        ? `还差${this.availableCount}位上车`
+        : "剧本车局发车中";
+      return `${seatText}｜${this.scriptName}｜${this.storeName}｜${this.startText}，来一起沉浸一局`;
+    },
+    shareTimelineQuery() {
+      if (this.sessionId) {
+        const shareCode = `s${this.sessionId}-${Date.now()}`;
+        return `id=${encodeURIComponent(this.sessionId)}&shareCode=${encodeURIComponent(
+          shareCode
+        )}&source=wechat_timeline`;
+      }
+      const query = flowToQuery(this.persistFlow()).replace(/^\?/, "");
+      return query ? `${query}&source=wechat_timeline` : "source=wechat_timeline";
+    },
+    bindAuthChangeListener() {
+      if (typeof uni.$on === "function") {
+        uni.$on(AUTH_CHANGE_EVENT, this.refreshCurrentUserGender);
+      }
+    },
+    unbindAuthChangeListener() {
+      if (typeof uni.$off === "function") {
+        uni.$off(AUTH_CHANGE_EVENT, this.refreshCurrentUserGender);
+      }
+    },
+    refreshCurrentUserGender(auth = null) {
+      const currentAuth = auth?.user ? auth : getCurrentUser();
+      this.currentUserId = currentAuth.user?.id || "";
+      const nextGender = currentAuth.user?.gender || "";
+      if (nextGender !== this.currentUserGender) {
+        this.confirmedCrossCastRoleKey = "";
+      }
+      this.currentUserGender = nextGender;
+      this.clearSeatSelectionWhenLoggedOut();
+    },
+    clearSeatSelectionWhenLoggedOut() {
+      if (this.currentUserId) {
+        return;
+      }
+      this.pendingRole = null;
+      this.confirmedCrossCastRoleKey = "";
+    },
+    async ensureSeatSelectionLogin(options = {}) {
+      const auth = await ensureLoggedIn({
+        content: "登录后可以选择角色并锁定你的位置。",
+        ...options
+      });
+      if (!auth?.user) {
+        this.statusText = "登录后可继续选择角色。";
+        return null;
+      }
+      this.currentUserId = auth.user.id || "";
+      this.refreshCurrentUserGender(auth);
+      return auth;
     },
     async loadPublishedSession(sessionId) {
       try {
@@ -402,6 +472,14 @@ export default {
         uni.showToast({ title: "这是你当前选择的角色", icon: "none" });
         return;
       }
+      const auth = await this.ensureSeatSelectionLogin();
+      if (!auth) {
+        return;
+      }
+      if (this.pendingRole && isSameRole(role, this.pendingRole)) {
+        await this.confirmRole();
+        return;
+      }
       const confirmed = await this.confirmCrossCastRole(role);
       if (!confirmed) {
         return;
@@ -428,6 +506,14 @@ export default {
     async confirmRole() {
       if (!this.pendingRole) {
         uni.showToast({ title: "先选择一个可选角色", icon: "none" });
+        return;
+      }
+      const auth = await this.ensureSeatSelectionLogin({
+        requirePhone: true,
+        phoneRequiredTitle: "授权手机号后上车",
+        phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
+      });
+      if (!auth) {
         return;
       }
       const pendingRoleKey = this.roleKey(this.pendingRole);
@@ -499,7 +585,7 @@ export default {
       if (uni.showShareMenu) {
         uni.showShareMenu({
           withShareTicket: true,
-          menus: ["shareAppMessage"]
+          menus: ["shareAppMessage", "shareTimeline"]
         });
       }
     },
