@@ -31,6 +31,7 @@
         </div>
       </header>
       <CatalogWorkspace />
+      <div class="app-build-version">{{ buildVersion }}</div>
     </section>
   </div>
 </template>
@@ -43,6 +44,7 @@ import LoginPanel from "./components/LoginPanel.vue";
 
 const auth = ref(getStoredAuth());
 const sidebarCollapsed = ref(false);
+const buildVersion = `版本 ${__PINCHE_BUILD_TIME__}`;
 
 function setAuth(nextAuth) {
   auth.value = nextAuth;

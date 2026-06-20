@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const root = process.cwd();
 
@@ -120,6 +121,28 @@ assert(!webApi.includes("deleteScript"), "web API should not expose script hard 
 assert(webApi.includes("listStoreScripts"), "web API should list store-script links");
 assert(webApi.includes("saveStoreScripts"), "web API should save store-script links");
 
+const adminViteConfigSource = read("apps/admin-web/vite.config.js");
+assert(
+  adminViteConfigSource.includes("__PINCHE_BUILD_TIME__"),
+  "admin web Vite config must inject the build-time version constant"
+);
+assert(
+  adminViteConfigSource.includes("Asia/Shanghai"),
+  "admin web build time must be formatted in Beijing time"
+);
+const adminViteConfig = await import(
+  pathToFileURL(path.join(root, "apps/admin-web/vite.config.js")).href
+);
+assert(
+  typeof adminViteConfig.formatBuildTime === "function",
+  "admin web Vite config should export the build-time formatter for checks"
+);
+assert(
+  adminViteConfig.formatBuildTime(new Date("2026-06-19T16:05:00.000Z")) ===
+    "2026-06-20 00:05",
+  "admin web build-time formatter should convert UTC build moments to Beijing time"
+);
+
 const dockerWorkflow = read(".github/workflows/docker-publish.yml");
 assert(
   dockerWorkflow.includes("API_IMAGE_NAME: hkccr.ccs.tencentyun.com/murder/pinche"),
@@ -149,6 +172,9 @@ assert(loginPanel.includes("pollLoginTicket"), "login panel should poll ticket s
 const appShell = read("apps/admin-web/src/App.vue");
 for (const token of ["shell-toggle", "user-avatar", "sidebar-collapse"]) {
   assert(appShell.includes(token), `admin shell should include operator workspace ${token}`);
+}
+for (const token of ["buildVersion", "__PINCHE_BUILD_TIME__", "app-build-version"]) {
+  assert(appShell.includes(token), `admin shell should render build-time version ${token}`);
 }
 
 const catalogWorkspace = read("apps/admin-web/src/components/CatalogWorkspace.vue");
@@ -195,6 +221,7 @@ const adminStyles = read("apps/admin-web/src/styles.css");
 for (const token of [
   "--admin-sidebar",
   ".operator-topbar",
+  ".app-build-version",
   ".catalog-panel",
   ".status-pill.active",
   ".data-table tbody tr.selected-row",
