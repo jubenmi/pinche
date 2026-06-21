@@ -619,7 +619,7 @@ export default {
           });
           return;
         }
-        uni.showToast({ title: "个人信息保存失败", icon: "none" });
+        uni.showToast({ title: error?.userMessage || "个人信息保存失败", icon: "none" });
       } finally {
         this.savingProfile = false;
       }

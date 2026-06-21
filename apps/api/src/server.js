@@ -265,6 +265,27 @@ function parseMultipartAvatarUpload(contentType, body) {
   });
 }
 
+function parseRawAvatarUpload(contentType, body) {
+  const normalizedContentType = String(contentType || "").split(";")[0].trim().toLowerCase();
+  if (body.length === 0) {
+    throw badRequest("avatar file is required");
+  }
+  if (body.length > AVATAR_UPLOAD_MAX_BYTES) {
+    throw badRequest("avatar file is too large");
+  }
+
+  const extension = avatarExtensionFromBytes(body) || avatarMimeTypes[normalizedContentType];
+  if (!extension) {
+    throw badRequest("avatar must be a JPEG or PNG image");
+  }
+
+  return {
+    extension,
+    file: body,
+    mimeType: extension === ".png" ? "image/png" : "image/jpeg"
+  };
+}
+
 function avatarContentType(filename) {
   const extension = path.extname(filename).toLowerCase();
   if (extension === ".jpg" || extension === ".jpeg") {
@@ -438,12 +459,14 @@ async function saveUploadedObject({ key, filename, file, contentType, localDir, 
 
 async function saveUploadedAvatar(request, userId) {
   const contentType = request.headers["content-type"] || "";
-  if (!contentType.includes("multipart/form-data")) {
-    throw badRequest("avatar upload must be multipart/form-data");
-  }
-
-  const body = await readRawBody(request, AVATAR_MULTIPART_MAX_BYTES);
-  const { extension, file, mimeType } = parseMultipartAvatarUpload(contentType, body);
+  const isMultipart = contentType.includes("multipart/form-data");
+  const body = await readRawBody(
+    request,
+    isMultipart ? AVATAR_MULTIPART_MAX_BYTES : AVATAR_UPLOAD_MAX_BYTES
+  );
+  const { extension, file, mimeType } = isMultipart
+    ? parseMultipartAvatarUpload(contentType, body)
+    : parseRawAvatarUpload(contentType, body);
   const avatarFilenameBase = uploadFilenameBase("user", userId);
   const originalAvatarFilename = `${avatarFilenameBase}${extension}`;
   const avatarFilename = isCosUploadStorageEnabled()
