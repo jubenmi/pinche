@@ -8,7 +8,8 @@
     "build:mp-weixin": "uni build -p mp-weixin"
   },
   "dependencies": {
-    "@jubenmi/talk": "file:../../packages/talk"
+    "@jubenmi/talk": "file:../../packages/talk",
+    "cos-wx-sdk-v5": "^1.8.0"
   },
   "devDependencies": {
     "@dcloudio/uni-app": "3.0.0-5000720260410001",

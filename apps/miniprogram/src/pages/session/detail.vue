@@ -71,6 +71,7 @@
             class="review-avatar"
             :src="review.user_avatar_url ? assetUrl(review.user_avatar_url) : '/static/icons/user.png'"
             mode="aspectFill"
+            :webp="true"
           />
           <view class="review-main">
             <view class="review-name">{{ reviewAuthorName(review) }}</view>
@@ -163,6 +164,7 @@ export default {
     this.focusedSeatId = options.seatId || "";
     this.focusChatOnLoad = options.chat === "1";
     this.hydrateUser();
+    this.relinkSessionMembership();
     this.loadSession();
     this.loadSessionReviews();
     this.loadMyReviewState();
@@ -171,6 +173,7 @@ export default {
   },
   onShow() {
     this.hydrateUser();
+    this.relinkSessionMembership();
     if (this.sessionId) {
       this.loadSessionReviews();
       this.loadMyReviewState();
@@ -206,6 +209,19 @@ export default {
     hydrateUser() {
       const auth = getCurrentUser();
       this.currentUserId = auth.user?.id || "";
+    },
+    async relinkSessionMembership() {
+      if (!this.currentUserId || !this.sessionId || this.sessionId === "d1-demo") {
+        return;
+      }
+      try {
+        await request({
+          url: `/api/sessions/${this.sessionId}/relink`,
+          method: "PATCH"
+        });
+      } catch (error) {
+        // Non-members can still view public session detail; relink only restores existing ties.
+      }
     },
     async ensureProtectedActionLogin() {
       const auth = await ensureLoggedIn({

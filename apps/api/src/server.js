@@ -18,6 +18,8 @@ import {
 } from "./modules/auth/wechat.js";
 import { routeExtensions } from "./modules/extensions/registry.js";
 import {
+  buildCosAuthorization,
+  cosHost,
   cosObjectKeyFromUploadPath,
   cosStorageEnabled,
   getCosObject,
@@ -41,6 +43,8 @@ import {
   getSession,
   getSessionShareStats,
   getMySessionReview,
+  hideMyOrganizedSession,
+  hideMySignup,
   kickSessionSeat,
   listAdminScripts,
   listAdminStores,
@@ -55,6 +59,7 @@ import {
   lockSeat,
   publishSession,
   rejectSignup,
+  relinkMySessionMembership,
   replaceStoreScripts,
   reviewCatalogRequest,
   updateDeposit,
@@ -74,6 +79,7 @@ const AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 const AVATAR_MULTIPART_MAX_BYTES = AVATAR_UPLOAD_MAX_BYTES + 64 * 1024;
 const SESSION_REVIEW_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_REVIEW_MULTIPART_MAX_BYTES = SESSION_REVIEW_UPLOAD_MAX_BYTES + 64 * 1024;
+const AVATAR_WEBP_RULE = "imageMogr2/auto-orient/thumbnail/512x512>/format/webp/quality/80";
 const avatarMimeTypes = {
   "image/jpeg": ".jpg",
   "image/png": ".png"
@@ -267,19 +273,159 @@ function avatarContentType(filename) {
   if (extension === ".png") {
     return "image/png";
   }
+  if (extension === ".webp") {
+    return "image/webp";
+  }
   return "application/octet-stream";
+}
+
+function uploadedObjectContentType(filename, fallbackContentType = "") {
+  const filenameContentType = avatarContentType(filename);
+  if (filenameContentType !== "application/octet-stream") {
+    return filenameContentType;
+  }
+  return fallbackContentType || filenameContentType;
 }
 
 function isCosUploadStorageEnabled() {
   return cosStorageEnabled(config.cos);
 }
 
-async function saveUploadedObject({ key, filename, file, contentType, localDir }) {
+function uploadFilenameBase(prefix, userId) {
+  return `${prefix}-${userId}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
+}
+
+function avatarWebpPicOperations(key) {
+  return JSON.stringify({
+    is_pic_info: 1,
+    rules: [
+      {
+        bucket: config.cos.bucket,
+        fileid: `/${key}`,
+        rule: AVATAR_WEBP_RULE
+      }
+    ]
+  });
+}
+
+function normalizeUploadExtension(extension) {
+  const normalized = String(extension || "").trim().toLowerCase();
+  if (normalized === "jpg" || normalized === "jpeg" || normalized === "png") {
+    return `.${normalized}`;
+  }
+  if (normalized === ".jpg" || normalized === ".jpeg" || normalized === ".png") {
+    return normalized;
+  }
+  return ".jpg";
+}
+
+function createCosDirectUploadIntent({ kind, extension, userId }) {
+  if (!isCosUploadStorageEnabled()) {
+    return { direct: false };
+  }
+
+  const sourceExtension = normalizeUploadExtension(extension);
+  if (kind === "avatar") {
+    const key = `uploads/avatars/${uploadFilenameBase("user", userId)}.webp`;
+    return {
+      direct: true,
+      kind,
+      bucket: config.cos.bucket,
+      region: config.cos.region,
+      key,
+      uploadPath: `/${key}`,
+      maxBytes: AVATAR_UPLOAD_MAX_BYTES,
+      contentType: avatarContentType(`source${sourceExtension}`),
+      picOperations: avatarWebpPicOperations(key)
+    };
+  }
+
+  if (kind === "sessionReviewPhoto") {
+    const key = `uploads/session-reviews/${uploadFilenameBase("review", userId)}${sourceExtension}`;
+    return {
+      direct: true,
+      kind,
+      bucket: config.cos.bucket,
+      region: config.cos.region,
+      key,
+      uploadPath: `/${key}`,
+      maxBytes: SESSION_REVIEW_UPLOAD_MAX_BYTES,
+      contentType: avatarContentType(key)
+    };
+  }
+
+  throw badRequest("unsupported upload kind");
+}
+
+function normalizeCosHeaders(headers = {}) {
+  return Object.fromEntries(
+    Object.entries(headers || {})
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+      .map(([name, value]) => [String(name).toLowerCase(), String(value)])
+  );
+}
+
+function directUploadKindForKey(key, userId) {
+  const userIdText = String(userId);
+  const avatarPattern = new RegExp(
+    `^uploads/avatars/user-${userIdText}-\\d+-[a-f0-9]{16}\\.webp$`
+  );
+  if (avatarPattern.test(key)) {
+    return "avatar";
+  }
+
+  const reviewPattern = new RegExp(
+    `^uploads/session-reviews/review-${userIdText}-\\d+-[a-f0-9]{16}\\.(?:jpg|jpeg|png)$`
+  );
+  if (reviewPattern.test(key)) {
+    return "sessionReviewPhoto";
+  }
+
+  throw forbidden("upload object key is not allowed");
+}
+
+function authorizeCosDirectUpload({ body, userId }) {
+  if (!isCosUploadStorageEnabled()) {
+    throw badRequest("COS storage is not enabled");
+  }
+
+  const bucket = String(body.bucket || body.Bucket || "");
+  const region = String(body.region || body.Region || "");
+  const method = String(body.method || body.Method || "").toUpperCase();
+  const key = String(body.key || body.Key || "");
+
+  if (bucket !== config.cos.bucket || region !== config.cos.region) {
+    throw forbidden("COS bucket or region is not allowed");
+  }
+  if (method !== "PUT") {
+    throw badRequest("only COS PUT uploads can be signed");
+  }
+
+  const kind = directUploadKindForKey(key, userId);
+  const headers = normalizeCosHeaders(body.headers || body.Headers);
+  headers.host = headers.host || cosHost(config.cos);
+
+  if (kind === "avatar" && headers["pic-operations"] !== avatarWebpPicOperations(key)) {
+    throw forbidden("avatar upload must include the server-issued WebP processing rule");
+  }
+
+  return {
+    authorization: buildCosAuthorization({
+      method,
+      key,
+      headers,
+      config: config.cos
+    })
+  };
+}
+
+async function saveUploadedObject({ key, filename, file, contentType, localDir, picOperations }) {
   if (isCosUploadStorageEnabled()) {
     await putCosObject({
       key,
       body: file,
       contentType,
+      picOperations,
       config: config.cos
     });
     return `/${key}`;
@@ -298,14 +444,18 @@ async function saveUploadedAvatar(request, userId) {
 
   const body = await readRawBody(request, AVATAR_MULTIPART_MAX_BYTES);
   const { extension, file, mimeType } = parseMultipartAvatarUpload(contentType, body);
-  const avatarFilename = `user-${userId}-${Date.now()}-${crypto
-    .randomBytes(8)
-    .toString("hex")}${extension}`;
+  const avatarFilenameBase = uploadFilenameBase("user", userId);
+  const originalAvatarFilename = `${avatarFilenameBase}${extension}`;
+  const avatarFilename = isCosUploadStorageEnabled()
+    ? `${avatarFilenameBase}.webp`
+    : originalAvatarFilename;
+  const key = `uploads/avatars/${avatarFilename}`;
   return saveUploadedObject({
-    key: `uploads/avatars/${avatarFilename}`,
+    key,
     filename: avatarFilename,
     file,
-    contentType: mimeType || avatarContentType(avatarFilename),
+    contentType: mimeType || avatarContentType(originalAvatarFilename),
+    picOperations: isCosUploadStorageEnabled() ? avatarWebpPicOperations(key) : "",
     localDir: avatarUploadDir
   });
 }
@@ -322,9 +472,7 @@ async function saveUploadedSessionReviewPhoto(request, userId) {
     maxBytes: SESSION_REVIEW_UPLOAD_MAX_BYTES,
     label: "review photo"
   });
-  const photoFilename = `review-${userId}-${Date.now()}-${crypto
-    .randomBytes(8)
-    .toString("hex")}${extension}`;
+  const photoFilename = `${uploadFilenameBase("review", userId)}${extension}`;
   return saveUploadedObject({
     key: `uploads/session-reviews/${photoFilename}`,
     filename: photoFilename,
@@ -345,7 +493,7 @@ async function serveLocalUploadedObject({ filePath, filename, response }) {
   response.writeHead(200, {
     "cache-control": "public, max-age=31536000, immutable",
     "content-length": file.length,
-    "content-type": avatarContentType(filename)
+    "content-type": uploadedObjectContentType(filename)
   });
   response.end(file);
 }
@@ -359,7 +507,7 @@ async function serveCosUploadedObject({ key, filename, response }) {
   response.writeHead(200, {
     "cache-control": "public, max-age=31536000, immutable",
     "content-length": object.body.length,
-    "content-type": object.headers["content-type"] || avatarContentType(filename)
+    "content-type": uploadedObjectContentType(filename, object.headers["content-type"])
   });
   response.end(object.body);
 }
@@ -484,6 +632,33 @@ async function route(request, response) {
   }
 
   const body = await bodyFor(request);
+
+  if (request.method === "POST" && url.pathname === "/api/uploads/cos-intent") {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        upload: createCosDirectUploadIntent({
+          kind: body.kind,
+          extension: body.extension,
+          userId: user.user.id
+        })
+      }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/uploads/cos-authorization") {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: authorizeCosDirectUpload({
+        body,
+        userId: user.user.id
+      })
+    });
+    return;
+  }
 
   if (request.method === "GET" && url.pathname === "/health") {
     const database = await checkDatabaseReadiness();
@@ -769,6 +944,26 @@ async function route(request, response) {
     return;
   }
 
+  const hideSessionId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/hide$/);
+  if (request.method === "PATCH" && hideSessionId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await hideMyOrganizedSession(user, hideSessionId)
+    });
+    return;
+  }
+
+  const relinkSessionId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/relink$/);
+  if (request.method === "PATCH" && relinkSessionId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await relinkMySessionMembership(user, relinkSessionId)
+    });
+    return;
+  }
+
   const sessionReviewsId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/reviews$/);
   if (request.method === "GET" && sessionReviewsId) {
     jsonResponse(response, 200, {
@@ -892,6 +1087,16 @@ async function route(request, response) {
   if (request.method === "POST" && url.pathname === "/api/signups") {
     const user = await getAuthUser(request);
     jsonResponse(response, 201, { ok: true, data: await createSignup(user, body) });
+    return;
+  }
+
+  const hideSignupId = idMatch(url.pathname, /^\/api\/signups\/(\d+)\/hide$/);
+  if (request.method === "PATCH" && hideSignupId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await hideMySignup(user, hideSignupId)
+    });
     return;
   }
 

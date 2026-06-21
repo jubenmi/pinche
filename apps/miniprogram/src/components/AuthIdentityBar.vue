@@ -2,7 +2,13 @@
   <view class="auth-identity">
     <view class="auth-identity-bar" :class="{ empty: !user }" @tap="openProfileModal(false)">
       <view v-if="user" class="auth-avatar" :class="barAvatarClass">
-        <image class="auth-avatar-image" :src="barAvatar.src" mode="aspectFill" />
+        <image
+          class="auth-avatar-image"
+          :src="barAvatar.src"
+          mode="aspectFill"
+          :webp="true"
+          @error="handleAvatarLoadError(barAvatar.src)"
+        />
       </view>
       <view class="auth-main">
         <text class="auth-state">{{ user ? "已登录" : "未登录" }}</text>
@@ -22,32 +28,44 @@
         </view>
 
         <view class="profile-preview">
-          <view class="profile-avatar" :class="avatarGenderClass">
-            <image class="profile-avatar-image" :src="avatarPreview.src" mode="aspectFill" />
-          </view>
+          <button
+            class="profile-avatar profile-avatar-button"
+            :class="[avatarGenderClass, { disabled: avatarChoosing || savingProfile }]"
+            :disabled="avatarChoosing || savingProfile"
+            open-type="chooseAvatar"
+            hover-class="profile-avatar-button-hover"
+            aria-label="选择头像"
+            @tap="markAvatarChoosing"
+            @chooseavatar="handleChooseAvatar"
+          >
+            <image
+              class="profile-avatar-image"
+              :src="avatarPreview.src"
+              mode="aspectFill"
+              :webp="true"
+              @error="handleAvatarLoadError(avatarPreview.src)"
+            />
+          </button>
           <view class="profile-preview-copy">
-            <view class="profile-name">{{ displayName }}</view>
-            <view class="profile-avatar-label">{{ avatarPreview.label }}</view>
-            <button
-              class="avatar-change"
-              :class="{ disabled: avatarChoosing || savingProfile }"
-              :disabled="avatarChoosing || savingProfile"
-              open-type="chooseAvatar"
-              @tap="markAvatarChoosing"
-              @chooseavatar="handleChooseAvatar"
-            >
-              {{ avatarButtonText }}
-            </button>
+            <view class="profile-name-control">
+              <text v-if="profileGenderSymbol" class="profile-gender-symbol">{{ profileGenderSymbol }}</text>
+              <input
+                class="profile-nickname-input"
+                type="nickname"
+                maxlength="32"
+                :placeholder="profileNicknamePlaceholder"
+                :class="{ disabled: savingProfile }"
+                :value="draftNickname"
+                :disabled="savingProfile"
+                @input="handleNicknameInput"
+                @change="handleNicknameInput"
+                @confirm="handleNicknameInput"
+                @blur="handleNicknameBlur"
+              />
+            </view>
+            <view class="profile-avatar-label">{{ avatarLabelText }}</view>
           </view>
         </view>
-
-        <view class="profile-field-label">昵称</view>
-        <input
-          v-model="draftNickname"
-          class="profile-input"
-          maxlength="32"
-          placeholder="填写昵称"
-        />
 
         <view class="profile-field-label">性别</view>
         <view class="gender-options">
@@ -133,7 +151,10 @@ import {
   AUTH_PROFILE_RESPONSE_EVENT,
   assetUrl,
   clearAuth,
+  clearCurrentUserAvatarUrl,
   getCurrentUser,
+  getToken,
+  refreshCurrentAuth,
   uploadUserAvatar,
   updateUserPhoneFromWechatPhoneCode,
   updateUserGender,
@@ -158,6 +179,26 @@ const DEFAULT_AVATARS = {
 
 function avatarForGender(gender) {
   return DEFAULT_AVATARS[gender] || DEFAULT_AVATARS.unknown;
+}
+
+function genderAvatarClass(gender) {
+  return ["male", "female"].includes(gender) ? gender : "unknown";
+}
+
+function genderSymbol(gender) {
+  if (gender === "male") {
+    return "♂";
+  }
+  if (gender === "female") {
+    return "♀";
+  }
+  return "";
+}
+
+function profileNameWithGenderSymbol(nickname, gender) {
+  const name = (nickname || "").trim() || "填写昵称";
+  const symbol = genderSymbol(gender);
+  return symbol ? `${symbol} ${name}` : name;
 }
 
 function currentPageRoute() {
@@ -197,7 +238,13 @@ export default {
       if (!this.user) {
         return "等待微信登录";
       }
-      return this.user.nickname || this.user.open_id || this.user.openid || `用户${this.user.id}`;
+      return profileNameWithGenderSymbol(this.user.nickname, this.user.gender);
+    },
+    profileGenderSymbol() {
+      return genderSymbol(this.draftGender || this.user?.gender);
+    },
+    profileNicknamePlaceholder() {
+      return "填写昵称";
     },
     genderText() {
       return this.user?.gender ? userGenderLabel(this.user.gender) : "";
@@ -215,10 +262,7 @@ export default {
       return avatarForGender(this.user?.gender || "");
     },
     barAvatarClass() {
-      if (this.user?.avatarUrl) {
-        return "custom";
-      }
-      return this.user?.gender || "unknown";
+      return genderAvatarClass(this.user?.gender);
     },
     avatarPreview() {
       if (this.draftAvatarTempPath) {
@@ -236,10 +280,7 @@ export default {
       return avatarForGender(this.draftGender || this.user?.gender || "");
     },
     avatarGenderClass() {
-      if (this.draftAvatarTempPath || this.draftAvatarUrl) {
-        return "custom";
-      }
-      return this.draftGender || this.user?.gender || "unknown";
+      return genderAvatarClass(this.draftGender || this.user?.gender);
     },
     defaultAvatars() {
       return DEFAULT_AVATARS;
@@ -256,8 +297,8 @@ export default {
     saveButtonText() {
       return this.savingProfile ? "保存中..." : "保存";
     },
-    avatarButtonText() {
-      return this.avatarChoosing ? "选择中..." : "更换头像";
+    avatarLabelText() {
+      return this.avatarChoosing ? "选择中..." : this.avatarPreview.label;
     },
     phoneTitle() {
       if (this.phoneTitleText) {
@@ -280,6 +321,7 @@ export default {
   created() {
     this.ownerRoute = currentPageRoute();
     this.refreshIdentity();
+    this.refreshIdentityFromServer();
     if (typeof uni.$on === "function") {
       uni.$on(AUTH_CHANGE_EVENT, this.refreshIdentity);
       uni.$on(AUTH_PHONE_REQUEST_EVENT, this.handlePhoneRequest);
@@ -324,6 +366,19 @@ export default {
       if (!this.profileVisible && !this.phoneVisible) {
         this.syncProfileDrafts();
       }
+    },
+    async refreshIdentityFromServer() {
+      const auth = getCurrentUser();
+      if (!auth.user) {
+        return;
+      }
+      if (!getToken()) {
+        clearAuth();
+        this.refreshIdentity();
+        return;
+      }
+      await refreshCurrentAuth();
+      this.refreshIdentity();
     },
     handlePhoneRequest(payload = {}) {
       if (payload.route && this.ownerRoute && payload.route !== this.ownerRoute) {
@@ -450,6 +505,24 @@ export default {
     selectGender(gender) {
       this.draftGender = gender;
     },
+    applyDraftNickname(value, options = {}) {
+      const nickname = (value || "").trim();
+      if (!nickname && options.keepCurrentOnEmpty) {
+        return true;
+      }
+      if (nickname.length > 32) {
+        uni.showToast({ title: "昵称最多32个字", icon: "none" });
+        return false;
+      }
+      this.draftNickname = nickname;
+      return true;
+    },
+    handleNicknameInput(event = {}) {
+      this.applyDraftNickname(event.detail?.value || "");
+    },
+    handleNicknameBlur(event = {}) {
+      this.applyDraftNickname(event.detail?.value || "", { keepCurrentOnEmpty: true });
+    },
     markAvatarChoosing() {
       if (this.avatarChoosing || this.savingProfile) {
         return;
@@ -469,6 +542,18 @@ export default {
       if (avatarUrl) {
         this.draftAvatarTempPath = avatarUrl;
       }
+    },
+    handleAvatarLoadError(imageSrc = "") {
+      if (!this.user?.avatarUrl) {
+        return;
+      }
+      const currentAvatarSrc = assetUrl(this.user.avatarUrl);
+      if (imageSrc && imageSrc !== currentAvatarSrc) {
+        return;
+      }
+      clearCurrentUserAvatarUrl(this.user.avatarUrl);
+      this.refreshIdentity();
+      this.syncProfileDrafts();
     },
     async saveProfile() {
       if (!this.canSaveProfile) {
@@ -545,6 +630,9 @@ export default {
 .auth-identity {
   --avatar-male-surface: #dcece7;
   --avatar-female-surface: #f7dde7;
+  --avatar-male-ring: #257b67;
+  --avatar-female-ring: #d65b89;
+  --avatar-unknown-ring: rgba(196, 174, 119, 0.62);
 
   position: relative;
   z-index: 8;
@@ -579,24 +667,24 @@ export default {
   height: 36rpx;
   border-radius: 50%;
   overflow: hidden;
-  border: 1rpx solid rgba(196, 174, 119, 0.6);
+  border: 3rpx solid var(--avatar-unknown-ring);
   background: #f4efe2;
+  box-sizing: border-box;
 }
 
 .auth-avatar.male {
+  border-color: var(--avatar-male-ring);
   background: var(--avatar-male-surface);
 }
 
 .auth-avatar.female {
+  border-color: var(--avatar-female-ring);
   background: var(--avatar-female-surface);
 }
 
 .auth-avatar.unknown {
+  border-color: var(--avatar-unknown-ring);
   background: #eef1eb;
-}
-
-.auth-avatar.custom {
-  background: #ffffff;
 }
 
 .auth-avatar-image {
@@ -716,28 +804,43 @@ export default {
   justify-content: center;
   width: 96rpx;
   height: 96rpx;
+  margin: 0;
+  padding: 0;
   border-radius: 50%;
   overflow: hidden;
-  border: 2rpx solid rgba(196, 174, 119, 0.62);
+  border: 4rpx solid var(--avatar-unknown-ring);
   background: #f4efe2;
+  box-sizing: border-box;
+  line-height: 1;
+}
+
+.profile-avatar-button::after {
+  border: 0;
+}
+
+.profile-avatar-button.disabled {
+  opacity: 0.68;
+}
+
+.profile-avatar-button-hover {
+  transform: scale(0.98);
 }
 
 .profile-avatar.male,
 .gender-option.male .option-avatar {
+  border-color: var(--avatar-male-ring);
   background: var(--avatar-male-surface);
 }
 
 .profile-avatar.female,
 .gender-option.female .option-avatar {
+  border-color: var(--avatar-female-ring);
   background: var(--avatar-female-surface);
 }
 
 .profile-avatar.unknown {
+  border-color: var(--avatar-unknown-ring);
   background: #eef1eb;
-}
-
-.profile-avatar.custom {
-  background: #ffffff;
 }
 
 .profile-avatar-image {
@@ -747,10 +850,20 @@ export default {
 }
 
 .profile-preview-copy {
+  position: relative;
   min-width: 0;
 }
 
+.profile-name-control {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 8rpx;
+}
+
 .profile-name {
+  display: block;
   overflow: hidden;
   color: #183d34;
   font-size: 26rpx;
@@ -760,6 +873,35 @@ export default {
   white-space: nowrap;
 }
 
+.profile-name.placeholder {
+  color: #1f6f5b;
+}
+
+.profile-gender-symbol {
+  flex: 0 0 auto;
+  color: #183d34;
+  font-size: 26rpx;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.profile-nickname-input {
+  width: 260rpx;
+  height: 42rpx;
+  min-height: 42rpx;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #183d34;
+  font-size: 26rpx;
+  font-weight: 600;
+  line-height: 42rpx;
+}
+
+.profile-nickname-input.disabled {
+  color: #7b857e;
+}
+
 .profile-avatar-label {
   margin-top: 8rpx;
   color: #7b857e;
@@ -767,42 +909,11 @@ export default {
   line-height: 1.4;
 }
 
-.avatar-change {
-  width: 156rpx;
-  height: 52rpx;
-  margin: 14rpx 0 0;
-  padding: 0;
-  border: 1rpx solid #d9cfbc;
-  border-radius: 10rpx;
-  background: #ffffff;
-  color: #1f6f5b;
-  font-size: 23rpx;
-  font-weight: 600;
-  line-height: 52rpx;
-}
-
-.avatar-change.disabled {
-  color: #8f9a93;
-  background: #f4f6f3;
-}
-
 .profile-field-label {
   margin-top: 28rpx;
   color: #314d45;
   font-size: 25rpx;
   font-weight: 600;
-}
-
-.profile-input {
-  height: 72rpx;
-  margin-top: 14rpx;
-  padding: 0 20rpx;
-  box-sizing: border-box;
-  border: 1rpx solid #e4ddcf;
-  border-radius: 12rpx;
-  background: #ffffff;
-  color: #183d34;
-  font-size: 26rpx;
 }
 
 .gender-options {

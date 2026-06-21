@@ -1257,7 +1257,10 @@ export async function getSessionShareStats(sessionId) {
 
 export async function listMySessions(user, filters = {}) {
   return withDatabaseConnection(async (connection) => {
-    const where = ["session.organizer_user_id = ?"];
+    const where = [
+      "session.organizer_user_id = ?",
+      "session.organizer_hidden_at IS NULL"
+    ];
     const values = [user.user.id];
 
     if (filters.status) {
@@ -1283,6 +1286,74 @@ export async function listMySessions(user, filters = {}) {
       values
     );
     return rows;
+  });
+}
+
+export async function hideMyOrganizedSession(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await findById(connection, "sessions", id);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    if (Number(session.organizer_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the session organizer can hide this session membership");
+    }
+    await connection.query(
+      "UPDATE sessions SET organizer_hidden_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [id]
+    );
+    return findById(connection, "sessions", id);
+  });
+}
+
+export async function relinkMySessionMembership(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withTransaction(async (connection) => {
+    const session = await findById(connection, "sessions", id);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+
+    const organizerRelinked = Number(session.organizer_user_id) === Number(user.user.id);
+    if (organizerRelinked) {
+      await connection.query(
+        "UPDATE sessions SET organizer_hidden_at = NULL WHERE id = ?",
+        [id]
+      );
+    }
+
+    const [signupRows] = await connection.query(
+      `
+        SELECT id
+        FROM signups
+        WHERE session_id = ?
+          AND user_id = ?
+      `,
+      [id, user.user.id]
+    );
+    const signupRelinked = signupRows.length > 0;
+    if (signupRelinked) {
+      await connection.query(
+        `
+          UPDATE signups
+          SET user_hidden_at = NULL
+          WHERE session_id = ?
+            AND user_id = ?
+        `,
+        [id, user.user.id]
+      );
+    }
+
+    if (!organizerRelinked && !signupRelinked) {
+      throw forbidden("Only existing session members can relink this session");
+    }
+
+    return {
+      session_id: id,
+      organizer_relinked: organizerRelinked,
+      signup_relinked: signupRelinked
+    };
   });
 }
 
@@ -1574,6 +1645,7 @@ export async function listMySignups(user) {
         JOIN sessions session ON session.id = signup.session_id
         LEFT JOIN session_seats seat ON seat.id = signup.seat_id
         WHERE signup.user_id = ?
+          AND signup.user_hidden_at IS NULL
         ORDER BY session.start_at DESC, signup.id DESC
       `,
       [user.user.id]
@@ -1583,6 +1655,30 @@ export async function listMySignups(user) {
       can_review: Boolean(row.can_review),
       has_review: Boolean(row.has_review)
     }));
+  });
+}
+
+export async function hideMySignup(user, signupId) {
+  const id = positiveId(signupId, "signupId");
+  return withDatabaseConnection(async (connection) => {
+    const signup = await findById(connection, "signups", id);
+    if (!signup) {
+      throw notFound("Signup not found");
+    }
+    if (Number(signup.user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the signup user can hide this session membership");
+    }
+
+    await connection.query(
+      "UPDATE signups SET user_hidden_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [id]
+    );
+
+    return {
+      id,
+      session_id: Number(signup.session_id),
+      hidden: true
+    };
   });
 }
 

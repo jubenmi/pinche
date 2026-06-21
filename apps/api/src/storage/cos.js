@@ -13,10 +13,8 @@ function sha1(value) {
 }
 
 function encodeCosComponent(value) {
-  return encodeURIComponent(String(value)).replace(
-    /[!'()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
-  );
+  return encodeURIComponent(String(value))
+    .replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function sortedHeaderEntries(headers = {}) {
@@ -93,13 +91,19 @@ export function buildCosAuthorization({
   ].join("&");
 }
 
-function cosRequest({ method, key, body, contentType, config }) {
+function cosRequest({ method, key, body, contentType, headers: extraHeaders = {}, config }) {
   const host = cosHost(config);
   const date = new Date().toUTCString();
-  const signedHeaders = { date, host };
+  const normalizedExtraHeaders = Object.fromEntries(
+    Object.entries(extraHeaders)
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+      .map(([name, value]) => [name.toLowerCase(), String(value)])
+  );
+  const signedHeaders = { date, host, ...normalizedExtraHeaders };
   const headers = {
     date,
     host,
+    ...normalizedExtraHeaders,
     authorization: buildCosAuthorization({
       method,
       key,
@@ -151,12 +155,13 @@ function cosRequest({ method, key, body, contentType, config }) {
   });
 }
 
-export async function putCosObject({ key, body, contentType, config }) {
+export async function putCosObject({ key, body, contentType, picOperations, config }) {
   return cosRequest({
     method: "PUT",
     key,
     body,
     contentType,
+    headers: picOperations ? { "pic-operations": picOperations } : {},
     config
   });
 }

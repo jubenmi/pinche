@@ -12,6 +12,8 @@ export const BACKEND_STATUS_CHANGE_EVENT = "pinche-backend-status-change";
 
 const BACKEND_HEALTH_TIMEOUT = 3000;
 const MAINTENANCE_USER_MESSAGE = "服务正在上线维护中，请稍后再试。";
+let cosClient = null;
+let cosSdkConstructor = null;
 const backendStatus = {
   checking: false,
   available: null,
@@ -184,6 +186,24 @@ export function getCurrentUser() {
   return { user, roles };
 }
 
+export function clearCurrentUserAvatarUrl(avatarUrl) {
+  const auth = getCurrentUser();
+  if (!auth.user?.avatarUrl || auth.user.avatarUrl !== avatarUrl) {
+    return auth;
+  }
+
+  const nextAuth = {
+    token: getToken(),
+    user: {
+      ...auth.user,
+      avatarUrl: null
+    },
+    roles: auth.roles || []
+  };
+  setAuth(nextAuth);
+  return nextAuth;
+}
+
 export function clearAuth() {
   const app = getApp();
   app.globalData.token = "";
@@ -339,7 +359,108 @@ export function userGenderLabel(gender) {
   return labels[gender] || "未选择";
 }
 
-export async function uploadUserAvatar(filePath) {
+function fileExtensionFromPath(filePath) {
+  const match = String(filePath || "").match(/\.([A-Za-z0-9]+)(?:[?#].*)?$/);
+  const extension = match ? match[1].toLowerCase() : "";
+  if (extension === "jpg" || extension === "jpeg" || extension === "png") {
+    return `.${extension}`;
+  }
+  return ".jpg";
+}
+
+async function loadCosSdk() {
+  if (cosSdkConstructor) {
+    return cosSdkConstructor;
+  }
+
+  const module = await import("cos-wx-sdk-v5/index.js");
+  cosSdkConstructor = module.default || module;
+  return cosSdkConstructor;
+}
+
+async function getCosClient() {
+  if (cosClient) {
+    return cosClient;
+  }
+
+  const COS = await loadCosSdk();
+  cosClient = new COS({
+    SimpleUploadMethod: "putObject",
+    getAuthorization(options, callback) {
+      request({
+        url: "/api/uploads/cos-authorization",
+        method: "POST",
+        data: {
+          bucket: options.Bucket,
+          region: options.Region,
+          method: options.Method,
+          key: options.Key,
+          query: options.Query || {},
+          headers: options.Headers || {}
+        }
+      })
+        .then((response) => {
+          const data = dataOf(response);
+          callback(data?.authorization || "");
+        })
+        .catch(() => {
+          callback("");
+        });
+    }
+  });
+
+  return cosClient;
+}
+
+async function requestCosUploadIntent(kind, filePath) {
+  const response = await request({
+    url: "/api/uploads/cos-intent",
+    method: "POST",
+    data: {
+      kind,
+      extension: fileExtensionFromPath(filePath)
+    }
+  });
+  return dataOf(response)?.upload || { direct: false };
+}
+
+async function uploadCosObject(upload, filePath) {
+  const client = await getCosClient();
+  return new Promise((resolve, reject) => {
+    client.putObject(
+      {
+        Bucket: upload.bucket,
+        Region: upload.region,
+        Key: upload.key,
+        FilePath: filePath,
+        ContentType: upload.contentType,
+        PicOperations: upload.picOperations,
+        onProgress() {}
+      },
+      (error) => {
+        if (error) {
+          reject({
+            statusCode: 0,
+            errMsg: error.error?.Message || error.message || error.errMsg || "COS upload failed",
+            originalError: error
+          });
+          return;
+        }
+        resolve(upload.uploadPath);
+      }
+    );
+  });
+}
+
+async function uploadCosBackedFile({ kind, filePath, fallbackUpload }) {
+  const upload = await requestCosUploadIntent(kind, filePath);
+  if (!upload.direct) {
+    return fallbackUpload(filePath);
+  }
+  return uploadCosObject(upload, filePath);
+}
+
+function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage, failMessage }) {
   if (shouldBlockBusinessRequests()) {
     return Promise.reject({
       statusCode: 0,
@@ -357,9 +478,9 @@ export async function uploadUserAvatar(filePath) {
 
   return new Promise((resolve, reject) => {
     uni.uploadFile({
-      url: getApiBaseUrl() + "/api/users/me/avatar",
+      url: getApiBaseUrl() + url,
       filePath,
-      name: "avatar",
+      name,
       header: headers,
       success(response) {
         let responseData = response.data || {};
@@ -384,16 +505,16 @@ export async function uploadUserAvatar(filePath) {
           return;
         }
 
-        const avatarUrl = responseData.data?.avatarUrl || "";
-        if (!avatarUrl) {
+        const uploadedUrl = responseData.data?.[responseField] || "";
+        if (!uploadedUrl) {
           reject({
             statusCode: response.statusCode,
-            errMsg: "missing avatarUrl"
+            errMsg: `missing ${responseField}`
           });
           return;
         }
 
-        resolve(avatarUrl);
+        resolve(uploadedUrl);
       },
       fail(error) {
         const errMsg = error?.errMsg || "upload failed";
@@ -403,8 +524,8 @@ export async function uploadUserAvatar(filePath) {
           maintenance: true,
           errMsg,
           userMessage: errMsg.includes("timeout")
-            ? "头像上传超时，请确认本地后端已启动。"
-            : "头像上传失败，请稍后重试。",
+            ? timeoutMessage
+            : failMessage,
           originalError: error
         });
       }
@@ -412,76 +533,41 @@ export async function uploadUserAvatar(filePath) {
   });
 }
 
+function fallbackUploadUserAvatar(filePath) {
+  return uploadBackendFile({
+    filePath,
+    url: "/api/users/me/avatar",
+    name: "avatar",
+    responseField: "avatarUrl",
+    timeoutMessage: "头像上传超时，请确认本地后端已启动。",
+    failMessage: "头像上传失败，请稍后重试。"
+  });
+}
+
+export async function uploadUserAvatar(filePath) {
+  return uploadCosBackedFile({
+    kind: "avatar",
+    filePath,
+    fallbackUpload: fallbackUploadUserAvatar
+  });
+}
+
+function fallbackUploadSessionReviewPhoto(filePath) {
+  return uploadBackendFile({
+    filePath,
+    url: "/api/session-reviews/photos",
+    name: "photo",
+    responseField: "photoUrl",
+    timeoutMessage: "照片上传超时，请确认本地后端已启动。",
+    failMessage: "照片上传失败，请稍后重试。"
+  });
+}
+
 export async function uploadSessionReviewPhoto(filePath) {
-  if (shouldBlockBusinessRequests()) {
-    return Promise.reject({
-      statusCode: 0,
-      maintenance: true,
-      errMsg: "backend maintenance",
-      userMessage: MAINTENANCE_USER_MESSAGE
-    });
-  }
-
-  const headers = {};
-  const token = getToken();
-  if (token) {
-    headers.Authorization = "Bearer " + token;
-  }
-
-  return new Promise((resolve, reject) => {
-    uni.uploadFile({
-      url: getApiBaseUrl() + "/api/session-reviews/photos",
-      filePath,
-      name: "photo",
-      header: headers,
-      success(response) {
-        let responseData = response.data || {};
-        if (typeof responseData === "string") {
-          try {
-            responseData = JSON.parse(responseData);
-          } catch (error) {
-            reject({
-              statusCode: response.statusCode,
-              errMsg: "invalid upload response",
-              originalError: error
-            });
-            return;
-          }
-        }
-
-        if (response.statusCode >= 400 || responseData.ok === false) {
-          reject({
-            statusCode: response.statusCode,
-            data: responseData
-          });
-          return;
-        }
-
-        const photoUrl = responseData.data?.photoUrl || "";
-        if (!photoUrl) {
-          reject({
-            statusCode: response.statusCode,
-            errMsg: "missing photoUrl"
-          });
-          return;
-        }
-
-        resolve(photoUrl);
-      },
-      fail(error) {
-        const errMsg = error?.errMsg || "upload failed";
-        markBackendMaintenance(error);
-        reject({
-          statusCode: 0,
-          maintenance: true,
-          errMsg,
-          userMessage: errMsg.includes("timeout")
-            ? "照片上传超时，请确认本地后端已启动。"
-            : "照片上传失败，请稍后重试。",
-          originalError: error
-        });
-      }
-    });
+  return uploadCosBackedFile({
+    kind: "sessionReviewPhoto",
+    filePath,
+    fallbackUpload: fallbackUploadSessionReviewPhoto
   });
 }
 

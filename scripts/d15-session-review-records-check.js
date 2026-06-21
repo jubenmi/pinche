@@ -47,7 +47,10 @@ assert(
 
 const api = read("apps/miniprogram/src/utils/api.js");
 assert(api.includes("export async function uploadSessionReviewPhoto"), "miniprogram API must upload review photos");
-assert(api.includes('name: "photo"'), "review photo upload must use photo field name");
+assert(api.includes("uploadCosBackedFile"), "review photo upload must use the shared COS-backed upload path");
+assert(api.includes('kind: "sessionReviewPhoto"'), "review photo upload must request a session review direct upload intent");
+assert(api.includes("fallbackUploadSessionReviewPhoto"), "review photo upload must keep a backend fallback for local storage");
+assert(api.includes('name: "photo"'), "review photo fallback upload must use photo field name");
 
 const pagesJson = read("apps/miniprogram/src/pages.json");
 assert(pagesJson.includes("pages/session/review"), "pages.json must register review page");

@@ -19,7 +19,14 @@
         <button class="profile-edit" @tap="openProfileEditor">编辑资料</button>
       </view>
       <view class="profile-row">
-        <image class="profile-avatar" :src="profileAvatarSrc" mode="aspectFill" />
+        <image
+          class="profile-avatar"
+          :class="profileAvatarClass"
+          :src="profileAvatarSrc"
+          mode="aspectFill"
+          :webp="true"
+          @error="handleProfileAvatarError"
+        />
         <view class="profile-copy">
           <view class="profile-name">{{ profileName }}</view>
           <view class="profile-meta">性别：{{ genderText }}</view>
@@ -64,6 +71,9 @@
         <view class="item-actions">
           <button class="mini-button" @tap="goManage(session.id)">管理</button>
           <button class="mini-button muted" @tap="goDetail(session.id)">详情</button>
+          <button class="mini-button danger-muted" @tap="hideOrganizedSession(session)">
+            删除
+          </button>
         </view>
       </view>
     </view>
@@ -90,6 +100,9 @@
             {{ signup.has_review ? "编辑记录" : "写记录" }}
           </button>
           <button class="mini-button muted" @tap="goDetail(signup.session_id)">详情</button>
+          <button class="mini-button danger-muted" @tap="hideJoinedSession(signup)">
+            删除
+          </button>
         </view>
       </view>
     </view>
@@ -103,6 +116,7 @@ import {
   AUTH_CHANGE_EVENT,
   AUTH_PROFILE_REQUEST_EVENT,
   assetUrl,
+  clearCurrentUserAvatarUrl,
   dataOf,
   clearAuth,
   ensureLoggedIn,
@@ -127,6 +141,7 @@ const isAdmin = computed(() => roles.value.includes("system_admin"));
 const rolesText = computed(() => roles.value.join(", "));
 const genderText = computed(() => userGenderLabel(gender.value));
 const profileName = computed(() => loginName(currentUser.value));
+const profileAvatarClass = computed(() => genderAvatarClass(gender.value));
 const profileAvatarSrc = computed(() => {
   if (currentUser.value?.avatarUrl) {
     return assetUrl(currentUser.value.avatarUrl);
@@ -237,6 +252,15 @@ async function openProfileEditor() {
   });
 }
 
+function handleProfileAvatarError() {
+  const avatarUrl = currentUser.value?.avatarUrl || "";
+  if (!avatarUrl) {
+    return;
+  }
+  clearCurrentUserAvatarUrl(avatarUrl);
+  hydrateAuth();
+}
+
 function currentPageRoute() {
   if (typeof getCurrentPages !== "function") {
     return "";
@@ -283,6 +307,58 @@ function goReview(id) {
   uni.navigateTo({ url: `/pages/session/review?id=${id}` });
 }
 
+function confirmPersonalDownlist(content, onConfirm) {
+  uni.showModal({
+    title: "删除记录",
+    content,
+    confirmText: "删除",
+    cancelText: "再想想",
+    success: (result) => {
+      if (result.confirm) {
+        onConfirm();
+      }
+    }
+  });
+}
+
+function hideOrganizedSession(session) {
+  confirmPersonalDownlist(
+    "只会从你的列表下架，不会取消车，也不会影响其他车友。之后可以通过车友分享链接重新链接。",
+    async () => {
+      sessionStatusText.value = "正在从我的发起下架...";
+      try {
+        await request({
+          url: `/api/sessions/${session.id}/hide`,
+          method: "PATCH"
+        });
+        await loadMySessions();
+        uni.showToast({ title: "已从列表下架", icon: "none" });
+      } catch (error) {
+        sessionStatusText.value = "删除失败，请稍后重试。";
+      }
+    }
+  );
+}
+
+function hideJoinedSession(signup) {
+  confirmPersonalDownlist(
+    "只会从你的列表下架，不会影响这台车或其他车友。之后可以通过车友分享链接重新链接。",
+    async () => {
+      signupStatusText.value = "正在从我参与下架...";
+      try {
+        await request({
+          url: `/api/signups/${signup.id}/hide`,
+          method: "PATCH"
+        });
+        await loadMySignups();
+        uni.showToast({ title: "已从列表下架", icon: "none" });
+      } catch (error) {
+        signupStatusText.value = "删除失败，请稍后重试。";
+      }
+    }
+  );
+}
+
 function statusLabel(status) {
   const labels = {
     draft: "草稿",
@@ -304,7 +380,27 @@ function signupStatusLabel(status) {
 }
 
 function loginName(user) {
-  return user?.nickname || user?.open_id || user?.openid || "已登录";
+  return profileNameWithGenderSymbol(user?.nickname, user?.gender);
+}
+
+function genderAvatarClass(value) {
+  return ["male", "female"].includes(value) ? value : "unknown";
+}
+
+function genderSymbol(value) {
+  if (value === "male") {
+    return "♂";
+  }
+  if (value === "female") {
+    return "♀";
+  }
+  return "";
+}
+
+function profileNameWithGenderSymbol(nickname, value) {
+  const name = (nickname || "").trim() || "填写昵称";
+  const symbol = genderSymbol(value);
+  return symbol ? `${symbol} ${name}` : name;
 }
 </script>
 
@@ -325,6 +421,14 @@ function loginName(user) {
 
 .section-head .section-title {
   margin-bottom: 0;
+}
+
+.profile-section {
+  --avatar-male-surface: #dcece7;
+  --avatar-female-surface: #f7dde7;
+  --avatar-male-ring: #257b67;
+  --avatar-female-ring: #d65b89;
+  --avatar-unknown-ring: rgba(196, 174, 119, 0.62);
 }
 
 .profile-edit {
@@ -353,8 +457,19 @@ function loginName(user) {
   width: 96rpx;
   height: 96rpx;
   border-radius: 50%;
-  border: 2rpx solid rgba(31, 122, 104, 0.18);
-  background: #eef7f4;
+  border: 4rpx solid var(--avatar-unknown-ring);
+  background: #eef1eb;
+  box-sizing: border-box;
+}
+
+.profile-avatar.male {
+  border-color: var(--avatar-male-ring);
+  background: var(--avatar-male-surface);
+}
+
+.profile-avatar.female {
+  border-color: var(--avatar-female-ring);
+  background: var(--avatar-female-surface);
 }
 
 .profile-copy {
@@ -475,5 +590,10 @@ function loginName(user) {
 .mini-button.muted {
   background: #eef2f7;
   color: #334155;
+}
+
+.mini-button.danger-muted {
+  background: #fff7ed;
+  color: #9f3f33;
 }
 </style>
