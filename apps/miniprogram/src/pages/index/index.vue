@@ -12,6 +12,7 @@
       <view v-if="backendStatus.lastErrorMessage" class="maintenance-meta">
         {{ backendStatus.lastErrorMessage }}
       </view>
+      <view class="build-version">{{ buildVersion }}</view>
       <button
         class="maintenance-retry"
         :class="{ disabled: backendStatus.checking }"
