@@ -66,6 +66,13 @@ assert(
     api.includes("avatarUrl: null"),
   "miniprogram API must clear stale cached avatar URLs after image load failure"
 );
+assert(
+  api.includes("function rejectUnauthorizedResponse") &&
+    api.includes("clearAuth()") &&
+    api.includes('userMessage: "登录已过期，请重新登录。"') &&
+    api.includes("rejectUnauthorizedResponse(response)"),
+  "miniprogram API must clear cached auth and surface a relogin message on 401 responses"
+);
 
 const identityBar = read("apps/miniprogram/src/components/AuthIdentityBar.vue");
 assert(identityBar.includes("draftNickname"), "profile modal must track draftNickname");
@@ -104,6 +111,12 @@ assert(
     identityBar.includes("handleAvatarLoadError") &&
     identityBar.includes("this.refreshIdentity()"),
   "identity bar must fall back and clear stale cached avatars when uploaded images fail"
+);
+assert(
+  identityBar.includes('error?.statusCode === 401') &&
+    identityBar.includes("this.finishProfileRequest(null)") &&
+    identityBar.includes('error.userMessage || "登录已过期，请重新登录。"'),
+  "profile modal must close stale auth requests and tell users to relogin after 401"
 );
 assert(identityBar.includes("user.nickname"), "identity display must prefer nickname");
 assert(

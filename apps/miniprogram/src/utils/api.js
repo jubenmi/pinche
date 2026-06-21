@@ -215,6 +215,17 @@ export function clearAuth() {
   notifyAuthChange();
 }
 
+function rejectUnauthorizedResponse(response) {
+  if (response?.statusCode !== 401) {
+    return response;
+  }
+  clearAuth();
+  return {
+    ...response,
+    userMessage: "登录已过期，请重新登录。"
+  };
+}
+
 function confirmLogin(options = {}) {
   if (options.prompt === false || typeof uni.showModal !== "function") {
     return Promise.resolve(true);
@@ -498,10 +509,10 @@ function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage,
         }
 
         if (response.statusCode >= 400 || responseData.ok === false) {
-          reject({
+          reject(rejectUnauthorizedResponse({
             statusCode: response.statusCode,
             data: responseData
-          });
+          }));
           return;
         }
 
@@ -864,7 +875,7 @@ export function request(options = {}) {
       success(response) {
         const responseData = response.data || {};
         if (response.statusCode >= 400 || responseData.ok === false) {
-          reject(response);
+          reject(rejectUnauthorizedResponse(response));
           return;
         }
         resolve(response);

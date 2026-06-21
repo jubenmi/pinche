@@ -502,6 +502,18 @@ export default {
       this.profileRequestId = "";
       this.syncProfileDrafts();
     },
+    finishProfileRequest(auth) {
+      const requestId = this.profileRequestId;
+      this.profileVisible = false;
+      this.profileRequired = false;
+      this.profileRequestId = "";
+      this.savingProfile = false;
+      this.clearAvatarChoosing();
+      this.syncProfileDrafts();
+      if (requestId && typeof uni.$emit === "function") {
+        uni.$emit(AUTH_PROFILE_RESPONSE_EVENT, { requestId, auth });
+      }
+    },
     selectGender(gender) {
       this.draftGender = gender;
     },
@@ -598,6 +610,15 @@ export default {
         }
         uni.showToast({ title: "个人信息已更新", icon: "none" });
       } catch (error) {
+        if (error?.statusCode === 401) {
+          this.finishProfileRequest(null);
+          this.refreshIdentity();
+          uni.showToast({
+            title: error.userMessage || "登录已过期，请重新登录。",
+            icon: "none"
+          });
+          return;
+        }
         uni.showToast({ title: "个人信息保存失败", icon: "none" });
       } finally {
         this.savingProfile = false;

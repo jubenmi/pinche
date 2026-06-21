@@ -2,7 +2,7 @@
   "appid": "wx2675a606d3bd242c",
   "compileType": "miniprogram",
   "libVersion": "3.13.1",
-  "miniprogramRoot": "dist/dev/mp-weixin/",
+  "miniprogramRoot": "dist/build/mp-weixin/",
   "projectname": "pinche",
   "setting": {
     "urlCheck": false,
