@@ -110,6 +110,18 @@ function normalizeError(error) {
     return error;
   }
 
+  if (error?.code === "WECHAT_CONFIG_MISSING") {
+    return new AppError(502, "WECHAT_CONFIG_MISSING", "WeChat login configuration is missing");
+  }
+
+  if (error?.code === "WECHAT_LOGIN_FAILED") {
+    return new AppError(502, "WECHAT_LOGIN_FAILED", error.message, error.details);
+  }
+
+  if (error?.code === "WECHAT_UPSTREAM_TIMEOUT") {
+    return new AppError(504, "WECHAT_UPSTREAM_TIMEOUT", "WeChat login service timed out");
+  }
+
   if (error?.code === "ER_DUP_ENTRY") {
     return new AppError(409, "CONFLICT", "Duplicate resource", error.sqlMessage);
   }

@@ -63,7 +63,7 @@ function mockOpenidFromCode(code) {
 
 function getJson(url) {
   return new Promise((resolve, reject) => {
-    https
+    const request = https
       .get(url, (response) => {
         let body = "";
         response.setEncoding("utf8");
@@ -79,6 +79,12 @@ function getJson(url) {
         });
       })
       .on("error", reject);
+    request.setTimeout(5000, () => {
+      request.destroy();
+      const error = new Error("WeChat login service timed out");
+      error.code = "WECHAT_UPSTREAM_TIMEOUT";
+      reject(error);
+    });
   });
 }
 
