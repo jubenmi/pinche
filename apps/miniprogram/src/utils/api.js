@@ -379,6 +379,37 @@ function fileExtensionFromPath(filePath) {
   return ".jpg";
 }
 
+function imageContentTypeFromPath(filePath) {
+  return fileExtensionFromPath(filePath) === ".png" ? "image/png" : "image/jpeg";
+}
+
+function readFileAsArrayBuffer(filePath) {
+  if (typeof uni === "undefined" || typeof uni.getFileSystemManager !== "function") {
+    return Promise.reject({
+      statusCode: 0,
+      errMsg: "file system unavailable",
+      userMessage: "头像读取失败，请重新选择头像。"
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    uni.getFileSystemManager().readFile({
+      filePath,
+      success(result) {
+        resolve(result.data);
+      },
+      fail(error) {
+        reject({
+          statusCode: 0,
+          errMsg: error?.errMsg || "read file failed",
+          userMessage: "头像读取失败，请重新选择头像。",
+          originalError: error
+        });
+      }
+    });
+  });
+}
+
 async function loadCosSdk() {
   if (cosSdkConstructor) {
     return cosSdkConstructor;
@@ -468,7 +499,11 @@ async function uploadCosBackedFile({ kind, filePath, fallbackUpload }) {
   if (!upload.direct) {
     return fallbackUpload(filePath);
   }
-  return uploadCosObject(upload, filePath);
+  try {
+    return await uploadCosObject(upload, filePath);
+  } catch (error) {
+    return fallbackUpload(filePath);
+  }
 }
 
 function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage, failMessage }) {
@@ -544,11 +579,85 @@ function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage,
   });
 }
 
-function fallbackUploadUserAvatar(filePath) {
-  return uploadBackendFile({
-    filePath,
+function uploadBackendBinaryFile({ bodyBytes, contentType, url, responseField, timeoutMessage, failMessage }) {
+  if (shouldBlockBusinessRequests()) {
+    return Promise.reject({
+      statusCode: 0,
+      maintenance: true,
+      errMsg: "backend maintenance",
+      userMessage: MAINTENANCE_USER_MESSAGE
+    });
+  }
+
+  const headers = {
+    "content-type": contentType
+  };
+  const token = getToken();
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+
+  return new Promise((resolve, reject) => {
+    uni.request({
+      url: getApiBaseUrl() + url,
+      method: "POST",
+      data: bodyBytes,
+      header: headers,
+      timeout: 15000,
+      success(response) {
+        let responseData = response.data || {};
+        if (typeof responseData === "string") {
+          try {
+            responseData = JSON.parse(responseData);
+          } catch (error) {
+            reject({
+              statusCode: response.statusCode,
+              errMsg: "invalid upload response",
+              originalError: error
+            });
+            return;
+          }
+        }
+
+        if (response.statusCode >= 400 || responseData.ok === false) {
+          reject(rejectUnauthorizedResponse({
+            statusCode: response.statusCode,
+            data: responseData
+          }));
+          return;
+        }
+
+        const uploadedUrl = responseData.data?.[responseField] || "";
+        if (!uploadedUrl) {
+          reject({
+            statusCode: response.statusCode,
+            errMsg: `missing ${responseField}`
+          });
+          return;
+        }
+
+        resolve(uploadedUrl);
+      },
+      fail(error) {
+        const errMsg = error?.errMsg || "request failed";
+        markBackendMaintenance(error);
+        reject({
+          statusCode: 0,
+          maintenance: true,
+          errMsg,
+          userMessage: errMsg.includes("timeout") ? timeoutMessage : failMessage,
+          originalError: error
+        });
+      }
+    });
+  });
+}
+
+async function fallbackUploadUserAvatar(filePath) {
+  return uploadBackendBinaryFile({
+    bodyBytes: await readFileAsArrayBuffer(filePath),
+    contentType: imageContentTypeFromPath(filePath),
     url: "/api/users/me/avatar",
-    name: "avatar",
     responseField: "avatarUrl",
     timeoutMessage: "头像上传超时，请确认本地后端已启动。",
     failMessage: "头像上传失败，请稍后重试。"
@@ -788,13 +897,15 @@ export async function ensureLoggedIn(options = {}) {
   const token = getToken();
   if (auth.user && token) {
     const refreshedAuth = await refreshCurrentAuth();
-    const phoneAuth = await ensureUserPhone(refreshedAuth || { ...auth, token }, options);
-    if (!phoneAuth) {
-      return null;
+    if (refreshedAuth) {
+      const phoneAuth = await ensureUserPhone(refreshedAuth, options);
+      if (!phoneAuth) {
+        return null;
+      }
+      return options.requireGender === true ? ensureUserGender(phoneAuth, options) : phoneAuth;
     }
-    return options.requireGender === true ? ensureUserGender(phoneAuth, options) : phoneAuth;
   }
-  if (auth.user && !token) {
+  if (auth.user && !getToken()) {
     clearAuth();
   }
 
