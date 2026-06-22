@@ -110,6 +110,18 @@ function normalizeError(error) {
     return error;
   }
 
+  if (error?.code === "WECHAT_CONFIG_MISSING") {
+    return new AppError(502, "WECHAT_CONFIG_MISSING", "WeChat login configuration is missing");
+  }
+
+  if (error?.code === "WECHAT_LOGIN_FAILED") {
+    return new AppError(502, "WECHAT_LOGIN_FAILED", error.message, error.details);
+  }
+
+  if (error?.code === "WECHAT_UPSTREAM_TIMEOUT") {
+    return new AppError(504, "WECHAT_UPSTREAM_TIMEOUT", "WeChat login service timed out");
+  }
+
   if (error?.code === "ER_DUP_ENTRY") {
     return new AppError(409, "CONFLICT", "Duplicate resource", error.sqlMessage);
   }
@@ -263,6 +275,27 @@ function parseMultipartAvatarUpload(contentType, body) {
     maxBytes: AVATAR_UPLOAD_MAX_BYTES,
     label: "avatar"
   });
+}
+
+function parseRawAvatarUpload(contentType, body) {
+  const normalizedContentType = String(contentType || "").split(";")[0].trim().toLowerCase();
+  if (body.length === 0) {
+    throw badRequest("avatar file is required");
+  }
+  if (body.length > AVATAR_UPLOAD_MAX_BYTES) {
+    throw badRequest("avatar file is too large");
+  }
+
+  const extension = avatarExtensionFromBytes(body) || avatarMimeTypes[normalizedContentType];
+  if (!extension) {
+    throw badRequest("avatar must be a JPEG or PNG image");
+  }
+
+  return {
+    extension,
+    file: body,
+    mimeType: extension === ".png" ? "image/png" : "image/jpeg"
+  };
 }
 
 function avatarContentType(filename) {
@@ -438,12 +471,14 @@ async function saveUploadedObject({ key, filename, file, contentType, localDir, 
 
 async function saveUploadedAvatar(request, userId) {
   const contentType = request.headers["content-type"] || "";
-  if (!contentType.includes("multipart/form-data")) {
-    throw badRequest("avatar upload must be multipart/form-data");
-  }
-
-  const body = await readRawBody(request, AVATAR_MULTIPART_MAX_BYTES);
-  const { extension, file, mimeType } = parseMultipartAvatarUpload(contentType, body);
+  const isMultipart = contentType.includes("multipart/form-data");
+  const body = await readRawBody(
+    request,
+    isMultipart ? AVATAR_MULTIPART_MAX_BYTES : AVATAR_UPLOAD_MAX_BYTES
+  );
+  const { extension, file, mimeType } = isMultipart
+    ? parseMultipartAvatarUpload(contentType, body)
+    : parseRawAvatarUpload(contentType, body);
   const avatarFilenameBase = uploadFilenameBase("user", userId);
   const originalAvatarFilename = `${avatarFilenameBase}${extension}`;
   const avatarFilename = isCosUploadStorageEnabled()

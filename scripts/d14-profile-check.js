@@ -37,6 +37,12 @@ assert(
 const server = read("apps/api/src/server.js");
 assert(server.includes("AVATAR_UPLOAD_MAX_BYTES"), "server must define avatar upload limit");
 assert(server.includes("parseMultipartAvatarUpload"), "server must parse multipart avatar upload");
+assert(server.includes("parseRawAvatarUpload"), "server must parse raw avatar image upload");
+assert(
+  server.includes("contentType.includes(\"multipart/form-data\")") &&
+    server.includes("parseRawAvatarUpload(contentType, body)"),
+  "avatar upload endpoint must accept raw JPEG/PNG bodies for miniprogram request fallback"
+);
 assert(server.includes('/api/users/me/avatar'), "server must route avatar upload");
 assert(server.includes('/uploads/avatars/'), "server must serve uploaded avatars");
 assert(
@@ -54,7 +60,13 @@ assert(api.includes("export async function uploadUserAvatar"), "miniprogram API 
 assert(api.includes("uploadCosBackedFile"), "avatar upload must use the shared COS-backed upload path");
 assert(api.includes('kind: "avatar"'), "avatar upload must request an avatar direct upload intent");
 assert(api.includes("fallbackUploadUserAvatar"), "avatar upload must keep a backend fallback for local storage");
-assert(api.includes('name: "avatar"'), "avatar fallback upload must use avatar field name");
+assert(api.includes("readFileAsArrayBuffer"), "avatar fallback must read local avatar files as bytes");
+assert(api.includes("uploadBackendBinaryFile"), "avatar fallback must support request-based binary uploads");
+assert(
+  api.includes('contentType: imageContentTypeFromPath(filePath)') &&
+    api.includes("bodyBytes: await readFileAsArrayBuffer(filePath)"),
+  "avatar fallback must use request/raw upload so experience builds do not depend on uploadFile domains"
+);
 assert(api.includes("export async function updateUserProfile"), "miniprogram API must update profile");
 assert(
   api.includes("return updateUserProfile({ gender })"),
@@ -72,6 +84,14 @@ assert(
     api.includes('userMessage: "登录已过期，请重新登录。"') &&
     api.includes("rejectUnauthorizedResponse(response)"),
   "miniprogram API must clear cached auth and surface a relogin message on 401 responses"
+);
+assert(
+  api.includes("const refreshedAuth = await refreshCurrentAuth();") &&
+    api.includes("if (refreshedAuth) {") &&
+    api.includes("ensureUserPhone(refreshedAuth, options)") &&
+    !api.includes("refreshedAuth ||") &&
+    !api.includes("if (!refreshedAuth) {\n      return null;\n    }"),
+  "ensureLoggedIn must discard stale cached auth after refresh fails and continue to a fresh login flow"
 );
 
 const identityBar = read("apps/miniprogram/src/components/AuthIdentityBar.vue");
@@ -117,6 +137,10 @@ assert(
     identityBar.includes("this.finishProfileRequest(null)") &&
     identityBar.includes('error.userMessage || "登录已过期，请重新登录。"'),
   "profile modal must close stale auth requests and tell users to relogin after 401"
+);
+assert(
+  identityBar.includes('error?.userMessage || "个人信息保存失败"'),
+  "profile modal must surface avatar upload failure messages instead of only generic profile save failures"
 );
 assert(identityBar.includes("user.nickname"), "identity display must prefer nickname");
 assert(
