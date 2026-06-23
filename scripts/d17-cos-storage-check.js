@@ -159,7 +159,7 @@ assert(miniprogramApi.includes("/api/uploads/cos-authorization"), "miniprogram A
 assert(miniprogramApi.includes(".putObject("), "miniprogram API must upload files directly to COS with putObject");
 assert(miniprogramApi.includes("PicOperations"), "avatar direct uploads must pass CI PicOperations to COS");
 const cosBackedUploadBody = miniprogramApi.match(
-  /async function uploadCosBackedFile\(\{ kind, filePath, fallbackUpload \}\) \{[\s\S]*?\n\}/
+  /async function uploadCosBackedFile\(\{ kind, filePath, fallbackUpload, intentData = \{\} \}\) \{[\s\S]*?\n\}/
 )?.[0] || "";
 assert(
   cosBackedUploadBody.includes("try {") &&
