@@ -1544,7 +1544,7 @@ export async function listMySessions(user, filters = {}) {
           session.*,
           COUNT(DISTINCT seat.id) AS seat_count,
           COUNT(DISTINCT signup.id) AS signup_count,
-          SUM(CASE WHEN signup.status = 'pending' THEN 1 ELSE 0 END) AS pending_signup_count
+          COUNT(DISTINCT CASE WHEN signup.status = 'pending' THEN signup.id END) AS pending_signup_count
         FROM sessions session
         LEFT JOIN session_seats seat ON seat.session_id = session.id
         LEFT JOIN signups signup ON signup.session_id = session.id
