@@ -275,6 +275,50 @@ function assertSessionReviewPhotoUrls(photoUrls) {
   });
 }
 
+function booleanValue(value, fallback = true) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  if (value === true || value === 1 || value === "1") {
+    return true;
+  }
+  if (value === false || value === 0 || value === "0") {
+    return false;
+  }
+  const text = String(value).trim().toLowerCase();
+  if (["true", "yes", "on"].includes(text)) {
+    return true;
+  }
+  if (["false", "no", "off"].includes(text)) {
+    return false;
+  }
+  throw badRequest("Expected boolean value");
+}
+
+function sessionAlbumPhotoUrl(sessionId, userId, value) {
+  const text = String(value || "").trim();
+  const sessionIdText = String(positiveId(sessionId, "sessionId"));
+  const userIdText = String(positiveId(userId, "userId"));
+  const pattern = new RegExp(
+    `^\\/uploads\\/session-album\\/album-${sessionIdText}-${userIdText}-\\d+-[a-f0-9]{16}\\.(?:jpg|jpeg|png)$`
+  );
+  if (!pattern.test(text)) {
+    throw badRequest("photoUrl must contain an uploaded session album photo");
+  }
+  return text;
+}
+
+function albumPrivacy(row = {}) {
+  return {
+    allow_uploaded_visible: row.allow_uploaded_visible !== undefined
+      ? Boolean(Number(row.allow_uploaded_visible))
+      : true,
+    allow_tagged_visible: row.allow_tagged_visible !== undefined
+      ? Boolean(Number(row.allow_tagged_visible))
+      : true
+  };
+}
+
 function publicText(value) {
   if (value === undefined || value === null) {
     return value;
@@ -553,6 +597,232 @@ async function currentEligibleSignup(connection, sessionId, userId) {
     [sessionId, userId]
   );
   return rows[0] || null;
+}
+
+async function requireSessionAlbumOpen(connection, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  const [rows] = await connection.query(
+    `
+      SELECT session.*
+      FROM sessions session
+      WHERE session.id = ?
+        AND ${reviewWindowSql()}
+      LIMIT 1
+    `,
+    [id]
+  );
+  if (rows[0]) {
+    return rows[0];
+  }
+
+  const session = await findById(connection, "sessions", id);
+  if (!session) {
+    throw notFound("Session not found");
+  }
+  throw forbidden("Session album opens after the session starts");
+}
+
+async function isSessionAlbumMember(connection, session, userId) {
+  const id = Number(userId);
+  if (!id) {
+    return false;
+  }
+  if (
+    Number(session.organizer_user_id) === id ||
+    Number(session.dm_user_id || 0) === id ||
+    Number(session.npc_user_id || 0) === id
+  ) {
+    return true;
+  }
+
+  const [rows] = await connection.query(
+    `
+      SELECT id
+      FROM session_seats
+      WHERE session_id = ?
+        AND confirmed_user_id = ?
+        AND status IN ('confirmed', 'locked')
+      LIMIT 1
+    `,
+    [session.id, id]
+  );
+  return rows.length > 0;
+}
+
+async function requireSessionAlbumMember(connection, session, user) {
+  if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
+    throw forbidden("Only session members can use the session album");
+  }
+}
+
+async function getAlbumPrivacy(connection, sessionId, userId) {
+  const [rows] = await connection.query(
+    `
+      SELECT *
+      FROM session_album_privacy
+      WHERE session_id = ?
+        AND user_id = ?
+      LIMIT 1
+    `,
+    [sessionId, userId]
+  );
+  return albumPrivacy(rows[0] || {});
+}
+
+async function albumPrivacyMap(connection, sessionId, userIds) {
+  const ids = [...new Set(userIds.map(Number).filter(Boolean))];
+  const privacyByUser = new Map(ids.map((id) => [id, albumPrivacy()]));
+  if (ids.length === 0) {
+    return privacyByUser;
+  }
+  const placeholders = ids.map(() => "?").join(", ");
+  const [rows] = await connection.query(
+    `
+      SELECT *
+      FROM session_album_privacy
+      WHERE session_id = ?
+        AND user_id IN (${placeholders})
+    `,
+    [sessionId, ...ids]
+  );
+  for (const row of rows) {
+    privacyByUser.set(Number(row.user_id), albumPrivacy(row));
+  }
+  return privacyByUser;
+}
+
+async function sessionAlbumPeople(connection, session) {
+  const [seatRows] = await connection.query(
+    `
+      SELECT
+        seat.id,
+        seat.name,
+        seat.role_name,
+        seat.seat_type,
+        seat.confirmed_user_id,
+        user.nickname AS user_nickname,
+        user.open_id AS user_open_id
+      FROM session_seats seat
+      LEFT JOIN users user ON user.id = seat.confirmed_user_id
+      WHERE seat.session_id = ?
+        AND seat.status IN ('confirmed', 'locked')
+        AND seat.confirmed_user_id IS NOT NULL
+      ORDER BY seat.id
+    `,
+    [session.id]
+  );
+
+  const people = seatRows.map((seat) => ({
+    key: `seat:${seat.id}`,
+    tag_type: "seat",
+    seat_id: Number(seat.id),
+    user_id: seat.confirmed_user_id ? Number(seat.confirmed_user_id) : null,
+    label: seat.role_name || seat.name || seat.user_nickname || "车友",
+    note: seat.name || seat.seat_type || "车友位"
+  }));
+
+  if (session.npc_user_id || session.npc_name_snapshot) {
+    people.push({
+      key: "npc:session",
+      tag_type: "npc",
+      seat_id: null,
+      user_id: session.npc_user_id ? Number(session.npc_user_id) : null,
+      label: session.npc_name_snapshot || "NPC",
+      note: "NPC"
+    });
+  }
+
+  return people;
+}
+
+function normalizeAlbumTagKeys(body = {}) {
+  const raw = Array.isArray(body.tagKeys)
+    ? body.tagKeys
+    : Array.isArray(body.tags)
+      ? body.tags.map((tag) => tag.key || tag.tagKey || tag.id || tag)
+      : [];
+  const seen = new Set();
+  const keys = [];
+  for (const item of raw) {
+    const key = String(item || "").trim();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    if (!/^(seat:\d+|npc:session)$/.test(key)) {
+      throw badRequest("tags contains an invalid person key");
+    }
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+function tagsByPhotoId(rows = []) {
+  const map = new Map();
+  for (const row of rows) {
+    const photoId = Number(row.photo_id);
+    const list = map.get(photoId) || [];
+    list.push({
+      id: Number(row.id),
+      key: row.tag_type === "seat" && row.seat_id
+        ? `seat:${row.seat_id}`
+        : row.tag_type === "npc"
+          ? "npc:session"
+          : `${row.tag_type}:${row.id}`,
+      tag_type: row.tag_type,
+      seat_id: row.seat_id ? Number(row.seat_id) : null,
+      user_id: row.user_id ? Number(row.user_id) : null,
+      label: row.label
+    });
+    map.set(photoId, list);
+  }
+  return map;
+}
+
+async function albumTagsForPhotos(connection, photoIds) {
+  if (photoIds.length === 0) {
+    return new Map();
+  }
+  const placeholders = photoIds.map(() => "?").join(", ");
+  const [rows] = await connection.query(
+    `
+      SELECT *
+      FROM session_album_photo_tags
+      WHERE photo_id IN (${placeholders})
+      ORDER BY photo_id, sort_order, id
+    `,
+    photoIds
+  );
+  return tagsByPhotoId(rows);
+}
+
+function isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, userId) {
+  const currentUserId = Number(userId);
+  const uploaderUserId = Number(photo.uploader_user_id);
+  if (uploaderUserId === currentUserId) {
+    return true;
+  }
+
+  const taggedUserIds = tags.map((tag) => Number(tag.user_id || 0)).filter(Boolean);
+  if (taggedUserIds.includes(currentUserId)) {
+    return true;
+  }
+  if (tags.length === 0) {
+    return false;
+  }
+
+  const uploaderPrivacy = privacyByUser.get(uploaderUserId) || albumPrivacy();
+  if (!uploaderPrivacy.allow_uploaded_visible) {
+    return false;
+  }
+
+  for (const taggedUserId of taggedUserIds) {
+    const taggedPrivacy = privacyByUser.get(taggedUserId) || albumPrivacy();
+    if (!taggedPrivacy.allow_tagged_visible) {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function markSignupReviewEligible(connection, signupId) {
@@ -1903,6 +2173,271 @@ export async function cancelSession(user, sessionId, body = {}) {
       content
     });
     return findById(connection, "sessions", sessionId);
+  });
+}
+
+export async function assertSessionAlbumUploadAllowed(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    await requireSessionAlbumMember(connection, session, user);
+    return session;
+  });
+}
+
+export async function getMySessionAlbumPrivacy(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    await requireSessionAlbumMember(connection, session, user);
+    return {
+      session_id: id,
+      user_id: user.user.id,
+      ...(await getAlbumPrivacy(connection, id, user.user.id))
+    };
+  });
+}
+
+export async function updateMySessionAlbumPrivacy(user, sessionId, body = {}) {
+  const id = positiveId(sessionId, "sessionId");
+  const allowUploadedVisible = booleanValue(
+    body.allowUploadedVisible ?? body.allow_uploaded_visible,
+    true
+  );
+  const allowTaggedVisible = booleanValue(
+    body.allowTaggedVisible ?? body.allow_tagged_visible,
+    true
+  );
+  return withTransaction(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    await requireSessionAlbumMember(connection, session, user);
+    await connection.query(
+      `
+        INSERT INTO session_album_privacy
+          (session_id, user_id, allow_uploaded_visible, allow_tagged_visible)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          allow_uploaded_visible = VALUES(allow_uploaded_visible),
+          allow_tagged_visible = VALUES(allow_tagged_visible)
+      `,
+      [
+        id,
+        user.user.id,
+        allowUploadedVisible ? 1 : 0,
+        allowTaggedVisible ? 1 : 0
+      ]
+    );
+    return {
+      session_id: id,
+      user_id: user.user.id,
+      allow_uploaded_visible: allowUploadedVisible,
+      allow_tagged_visible: allowTaggedVisible
+    };
+  });
+}
+
+export async function listSessionAlbumPeople(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    await requireSessionAlbumMember(connection, session, user);
+    return {
+      session_id: id,
+      people: await sessionAlbumPeople(connection, session)
+    };
+  });
+}
+
+export async function listSessionAlbum(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    const canUpload = await isSessionAlbumMember(connection, session, user.user.id);
+    const privacy = canUpload
+      ? await getAlbumPrivacy(connection, id, user.user.id)
+      : albumPrivacy();
+    const [photoRows] = await connection.query(
+      `
+        SELECT
+          photo.*,
+          user.nickname AS uploader_nickname,
+          user.open_id AS uploader_open_id
+        FROM session_album_photos photo
+        JOIN users user ON user.id = photo.uploader_user_id
+        WHERE photo.session_id = ?
+          AND photo.status = 'active'
+        ORDER BY photo.created_at DESC, photo.id DESC
+      `,
+      [id]
+    );
+    const photoIds = photoRows.map((photo) => Number(photo.id));
+    const tagsMap = await albumTagsForPhotos(connection, photoIds);
+    const privacyUserIds = [];
+    for (const photo of photoRows) {
+      privacyUserIds.push(photo.uploader_user_id);
+      for (const tag of tagsMap.get(Number(photo.id)) || []) {
+        if (tag.user_id) {
+          privacyUserIds.push(tag.user_id);
+        }
+      }
+    }
+    const privacyByUser = await albumPrivacyMap(connection, id, privacyUserIds);
+    const photos = [];
+    let hiddenCount = 0;
+    let untaggedCount = 0;
+    for (const photo of photoRows) {
+      const tags = tagsMap.get(Number(photo.id)) || [];
+      if (tags.length === 0) {
+        untaggedCount += 1;
+      }
+      if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, user.user.id)) {
+        hiddenCount += 1;
+        continue;
+      }
+      photos.push({
+        id: Number(photo.id),
+        session_id: Number(photo.session_id),
+        uploader_user_id: Number(photo.uploader_user_id),
+        uploader_name: photo.uploader_nickname || photo.uploader_open_id || "车友",
+        is_mine: Number(photo.uploader_user_id) === Number(user.user.id),
+        can_tag: Number(photo.uploader_user_id) === Number(user.user.id),
+        created_at: photo.created_at,
+        tags
+      });
+    }
+    return {
+      session_id: id,
+      can_upload: canUpload,
+      privacy,
+      visible_count: photos.length,
+      hidden_count: hiddenCount,
+      untagged_count: untaggedCount,
+      photos
+    };
+  });
+}
+
+export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
+  const id = positiveId(sessionId, "sessionId");
+  const photoUrl = sessionAlbumPhotoUrl(id, user.user.id, body.photoUrl || body.photo_url);
+  return withTransaction(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    await requireSessionAlbumMember(connection, session, user);
+    const [result] = await connection.query(
+      `
+        INSERT INTO session_album_photos (session_id, uploader_user_id, photo_url, status)
+        VALUES (?, ?, ?, 'active')
+      `,
+      [id, user.user.id, photoUrl]
+    );
+    const photo = await findById(connection, "session_album_photos", result.insertId);
+    return {
+      id: Number(photo.id),
+      session_id: Number(photo.session_id),
+      uploader_user_id: Number(photo.uploader_user_id),
+      is_mine: true,
+      can_tag: true,
+      created_at: photo.created_at,
+      tags: []
+    };
+  });
+}
+
+export async function updateSessionAlbumPhotoTags(user, photoId, body = {}) {
+  const id = positiveId(photoId, "photoId");
+  const tagKeys = normalizeAlbumTagKeys(body);
+  return withTransaction(async (connection) => {
+    const photo = await findById(connection, "session_album_photos", id);
+    if (!photo || photo.status !== "active") {
+      throw notFound("Album photo not found");
+    }
+    if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the photo uploader can tag this photo");
+    }
+    const session = await requireSessionAlbumOpen(connection, photo.session_id);
+    const people = await sessionAlbumPeople(connection, session);
+    const peopleByKey = new Map(people.map((person) => [person.key, person]));
+    const tags = tagKeys.map((key) => {
+      const person = peopleByKey.get(key);
+      if (!person) {
+        throw badRequest("tags contains a person outside this session");
+      }
+      return person;
+    });
+
+    await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [id]);
+    for (const [index, tag] of tags.entries()) {
+      await connection.query(
+        `
+          INSERT INTO session_album_photo_tags
+            (photo_id, tag_type, seat_id, user_id, label, sort_order)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        [
+          id,
+          tag.tag_type,
+          tag.seat_id || null,
+          tag.user_id || null,
+          tag.label,
+          index
+        ]
+      );
+    }
+
+    return {
+      id,
+      tags: tags.map((tag) => ({
+        key: tag.key,
+        tag_type: tag.tag_type,
+        seat_id: tag.seat_id,
+        user_id: tag.user_id,
+        label: tag.label
+      }))
+    };
+  });
+}
+
+export async function deleteSessionAlbumPhoto(user, photoId) {
+  const id = positiveId(photoId, "photoId");
+  return withTransaction(async (connection) => {
+    const photo = await findById(connection, "session_album_photos", id);
+    if (!photo || photo.status !== "active") {
+      throw notFound("Album photo not found");
+    }
+    if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the photo uploader can delete this photo");
+    }
+    await connection.query(
+      "UPDATE session_album_photos SET status = 'deleted' WHERE id = ?",
+      [id]
+    );
+    return { id, status: "deleted" };
+  });
+}
+
+export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
+  const id = positiveId(photoId, "photoId");
+  const currentUserId = positiveId(userId, "userId");
+  return withDatabaseConnection(async (connection) => {
+    const photo = await findById(connection, "session_album_photos", id);
+    if (!photo || photo.status !== "active") {
+      throw notFound("Album photo not found");
+    }
+    await requireSessionAlbumOpen(connection, photo.session_id);
+    const tagsMap = await albumTagsForPhotos(connection, [id]);
+    const tags = tagsMap.get(id) || [];
+    const privacyByUser = await albumPrivacyMap(
+      connection,
+      photo.session_id,
+      [
+        photo.uploader_user_id,
+        ...tags.map((tag) => tag.user_id).filter(Boolean)
+      ]
+    );
+    if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, currentUserId)) {
+      throw forbidden("Album photo is not visible");
+    }
+    return photo;
   });
 }
 

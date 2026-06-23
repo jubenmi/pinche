@@ -61,6 +61,18 @@
       }
     },
     {
+      "path": "pages/session/album",
+      "style": {
+        "navigationBarTitleText": "车局相册"
+      }
+    },
+    {
+      "path": "pages/session/albumPrivacy",
+      "style": {
+        "navigationBarTitleText": "相册隐私"
+      }
+    },
+    {
       "path": "pages/session/manage",
       "style": {
         "navigationBarTitleText": "车头管理"

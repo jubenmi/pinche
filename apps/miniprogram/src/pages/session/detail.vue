@@ -11,6 +11,7 @@
         <button class="button" @click="goShare">选择角色</button>
         <button class="button secondary" open-type="share">分享</button>
         <button class="button secondary" @click="goManage">车头管理</button>
+        <button class="button secondary" @click="goAlbum">{{ albumButtonText }}</button>
       </view>
     </view>
 
@@ -155,6 +156,9 @@ export default {
     },
     authTools() {
       return { dataOf, ensureLoggedIn, request };
+    },
+    albumButtonText() {
+      return this.isAlbumOpen() ? "车局相册" : "相册·发车后";
     }
   },
   async onLoad(options) {
@@ -347,6 +351,25 @@ export default {
       const id = this.sessionId || "d1-demo";
       uni.navigateTo({ url: `/pages/session/review?id=${id}` });
     },
+    async goAlbum() {
+      const auth = await this.ensureProtectedActionLogin();
+      if (!auth) {
+        return;
+      }
+      if (!this.isAlbumOpen()) {
+        uni.showToast({ title: "相册会在发车后开放", icon: "none" });
+        return;
+      }
+      const id = this.sessionId || "d1-demo";
+      uni.navigateTo({ url: `/pages/session/album?id=${id}` });
+    },
+    isAlbumOpen() {
+      if (!this.session.start_at) {
+        return false;
+      }
+      const startAt = Date.parse(String(this.session.start_at).replace(" ", "T"));
+      return Number.isFinite(startAt) && startAt <= Date.now();
+    },
     starText(rating) {
       const value = Math.max(0, Math.min(5, Number(rating || 0)));
       return "★★★★★".slice(0, value) + "☆☆☆☆☆".slice(0, 5 - value);
@@ -419,6 +442,14 @@ export default {
 
 .section-head .section-title {
   margin-bottom: 0;
+}
+
+.actions {
+  flex-wrap: wrap;
+}
+
+.actions .button {
+  flex: 1 1 42%;
 }
 
 .notice,
