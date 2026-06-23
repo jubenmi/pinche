@@ -79,6 +79,19 @@ export function assetUrl(path) {
   return path;
 }
 
+export function apiUrl(path) {
+  if (!path) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  if (path.startsWith("/")) {
+    return getApiBaseUrl() + path;
+  }
+  return path;
+}
+
 export function getBackendStatus() {
   return copyBackendStatus();
 }
@@ -454,13 +467,14 @@ async function getCosClient() {
   return cosClient;
 }
 
-async function requestCosUploadIntent(kind, filePath) {
+async function requestCosUploadIntent(kind, filePath, data = {}) {
   const response = await request({
     url: "/api/uploads/cos-intent",
     method: "POST",
     data: {
       kind,
-      extension: fileExtensionFromPath(filePath)
+      extension: fileExtensionFromPath(filePath),
+      ...data
     }
   });
   return dataOf(response)?.upload || { direct: false };
@@ -494,8 +508,8 @@ async function uploadCosObject(upload, filePath) {
   });
 }
 
-async function uploadCosBackedFile({ kind, filePath, fallbackUpload }) {
-  const upload = await requestCosUploadIntent(kind, filePath);
+async function uploadCosBackedFile({ kind, filePath, fallbackUpload, intentData = {} }) {
+  const upload = await requestCosUploadIntent(kind, filePath, intentData);
   if (!upload.direct) {
     return fallbackUpload(filePath);
   }
@@ -688,6 +702,26 @@ export async function uploadSessionReviewPhoto(filePath) {
     kind: "sessionReviewPhoto",
     filePath,
     fallbackUpload: fallbackUploadSessionReviewPhoto
+  });
+}
+
+function fallbackUploadSessionAlbumPhoto(sessionId, filePath) {
+  return uploadBackendFile({
+    filePath,
+    url: `/api/sessions/${sessionId}/album/uploads`,
+    name: "photo",
+    responseField: "photoUrl",
+    timeoutMessage: "相册照片上传超时，请确认本地后端已启动。",
+    failMessage: "相册照片上传失败，请稍后重试。"
+  });
+}
+
+export async function uploadSessionAlbumPhoto(sessionId, filePath) {
+  return uploadCosBackedFile({
+    kind: "sessionAlbumPhoto",
+    filePath,
+    intentData: { sessionId },
+    fallbackUpload: (path) => fallbackUploadSessionAlbumPhoto(sessionId, path)
   });
 }
 

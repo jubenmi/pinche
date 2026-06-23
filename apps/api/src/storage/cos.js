@@ -56,7 +56,7 @@ export function cosObjectKeyFromUploadPath(uploadPath, expectedPrefix) {
 
 export function cosUploadPathForKey(key) {
   const keyText = String(key || "");
-  if (!/^uploads\/(avatars|session-reviews)\/[A-Za-z0-9._-]+$/.test(keyText)) {
+  if (!/^uploads\/(avatars|session-reviews|session-album)\/[A-Za-z0-9._-]+$/.test(keyText)) {
     throw new Error("invalid COS object key");
   }
   return `/${keyText}`;
