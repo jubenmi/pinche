@@ -1,32 +1,40 @@
-source visual truth path: /Users/dirui/Downloads/ig_028c7a9fd4ed3a60016a2bc0e4979c8191b89585dad4a52f4c.png
-implementation screenshot path: blocked
-viewport: attempted 390 x 844 mobile browser viewport
-state: first creation flow pages, entry through share ticket
-full-view comparison evidence: source visual opened and inspected; H5 implementation preview could not render.
-focused region comparison evidence: blocked because H5 implementation preview could not render.
+**Source Visual Truth**
+- `/Users/dirui/.codex/generated_images/019eefd2-0ab9-7c02-9e4e-e83365c89bb9/ig_013022e0b01fc2c2016a394d68a93881918686bf220eea7fd8.png`
+
+**Implementation Evidence**
+- DevTools project: `/Users/dirui/Documents/pinche/apps/miniprogram/dist/dev/mp-weixin`
+- Simulator: WeChat DevTools iPhone 12/13, page `pages/mine/index`
+- API base in dev build: `http://192.168.1.9:3018`
+- Authenticated state verified with `dev-admin-openid`: top summary shows `2 场车局`, `我发起 1`, `我参与 1`, and roles `organizer / player / system_admin`.
+- Calendar content verified in DevTools: `6/22` contains one `发起` row with `1个待审`; `6/23` contains one `参与` row with `已上车`.
+- Drag loading verified: swiping the vertical calendar extended the visible date window from `6/22-6/28` through `7/5`.
+- Filter verified: selecting `待处理 1` keeps the pending organized row and hides the joined row.
+- Local API verified: `/api/auth/wechat/login` returns mocked dev auth for user `1`; `/api/users/me/sessions?limit=50` returns one organized session; `/api/users/me/signups` returns one joined signup.
 
 **Findings**
-- [P2] Browser screenshot QA is blocked by H5 dependency resolution
-  Location: local H5 preview at http://localhost:5173/.
-  Evidence: Browser console reports that Vue runtime imports `getEscapedCssVarName` from `@vue/shared`, but that export is not available in the resolved package. The `mp-weixin` build succeeds.
-  Impact: I cannot produce a side-by-side browser screenshot comparison for pixel-level QA in this environment.
-  Fix: If H5 visual preview becomes required, align the UniApp H5/Vue dependency resolution separately. The requested WeChat mini program target still compiles.
+- No actionable P0/P1/P2 issues found in build output, API syntax checks, miniprogram checks, or DevTools runtime validation.
+- The earlier `POST https://api.pinche.jubenmi.com/api/auth/wechat/login 502` came from opening the production build/project. Opening the dev dist project uses the local API and logs in successfully.
 
-**Open Questions**
-- None for the requested visual direction. The implementation uses the provided PNG as the source for watercolor backgrounds, bamboo decoration, and icon assets.
+**Required Fidelity Surfaces**
+- Fonts and typography: keeps the existing Mini Program typography stack and `PincheBrand` display font for the page title and counters, matching the selected journal-calendar direction.
+- Spacing and layout rhythm: implements the stacked journal flow: profile/summary hero, segmented filters, left timeline rail, grouped day bands, compact row actions, and top/bottom load affordances.
+- Colors and visual tokens: stays on the existing warm paper, deep green, muted blue-gray, amber, and soft beige border system.
+- Image quality and asset fidelity: uses existing project assets (`bamboo-corner.png`, `ink-home-landscape.jpg`, `pin.png`, `chevron.png`) rather than placeholder drawings.
+- Copy and content: UI text reflects the selected Chinese calendar direction: `我的拼车日程`, `全部/发起/参与/待处理`, `拖到顶部加载更早日期`, and `继续拖动加载更多日期`.
 
-**Implementation Checklist**
-- Add real watercolor/static visual assets from the source design.
-- Update the global page surface, typography, borders, and green button treatment.
-- Add icons to entry, store list, script list, role selection, share ticket, and share action.
-- Rework the share ticket with bamboo corner art, mountain background, row icons, note, role, time, and store details.
-- Keep the existing product constraints: one entry choice stack, step-by-step creation, one WeChat share button, and no extra copy/timeline/share actions.
-- Run `npm run check`.
-- Run `npm run build:mp-weixin`.
+**Patches Made**
+- Replaced separate `我发起` / `我参与` lists with one combined vertical calendar data model.
+- Added filters, dynamic date-window expansion, collapsible day bands, and per-row actions.
+- Preserved manage/detail/review/delete behavior in the new session rows.
+- Changed development WeChat login to prefer the page-provided `devCode`, so DevTools can reliably use `dev-admin-openid`.
+- Fixed `pending_signup_count` for `listMySessions` to avoid over-counting pending signups when session seats are joined.
 
-**Follow-up Polish**
-- P3: replace cropped source icons with a dedicated licensed icon set if the project later adds one.
-- P3: add real poster export/canvas only if saving a poster becomes part of the product scope.
+**Validation Commands**
+- `npm --workspace apps/api run check`
+- `npm run check`
+- `node scripts/check-miniprogram.js`
+- `npm --workspace apps/miniprogram run build:mp-weixin`
+- `curl -sS http://127.0.0.1:3018/health`
+- `curl -sS http://192.168.1.9:3018/health`
 
-patches made since previous QA pass: added visual assets, rebuilt the page surfaces and first creation flow styling, updated share ticket layout, kept single share action.
-final result: blocked
+final result: passed

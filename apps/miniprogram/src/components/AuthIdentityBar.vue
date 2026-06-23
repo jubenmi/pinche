@@ -12,7 +12,9 @@
       </view>
       <view class="auth-main">
         <text class="auth-state">{{ user ? "已登录" : "未登录" }}</text>
-        <text class="auth-name">{{ displayName }}</text>
+        <view class="auth-name">
+          <text class="auth-name-text">{{ displayName }}</text>
+        </view>
       </view>
       <view v-if="rolesText" class="auth-roles">{{ rolesText }}</view>
     </view>
@@ -195,9 +197,13 @@ function genderSymbol(gender) {
   return "";
 }
 
-function profileNameWithGenderSymbol(nickname, gender) {
-  const name = (nickname || "").trim() || "填写昵称";
-  const symbol = genderSymbol(gender);
+function profileDisplayName(nickname) {
+  return (nickname || "").trim() || "填写昵称";
+}
+
+function profileNameWithGenderSymbol(nickname, value) {
+  const name = profileDisplayName(nickname);
+  const symbol = genderSymbol(value);
   return symbol ? `${symbol} ${name}` : name;
 }
 
@@ -239,6 +245,9 @@ export default {
         return "等待微信登录";
       }
       return profileNameWithGenderSymbol(this.user.nickname, this.user.gender);
+    },
+    barGenderSymbol() {
+      return genderSymbol(this.user?.gender);
     },
     profileGenderSymbol() {
       return genderSymbol(this.draftGender || this.user?.gender);
@@ -321,7 +330,6 @@ export default {
   created() {
     this.ownerRoute = currentPageRoute();
     this.refreshIdentity();
-    this.refreshIdentityFromServer();
     if (typeof uni.$on === "function") {
       uni.$on(AUTH_CHANGE_EVENT, this.refreshIdentity);
       uni.$on(AUTH_PHONE_REQUEST_EVENT, this.handlePhoneRequest);
@@ -377,7 +385,13 @@ export default {
         this.refreshIdentity();
         return;
       }
-      await refreshCurrentAuth();
+      try {
+        await refreshCurrentAuth();
+      } catch (error) {
+        if (error?.statusCode === 401) {
+          clearAuth();
+        }
+      }
       this.refreshIdentity();
     },
     handlePhoneRequest(payload = {}) {
@@ -729,10 +743,34 @@ export default {
 }
 
 .auth-name {
+  display: flex;
+  align-items: center;
+  gap: 6rpx;
   overflow: hidden;
   min-width: 0;
+  height: 32rpx;
+}
+
+.auth-gender-symbol {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 22rpx;
+  height: 32rpx;
+  color: inherit;
   font-size: 22rpx;
-  line-height: 1.35;
+  font-weight: 600;
+  line-height: 32rpx;
+  transform: translateY(-1rpx);
+}
+
+.auth-name-text {
+  overflow: hidden;
+  min-width: 0;
+  color: inherit;
+  font-size: 22rpx;
+  line-height: 32rpx;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -899,11 +937,17 @@ export default {
 }
 
 .profile-gender-symbol {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 28rpx;
+  height: 42rpx;
   color: #183d34;
   font-size: 26rpx;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 42rpx;
+  transform: translateY(-1rpx);
 }
 
 .profile-nickname-input {

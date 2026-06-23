@@ -5,7 +5,6 @@ import uniPlugin from "@dcloudio/vite-plugin-uni";
 
 const uni = typeof uniPlugin === "function" ? uniPlugin : uniPlugin.default;
 const buildTime = formatBuildTime();
-const componentLazyCodeLoading = "requiredComponents";
 
 function formatBuildTime(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
@@ -20,37 +19,8 @@ export default defineConfig({
   define: {
     __PINCHE_BUILD_TIME__: JSON.stringify(buildTime)
   },
-  plugins: [uni(), miniprogramQualityJsonPlugin(), stripDcloudPreloadAssetPlugin()]
+  plugins: [uni(), stripDcloudPreloadAssetPlugin()]
 });
-
-function miniprogramQualityJsonPlugin() {
-  return {
-    name: "pinche:miniprogram-quality-json",
-    generateBundle(_outputOptions, bundle) {
-      const appJsonAsset = bundle["app.json"];
-      if (!appJsonAsset || appJsonAsset.type !== "asset") {
-        return;
-      }
-      appJsonAsset.source = withComponentLazyCodeLoading(appJsonAsset.source);
-    },
-    writeBundle(outputOptions) {
-      if (!outputOptions.dir) {
-        return;
-      }
-      const appJsonPath = path.join(outputOptions.dir, "app.json");
-      if (!fs.existsSync(appJsonPath)) {
-        return;
-      }
-      fs.writeFileSync(appJsonPath, withComponentLazyCodeLoading(fs.readFileSync(appJsonPath, "utf8")));
-    }
-  };
-}
-
-function withComponentLazyCodeLoading(source) {
-  const appJson = JSON.parse(Buffer.isBuffer(source) ? source.toString("utf8") : source);
-  appJson.lazyCodeLoading = componentLazyCodeLoading;
-  return `${JSON.stringify(appJson, null, 2)}\n`;
-}
 
 function stripDcloudPreloadAssetPlugin() {
   return {

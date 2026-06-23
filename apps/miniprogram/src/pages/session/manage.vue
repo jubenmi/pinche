@@ -18,6 +18,11 @@
       <view class="info-row">时间：{{ session.start_at }}</view>
       <view class="info-row">状态：{{ sessionStatusLabel(session.status) }}</view>
       <view class="info-row">座位：{{ seatSummary }}</view>
+      <view class="actions compact">
+        <button class="mini-button muted" :disabled="busyAction" @click="leaveOrganizer">
+          退出车头
+        </button>
+      </view>
     </view>
 
     <ManagePinnedMessage
@@ -41,6 +46,14 @@
         <view class="info-row">角色：{{ seat.role_name || "未标注" }}</view>
         <view class="info-row">类型：{{ seatTypeLabel(seat.seat_type) }}</view>
         <view v-if="canKickSeat(seat)" class="actions compact">
+          <button
+            v-if="canTransferOrganizerToSeat(seat)"
+            class="mini-button"
+            :disabled="busyAction"
+            @click="transferOrganizerToSeat(seat)"
+          >
+            转让车头
+          </button>
           <button class="mini-button muted" :disabled="busyAction" @click="kickSeat(seat)">
             踢出/释放
           </button>
@@ -225,6 +238,33 @@ export default {
         });
       });
     },
+    async transferOrganizerToSeat(seat) {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
+      this.confirmAction(`确认把车头转让给「${seat.name}」吗？`, async () => {
+        await this.runOrganizerTransition("车头已转让。", {
+          url: `/api/sessions/${this.sessionId}/organizer/transfer`,
+          method: "PATCH",
+          data: {
+            targetUserId: seat.confirmed_user_id
+          }
+        });
+      });
+    },
+    async leaveOrganizer() {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
+      this.confirmAction("确认退出车头吗？系统会交给下一位已上车成员。", async () => {
+        await this.runOrganizerTransition("已退出车头。", {
+          url: `/api/sessions/${this.sessionId}/organizer/leave`,
+          method: "PATCH"
+        });
+      });
+    },
     async cancelSession() {
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
@@ -268,12 +308,29 @@ export default {
         this.busyAction = false;
       }
     },
+    async runOrganizerTransition(successText, options) {
+      if (this.busyAction) {
+        return;
+      }
+      this.busyAction = true;
+      try {
+        await request(options);
+        this.statusText = successText;
+        uni.showToast({ title: successText, icon: "none" });
+        const id = this.sessionId || "d1-demo";
+        uni.redirectTo({ url: `/pages/session/detail?id=${id}` });
+      } catch (error) {
+        this.statusText = this.actionErrorText(error);
+      } finally {
+        this.busyAction = false;
+      }
+    },
     actionErrorText(error) {
       if (error?.statusCode === 403) {
         return "只有车头可以执行这个操作。";
       }
       if (error?.statusCode === 409) {
-        return "座位状态已变化，请刷新后再试。";
+        return "暂无可接任的车友，请先确认有人已上车。";
       }
       return "操作失败，请稍后重试。";
     },
@@ -295,7 +352,13 @@ export default {
       return this.seatById(seatId)?.status || "";
     },
     canKickSeat(seat) {
-      return ["applied", "confirmed", "locked"].includes(seat.status);
+      return Boolean(seat?.id);
+    },
+    canTransferOrganizerToSeat(seat) {
+      return (
+        seat?.confirmed_user_id &&
+        Number(seat.confirmed_user_id) !== Number(this.session.organizer_user_id)
+      );
     },
     sessionStatusLabel(status) {
       const labels = {

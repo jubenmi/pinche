@@ -66,6 +66,23 @@ export function getApiBaseUrl() {
   return app.globalData.apiBaseUrl;
 }
 
+function isLocalApiBaseUrl() {
+  const value = getApiBaseUrl();
+  try {
+    const { hostname } = new URL(value);
+    return (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "0.0.0.0" ||
+      hostname.startsWith("192.168.") ||
+      hostname.startsWith("10.") ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
 export function assetUrl(path) {
   if (!path) {
     return "";
@@ -905,11 +922,18 @@ export function loginWithWechat(options = {}) {
     uni.login({
       provider: "weixin",
       success(loginResult) {
+        const code = resolveWechatLoginCode(loginResult, options);
+        if (!code) {
+          const error = new Error("WeChat login code is missing");
+          error.userMessage = "微信登录凭证获取失败，请重试";
+          reject(error);
+          return;
+        }
         request({
           url: "/api/auth/wechat/login",
           method: "POST",
           data: {
-            code: loginResult.code || options.devCode || "dev-player-openid"
+            code
           }
         })
           .then((response) => {
@@ -924,6 +948,16 @@ export function loginWithWechat(options = {}) {
       fail: reject
     });
   });
+}
+
+function resolveWechatLoginCode(loginResult, options = {}) {
+  if (import.meta.env.DEV && options.devCode && isLocalApiBaseUrl()) {
+    return options.devCode;
+  }
+  if (loginResult.code) {
+    return loginResult.code;
+  }
+  return isLocalApiBaseUrl() ? options.devCode || "dev-player-openid" : "";
 }
 
 export async function ensureLoggedIn(options = {}) {
@@ -966,7 +1000,7 @@ export async function ensureLoggedIn(options = {}) {
   } catch (error) {
     if (options.showToast !== false) {
       uni.showToast({
-        title: options.failTitle || "登录失败",
+        title: error?.userMessage || options.failTitle || "登录失败",
         icon: "none"
       });
     }
@@ -1020,7 +1054,12 @@ export function request(options = {}) {
       success(response) {
         const responseData = response.data || {};
         if (response.statusCode >= 400 || responseData.ok === false) {
-          reject(rejectUnauthorizedResponse(response));
+          reject(
+            rejectUnauthorizedResponse({
+              ...response,
+              userMessage: responseData.error?.message || responseData.message || "请求失败"
+            })
+          );
           return;
         }
         resolve(response);
