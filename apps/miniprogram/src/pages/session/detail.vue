@@ -384,9 +384,13 @@ export default {
       return this.focusedSeatId && Number(seat.id) === Number(this.focusedSeatId);
     },
     canApplySeat(seat) {
+      if (this.session.status === "recruiting") {
+        return ["open", "applied"].includes(seat.status);
+      }
       return (
-        this.session.status === "recruiting" &&
-        ["open", "applied"].includes(seat.status)
+        this.session.status === "locked" &&
+        this.isAlbumOpen() &&
+        seat.status === "open"
       );
     },
     statusLabel(status) {

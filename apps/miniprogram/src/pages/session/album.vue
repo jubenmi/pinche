@@ -82,7 +82,7 @@
         </view>
 
         <view class="people-group">
-          <view class="group-title">车友位</view>
+          <view class="group-title">车友</view>
           <view class="people-grid">
             <button
               v-for="person in seatPeople"
@@ -98,7 +98,7 @@
         </view>
 
         <view v-if="npcPeople.length" class="people-group">
-          <view class="group-title">NPC</view>
+          <view class="group-title">DM / NPC</view>
           <view class="people-grid">
             <button
               v-for="person in npcPeople"
@@ -182,7 +182,7 @@ export default {
       return this.people.filter((person) => person.tag_type === "seat");
     },
     npcPeople() {
-      return this.people.filter((person) => person.tag_type === "npc");
+      return this.people.filter((person) => ["dm", "npc"].includes(person.tag_type));
     },
     selectedPeople() {
       return this.people.filter((person) => this.selectedTagKeys.includes(person.key));
@@ -229,12 +229,67 @@ export default {
       }
     },
     async loadPeople() {
+      let people = [];
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album/people` });
-        this.people = dataOf(response)?.people || [];
+        people = dataOf(response)?.people || [];
       } catch (error) {
-        this.people = [];
+        people = [];
       }
+      this.people = this.mergePeople([...people, ...(await this.loadSessionPeopleFallback())]);
+    },
+    async loadSessionPeopleFallback() {
+      try {
+        const response = await request({ url: `/api/sessions/${this.sessionId}` });
+        return this.sessionDetailPeople(dataOf(response) || {});
+      } catch (error) {
+        return [];
+      }
+    },
+    sessionDetailPeople(session) {
+      const people = [];
+      for (const seat of session.seats || []) {
+        people.push({
+          key: `seat:${seat.id}`,
+          tag_type: "seat",
+          seat_id: seat.id,
+          user_id: seat.confirmed_user_id || null,
+          label: seat.role_name || seat.name || "车友",
+          note: [seat.name, seat.role_name].filter(Boolean).join(" · ") || "车友"
+        });
+      }
+
+      if (session.dm_user_id || session.dm_name_snapshot) {
+        people.push({
+          key: "dm:session",
+          tag_type: "dm",
+          seat_id: null,
+          user_id: session.dm_user_id || null,
+          label: session.dm_name_snapshot || "DM",
+          note: "DM"
+        });
+      }
+      if (session.npc_user_id || session.npc_name_snapshot) {
+        people.push({
+          key: "npc:session",
+          tag_type: "npc",
+          seat_id: null,
+          user_id: session.npc_user_id || null,
+          label: session.npc_name_snapshot || "NPC",
+          note: "NPC"
+        });
+      }
+
+      return people;
+    },
+    mergePeople(people) {
+      const peopleByKey = new Map();
+      for (const person of people) {
+        if (person?.key && !peopleByKey.has(person.key)) {
+          peopleByKey.set(person.key, person);
+        }
+      }
+      return [...peopleByKey.values()];
     },
     tagSummary(photo) {
       if (!photo.tags || photo.tags.length === 0) {

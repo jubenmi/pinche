@@ -51,6 +51,7 @@ import {
   hideMyOrganizedSession,
   hideMySignup,
   kickSessionSeat,
+  leaveSessionOrganizer,
   listAdminScripts,
   listAdminStores,
   listActiveScripts,
@@ -69,6 +70,7 @@ import {
   relinkMySessionMembership,
   replaceStoreScripts,
   reviewCatalogRequest,
+  transferSessionOrganizer,
   updateDeposit,
   updateScript,
   updateSeat,
@@ -1158,6 +1160,32 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await relinkMySessionMembership(user, relinkSessionId)
+    });
+    return;
+  }
+
+  const transferOrganizerSessionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/organizer\/transfer$/
+  );
+  if (request.method === "PATCH" && transferOrganizerSessionId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await transferSessionOrganizer(user, transferOrganizerSessionId, body)
+    });
+    return;
+  }
+
+  const leaveOrganizerSessionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/organizer\/leave$/
+  );
+  if (request.method === "PATCH" && leaveOrganizerSessionId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await leaveSessionOrganizer(user, leaveOrganizerSessionId)
     });
     return;
   }

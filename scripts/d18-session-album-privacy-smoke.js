@@ -196,6 +196,21 @@ async function main() {
   const seatA = await approveSeat(session.id, seats[0].id, playerA, owner);
   await approveSeat(session.id, seats[1].id, playerB, owner);
 
+  const people = await request(
+    "GET",
+    `/api/sessions/${session.id}/album/people`,
+    undefined,
+    owner.token
+  );
+  const peopleKeys = (people.data.people || []).map((person) => person.key);
+  for (const expectedKey of [
+    ...seats.map((seat) => `seat:${seat.id}`),
+    "dm:session",
+    "npc:session"
+  ]) {
+    assert(peopleKeys.includes(expectedKey), `album people should include ${expectedKey}`);
+  }
+
   await request(
     "POST",
     `/api/sessions/${session.id}/album/photos`,
@@ -223,12 +238,22 @@ async function main() {
   );
   assert(!hasPhoto(playerInitialAlbum, photoId), "untagged photo should be hidden from non-uploader");
 
-  await request(
+  const tagged = await request(
     "PUT",
     `/api/session-album/photos/${photoId}/tags`,
-    { tagKeys: [`seat:${seatA.id}`] },
+    {
+      tagKeys: [
+        `seat:${seatA.id}`,
+        "dm:session",
+        "npc:session"
+      ]
+    },
     owner.token
   );
+  const taggedKeys = (tagged.data.tags || []).map((tag) => tag.key);
+  for (const expectedKey of ["dm:session", "npc:session"]) {
+    assert(taggedKeys.includes(expectedKey), `album tags should save ${expectedKey}`);
+  }
 
   const playerTaggedAlbum = await request(
     "GET",

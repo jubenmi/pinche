@@ -108,7 +108,7 @@ async function createSeat(sessionId, seat, token) {
   return payload.data;
 }
 
-async function createPublishedSession(admin, owner) {
+async function createPublishedSession(admin, owner, hoursFromNow = 36) {
   const store = await request(
     "POST",
     "/api/admin/stores",
@@ -142,7 +142,7 @@ async function createPublishedSession(admin, owner) {
     {
       storeId: store.data.id,
       scriptId: script.data.id,
-      startAt: startAt(),
+      startAt: startAt(hoursFromNow),
       dmNameSnapshot: `D6指定DM-${suffix}`,
       npcNameSnapshot: `D6指定NPC-${suffix}`,
       depositAmount: 5000,
@@ -174,8 +174,10 @@ async function main() {
   const playerA = await login(`dev-d6-player-a-${suffix}`);
   const playerB = await login(`dev-d6-player-b-${suffix}`);
   const playerC = await login(`dev-d6-player-c-${suffix}`);
+  const playerD = await login(`dev-d6-player-d-${suffix}`);
   await authorizePhone(owner, "d6-owner-phone");
   await authorizePhone(playerA, "d6-player-a-phone");
+  await authorizePhone(playerD, "d6-player-d-phone");
 
   const { session, seats } = await createPublishedSession(admin, owner);
   const targetSeat = seats.find((seat) => seat.name === "F4-1");
@@ -401,6 +403,83 @@ async function main() {
   const finalDetail = await request("GET", `/api/sessions/${session.id}`);
   const lockedSeat = finalDetail.data.seats.find((seat) => seat.id === targetSeat.id);
   assert(lockedSeat.status === "locked", "final seat status should be locked");
+
+  const transferredSession = await request(
+    "PATCH",
+    `/api/sessions/${session.id}/organizer/transfer`,
+    { targetUserId: playerA.user.id },
+    owner.token
+  );
+  assert(
+    Number(transferredSession.data.organizer_user_id) === Number(playerA.user.id),
+    "session organizer should transfer to an onboard player"
+  );
+  await request(
+    "GET",
+    `/api/sessions/${session.id}/signups`,
+    undefined,
+    owner.token,
+    403
+  );
+  await request("GET", `/api/sessions/${session.id}/signups`, undefined, playerA.token);
+
+  await request(
+    "PATCH",
+    `/api/sessions/${session.id}/cancel`,
+    { reason: "D6 cancel before kick check" },
+    playerA.token
+  );
+  const kickedCancelledSeat = await request(
+    "PATCH",
+    `/api/session-seats/${targetSeat.id}/kick`,
+    { reason: "cancelled session cleanup" },
+    playerA.token
+  );
+  assert(
+    kickedCancelledSeat.data.status === "cancelled",
+    "kicking after cancellation should not reopen the cancelled seat"
+  );
+  assert(
+    !kickedCancelledSeat.data.confirmed_user_id,
+    "kicking after cancellation should clear the confirmed user"
+  );
+
+  const { session: startedSession, seats: startedSeats } = await createPublishedSession(
+    admin,
+    owner,
+    -1
+  );
+  await request(
+    "PATCH",
+    `/api/sessions/${startedSession.id}`,
+    { status: "locked" },
+    owner.token
+  );
+  const startedOpenSeat = startedSeats.find((seat) => seat.name === "F4-4");
+  const claimedStartedSeat = await request(
+    "POST",
+    `/api/session-seats/${startedOpenSeat.id}/claim`,
+    { note: "after start empty seat claim" },
+    playerD.token
+  );
+  assert(
+    claimedStartedSeat.data.status === "confirmed",
+    "empty seat should be claimable after session start"
+  );
+  assert(
+    Number(claimedStartedSeat.data.confirmed_user_id) === Number(playerD.user.id),
+    "post-start empty seat claim should assign the player"
+  );
+  const autoTransferredSession = await request(
+    "PATCH",
+    `/api/sessions/${startedSession.id}/organizer/leave`,
+    {},
+    owner.token
+  );
+  assert(
+    Number(autoTransferredSession.data.organizer_user_id) === Number(playerD.user.id),
+    "leaving organizer should assign the next onboard member"
+  );
 
   console.log(
     JSON.stringify(

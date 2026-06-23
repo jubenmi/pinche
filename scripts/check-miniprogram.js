@@ -15,7 +15,11 @@ const miniprogramDevRoot = path.join(miniprogramRoot, "dist/dev/mp-weixin");
 const miniprogramBuildRoot = path.join(miniprogramRoot, "dist/build/mp-weixin");
 const codexHooksPath = path.join(root, ".codex/hooks.json");
 const devtoolsHookPath = path.join(root, "scripts/devtools-refresh-hook.js");
-const developmentApiBaseUrl = "http://127.0.0.1:3018";
+const developmentApiBaseUrlExamples = [
+  "http://127.0.0.1:3018",
+  "http://localhost:3018",
+  "http://192.168.x.x:3018"
+];
 const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
 const mainPackageLimitBytes = Math.floor(1.5 * 1024 * 1024);
 const localMediaLimitBytes = 200 * 1024;
@@ -133,6 +137,15 @@ function assertMinifiedEnabled(file, setting) {
   }
 }
 
+function isDevelopmentApiBaseUrl(value) {
+  if (value === "http://127.0.0.1:3018" || value === "http://localhost:3018") {
+    return true;
+  }
+  return /^http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}):3018$/.test(
+    value || ""
+  );
+}
+
 function assertMediaAssetsUnderLimit(rootDir, label, { skipDist = false } = {}) {
   if (!fs.existsSync(rootDir)) {
     return;
@@ -244,8 +257,8 @@ if (!fs.existsSync(pagesJsonPath)) {
   const pagesJson = readJson(pagesJsonPath);
   const pages = pagesJson.pages || [];
 
-  if (pagesJson.lazyCodeLoading !== "requiredComponents") {
-    fail('pages.json must enable lazyCodeLoading: "requiredComponents" for component lazy injection');
+  if (pagesJson.lazyCodeLoading === "requiredComponents") {
+    fail('pages.json must not enable lazyCodeLoading: "requiredComponents"; it can break DevTools JSON collection');
   }
 
   assertMediaAssetsUnderLimit(miniprogramRoot, "Miniprogram project", { skipDist: true });
@@ -270,8 +283,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     const builtAppJsonPath = path.join(miniprogramBuildRoot, "app.json");
     if (fs.existsSync(builtAppJsonPath)) {
       const builtAppJson = readJson(builtAppJsonPath);
-      if (builtAppJson.lazyCodeLoading !== "requiredComponents") {
-        fail('Built app.json must include lazyCodeLoading: "requiredComponents"');
+      if (builtAppJson.lazyCodeLoading === "requiredComponents") {
+        fail('Built app.json must not include lazyCodeLoading: "requiredComponents"');
       }
     }
 
@@ -940,8 +953,12 @@ if (!fs.existsSync(pagesJsonPath)) {
   const appSource = fs.readFileSync(path.join(srcRoot, "App.vue"), "utf8");
   if (!fs.existsSync(miniprogramDevEnvPath)) {
     fail("Miniprogram development env is missing: apps/miniprogram/.env.development");
-  } else if (readEnv(miniprogramDevEnvPath).VITE_API_BASE_URL !== developmentApiBaseUrl) {
-    fail(`Miniprogram development API base URL must be ${developmentApiBaseUrl}`);
+  } else if (!isDevelopmentApiBaseUrl(readEnv(miniprogramDevEnvPath).VITE_API_BASE_URL)) {
+    fail(
+      `Miniprogram development API base URL must be one of ${developmentApiBaseUrlExamples.join(
+        ", "
+      )} or a private LAN IP on port 3018`
+    );
   }
   if (!fs.existsSync(miniprogramProdEnvPath)) {
     fail("Miniprogram production env is missing: apps/miniprogram/.env.production");
