@@ -240,9 +240,12 @@ const checks = [
       source.includes('this.confirmedCrossCastRoleKey = ""')
   },
   {
-    label: "mine page exposes gender editor",
+    label: "mine page delegates gender editing to identity bar",
     file: "apps/miniprogram/src/pages/mine/index.vue",
-    test: (source) => source.includes("我的性别") && source.includes("saveGender")
+    test: (source) =>
+      source.includes("<AuthIdentityBar />") &&
+      !source.includes("我的性别") &&
+      !source.includes("saveGender")
   },
   {
     label: "root check runs D11 check",

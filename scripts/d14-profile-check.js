@@ -212,13 +212,22 @@ assert(
 );
 
 const mine = read("apps/miniprogram/src/pages/mine/index.vue");
-assert(mine.includes("个人信息"), "mine page must show personal information");
-assert(mine.includes("openProfileEditor"), "mine page must expose profile editor");
-assert(mine.includes("AUTH_PROFILE_REQUEST_EVENT"), "mine page must request shared profile modal");
-assert(mine.includes("profileAvatarSrc"), "mine page must render the current profile avatar");
 assert(
-  mine.includes(":webp=\"true\""),
-  "mine uploaded avatar image must enable WebP decoding"
+  mine.includes("<AuthIdentityBar />") && mine.includes("import AuthIdentityBar"),
+  "mine page must keep the shared identity bar as the profile entry"
+);
+assert(
+  !mine.includes("个人信息") && !mine.includes("我的性别"),
+  "mine page must not render duplicate profile or gender sections"
+);
+assert(
+  !mine.includes("openProfileEditor") &&
+    !mine.includes("AUTH_PROFILE_REQUEST_EVENT") &&
+    !mine.includes("profileAvatarSrc") &&
+    !mine.includes("handleProfileAvatarError") &&
+    !mine.includes("saveGender") &&
+    !mine.includes("updateUserGender"),
+  "mine page must not keep duplicate profile editor logic"
 );
 assert(
   !mine.includes("user?.open_id || user?.openid") &&
@@ -231,21 +240,6 @@ assert(
     mine.includes('return "♀";') &&
     mine.includes("profileNameWithGenderSymbol(user?.nickname, user?.gender)"),
   "mine profile name must prefix nickname with saved gender symbol"
-);
-assert(
-  mine.includes(":class=\"profileAvatarClass\"") &&
-    mine.includes("profileAvatarClass") &&
-    mine.includes("border: 4rpx solid var(--avatar-unknown-ring)") &&
-    mine.includes(".profile-avatar.male") &&
-    mine.includes(".profile-avatar.female"),
-  "mine profile avatar ring must reflect the current user gender"
-);
-assert(
-  mine.includes("clearCurrentUserAvatarUrl") &&
-    mine.includes('@error="handleProfileAvatarError"') &&
-    mine.includes("handleProfileAvatarError") &&
-    mine.includes("hydrateAuth()"),
-  "mine profile avatar must fall back and clear stale cached avatars when uploaded images fail"
 );
 
 console.log("D14 profile check passed");

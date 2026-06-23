@@ -705,29 +705,78 @@ async function sessionAlbumPeople(connection, session) {
       FROM session_seats seat
       LEFT JOIN users user ON user.id = seat.confirmed_user_id
       WHERE seat.session_id = ?
-        AND seat.status IN ('confirmed', 'locked')
-        AND seat.confirmed_user_id IS NOT NULL
       ORDER BY seat.id
     `,
     [session.id]
   );
 
-  const people = seatRows.map((seat) => ({
-    key: `seat:${seat.id}`,
-    tag_type: "seat",
-    seat_id: Number(seat.id),
-    user_id: seat.confirmed_user_id ? Number(seat.confirmed_user_id) : null,
-    label: seat.role_name || seat.name || seat.user_nickname || "车友",
-    note: seat.name || seat.seat_type || "车友位"
-  }));
+  const sessionUserIds = [
+    session.dm_user_id,
+    session.npc_user_id
+  ]
+    .map(Number)
+    .filter(Boolean);
+  const userNamesById = new Map();
+  if (sessionUserIds.length > 0) {
+    const placeholders = sessionUserIds.map(() => "?").join(", ");
+    const [userRows] = await connection.query(
+      `
+        SELECT id, nickname, open_id
+        FROM users
+        WHERE id IN (${placeholders})
+      `,
+      sessionUserIds
+    );
+    for (const row of userRows) {
+      userNamesById.set(Number(row.id), row.nickname || row.open_id || "");
+    }
+  }
+
+  const people = [];
+  const addPerson = (person) => {
+    if (!person.key || people.some((item) => item.key === person.key)) {
+      return;
+    }
+    people.push(person);
+  };
+
+  for (const seat of seatRows) {
+    const label = seat.user_nickname || seat.role_name || seat.name || "车友";
+    const note = [seat.name, seat.role_name].filter(Boolean).join(" · ") || "车友位";
+    addPerson({
+      key: `seat:${seat.id}`,
+      tag_type: "seat",
+      seat_id: Number(seat.id),
+      user_id: seat.confirmed_user_id ? Number(seat.confirmed_user_id) : null,
+      label,
+      note
+    });
+  }
+
+  if (session.dm_user_id || session.dm_name_snapshot) {
+    addPerson({
+      key: "dm:session",
+      tag_type: "dm",
+      seat_id: null,
+      user_id: session.dm_user_id ? Number(session.dm_user_id) : null,
+      label:
+        session.dm_name_snapshot ||
+        userNamesById.get(Number(session.dm_user_id)) ||
+        "DM",
+      note: "DM"
+    });
+  }
 
   if (session.npc_user_id || session.npc_name_snapshot) {
-    people.push({
+    addPerson({
       key: "npc:session",
       tag_type: "npc",
       seat_id: null,
       user_id: session.npc_user_id ? Number(session.npc_user_id) : null,
-      label: session.npc_name_snapshot || "NPC",
+      label:
+        session.npc_name_snapshot ||
+        userNamesById.get(Number(session.npc_user_id)) ||
+        "NPC",
       note: "NPC"
     });
   }
@@ -748,7 +797,7 @@ function normalizeAlbumTagKeys(body = {}) {
     if (!key || seen.has(key)) {
       continue;
     }
-    if (!/^(seat:\d+|npc:session)$/.test(key)) {
+    if (!/^(seat:\d+|dm:session|npc:session)$/.test(key)) {
       throw badRequest("tags contains an invalid person key");
     }
     seen.add(key);
@@ -766,8 +815,8 @@ function tagsByPhotoId(rows = []) {
       id: Number(row.id),
       key: row.tag_type === "seat" && row.seat_id
         ? `seat:${row.seat_id}`
-        : row.tag_type === "npc"
-          ? "npc:session"
+        : ["organizer", "dm", "npc"].includes(row.tag_type)
+          ? `${row.tag_type}:session`
           : `${row.tag_type}:${row.id}`,
       tag_type: row.tag_type,
       seat_id: row.seat_id ? Number(row.seat_id) : null,
@@ -1577,6 +1626,133 @@ export async function hideMyOrganizedSession(user, sessionId) {
   });
 }
 
+async function sessionOrganizerCandidates(connection, session, excludeUserId = null) {
+  const excluded = Number(excludeUserId || 0);
+  const seen = new Set();
+  const candidates = [];
+
+  function addCandidate(candidate) {
+    const userId = Number(candidate.user_id || 0);
+    if (!userId || userId === excluded || seen.has(userId)) {
+      return;
+    }
+    seen.add(userId);
+    candidates.push({
+      ...candidate,
+      user_id: userId
+    });
+  }
+
+  const [seatRows] = await connection.query(
+    `
+      SELECT
+        confirmed_user_id AS user_id,
+        id AS seat_id,
+        name,
+        role_name
+      FROM session_seats
+      WHERE session_id = ?
+        AND confirmed_user_id IS NOT NULL
+        AND status IN ('confirmed', 'locked')
+      ORDER BY id
+    `,
+    [session.id]
+  );
+  for (const seat of seatRows) {
+    addCandidate({
+      user_id: seat.user_id,
+      source: "seat",
+      label: seat.name || seat.role_name || "车友",
+      seat_id: seat.seat_id
+    });
+  }
+
+  addCandidate({
+    user_id: session.npc_user_id,
+    source: "npc",
+    label: session.npc_name_snapshot || "NPC",
+    seat_id: null
+  });
+  addCandidate({
+    user_id: session.dm_user_id,
+    source: "dm",
+    label: session.dm_name_snapshot || "DM",
+    seat_id: null
+  });
+
+  return candidates;
+}
+
+async function findSessionForOrganizerChange(connection, sessionId) {
+  const [rows] = await connection.query("SELECT * FROM sessions WHERE id = ? FOR UPDATE", [
+    sessionId
+  ]);
+  return rows[0] || null;
+}
+
+async function updateSessionOrganizer(connection, sessionId, targetUserId) {
+  await ensureRole(connection, targetUserId, "organizer");
+  await connection.query(
+    `
+      UPDATE sessions
+      SET organizer_user_id = ?,
+          organizer_hidden_at = NULL
+      WHERE id = ?
+    `,
+    [targetUserId, sessionId]
+  );
+  return findById(connection, "sessions", sessionId);
+}
+
+export async function transferSessionOrganizer(user, sessionId, body = {}) {
+  const id = positiveId(sessionId, "sessionId");
+  const targetUserId = positiveId(
+    body.targetUserId ?? body.target_user_id,
+    "targetUserId"
+  );
+
+  return withTransaction(async (connection) => {
+    const session = await findSessionForOrganizerChange(connection, id);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the session organizer can transfer this session");
+    }
+    if (Number(session.organizer_user_id) === targetUserId) {
+      throw badRequest("targetUserId is already the session organizer");
+    }
+
+    const candidates = await sessionOrganizerCandidates(connection, session);
+    if (!candidates.some((candidate) => candidate.user_id === targetUserId)) {
+      throw forbidden("Only onboard session members can become organizer");
+    }
+
+    return updateSessionOrganizer(connection, id, targetUserId);
+  });
+}
+
+export async function leaveSessionOrganizer(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+
+  return withTransaction(async (connection) => {
+    const session = await findSessionForOrganizerChange(connection, id);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    if (Number(session.organizer_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the current session organizer can leave as organizer");
+    }
+
+    const candidates = await sessionOrganizerCandidates(connection, session, user.user.id);
+    if (candidates.length === 0) {
+      throw conflict("No onboard session member can become organizer");
+    }
+
+    return updateSessionOrganizer(connection, id, candidates[0].user_id);
+  });
+}
+
 export async function relinkMySessionMembership(user, sessionId) {
   const id = positiveId(sessionId, "sessionId");
   return withTransaction(async (connection) => {
@@ -1810,7 +1986,10 @@ export async function claimSessionSeat(user, seatId, body = {}) {
 
     const [rows] = await connection.query(
       `
-        SELECT seat.*, session.status AS session_status
+        SELECT
+          seat.*,
+          session.status AS session_status,
+          (session.start_at <= CURRENT_TIMESTAMP) AS session_started
         FROM session_seats seat
         JOIN sessions session ON session.id = seat.session_id
         WHERE seat.id = ?
@@ -1821,7 +2000,18 @@ export async function claimSessionSeat(user, seatId, body = {}) {
     if (!seat) {
       throw notFound("Seat not found");
     }
-    if (seat.session_status !== "recruiting") {
+    const canClaimStartedOpenSeat =
+      seat.session_status === "locked" &&
+      Number(seat.session_started || 0) === 1 &&
+      seat.status === "open";
+    const isCurrentUserSeat =
+      seat.confirmed_user_id &&
+      Number(seat.confirmed_user_id) === Number(user.user.id);
+    if (
+      seat.session_status !== "recruiting" &&
+      !canClaimStartedOpenSeat &&
+      !isCurrentUserSeat
+    ) {
       throw badRequest("Session is not recruiting");
     }
     if (seat.status === "cancelled") {
@@ -2094,9 +2284,6 @@ export async function kickSessionSeat(user, seatId, body = {}) {
     if (!isAdmin(user) && Number(seat.organizer_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the session organizer can perform this action");
     }
-    if (seat.session_status === "cancelled") {
-      throw badRequest("Cancelled session cannot be changed");
-    }
 
     await connection.query(
       `
@@ -2107,14 +2294,15 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       [seatId]
     );
     await clearPreStartReviewEligibilityForSeat(connection, seatId);
+    const nextSeatStatus = seat.session_status === "cancelled" ? "cancelled" : "open";
     await connection.query(
       `
         UPDATE session_seats
-        SET status = 'open',
+        SET status = ?,
             confirmed_user_id = NULL
         WHERE id = ?
       `,
-      [seatId]
+      [nextSeatStatus, seatId]
     );
 
     const reason = optionalText(body.reason);

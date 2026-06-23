@@ -58,6 +58,7 @@
             roleGenderClass(role.roleGender),
             {
               taken: role.stateKind === 'taken',
+              unavailable: role.stateKind === 'unavailable',
               pending: role.pending,
               mine: role.stateKind === 'mine',
               switching: role.stateKind === 'switching'
@@ -116,6 +117,7 @@ import {
   roleOptionsFromFlow,
   writeCreateFlow
 } from "../../utils/createFlow";
+import { showWechatShareMenus } from "../../utils/share";
 
 export default {
   components: { AuthIdentityBar },
@@ -180,13 +182,14 @@ export default {
     },
     roleCards() {
       return this.roleOptions.map((role) => {
-        const taken = this.session.id
+        const occupied = this.session.id
           ? ["confirmed", "locked", "cancelled"].includes(role.status)
           : isRoleSelected(role, this.selectedRoles);
         const mine = this.session.id
           ? this.currentUserId &&
             Number(role.confirmedUserId) === Number(this.currentUserId)
           : this.role && isSameRole(role, this.role);
+        const claimable = this.isRoleClaimable(role, mine);
         const pending = this.pendingRole && isSameRole(role, this.pendingRole);
         const switching = pending && this.role && !isSameRole(role, this.role);
         const crossCast = (pending || mine) && isCrossCast(this.currentUserGender, role.roleGender);
@@ -195,14 +198,17 @@ export default {
           stateKind = "switching";
         } else if (pending || mine) {
           stateKind = "mine";
-        } else if (taken) {
+        } else if (occupied) {
           stateKind = "taken";
         } else if (role.status === "applied") {
           stateKind = "pendingReview";
+        } else if (!claimable) {
+          stateKind = "unavailable";
         }
         return {
           ...role,
-          taken,
+          taken: occupied,
+          claimable,
           pending,
           mine,
           crossCast,
@@ -215,6 +221,8 @@ export default {
                 ? "已选"
                 : stateKind === "pendingReview"
                   ? "待审"
+                  : stateKind === "unavailable"
+                    ? "不可选"
                   : "可选"
         };
       });
@@ -245,7 +253,7 @@ export default {
         const seatRole = this.roleOptions.find(
           (role) => Number(role.seatId || role.id) === Number(options.seatId)
         );
-        if (seatRole && this.currentUserId && !seatRole.taken) {
+        if (seatRole && this.currentUserId && !seatRole.taken && this.isRoleClaimable(seatRole)) {
           this.pendingRole = seatRole;
         } else if (seatRole && this.role && !isSameRole(seatRole, this.role)) {
           this.statusText = `你已选择 ${this.role.name}，确认后会释放原角色。`;
@@ -468,6 +476,10 @@ export default {
         uni.showToast({ title: "这个角色已被选择", icon: "none" });
         return;
       }
+      if (!role.claimable && !role.mine) {
+        uni.showToast({ title: "这个角色暂不可选择", icon: "none" });
+        return;
+      }
       if (role.taken && role.mine) {
         uni.showToast({ title: "这是你当前选择的角色", icon: "none" });
         return;
@@ -494,6 +506,26 @@ export default {
     roleGenderClass(roleGender) {
       const gender = normalizeRoleGender(roleGender);
       return ["male", "female"].includes(gender) ? gender : "";
+    },
+    isSessionStarted() {
+      if (!this.session.start_at) {
+        return false;
+      }
+      const startAt = Date.parse(String(this.session.start_at).replace(" ", "T"));
+      return Number.isFinite(startAt) && startAt <= Date.now();
+    },
+    isRoleClaimable(role, mine = false) {
+      if (!this.session.id || mine) {
+        return true;
+      }
+      if (this.session.status === "recruiting") {
+        return !["confirmed", "locked", "cancelled"].includes(role.status);
+      }
+      return (
+        this.session.status === "locked" &&
+        this.isSessionStarted() &&
+        role.status === "open"
+      );
     },
     roleDisplayText(role) {
       if (!role?.name) {
@@ -582,12 +614,10 @@ export default {
       }
     },
     showShareMenus() {
-      if (uni.showShareMenu) {
-        uni.showShareMenu({
-          withShareTicket: true,
-          menus: ["shareAppMessage", "shareTimeline"]
-        });
-      }
+      showWechatShareMenus({
+        withShareTicket: true,
+        menus: ["shareAppMessage", "shareTimeline"]
+      });
     },
     seatTypeLabel(type) {
       const labels = {
@@ -770,7 +800,8 @@ export default {
     inset 0 0 0 1rpx rgba(216, 167, 61, 0.26);
 }
 
-.role-choice.taken {
+.role-choice.taken,
+.role-choice.unavailable {
   border-color: rgba(214, 205, 188, 0.92);
   background: #f3f0e9;
   color: #8d8a82;
@@ -818,7 +849,8 @@ export default {
   font-weight: 600;
 }
 
-.role-choice.taken .role-choice-name {
+.role-choice.taken .role-choice-name,
+.role-choice.unavailable .role-choice-name {
   color: #747066;
 }
 
@@ -843,7 +875,8 @@ export default {
   color: #ffffff;
 }
 
-.role-choice.taken .role-state {
+.role-choice.taken .role-state,
+.role-choice.unavailable .role-state {
   color: #9b8d70;
 }
 

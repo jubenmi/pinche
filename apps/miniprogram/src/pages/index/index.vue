@@ -60,6 +60,7 @@ import {
   getBackendStatus
 } from "../../utils/api";
 import { clearCreateFlow } from "../../utils/createFlow";
+import { showWechatShareMenus } from "../../utils/share";
 
 const buildVersion = `版本 ${__PINCHE_BUILD_TIME__}`;
 const HOME_SHARE_FRIEND_TITLE = "剧本迷·拼车";
@@ -108,12 +109,10 @@ function retryBackend() {
 }
 
 function showHomeShareMenus() {
-  if (uni.showShareMenu) {
-    uni.showShareMenu({
-      withShareTicket: true,
-      menus: ["shareAppMessage", "shareTimeline"]
-    });
-  }
+  showWechatShareMenus({
+    withShareTicket: true,
+    menus: ["shareAppMessage", "shareTimeline"]
+  });
 }
 
 onLoad(() => {
