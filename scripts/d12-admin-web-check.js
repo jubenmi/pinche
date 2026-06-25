@@ -28,6 +28,7 @@ const requiredFiles = [
   "apps/admin-web/src/components/CatalogWorkspace.vue",
   "apps/admin-web/src/components/StoreDrawer.vue",
   "apps/admin-web/src/components/ScriptDrawer.vue",
+  "apps/admin-web/src/components/MiniProgramWorkspace.vue",
   "apps/admin-web/Dockerfile",
   "apps/admin-web/nginx.conf",
   "apps/api/docker-entrypoint.sh",
@@ -197,6 +198,9 @@ const appShell = read("apps/admin-web/src/App.vue");
 for (const token of ["shell-toggle", "user-avatar", "sidebar-collapse"]) {
   assert(appShell.includes(token), `admin shell should include operator workspace ${token}`);
 }
+for (const token of ["MiniProgramWorkspace", "网页小程序", "activeView === 'miniapp'"]) {
+  assert(appShell.includes(token), `admin shell should expose the admin mini app ${token}`);
+}
 for (const token of ["buildVersion", "__PINCHE_BUILD_TIME__", "app-build-version"]) {
   assert(appShell.includes(token), `admin shell should render build-time version ${token}`);
 }
@@ -304,6 +308,52 @@ for (const token of ["drawer-body", "drawer-footer", "secondary-action", "script
 }
 
 assert(webApi.includes("scriptLinks"), "web API should save store-script link prices");
+for (const token of [
+  'import("cos-js-sdk-v5")',
+  "/api/uploads/cos-intent",
+  "/api/uploads/cos-authorization",
+  "uploadCosBackedFile",
+  "uploadCosObject",
+  "getCosClient",
+  "client.putObject",
+  "fallbackUploadSessionAlbumPhoto",
+  "adminSessionAlbumPhoto",
+  "sessionReviewPhoto",
+  "/api/admin/sessions/",
+  "/album/uploads"
+]) {
+  assert(webApi.includes(token), `admin album upload should use COS-backed upload flow with ${token}`);
+}
+assert(
+  /async function uploadCosBackedFile\(\{ kind, file, fallbackUpload, intentData = \{\} \}\) \{[\s\S]*?return fallbackUpload\(file\);[\s\S]*?return await uploadCosObject\(upload, file\);[\s\S]*?return fallbackUpload\(file\);[\s\S]*?\n\}/.test(webApi),
+  "admin album upload should match the mini-program direct-COS-then-fallback strategy"
+);
+
+const miniAppWorkspace = read("apps/admin-web/src/components/MiniProgramWorkspace.vue");
+for (const token of [
+  "管理员内测版",
+  "创建车局",
+  "我的发车",
+  "车详情",
+  "车头管理",
+  "写记录",
+  "SessionAlbumWorkspace",
+  "createUserSession",
+  "createSessionSeat",
+  "publishSession",
+  "claimSessionSeat",
+  "listMySessions",
+  "listMySignups",
+  "listSessionSignups",
+  "approveSignup",
+  "rejectSignup",
+  "lockSessionSeat",
+  "kickSessionSeat",
+  "saveMySessionReview",
+  "uploadSessionReviewPhoto"
+]) {
+  assert(miniAppWorkspace.includes(token), `admin mini app should include ${token}`);
+}
 
 const setupPage = read("apps/miniprogram/src/pages/session/setup.vue");
 assert(

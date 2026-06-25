@@ -9,6 +9,7 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "cos-js-sdk-v5": "^1.10.1",
     "qrcode": "^1.5.4",
     "vue": "^3.5.16"
   },

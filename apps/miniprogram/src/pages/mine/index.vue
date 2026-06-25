@@ -212,6 +212,7 @@ const collapsedDayKeys = ref([]);
 const lastLoadedAt = ref(null);
 const scrollIntoViewId = ref("");
 const selectedDateKey = ref("");
+let authExpiredToastActive = false;
 
 const isAdmin = computed(() => roles.value.includes("system_admin"));
 const rolesText = computed(() => roles.value.join(", "));
@@ -336,23 +337,18 @@ function hydrateAuth() {
   const token = getToken();
   if (auth.user && !token) {
     clearAuth();
-    roles.value = [];
-    hasLogin.value = false;
-    statusText.value = "未登录";
-    sessions.value = [];
-    sessionStatusText.value = "";
-    signups.value = [];
-    signupStatusText.value = "";
-    lastLoadedAt.value = null;
+    resetLoggedOutState();
     return;
   }
   roles.value = auth.roles || [];
   hasLogin.value = Boolean(auth.user && token);
   statusText.value = auth.user ? loginName(auth.user) : "未登录";
-  if (hasLogin.value) {
-    resetCalendarWindow();
-    loadCalendar();
+  if (!hasLogin.value) {
+    resetLoggedOutState();
+    return;
   }
+  resetCalendarWindow();
+  loadCalendar();
 }
 
 async function login() {
@@ -369,6 +365,19 @@ async function login() {
 
 function logout() {
   clearAuth();
+  resetLoggedOutState();
+}
+
+function goAdmin() {
+  uni.navigateTo({ url: "/pages/admin/catalog" });
+}
+
+async function loadCalendar() {
+  await Promise.all([loadMySessions(), loadMySignups()]);
+  lastLoadedAt.value = new Date();
+}
+
+function resetLoggedOutState() {
   roles.value = [];
   hasLogin.value = false;
   statusText.value = "未登录";
@@ -381,13 +390,23 @@ function logout() {
   resetCalendarWindow();
 }
 
-function goAdmin() {
-  uni.navigateTo({ url: "/pages/admin/catalog" });
-}
-
-async function loadCalendar() {
-  await Promise.all([loadMySessions(), loadMySignups()]);
-  lastLoadedAt.value = new Date();
+function handleAuthExpired(error) {
+  if (error?.statusCode !== 401) {
+    return false;
+  }
+  clearAuth();
+  resetLoggedOutState();
+  if (!authExpiredToastActive) {
+    authExpiredToastActive = true;
+    uni.showToast({
+      title: error?.userMessage || "登录已过期，请重新登录。",
+      icon: "none"
+    });
+    setTimeout(() => {
+      authExpiredToastActive = false;
+    }, 1000);
+  }
+  return true;
 }
 
 async function refreshCalendar() {
@@ -409,6 +428,9 @@ async function loadMySessions() {
     const response = await request({ url: "/api/users/me/sessions?limit=50" });
     sessions.value = dataOf(response) || [];
   } catch (error) {
+    if (handleAuthExpired(error)) {
+      return;
+    }
     sessionStatusText.value = "我的发车加载失败，请稍后重试。";
   } finally {
     loadingSessions.value = false;
@@ -422,6 +444,9 @@ async function loadMySignups() {
     const response = await request({ url: "/api/users/me/signups" });
     signups.value = dataOf(response) || [];
   } catch (error) {
+    if (handleAuthExpired(error)) {
+      return;
+    }
     signupStatusText.value = "我参与的车加载失败，请稍后重试。";
   } finally {
     loadingSignups.value = false;
@@ -573,6 +598,9 @@ function hideOrganizedSession(session) {
         await loadCalendar();
         uni.showToast({ title: "已从列表下架", icon: "none" });
       } catch (error) {
+        if (handleAuthExpired(error)) {
+          return;
+        }
         sessionStatusText.value = "删除失败，请稍后重试。";
       }
     }
@@ -592,6 +620,9 @@ function hideJoinedSession(signup) {
         await loadCalendar();
         uni.showToast({ title: "已从列表下架", icon: "none" });
       } catch (error) {
+        if (handleAuthExpired(error)) {
+          return;
+        }
         signupStatusText.value = "删除失败，请稍后重试。";
       }
     }

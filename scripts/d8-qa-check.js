@@ -68,8 +68,8 @@ async function assertStaticChecks() {
 
   assert(
     appSource.includes("VITE_API_BASE_URL") &&
-      appSource.includes('"http://127.0.0.1:3018"'),
-    "miniprogram API base should support release env and default to 127.0.0.1"
+      appSource.includes('"https://api.pinche.jubenmi.com"'),
+    "miniprogram API base should support release env and default to production API"
   );
   assert(
     !detailSource.includes("session.note"),
