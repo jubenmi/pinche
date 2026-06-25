@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import sharp from "sharp";
 import { config, publicConfig } from "./config/env.js";
 import { checkDatabaseReadiness } from "./db/mysql.js";
 import { AppError, badRequest, forbidden, notFound, unauthorized } from "./http/errors.js";
@@ -26,6 +27,7 @@ import {
   putCosObject
 } from "./storage/cos.js";
 import {
+  assertAdminOwnSessionAlbumAllowed,
   assertSessionAlbumUploadAllowed,
   approveSignup,
   cancelSession,
@@ -87,6 +89,7 @@ const apiRoot = path.resolve(__dirname, "..");
 const avatarUploadDir = path.join(apiRoot, "uploads", "avatars");
 const sessionReviewUploadDir = path.join(apiRoot, "uploads", "session-reviews");
 const sessionAlbumUploadDir = path.join(apiRoot, "uploads", "session-album");
+const sessionAlbumDisplayUploadDir = path.join(sessionAlbumUploadDir, "display");
 const AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 const AVATAR_MULTIPART_MAX_BYTES = AVATAR_UPLOAD_MAX_BYTES + 64 * 1024;
 const SESSION_REVIEW_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
@@ -95,6 +98,8 @@ const SESSION_ALBUM_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_ALBUM_MULTIPART_MAX_BYTES = SESSION_ALBUM_UPLOAD_MAX_BYTES + 64 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const AVATAR_WEBP_RULE = "imageMogr2/auto-orient/thumbnail/512x512>/format/webp/quality/80";
+const SESSION_ALBUM_DISPLAY_JPG_RULE =
+  "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip";
 const avatarMimeTypes = {
   "image/jpeg": ".jpg",
   "image/png": ".png"
@@ -356,6 +361,19 @@ function avatarWebpPicOperations(key) {
   });
 }
 
+function sessionAlbumDisplayJpgPicOperations(key) {
+  return JSON.stringify({
+    is_pic_info: 1,
+    rules: [
+      {
+        bucket: config.cos.bucket,
+        fileid: `/${key}`,
+        rule: SESSION_ALBUM_DISPLAY_JPG_RULE
+      }
+    ]
+  });
+}
+
 function normalizeUploadExtension(extension) {
   const normalized = String(extension || "").trim().toLowerCase();
   if (normalized === "jpg" || normalized === "jpeg" || normalized === "png") {
@@ -403,10 +421,16 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
     };
   }
 
-  if (kind === "sessionAlbumPhoto") {
-    const session = await assertSessionAlbumUploadAllowed(user, sessionId);
-    const key =
-      `uploads/session-album/${uploadFilenameBase(`album-${session.id}`, uploadUserId)}${sourceExtension}`;
+  if (kind === "sessionAlbumPhoto" || kind === "adminSessionAlbumPhoto") {
+    const isAdminAlbumUpload = kind === "adminSessionAlbumPhoto";
+    const session = isAdminAlbumUpload
+      ? await assertAdminOwnSessionAlbumAllowed(user, sessionId)
+      : await assertSessionAlbumUploadAllowed(user, sessionId);
+    const filenamePrefix = isAdminAlbumUpload ? `admin-album-${session.id}` : `album-${session.id}`;
+    const key = `uploads/session-album/display/${uploadFilenameBase(
+      filenamePrefix,
+      uploadUserId
+    )}.jpg`;
     return {
       direct: true,
       kind,
@@ -416,7 +440,8 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
       key,
       uploadPath: `/${key}`,
       maxBytes: SESSION_ALBUM_UPLOAD_MAX_BYTES,
-      contentType: avatarContentType(key)
+      contentType: avatarContentType(`source${sourceExtension}`),
+      picOperations: sessionAlbumDisplayJpgPicOperations(key)
     };
   }
 
@@ -449,21 +474,31 @@ function directUploadKindForKey(key, userId) {
 
   const albumMatch = key.match(
     new RegExp(
-      `^uploads/session-album/album-(\\d+)-${userIdText}-\\d+-[a-f0-9]{16}\\.(?:jpg|jpeg|png)$`
+      `^uploads/session-album/display/album-(\\d+)-${userIdText}-\\d+-[a-f0-9]{16}\\.jpg$`
     )
   );
   if (albumMatch) {
     return { kind: "sessionAlbumPhoto", sessionId: Number(albumMatch[1]) };
   }
 
+  const adminAlbumMatch = key.match(
+    new RegExp(
+      `^uploads/session-album/display/admin-album-(\\d+)-${userIdText}-\\d+-[a-f0-9]{16}\\.jpg$`
+    )
+  );
+  if (adminAlbumMatch) {
+    return { kind: "adminSessionAlbumPhoto", sessionId: Number(adminAlbumMatch[1]) };
+  }
+
   throw forbidden("upload object key is not allowed");
 }
 
-async function authorizeCosDirectUpload({ body, userId }) {
+async function authorizeCosDirectUpload({ body, user }) {
   if (!isCosUploadStorageEnabled()) {
     throw badRequest("COS storage is not enabled");
   }
 
+  const userId = user.user.id;
   const bucket = String(body.bucket || body.Bucket || "");
   const region = String(body.region || body.Region || "");
   const method = String(body.method || body.Method || "").toUpperCase();
@@ -483,11 +518,21 @@ async function authorizeCosDirectUpload({ body, userId }) {
       directUpload.sessionId
     );
   }
+  if (directUpload.kind === "adminSessionAlbumPhoto") {
+    await assertAdminOwnSessionAlbumAllowed(user, directUpload.sessionId);
+  }
   const headers = normalizeCosHeaders(body.headers || body.Headers);
   headers.host = headers.host || cosHost(config.cos);
 
   if (directUpload.kind === "avatar" && headers["pic-operations"] !== avatarWebpPicOperations(key)) {
     throw forbidden("avatar upload must include the server-issued WebP processing rule");
+  }
+  if (
+    (directUpload.kind === "sessionAlbumPhoto" ||
+      directUpload.kind === "adminSessionAlbumPhoto") &&
+    headers["pic-operations"] !== sessionAlbumDisplayJpgPicOperations(key)
+  ) {
+    throw forbidden("album upload must include the server-issued JPG processing rule");
   }
 
   return {
@@ -565,7 +610,30 @@ async function saveUploadedSessionReviewPhoto(request, userId) {
   });
 }
 
-async function saveUploadedSessionAlbumPhoto(request, userId, sessionId) {
+async function processSessionAlbumDisplayJpg(file) {
+  const { data, info } = await sharp(file, { failOn: "none" })
+    .rotate()
+    .resize({
+      width: 2048,
+      height: 2048,
+      fit: "inside",
+      withoutEnlargement: true
+    })
+    .jpeg({
+      quality: 85,
+      mozjpeg: true
+    })
+    .toBuffer({ resolveWithObject: true });
+  return {
+    file: data,
+    width: info.width,
+    height: info.height,
+    byteSize: data.length,
+    contentType: "image/jpeg"
+  };
+}
+
+async function saveUploadedSessionAlbumPhoto(request, userId, sessionId, options = {}) {
   const contentType = request.headers["content-type"] || "";
   if (!contentType.includes("multipart/form-data")) {
     throw badRequest("album photo upload must be multipart/form-data");
@@ -577,13 +645,28 @@ async function saveUploadedSessionAlbumPhoto(request, userId, sessionId) {
     maxBytes: SESSION_ALBUM_UPLOAD_MAX_BYTES,
     label: "album photo"
   });
-  const photoFilename = `${uploadFilenameBase(`album-${sessionId}`, userId)}${extension}`;
+  const filenamePrefix = options.filenamePrefix || `album-${sessionId}`;
+  const photoFilename = `${uploadFilenameBase(filenamePrefix, userId)}.jpg`;
+  const key = `uploads/session-album/display/${photoFilename}`;
+
+  if (isCosUploadStorageEnabled()) {
+    return saveUploadedObject({
+      key,
+      filename: photoFilename,
+      file,
+      contentType: mimeType || avatarContentType(`source${extension}`),
+      picOperations: sessionAlbumDisplayJpgPicOperations(key),
+      localDir: sessionAlbumDisplayUploadDir
+    });
+  }
+
+  const display = await processSessionAlbumDisplayJpg(file);
   return saveUploadedObject({
-    key: `uploads/session-album/${photoFilename}`,
+    key,
     filename: photoFilename,
-    file,
-    contentType: mimeType || avatarContentType(photoFilename),
-    localDir: sessionAlbumUploadDir
+    file: display.file,
+    contentType: display.contentType,
+    localDir: sessionAlbumDisplayUploadDir
   });
 }
 
@@ -690,6 +773,38 @@ async function serveUploadedObject({ url, prefix, localDir, response }) {
   });
 }
 
+async function readUploadedObject({ url, prefix, localDir }) {
+  const requestedName = decodeURIComponent(url.pathname.slice(prefix.length));
+  const filename = path.basename(requestedName);
+  if (!filename || filename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(filename)) {
+    throw notFound();
+  }
+
+  const key = cosObjectKeyFromUploadPath(`${prefix}${filename}`, prefix);
+  if (isCosUploadStorageEnabled()) {
+    const object = await getCosObject({
+      key,
+      config: config.cos
+    });
+    return {
+      filename,
+      body: object.body,
+      contentType: uploadedObjectContentType(filename, object.headers["content-type"])
+    };
+  }
+
+  try {
+    const body = await fs.readFile(path.join(localDir, filename));
+    return {
+      filename,
+      body,
+      contentType: uploadedObjectContentType(filename)
+    };
+  } catch (error) {
+    throw notFound();
+  }
+}
+
 async function serveUploadedAvatar(url, response) {
   try {
     await serveUploadedObject({
@@ -724,8 +839,18 @@ async function serveUploadedSessionReviewPhoto(url, response) {
 
 async function serveUploadedSessionAlbumPhoto(photo, response) {
   try {
+    const photoUrl = new URL(photo.photo_url, "http://localhost");
+    if (photoUrl.pathname.startsWith("/uploads/session-album/display/")) {
+      await serveUploadedObject({
+        url: photoUrl,
+        prefix: "/uploads/session-album/display/",
+        localDir: sessionAlbumDisplayUploadDir,
+        response
+      });
+      return;
+    }
     await serveUploadedObject({
-      url: new URL(photo.photo_url, "http://localhost"),
+      url: photoUrl,
       prefix: "/uploads/session-album/",
       localDir: sessionAlbumUploadDir,
       response
@@ -736,6 +861,40 @@ async function serveUploadedSessionAlbumPhoto(photo, response) {
     }
     throw notFound();
   }
+}
+
+async function getSessionAlbumDisplayMetadata(photoUrl) {
+  const url = new URL(photoUrl, "http://localhost");
+  if (!url.pathname.startsWith("/uploads/session-album/display/")) {
+    throw badRequest("album photo must use the display image path");
+  }
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const object = await readUploadedObject({
+        url,
+        prefix: "/uploads/session-album/display/",
+        localDir: sessionAlbumDisplayUploadDir
+      });
+      const metadata = await sharp(object.body, { failOn: "none" }).metadata();
+      if (metadata.format !== "jpeg") {
+        throw badRequest("album display photo must be a processed JPEG");
+      }
+      if (Number(metadata.width || 0) > 2048 || Number(metadata.height || 0) > 2048) {
+        throw badRequest("album display photo exceeds the 2048px size limit");
+      }
+      return {
+        imageWidth: metadata.width || null,
+        imageHeight: metadata.height || null,
+        imageByteSize: object.body.length,
+        imageContentType: "image/jpeg"
+      };
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 180 * (attempt + 1)));
+    }
+  }
+  throw lastError || notFound("Album display photo not found");
 }
 
 function idMatch(pathname, pattern) {
@@ -829,6 +988,26 @@ async function route(request, response) {
     return;
   }
 
+  const adminSessionAlbumUploadId = idMatch(
+    url.pathname,
+    /^\/api\/admin\/sessions\/(\d+)\/album\/uploads$/
+  );
+  if (request.method === "POST" && adminSessionAlbumUploadId) {
+    const user = await getAuthUser(request);
+    const session = await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumUploadId);
+    const photoUrl = await saveUploadedSessionAlbumPhoto(
+      request,
+      user.user.id,
+      adminSessionAlbumUploadId,
+      { filenamePrefix: `admin-album-${session.id}` }
+    );
+    jsonResponse(response, 201, {
+      ok: true,
+      data: { photoUrl }
+    });
+    return;
+  }
+
   const body = await bodyFor(request);
 
   if (request.method === "POST" && url.pathname === "/api/uploads/cos-intent") {
@@ -854,7 +1033,7 @@ async function route(request, response) {
       ok: true,
       data: await authorizeCosDirectUpload({
         body,
-        userId: user.user.id
+        user
       })
     });
     return;
@@ -1201,6 +1380,21 @@ async function route(request, response) {
     return;
   }
 
+  const adminSessionAlbumId = idMatch(
+    url.pathname,
+    /^\/api\/admin\/sessions\/(\d+)\/album$/
+  );
+  if (request.method === "GET" && adminSessionAlbumId) {
+    const user = await getAuthUser(request);
+    await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumId);
+    const album = await listSessionAlbum(user, adminSessionAlbumId);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: attachSessionAlbumMediaUrls(album, user.user.id)
+    });
+    return;
+  }
+
   const sessionAlbumPrivacyId = idMatch(
     url.pathname,
     /^\/api\/sessions\/(\d+)\/album\/privacy$/
@@ -1235,13 +1429,58 @@ async function route(request, response) {
     return;
   }
 
+  const adminSessionAlbumPeopleId = idMatch(
+    url.pathname,
+    /^\/api\/admin\/sessions\/(\d+)\/album\/people$/
+  );
+  if (request.method === "GET" && adminSessionAlbumPeopleId) {
+    const user = await getAuthUser(request);
+    await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumPeopleId);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listSessionAlbumPeople(user, adminSessionAlbumPeopleId)
+    });
+    return;
+  }
+
   const sessionAlbumPhotosId = idMatch(
     url.pathname,
     /^\/api\/sessions\/(\d+)\/album\/photos$/
   );
   if (request.method === "POST" && sessionAlbumPhotosId) {
     const user = await getAuthUser(request);
-    const photo = await createSessionAlbumPhoto(user, sessionAlbumPhotosId, body);
+    await assertSessionAlbumUploadAllowed(user, sessionAlbumPhotosId);
+    const photoUrl = body.photoUrl || body.photo_url;
+    const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
+    const photo = await createSessionAlbumPhoto(user, sessionAlbumPhotosId, {
+      ...body,
+      photoUrl,
+      ...metadata
+    });
+    jsonResponse(response, 201, {
+      ok: true,
+      data: {
+        ...photo,
+        image_url: sessionAlbumMediaPath(photo.id, user.user.id)
+      }
+    });
+    return;
+  }
+
+  const adminSessionAlbumPhotosId = idMatch(
+    url.pathname,
+    /^\/api\/admin\/sessions\/(\d+)\/album\/photos$/
+  );
+  if (request.method === "POST" && adminSessionAlbumPhotosId) {
+    const user = await getAuthUser(request);
+    await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumPhotosId);
+    const photoUrl = body.photoUrl || body.photo_url;
+    const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
+    const photo = await createSessionAlbumPhoto(user, adminSessionAlbumPhotosId, {
+      ...body,
+      photoUrl,
+      ...metadata
+    });
     jsonResponse(response, 201, {
       ok: true,
       data: {

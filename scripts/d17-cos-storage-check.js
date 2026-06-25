@@ -70,6 +70,16 @@ assert.equal(
   "/uploads/session-reviews/review-1-abc.png",
   "COS object keys should map back to existing upload paths"
 );
+assert.equal(
+  cosUploadPathForKey("uploads/session-album/display/album-1-2-3-aaaaaaaaaaaaaaaa.jpg"),
+  "/uploads/session-album/display/album-1-2-3-aaaaaaaaaaaaaaaa.jpg",
+  "album display object keys should map back to upload paths"
+);
+assert.throws(
+  () => cosUploadPathForKey("uploads/session-album/album-1-2-3-aaaaaaaaaaaaaaaa.png"),
+  /invalid COS object key/,
+  "new album objects should use the display JPG prefix"
+);
 assert.throws(
   () => cosObjectKeyFromUploadPath("/uploads/avatars/../secret.jpg", "/uploads/avatars/"),
   /invalid upload object name/,
@@ -138,6 +148,11 @@ assert(server.includes(".webp"), "avatar uploads must generate WebP object names
 assert(
   server.includes("picOperations") && server.includes("imageMogr2/auto-orient/thumbnail/512x512>/format/webp/quality/80"),
   "server must request upload-time CI WebP processing for COS avatars"
+);
+assert(
+  server.includes("SESSION_ALBUM_DISPLAY_JPG_RULE") &&
+    server.includes("imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip"),
+  "server must request upload-time CI JPG processing for album display photos"
 );
 assert(
   server.includes("bucket: config.cos.bucket"),

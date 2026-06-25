@@ -1,6 +1,8 @@
 const TOKEN_KEY = "pinche_admin_web_token";
 const USER_KEY = "pinche_admin_web_user";
 const ROLES_KEY = "pinche_admin_web_roles";
+let cosClient = null;
+let cosSdkConstructor = null;
 
 function readJsonStorage(key, fallback) {
   try {
@@ -56,6 +58,124 @@ export async function apiRequest(path, options = {}) {
   return parseResponse(response);
 }
 
+async function apiFormDataRequest(path, formData, options = {}) {
+  const auth = getStoredAuth();
+  const response = await fetch(path, {
+    method: options.method || "POST",
+    headers: {
+      ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {})
+    },
+    body: formData
+  });
+  return parseResponse(response);
+}
+
+function fileExtensionFromName(name) {
+  const match = String(name || "").match(/\.([A-Za-z0-9]+)$/);
+  const extension = match ? match[1].toLowerCase() : "";
+  if (extension === "jpg" || extension === "jpeg" || extension === "png") {
+    return `.${extension}`;
+  }
+  return ".jpg";
+}
+
+async function requestCosUploadIntent(kind, file, data = {}) {
+  return apiRequest("/api/uploads/cos-intent", {
+    method: "POST",
+    body: {
+      kind,
+      extension: fileExtensionFromName(file.name),
+      ...data
+    }
+  });
+}
+
+async function authorizeCosUpload(options) {
+  return apiRequest("/api/uploads/cos-authorization", {
+    method: "POST",
+    body: {
+      bucket: options.Bucket,
+      region: options.Region,
+      method: options.Method,
+      key: options.Key,
+      query: options.Query || {},
+      headers: options.Headers || {}
+    }
+  });
+}
+
+async function loadCosSdk() {
+  if (cosSdkConstructor) {
+    return cosSdkConstructor;
+  }
+  const module = await import("cos-js-sdk-v5");
+  cosSdkConstructor = module.default || module;
+  return cosSdkConstructor;
+}
+
+async function getCosClient() {
+  if (cosClient) {
+    return cosClient;
+  }
+  const COS = await loadCosSdk();
+  cosClient = new COS({
+    getAuthorization(options, callback) {
+      authorizeCosUpload(options)
+        .then((data) => {
+          callback(data?.authorization || "");
+        })
+        .catch(() => {
+          callback("");
+        });
+    }
+  });
+  return cosClient;
+}
+
+async function uploadCosObject(upload, file) {
+  const client = await getCosClient();
+  return new Promise((resolve, reject) => {
+    client.putObject(
+      {
+        Bucket: upload.bucket,
+        Region: upload.region,
+        Key: upload.key,
+        Body: file,
+        ContentType: upload.contentType || file.type || "image/jpeg",
+        PicOperations: upload.picOperations,
+        onProgress() {}
+      },
+      (error) => {
+        if (error) {
+          reject({
+            statusCode: 0,
+            errMsg: error.error?.Message || error.message || error.errMsg || "COS upload failed",
+            originalError: error
+          });
+          return;
+        }
+        resolve(upload.uploadPath);
+      }
+    );
+  });
+}
+
+async function uploadCosBackedFile({ kind, file, fallbackUpload, intentData = {} }) {
+  const data = await requestCosUploadIntent(kind, file, intentData);
+  const upload = data?.upload || {};
+  if (!upload.direct) {
+    return fallbackUpload(file);
+  }
+  try {
+    if (file.size > Number(upload.maxBytes || 0)) {
+      throw new Error("Photo exceeds COS upload size limit.");
+    }
+    return await uploadCosObject(upload, file);
+  } catch (error) {
+    return fallbackUpload(file);
+  }
+}
+
 export function createLoginTicket() {
   return apiRequest("/api/admin/web-login/tickets", {
     method: "POST",
@@ -102,4 +222,229 @@ export function saveScript(script) {
   const method = script.id ? "PATCH" : "POST";
   const path = script.id ? `/api/admin/scripts/${script.id}` : "/api/admin/scripts";
   return apiRequest(path, { method, body: script });
+}
+
+export function listMySessions(filters) {
+  return apiRequest(`/api/users/me/sessions?${new URLSearchParams(filters)}`);
+}
+
+export function getSessionAlbum(sessionId) {
+  return apiRequest(`/api/admin/sessions/${sessionId}/album`);
+}
+
+export function listSessionAlbumPeople(sessionId) {
+  return apiRequest(`/api/admin/sessions/${sessionId}/album/people`);
+}
+
+async function fallbackUploadSessionAlbumPhoto(sessionId, file) {
+  const formData = new FormData();
+  formData.append("photo", file);
+  const data = await apiFormDataRequest(`/api/admin/sessions/${sessionId}/album/uploads`, formData);
+  return data.photoUrl;
+}
+
+async function fallbackUploadSessionReviewPhoto(file) {
+  const formData = new FormData();
+  formData.append("photo", file);
+  const data = await apiFormDataRequest("/api/session-reviews/photos", formData);
+  return data.photoUrl;
+}
+
+export async function uploadSessionAlbumPhoto(sessionId, file) {
+  const photoUrl = await uploadCosBackedFile({
+    kind: "adminSessionAlbumPhoto",
+    file,
+    intentData: { sessionId },
+    fallbackUpload: (nextFile) => fallbackUploadSessionAlbumPhoto(sessionId, nextFile)
+  });
+  return { photoUrl };
+}
+
+export function createSessionAlbumPhoto(sessionId, photoUrl) {
+  return apiRequest(`/api/admin/sessions/${sessionId}/album/photos`, {
+    method: "POST",
+    body: { photoUrl }
+  });
+}
+
+export function updateSessionAlbumPhotoTags(photoId, tagKeys) {
+  return apiRequest(`/api/session-album/photos/${photoId}/tags`, {
+    method: "PUT",
+    body: { tagKeys }
+  });
+}
+
+export function deleteSessionAlbumPhoto(photoId) {
+  return apiRequest(`/api/session-album/photos/${photoId}`, {
+    method: "DELETE"
+  });
+}
+
+export function getMySessionAlbumPrivacy(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/album/privacy`);
+}
+
+export function updateMySessionAlbumPrivacy(sessionId, privacy) {
+  return apiRequest(`/api/sessions/${sessionId}/album/privacy`, {
+    method: "PUT",
+    body: privacy
+  });
+}
+
+export function listActiveStores(filters) {
+  return apiRequest(`/api/stores?${new URLSearchParams(filters)}`);
+}
+
+export function listActiveScripts(filters) {
+  return apiRequest(`/api/scripts?${new URLSearchParams(filters)}`);
+}
+
+export function createUserSession(body) {
+  return apiRequest("/api/sessions", {
+    method: "POST",
+    body
+  });
+}
+
+export function createSessionSeat(sessionId, body) {
+  return apiRequest(`/api/sessions/${sessionId}/seats`, {
+    method: "POST",
+    body
+  });
+}
+
+export function publishSession(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/publish`, {
+    method: "POST"
+  });
+}
+
+export function getSession(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}`);
+}
+
+export function updateSession(sessionId, body) {
+  return apiRequest(`/api/sessions/${sessionId}`, {
+    method: "PATCH",
+    body
+  });
+}
+
+export function getSessionShareStats(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/share-stats`);
+}
+
+export function claimSessionSeat(seatId, body = {}) {
+  return apiRequest(`/api/session-seats/${seatId}/claim`, {
+    method: "POST",
+    body
+  });
+}
+
+export function lockSessionSeat(seatId) {
+  return apiRequest(`/api/session-seats/${seatId}/lock`, {
+    method: "POST"
+  });
+}
+
+export function kickSessionSeat(seatId, body = {}) {
+  return apiRequest(`/api/session-seats/${seatId}/kick`, {
+    method: "PATCH",
+    body
+  });
+}
+
+export function createSignup(body) {
+  return apiRequest("/api/signups", {
+    method: "POST",
+    body
+  });
+}
+
+export function listMySignups() {
+  return apiRequest("/api/users/me/signups");
+}
+
+export function hideMyOrganizedSession(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/hide`, {
+    method: "PATCH"
+  });
+}
+
+export function hideMySignup(signupId) {
+  return apiRequest(`/api/signups/${signupId}/hide`, {
+    method: "PATCH"
+  });
+}
+
+export function relinkSessionMembership(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/relink`, {
+    method: "PATCH"
+  });
+}
+
+export function listSessionSignups(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/signups`);
+}
+
+export function approveSignup(signupId) {
+  return apiRequest(`/api/signups/${signupId}/approve`, {
+    method: "PATCH"
+  });
+}
+
+export function rejectSignup(signupId) {
+  return apiRequest(`/api/signups/${signupId}/reject`, {
+    method: "PATCH"
+  });
+}
+
+export function updateSignupDeposit(signupId, depositStatus) {
+  return apiRequest(`/api/signups/${signupId}/deposit`, {
+    method: "PATCH",
+    body: { depositStatus }
+  });
+}
+
+export function cancelSession(sessionId, reason) {
+  return apiRequest(`/api/sessions/${sessionId}/cancel`, {
+    method: "PATCH",
+    body: { reason }
+  });
+}
+
+export function transferSessionOrganizer(sessionId, targetUserId) {
+  return apiRequest(`/api/sessions/${sessionId}/organizer/transfer`, {
+    method: "PATCH",
+    body: { targetUserId }
+  });
+}
+
+export function leaveSessionOrganizer(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/organizer/leave`, {
+    method: "PATCH"
+  });
+}
+
+export function listSessionReviews(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/reviews`);
+}
+
+export function getMySessionReview(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/review`);
+}
+
+export function saveMySessionReview(sessionId, body) {
+  return apiRequest(`/api/sessions/${sessionId}/review`, {
+    method: "PUT",
+    body
+  });
+}
+
+export async function uploadSessionReviewPhoto(file) {
+  return uploadCosBackedFile({
+    kind: "sessionReviewPhoto",
+    file,
+    fallbackUpload: (nextFile) => fallbackUploadSessionReviewPhoto(nextFile)
+  });
 }

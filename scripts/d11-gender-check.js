@@ -105,7 +105,9 @@ const checks = [
     label: "auth identity bar opens profile modal on tap",
     file: "apps/miniprogram/src/components/AuthIdentityBar.vue",
     test: (source) =>
-      source.includes('@tap="openProfileModal(false)"') &&
+      source.includes('@tap="handleIdentityTap"') &&
+      source.includes("handleIdentityTap") &&
+      source.includes("this.openProfileModal(false)") &&
       source.includes('class="profile-modal"') &&
       source.includes("handleProfileRequest")
   },
@@ -128,6 +130,26 @@ const checks = [
     label: "female default avatar image asset exists",
     file: "apps/miniprogram/src/static/avatars/default-female.jpg",
     test: (source) => source.length > 1024
+  },
+  {
+    label: "auth identity gender icons switch for male and female",
+    file: "apps/miniprogram/src/components/AuthIdentityBar.vue",
+    test: (source) =>
+      source.includes("GENDER_ICONS") &&
+      source.includes("/static/icons/gender-male.png") &&
+      source.includes("/static/icons/gender-female.png") &&
+      source.includes("profileGenderIcon") &&
+      source.includes("draftGender || this.user?.gender")
+  },
+  {
+    label: "male gender icon image asset exists",
+    file: "apps/miniprogram/src/static/icons/gender-male.png",
+    test: (source) => source.length > 200
+  },
+  {
+    label: "female gender icon image asset exists",
+    file: "apps/miniprogram/src/static/icons/gender-female.png",
+    test: (source) => source.length > 200
   },
   {
     label: "auth identity modal saves user gender",

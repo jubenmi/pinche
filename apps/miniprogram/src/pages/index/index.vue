@@ -1,6 +1,6 @@
 <template>
   <view class="page home-page">
-    <AuthIdentityBar />
+    <AuthIdentityBar passive-guest />
 
     <view v-if="backendStatus.maintenance" class="maintenance-state">
       <image class="maintenance-art" src="/static/art/maintenance-landscape.jpg" mode="widthFix" />

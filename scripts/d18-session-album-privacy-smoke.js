@@ -23,6 +23,43 @@ async function request(method, path, body, token, expectedStatus = 200) {
   return payload;
 }
 
+async function multipartRequest(method, path, parts, token, expectedStatus = 200) {
+  const boundary = `----pinche-d18-${suffix}-${Math.random().toString(16).slice(2)}`;
+  const chunks = [];
+  for (const part of parts) {
+    chunks.push(Buffer.from(`--${boundary}\r\n`));
+    chunks.push(
+      Buffer.from(
+        `Content-Disposition: form-data; name="${part.name}"; filename="${part.filename}"\r\n`
+      )
+    );
+    chunks.push(Buffer.from(`Content-Type: ${part.contentType}\r\n\r\n`));
+    chunks.push(part.body);
+    chunks.push(Buffer.from("\r\n"));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+      ...(token ? { authorization: `Bearer ${token}` } : {})
+    },
+    body: Buffer.concat(chunks)
+  });
+
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+
+  if (response.status !== expectedStatus) {
+    throw new Error(
+      `${method} ${path} expected ${expectedStatus}, got ${response.status}: ${text}`
+    );
+  }
+
+  return payload;
+}
+
 async function login(code) {
   const payload = await request("POST", "/api/auth/wechat/login", { code });
   return payload.data;
@@ -158,7 +195,29 @@ async function approveSeat(sessionId, seatId, player, owner) {
 }
 
 function fakeAlbumPhotoUrl(sessionId, userId, serial = 1) {
-  return `/uploads/session-album/album-${sessionId}-${userId}-${suffix + serial}-aaaaaaaaaaaaaaaa.jpg`;
+  return `/uploads/session-album/display/album-${sessionId}-${userId}-${suffix + serial}-aaaaaaaaaaaaaaaa.jpg`;
+}
+
+async function uploadAlbumPhoto(sessionId, token, label = "photo") {
+  const onePixelJpeg = Buffer.from(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/Aaf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/Aaf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z",
+    "base64"
+  );
+  const uploaded = await multipartRequest(
+    "POST",
+    `/api/sessions/${sessionId}/album/uploads`,
+    [
+      {
+        name: "photo",
+        filename: `${label}.jpg`,
+        contentType: "image/jpeg",
+        body: onePixelJpeg
+      }
+    ],
+    token,
+    201
+  );
+  return uploaded.data.photoUrl;
 }
 
 function hasPhoto(album, photoId) {
@@ -222,7 +281,7 @@ async function main() {
   const created = await request(
     "POST",
     `/api/sessions/${session.id}/album/photos`,
-    { photoUrl: fakeAlbumPhotoUrl(session.id, owner.user.id) },
+    { photoUrl: await uploadAlbumPhoto(session.id, owner.token, "owner-album") },
     owner.token,
     201
   );

@@ -7,6 +7,10 @@ const srcRoot = path.join(miniprogramRoot, "src");
 const pagesJsonPath = path.join(srcRoot, "pages.json");
 const manifestJsonPath = path.join(srcRoot, "manifest.json");
 const miniprogramProjectConfigPath = path.join(miniprogramRoot, "project.config.json");
+const miniprogramPrivateProjectConfigPath = path.join(
+  miniprogramRoot,
+  "project.private.config.json"
+);
 const srcProjectConfigPath = path.join(srcRoot, "project.config.json");
 const viteConfigPath = path.join(miniprogramRoot, "vite.config.js");
 const miniprogramDevEnvPath = path.join(miniprogramRoot, ".env.development");
@@ -15,12 +19,8 @@ const miniprogramDevRoot = path.join(miniprogramRoot, "dist/dev/mp-weixin");
 const miniprogramBuildRoot = path.join(miniprogramRoot, "dist/build/mp-weixin");
 const codexHooksPath = path.join(root, ".codex/hooks.json");
 const devtoolsHookPath = path.join(root, "scripts/devtools-refresh-hook.js");
-const developmentApiBaseUrlExamples = [
-  "http://127.0.0.1:3018",
-  "http://localhost:3018",
-  "http://192.168.x.x:3018"
-];
 const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
+const productionWechatAppId = "wx2675a606d3bd242c";
 const mainPackageLimitBytes = Math.floor(1.5 * 1024 * 1024);
 const localMediaLimitBytes = 200 * 1024;
 const localFontLimitBytes = 200 * 1024;
@@ -138,12 +138,7 @@ function assertMinifiedEnabled(file, setting) {
 }
 
 function isDevelopmentApiBaseUrl(value) {
-  if (value === "http://127.0.0.1:3018" || value === "http://localhost:3018") {
-    return true;
-  }
-  return /^http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}):3018$/.test(
-    value || ""
-  );
+  return value === productionApiBaseUrl;
 }
 
 function assertMediaAssetsUnderLimit(rootDir, label, { skipDist = false } = {}) {
@@ -243,22 +238,40 @@ function assertNoDcloudPreloadImageCode(rootDir, label) {
 if (!fs.existsSync(pagesJsonPath)) {
   fail("apps/miniprogram/src/pages.json is missing");
 } else {
+  let manifestJson = null;
   if (fs.existsSync(miniprogramProjectConfigPath)) {
-    assertMinifiedEnabled(miniprogramProjectConfigPath, readJson(miniprogramProjectConfigPath).setting);
+    const projectConfig = readJson(miniprogramProjectConfigPath);
+    assertMinifiedEnabled(miniprogramProjectConfigPath, projectConfig.setting);
+    if (projectConfig.appid !== productionWechatAppId) {
+      fail(`Miniprogram project.config.json must use appid ${productionWechatAppId}`);
+    }
+  }
+  if (fs.existsSync(miniprogramPrivateProjectConfigPath)) {
+    const privateProjectConfig = readJson(miniprogramPrivateProjectConfigPath);
+    if (privateProjectConfig.appid && privateProjectConfig.appid !== productionWechatAppId) {
+      fail("Miniprogram project.private.config.json must not override appid");
+    }
   }
   if (fs.existsSync(srcProjectConfigPath)) {
-    assertMinifiedEnabled(srcProjectConfigPath, readJson(srcProjectConfigPath).setting);
+    const srcProjectConfig = readJson(srcProjectConfigPath);
+    assertMinifiedEnabled(srcProjectConfigPath, srcProjectConfig.setting);
+    if (srcProjectConfig.appid !== productionWechatAppId) {
+      fail(`Miniprogram src/project.config.json must use appid ${productionWechatAppId}`);
+    }
   }
   if (fs.existsSync(manifestJsonPath)) {
-    const manifestJson = readJson(manifestJsonPath);
+    manifestJson = readJson(manifestJsonPath);
     assertMinifiedEnabled(manifestJsonPath, manifestJson["mp-weixin"]?.setting);
+    if (manifestJson["mp-weixin"]?.appid !== productionWechatAppId) {
+      fail(`Miniprogram manifest must use appid ${productionWechatAppId}`);
+    }
   }
 
   const pagesJson = readJson(pagesJsonPath);
   const pages = pagesJson.pages || [];
 
-  if (pagesJson.lazyCodeLoading === "requiredComponents") {
-    fail('pages.json must not enable lazyCodeLoading: "requiredComponents"; it can break DevTools JSON collection');
+  if (manifestJson?.["mp-weixin"]?.lazyCodeLoading !== "requiredComponents") {
+    fail('Miniprogram manifest must enable lazyCodeLoading: "requiredComponents" for component lazy injection');
   }
 
   assertMediaAssetsUnderLimit(miniprogramRoot, "Miniprogram project", { skipDist: true });
@@ -283,8 +296,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     const builtAppJsonPath = path.join(miniprogramBuildRoot, "app.json");
     if (fs.existsSync(builtAppJsonPath)) {
       const builtAppJson = readJson(builtAppJsonPath);
-      if (builtAppJson.lazyCodeLoading === "requiredComponents") {
-        fail('Built app.json must not include lazyCodeLoading: "requiredComponents"');
+      if (builtAppJson.lazyCodeLoading !== "requiredComponents") {
+        fail('Built app.json must include lazyCodeLoading: "requiredComponents"');
       }
     }
 
@@ -421,6 +434,9 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   if (/class="maintenance-art"\s+src="\/static\/art\/ticket-landscape\.(?:webp|jpe?g|png)"/.test(indexSource)) {
     fail("Entry page maintenance state must not reuse the ticket footer landscape art asset");
+  }
+  if (!indexSource.includes("<AuthIdentityBar passive-guest")) {
+    fail("Entry page identity bar must stay in passive guest mode before users choose login");
   }
   if (!/\.home-panel\s*\{[\s\S]*width:\s*420rpx;[\s\S]*margin:\s*0 auto;/.test(indexSource)) {
     fail("Entry page must keep the Create/Mine action stack aligned to one fixed width");
@@ -876,6 +892,8 @@ if (!fs.existsSync(pagesJsonPath)) {
       "AUTH_CHANGE_EVENT",
       "getCurrentUser",
       "goLoginPage",
+      "passiveGuest",
+      "handleIdentityTap",
       "overflow: hidden",
       "white-space: nowrap"
     ]) {
@@ -955,9 +973,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Miniprogram development env is missing: apps/miniprogram/.env.development");
   } else if (!isDevelopmentApiBaseUrl(readEnv(miniprogramDevEnvPath).VITE_API_BASE_URL)) {
     fail(
-      `Miniprogram development API base URL must be one of ${developmentApiBaseUrlExamples.join(
-        ", "
-      )} or a private LAN IP on port 3018`
+      `Miniprogram development API base URL must be ${productionApiBaseUrl}`
     );
   }
   if (!fs.existsSync(miniprogramProdEnvPath)) {
