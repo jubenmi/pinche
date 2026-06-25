@@ -1,6 +1,10 @@
 <template>
   <view class="auth-identity">
-    <view class="auth-identity-bar" :class="{ empty: !user }" @tap="openProfileModal(false)">
+    <view
+      class="auth-identity-bar"
+      :class="{ empty: !user, passive: !user && passiveGuest }"
+      @tap="handleIdentityTap"
+    >
       <view v-if="user" class="auth-avatar" :class="barAvatarClass">
         <image
           class="auth-avatar-image"
@@ -11,8 +15,9 @@
         />
       </view>
       <view class="auth-main">
-        <text class="auth-state">{{ user ? "已登录" : "未登录" }}</text>
+        <text class="auth-state">{{ authStateText }}</text>
         <view class="auth-name">
+          <image v-if="barGenderIcon" class="auth-gender-icon" :src="barGenderIcon" mode="aspectFit" />
           <text class="auth-name-text">{{ displayName }}</text>
         </view>
       </view>
@@ -50,7 +55,12 @@
           </button>
           <view class="profile-preview-copy">
             <view class="profile-name-control">
-              <text v-if="profileGenderSymbol" class="profile-gender-symbol">{{ profileGenderSymbol }}</text>
+              <image
+                v-if="profileGenderIcon"
+                class="profile-gender-icon"
+                :src="profileGenderIcon"
+                mode="aspectFit"
+              />
               <input
                 class="profile-nickname-input"
                 type="nickname"
@@ -179,6 +189,11 @@ const DEFAULT_AVATARS = {
   }
 };
 
+const GENDER_ICONS = {
+  male: "/static/icons/gender-male.png",
+  female: "/static/icons/gender-female.png"
+};
+
 function avatarForGender(gender) {
   return DEFAULT_AVATARS[gender] || DEFAULT_AVATARS.unknown;
 }
@@ -187,24 +202,12 @@ function genderAvatarClass(gender) {
   return ["male", "female"].includes(gender) ? gender : "unknown";
 }
 
-function genderSymbol(gender) {
-  if (gender === "male") {
-    return "♂";
-  }
-  if (gender === "female") {
-    return "♀";
-  }
-  return "";
+function genderIcon(gender) {
+  return GENDER_ICONS[gender] || "";
 }
 
 function profileDisplayName(nickname) {
   return (nickname || "").trim() || "填写昵称";
-}
-
-function profileNameWithGenderSymbol(nickname, value) {
-  const name = profileDisplayName(nickname);
-  const symbol = genderSymbol(value);
-  return symbol ? `${symbol} ${name}` : name;
 }
 
 function currentPageRoute() {
@@ -216,6 +219,12 @@ function currentPageRoute() {
 }
 
 export default {
+  props: {
+    passiveGuest: {
+      type: Boolean,
+      default: false
+    }
+  },
   data() {
     return {
       user: null,
@@ -242,15 +251,21 @@ export default {
   computed: {
     displayName() {
       if (!this.user) {
-        return "等待微信登录";
+        return this.passiveGuest ? "可先体验功能" : "前往登录页";
       }
-      return profileNameWithGenderSymbol(this.user.nickname, this.user.gender);
+      return profileDisplayName(this.user.nickname);
     },
-    barGenderSymbol() {
-      return genderSymbol(this.user?.gender);
+    authStateText() {
+      if (this.user) {
+        return "已登录";
+      }
+      return this.passiveGuest ? "游客浏览" : "未登录";
     },
-    profileGenderSymbol() {
-      return genderSymbol(this.draftGender || this.user?.gender);
+    barGenderIcon() {
+      return genderIcon(this.user?.gender);
+    },
+    profileGenderIcon() {
+      return genderIcon(this.draftGender || this.user?.gender);
     },
     profileNicknamePlaceholder() {
       return "填写昵称";
@@ -359,6 +374,12 @@ export default {
       this.draftAvatarUrl = this.user?.avatarUrl || "";
       this.draftAvatarTempPath = "";
       this.clearAvatarChoosing();
+    },
+    handleIdentityTap() {
+      if (!this.user && this.passiveGuest) {
+        return;
+      }
+      this.openProfileModal(false);
     },
     clearAvatarChoosing() {
       this.avatarChoosing = false;
@@ -745,24 +766,18 @@ export default {
 .auth-name {
   display: flex;
   align-items: center;
-  gap: 6rpx;
+  gap: 0;
   overflow: hidden;
   min-width: 0;
   height: 32rpx;
 }
 
-.auth-gender-symbol {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 22rpx;
-  height: 32rpx;
-  color: inherit;
-  font-size: 22rpx;
-  font-weight: 600;
-  line-height: 32rpx;
-  transform: translateY(-1rpx);
+.auth-gender-icon {
+  display: block;
+  flex: 0 0 22rpx;
+  width: 22rpx;
+  height: 22rpx;
+  margin-right: 3rpx;
 }
 
 .auth-name-text {
@@ -936,18 +951,11 @@ export default {
   color: #1f6f5b;
 }
 
-.profile-gender-symbol {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  min-width: 28rpx;
-  height: 42rpx;
-  color: #183d34;
-  font-size: 26rpx;
-  font-weight: 600;
-  line-height: 42rpx;
-  transform: translateY(-1rpx);
+.profile-gender-icon {
+  display: block;
+  flex: 0 0 28rpx;
+  width: 28rpx;
+  height: 28rpx;
 }
 
 .profile-nickname-input {

@@ -1,11 +1,12 @@
 <script>
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:3018";
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "https://api.pinche.jubenmi.com";
 
 export default {
   globalData: {
     apiBaseUrl,
     signupResultTemplateId: "",
     token: "",
+    authBaseUrl: "",
     user: null,
     roles: []
   },

@@ -26,6 +26,16 @@ for (const token of [
   assert(migration.includes(token), `album migration must include ${token}`);
 }
 
+const displayMigration = read("apps/api/migrations/0014_session_album_display_metadata.sql");
+for (const token of [
+  "image_width",
+  "image_height",
+  "image_byte_size",
+  "image_content_type"
+]) {
+  assert(displayMigration.includes(token), `album display migration must include ${token}`);
+}
+
 const service = read("apps/api/src/modules/core/service.js");
 for (const token of [
   "requireSessionAlbumOpen",
@@ -35,7 +45,13 @@ for (const token of [
   "allow_tagged_visible",
   "getVisibleSessionAlbumPhotoForMedia",
   "Only the photo uploader can tag this photo",
-  "tags.length === 0"
+  "tags.length === 0",
+  "session-album",
+  "display",
+  "image_width",
+  "image_height",
+  "image_byte_size",
+  "requiredPositiveInteger"
 ]) {
   assert(service.includes(token), `service must include ${token}`);
 }
@@ -46,6 +62,13 @@ assert(
 
 const server = read("apps/api/src/server.js");
 for (const token of [
+  "SESSION_ALBUM_DISPLAY_JPG_RULE",
+  "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip",
+  "sessionAlbumDisplayJpgPicOperations",
+  "processSessionAlbumDisplayJpg",
+  "getSessionAlbumDisplayMetadata",
+  "album display photo must be a processed JPEG",
+  "album display photo exceeds the 2048px size limit",
   "sessionAlbumMediaSignature",
   "verifySessionAlbumMediaQuery",
   "serveUploadedSessionAlbumPhoto",
@@ -54,7 +77,12 @@ for (const token of [
   "sessionAlbumPrivacyId",
   "sessionAlbumPeopleId",
   "sessionAlbumPhotosId",
-  "assertSessionAlbumUploadAllowed"
+  "adminSessionAlbumPhotosId",
+  "adminSessionAlbumUploadId",
+  "adminSessionAlbumPhoto",
+  "assertAdminOwnSessionAlbumAllowed",
+  "assertSessionAlbumUploadAllowed",
+  "/uploads/session-album/display/"
 ]) {
   assert(server.includes(token), `server must include ${token}`);
 }
@@ -65,6 +93,10 @@ assert(
 
 const cosStorage = read("apps/api/src/storage/cos.js");
 assert(cosStorage.includes("session-album"), "COS storage key whitelist must allow album objects");
+assert(
+  cosStorage.includes("session-album") && cosStorage.includes("display"),
+  "COS storage key whitelist must allow album display objects"
+);
 
 const api = read("apps/miniprogram/src/utils/api.js");
 for (const token of [
@@ -72,9 +104,40 @@ for (const token of [
   "uploadSessionAlbumPhoto",
   'kind: "sessionAlbumPhoto"',
   "sessionId",
-  "/album/uploads"
+  "/album/uploads",
+  "PicOperations: upload.picOperations"
 ]) {
   assert(api.includes(token), `miniprogram API must include ${token}`);
+}
+
+const adminWebPackage = read("apps/admin-web/package.json");
+assert(adminWebPackage.includes("cos-js-sdk-v5"), "admin web must depend on the COS web SDK");
+
+const adminWebApi = read("apps/admin-web/src/api.js");
+for (const token of [
+  'import("cos-js-sdk-v5")',
+  "PicOperations: upload.picOperations",
+  "adminSessionAlbumPhoto",
+  "/api/admin/sessions/",
+  "fallbackUploadSessionAlbumPhoto",
+  "getMySessionAlbumPrivacy",
+  "updateMySessionAlbumPrivacy",
+  "return data.photoUrl"
+]) {
+  assert(adminWebApi.includes(token), `admin web album upload must include ${token}`);
+}
+
+const adminAlbumWorkspace = read("apps/admin-web/src/components/SessionAlbumWorkspace.vue");
+for (const token of [
+  "隐私设置",
+  "allowUploadedVisible",
+  "allowTaggedVisible",
+  "我上传的",
+  "有我",
+  "待标注",
+  "selectedPeople"
+]) {
+  assert(adminAlbumWorkspace.includes(token), `admin album workspace must include ${token}`);
 }
 
 const pagesJson = read("apps/miniprogram/src/pages.json");

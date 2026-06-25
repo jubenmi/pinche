@@ -300,12 +300,31 @@ function sessionAlbumPhotoUrl(sessionId, userId, value) {
   const sessionIdText = String(positiveId(sessionId, "sessionId"));
   const userIdText = String(positiveId(userId, "userId"));
   const pattern = new RegExp(
-    `^\\/uploads\\/session-album\\/album-${sessionIdText}-${userIdText}-\\d+-[a-f0-9]{16}\\.(?:jpg|jpeg|png)$`
+    `^\\/uploads\\/session-album\\/display\\/(?:admin-)?album-${sessionIdText}-${userIdText}-\\d+-[a-f0-9]{16}\\.jpg$`
   );
   if (!pattern.test(text)) {
-    throw badRequest("photoUrl must contain an uploaded session album photo");
+    throw badRequest("photoUrl must contain an uploaded session album display photo");
   }
   return text;
+}
+
+function optionalPositiveInteger(value, fieldName) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) {
+    throw badRequest(`${fieldName} must be a positive integer`);
+  }
+  return number;
+}
+
+function requiredPositiveInteger(value, fieldName) {
+  const number = optionalPositiveInteger(value, fieldName);
+  if (number === null) {
+    throw badRequest(`${fieldName} is required`);
+  }
+  return number;
 }
 
 function albumPrivacy(row = {}) {
@@ -2373,6 +2392,20 @@ export async function assertSessionAlbumUploadAllowed(user, sessionId) {
   });
 }
 
+export async function assertAdminOwnSessionAlbumAllowed(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  if (!isAdmin(user)) {
+    throw forbidden("system_admin role required");
+  }
+  return withDatabaseConnection(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    if (Number(session.organizer_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the session organizer can use admin album upload");
+    }
+    return session;
+  });
+}
+
 export async function getMySessionAlbumPrivacy(user, sessionId) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
@@ -2489,6 +2522,10 @@ export async function listSessionAlbum(user, sessionId) {
         uploader_name: photo.uploader_nickname || photo.uploader_open_id || "车友",
         is_mine: Number(photo.uploader_user_id) === Number(user.user.id),
         can_tag: Number(photo.uploader_user_id) === Number(user.user.id),
+        image_width: photo.image_width ? Number(photo.image_width) : null,
+        image_height: photo.image_height ? Number(photo.image_height) : null,
+        image_byte_size: photo.image_byte_size ? Number(photo.image_byte_size) : null,
+        image_content_type: photo.image_content_type || "image/jpeg",
         created_at: photo.created_at,
         tags
       });
@@ -2508,15 +2545,45 @@ export async function listSessionAlbum(user, sessionId) {
 export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
   const photoUrl = sessionAlbumPhotoUrl(id, user.user.id, body.photoUrl || body.photo_url);
+  const imageWidth = requiredPositiveInteger(body.imageWidth ?? body.image_width, "imageWidth");
+  const imageHeight = requiredPositiveInteger(body.imageHeight ?? body.image_height, "imageHeight");
+  const imageByteSize = requiredPositiveInteger(
+    body.imageByteSize ?? body.image_byte_size,
+    "imageByteSize"
+  );
+  const imageContentType = String(body.imageContentType || body.image_content_type || "image/jpeg")
+    .trim()
+    .toLowerCase();
+  if (imageContentType !== "image/jpeg") {
+    throw badRequest("imageContentType must be image/jpeg");
+  }
   return withTransaction(async (connection) => {
     const session = await requireSessionAlbumOpen(connection, id);
     await requireSessionAlbumMember(connection, session, user);
     const [result] = await connection.query(
       `
-        INSERT INTO session_album_photos (session_id, uploader_user_id, photo_url, status)
-        VALUES (?, ?, ?, 'active')
+        INSERT INTO session_album_photos
+          (
+            session_id,
+            uploader_user_id,
+            photo_url,
+            image_width,
+            image_height,
+            image_byte_size,
+            image_content_type,
+            status
+          )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
       `,
-      [id, user.user.id, photoUrl]
+      [
+        id,
+        user.user.id,
+        photoUrl,
+        imageWidth,
+        imageHeight,
+        imageByteSize,
+        imageContentType
+      ]
     );
     const photo = await findById(connection, "session_album_photos", result.insertId);
     return {
@@ -2525,6 +2592,10 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
       uploader_user_id: Number(photo.uploader_user_id),
       is_mine: true,
       can_tag: true,
+      image_width: photo.image_width ? Number(photo.image_width) : null,
+      image_height: photo.image_height ? Number(photo.image_height) : null,
+      image_byte_size: photo.image_byte_size ? Number(photo.image_byte_size) : null,
+      image_content_type: photo.image_content_type || "image/jpeg",
       created_at: photo.created_at,
       tags: []
     };

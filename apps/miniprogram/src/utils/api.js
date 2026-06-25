@@ -1,6 +1,7 @@
 const TOKEN_KEY = "pinche_token";
 const USER_KEY = "pinche_user";
 const ROLES_KEY = "pinche_roles";
+const AUTH_BASE_URL_KEY = "pinche_auth_base_url";
 export const AUTH_CHANGE_EVENT = "pinche-auth-change";
 export const AUTH_PROFILE_REQUEST_EVENT = "pinche-auth-profile-request";
 export const AUTH_PROFILE_ACK_EVENT = "pinche-auth-profile-ack";
@@ -175,22 +176,39 @@ export function checkBackendHealth(options = {}) {
 export function setToken(token) {
   const app = getApp();
   app.globalData.token = token || "";
+  app.globalData.authBaseUrl = token ? getApiBaseUrl() : "";
   if (token) {
     uni.setStorageSync(TOKEN_KEY, token);
+    uni.setStorageSync(AUTH_BASE_URL_KEY, getApiBaseUrl());
   } else {
     uni.removeStorageSync(TOKEN_KEY);
+    uni.removeStorageSync(AUTH_BASE_URL_KEY);
   }
 }
 
 export function getToken() {
   const app = getApp();
   if (app.globalData.token) {
-    return app.globalData.token;
+    if (app.globalData.authBaseUrl === getApiBaseUrl()) {
+      return app.globalData.token;
+    }
+    clearAuth();
+    return "";
   }
 
   const token = uni.getStorageSync(TOKEN_KEY) || "";
-  app.globalData.token = token;
-  return token;
+  const authBaseUrl = uni.getStorageSync(AUTH_BASE_URL_KEY) || "";
+  if (token && authBaseUrl !== getApiBaseUrl()) {
+    clearAuth();
+    return "";
+  }
+  if (token) {
+    app.globalData.token = token;
+    app.globalData.authBaseUrl = authBaseUrl;
+    return app.globalData.token;
+  }
+
+  return "";
 }
 
 export function setAuth(auth) {
@@ -205,6 +223,13 @@ export function setAuth(auth) {
 
 export function getCurrentUser() {
   const app = getApp();
+  const token = app.globalData.token || uni.getStorageSync(TOKEN_KEY) || "";
+  const authBaseUrl = app.globalData.authBaseUrl || uni.getStorageSync(AUTH_BASE_URL_KEY) || "";
+  if (token && authBaseUrl !== getApiBaseUrl()) {
+    clearAuth();
+    return { user: null, roles: [] };
+  }
+
   const user = app.globalData.user || uni.getStorageSync(USER_KEY) || null;
   const storedRoles = uni.getStorageSync(ROLES_KEY) || [];
   const roles =
@@ -237,9 +262,11 @@ export function clearCurrentUserAvatarUrl(avatarUrl) {
 export function clearAuth() {
   const app = getApp();
   app.globalData.token = "";
+  app.globalData.authBaseUrl = "";
   app.globalData.user = null;
   app.globalData.roles = [];
   uni.removeStorageSync(TOKEN_KEY);
+  uni.removeStorageSync(AUTH_BASE_URL_KEY);
   uni.removeStorageSync(USER_KEY);
   uni.removeStorageSync(ROLES_KEY);
   notifyAuthChange();

@@ -144,15 +144,17 @@ assert(
 );
 assert(identityBar.includes("user.nickname"), "identity display must prefer nickname");
 assert(
-  identityBar.includes("profileNameWithGenderSymbol") &&
-    identityBar.includes('return "♂";') &&
-    identityBar.includes('return "♀";') &&
-    identityBar.includes("profileNameWithGenderSymbol(this.user.nickname, this.user.gender)") &&
-    identityBar.includes("profileGenderSymbol"),
-  "identity profile names must prefix nickname with saved or drafted gender symbol"
+  identityBar.includes("GENDER_ICONS") &&
+    identityBar.includes("/static/icons/gender-male.png") &&
+    identityBar.includes("/static/icons/gender-female.png") &&
+    identityBar.includes("barGenderIcon") &&
+    identityBar.includes("profileGenderIcon") &&
+    identityBar.includes("profileDisplayName(this.user.nickname)") &&
+    identityBar.includes("draftGender || this.user?.gender"),
+  "identity profile names must show nickname text with saved or drafted gender icon"
 );
 assert(
-  identityBar.includes("profileGenderSymbol") &&
+  identityBar.includes("profileGenderIcon") &&
     identityBar.includes('type="nickname"') &&
     identityBar.includes("handleNicknameInput"),
   "profile modal nickname text must use the native WeChat nickname input"
@@ -187,7 +189,7 @@ assert(
 );
 assert(
   !identityBar.includes("this.user.open_id || this.user.openid") &&
-    identityBar.includes("profileNameWithGenderSymbol(this.user.nickname, this.user.gender)"),
+    identityBar.includes("profileDisplayName(this.user.nickname)"),
   "identity display must show fill nickname instead of falling back to openid"
 );
 assert(
