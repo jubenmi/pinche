@@ -1,5 +1,5 @@
 <template>
-  <LoginPanel v-if="!auth.token" @authenticated="setAuth" />
+  <LoginPanel v-if="!auth.token" :build-version="buildVersion" @authenticated="setAuth" />
   <div v-else class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <aside class="sidebar">
       <div class="brand">
@@ -73,7 +73,7 @@ const auth = ref(getStoredAuth());
 const sidebarCollapsed = ref(false);
 const initialSessionId = new URLSearchParams(window.location.search).get("sessionId");
 const activeView = ref(initialSessionId ? "miniapp" : "catalog");
-const buildVersion = `版本 ${__PINCHE_BUILD_TIME__}`;
+const buildVersion = `版本号 ${__PINCHE_BUILD_TIME__}`;
 const pageTitle = computed(() => {
   if (activeView.value === "album") {
     return "我的车局相册";

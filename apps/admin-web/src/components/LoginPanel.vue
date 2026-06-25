@@ -16,6 +16,7 @@
         {{ loading ? "生成中" : "刷新二维码" }}
       </button>
     </section>
+    <div class="app-build-version">{{ buildVersion }}</div>
   </main>
 </template>
 
@@ -23,6 +24,13 @@
 import QRCode from "qrcode";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { createLoginTicket, pollLoginTicket, setStoredAuth } from "../api";
+
+defineProps({
+  buildVersion: {
+    type: String,
+    required: true
+  }
+});
 
 const emit = defineEmits(["authenticated"]);
 const qrCanvas = ref(null);

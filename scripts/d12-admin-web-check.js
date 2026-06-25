@@ -193,6 +193,10 @@ assert(
 const loginPanel = read("apps/admin-web/src/components/LoginPanel.vue");
 assert(loginPanel.includes("QRCode"), "login panel should generate a QR code");
 assert(loginPanel.includes("pollLoginTicket"), "login panel should poll ticket status");
+assert(
+  loginPanel.includes("buildVersion") && loginPanel.includes("app-build-version"),
+  "login panel should show the build-time version on the public home page"
+);
 
 const appShell = read("apps/admin-web/src/App.vue");
 for (const token of ["shell-toggle", "user-avatar", "sidebar-collapse"]) {
@@ -204,6 +208,11 @@ for (const token of ["MiniProgramWorkspace", "网页小程序", "activeView === 
 for (const token of ["buildVersion", "__PINCHE_BUILD_TIME__", "app-build-version"]) {
   assert(appShell.includes(token), `admin shell should render build-time version ${token}`);
 }
+assert(
+  appShell.includes(':build-version="buildVersion"') &&
+    appShell.includes("版本号 ${__PINCHE_BUILD_TIME__}"),
+  "admin shell should pass the Beijing build-time version to the login home page"
+);
 
 const catalogWorkspace = read("apps/admin-web/src/components/CatalogWorkspace.vue");
 for (const token of [
