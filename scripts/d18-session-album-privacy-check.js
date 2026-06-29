@@ -51,10 +51,20 @@ for (const token of [
   "image_width",
   "image_height",
   "image_byte_size",
-  "requiredPositiveInteger"
+  "requiredPositiveInteger",
+  "await requireSessionAlbumMember(connection, session, user);",
+  "Only session members can view the session album"
 ]) {
   assert(service.includes(token), `service must include ${token}`);
 }
+assert(
+  /export async function listSessionAlbum[\s\S]{0,500}await requireSessionAlbumMember\(connection, session, user\);/.test(service),
+  "album list must require same-session membership"
+);
+assert(
+  /export async function getVisibleSessionAlbumPhotoForMedia[\s\S]{0,700}isSessionAlbumMember\(connection, session, currentUserId\)/.test(service),
+  "album media visibility must require same-session membership"
+);
 assert(
   !/isAlbumPhotoVisibleToUser[\s\S]{0,600}isAdmin/.test(service),
   "album photo visibility must not grant system_admin bypass"
@@ -71,6 +81,7 @@ for (const token of [
   "album display photo exceeds the 2048px size limit",
   "sessionAlbumMediaSignature",
   "verifySessionAlbumMediaQuery",
+  "private, no-store",
   "serveUploadedSessionAlbumPhoto",
   "sessionAlbumPhoto",
   "/api/session-album/photos/",
@@ -86,6 +97,14 @@ for (const token of [
 ]) {
   assert(server.includes(token), `server must include ${token}`);
 }
+assert(
+  /sessionAlbumMediaPhotoId[\s\S]{0,500}const user = await getAuthUser\(request\);[\s\S]{0,500}getVisibleSessionAlbumPhotoForMedia\(\s*user\.user\.id/.test(server),
+  "album media route must bind image access to the logged-in user"
+);
+assert(
+  !server.includes('query.get("userId")'),
+  "album media route must not trust userId from the URL query"
+);
 assert(
   !server.includes('url.pathname.startsWith("/uploads/session-album/")'),
   "album photos must not be exposed as public static uploads"
@@ -129,6 +148,10 @@ for (const token of [
 
 const adminAlbumWorkspace = read("apps/admin-web/src/components/SessionAlbumWorkspace.vue");
 for (const token of [
+  "fetchAuthorizedMediaObjectUrl",
+  "display_url",
+  "photo.can_tag",
+  "photo.is_mine",
   "隐私设置",
   "allowUploadedVisible",
   "allowTaggedVisible",
@@ -146,8 +169,12 @@ assert(pagesJson.includes("pages/session/albumPrivacy"), "pages.json must regist
 
 const albumPage = read("apps/miniprogram/src/pages/session/album.vue");
 for (const token of [
-  "可见照片可保存",
+  "同车成员可保存",
   "隐私照片不会展示",
+  "getToken",
+  "downloadAlbumImage",
+  "display_url",
+  'v-if="canUpload"',
   "uploadSessionAlbumPhoto",
   "标注",
   "tagKeys",
@@ -158,8 +185,8 @@ for (const token of [
 
 const privacyPage = read("apps/miniprogram/src/pages/session/albumPrivacy.vue");
 for (const token of [
-  "别人可以查看我上传的照片",
-  "别人可以查看包含我的照片",
+  "其他同车成员可以查看我上传的照片",
+  "其他同车成员可以查看包含我的照片",
   "车头也不能越权查看原图",
   "allowUploadedVisible",
   "allowTaggedVisible"
@@ -173,9 +200,13 @@ assert(detailPage.includes("相册会在发车后开放"), "session detail must 
 
 const smoke = read("scripts/d18-session-album-privacy-smoke.js");
 for (const token of [
+  "non-member should not list member-only album",
+  "album media should require login",
+  "same-session member without photo visibility should not open media",
+  "visible same-session member should open media",
   "untagged photo should be hidden from non-uploader",
   "tagged player should see photo containing them",
-  "outsider should not see when tagged player blocks visibility",
+  "other member should not see when tagged player blocks visibility",
   "admin must not bypass tagged player privacy",
   "future.session.id"
 ]) {

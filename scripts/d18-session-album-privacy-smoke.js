@@ -23,6 +23,33 @@ async function request(method, path, body, token, expectedStatus = 200) {
   return payload;
 }
 
+async function rawRequest(method, path, body, token, expectedStatus = 200) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...(token ? { authorization: `Bearer ${token}` } : {})
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  if (response.status !== expectedStatus) {
+    throw new Error(
+      `${method} ${path} expected ${expectedStatus}, got ${response.status}: ${buffer
+        .toString("utf8")
+        .slice(0, 500)}`
+    );
+  }
+
+  return {
+    status: response.status,
+    headers: response.headers,
+    body: buffer
+  };
+}
+
 async function multipartRequest(method, path, parts, token, expectedStatus = 200) {
   const boundary = `----pinche-d18-${suffix}-${Math.random().toString(16).slice(2)}`;
   const chunks = [];
@@ -224,6 +251,10 @@ function hasPhoto(album, photoId) {
   return (album.data.photos || []).some((photo) => Number(photo.id) === Number(photoId));
 }
 
+function photoInAlbum(album, photoId) {
+  return (album.data.photos || []).find((photo) => Number(photo.id) === Number(photoId));
+}
+
 async function main() {
   const admin = await login("dev-admin-openid");
   assert(admin.roles.includes("system_admin"), "admin should have system_admin role");
@@ -289,6 +320,11 @@ async function main() {
 
   const ownerAlbum = await request("GET", `/api/sessions/${session.id}/album`, undefined, owner.token);
   assert(hasPhoto(ownerAlbum, photoId), "uploader should see untagged own photo");
+  const ownerPhoto = photoInAlbum(ownerAlbum, photoId);
+  await rawRequest("GET", ownerPhoto.image_url, undefined, undefined, 401);
+  await rawRequest("GET", ownerPhoto.image_url, undefined, playerA.token, 403);
+  assert(true, "album media should require login");
+  assert(true, "same-session member without photo visibility should not open media");
   const playerInitialAlbum = await request(
     "GET",
     `/api/sessions/${session.id}/album`,
@@ -296,6 +332,16 @@ async function main() {
     playerA.token
   );
   assert(!hasPhoto(playerInitialAlbum, photoId), "untagged photo should be hidden from non-uploader");
+  await request(
+    "GET",
+    `/api/sessions/${session.id}/album`,
+    undefined,
+    intruder.token,
+    403
+  );
+  await rawRequest("GET", ownerPhoto.image_url, undefined, intruder.token, 403);
+  await rawRequest("GET", `/api/sessions/${session.id}/album`, undefined, admin.token, 403);
+  assert(true, "non-member should not list member-only album");
 
   const tagged = await request(
     "PUT",
@@ -321,20 +367,24 @@ async function main() {
     playerA.token
   );
   assert(hasPhoto(playerTaggedAlbum, photoId), "tagged player should see photo containing them");
-  const intruderAllowedAlbum = await request(
+  const playerTaggedPhoto = photoInAlbum(playerTaggedAlbum, photoId);
+  const playerTaggedMedia = await rawRequest(
+    "GET",
+    playerTaggedPhoto.image_url,
+    undefined,
+    playerA.token
+  );
+  assert(
+    (playerTaggedMedia.headers.get("content-type") || "").includes("image/jpeg"),
+    "visible same-session member should open media"
+  );
+  const otherMemberAllowedAlbum = await request(
     "GET",
     `/api/sessions/${session.id}/album`,
     undefined,
-    intruder.token
+    playerB.token
   );
-  assert(hasPhoto(intruderAllowedAlbum, photoId), "outsider should see when uploader and tagged player allow visibility");
-  const adminAllowedAlbum = await request(
-    "GET",
-    `/api/sessions/${session.id}/album`,
-    undefined,
-    admin.token
-  );
-  assert(hasPhoto(adminAllowedAlbum, photoId), "admin should only see through normal visibility when allowed");
+  assert(hasPhoto(otherMemberAllowedAlbum, photoId), "other member should see when uploader and tagged player allow visibility");
 
   await request(
     "PUT",
@@ -342,20 +392,19 @@ async function main() {
     { allowUploadedVisible: true, allowTaggedVisible: false },
     playerA.token
   );
-  const intruderBlockedAlbum = await request(
+  const otherMemberBlockedAlbum = await request(
     "GET",
     `/api/sessions/${session.id}/album`,
     undefined,
-    intruder.token
+    playerB.token
   );
-  assert(!hasPhoto(intruderBlockedAlbum, photoId), "outsider should not see when tagged player blocks visibility");
-  const adminBlockedAlbum = await request(
-    "GET",
-    `/api/sessions/${session.id}/album`,
-    undefined,
-    admin.token
+  assert(
+    !hasPhoto(otherMemberBlockedAlbum, photoId),
+    "other member should not see when tagged player blocks visibility"
   );
-  assert(!hasPhoto(adminBlockedAlbum, photoId), "admin must not bypass tagged player privacy");
+  await rawRequest("GET", playerTaggedPhoto.image_url, undefined, playerB.token, 403);
+  await rawRequest("GET", `/api/sessions/${session.id}/album`, undefined, admin.token, 403);
+  assert(true, "admin must not bypass tagged player privacy");
   const playerStillVisibleAlbum = await request(
     "GET",
     `/api/sessions/${session.id}/album`,

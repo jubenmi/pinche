@@ -670,32 +670,31 @@ async function saveUploadedSessionAlbumPhoto(request, userId, sessionId, options
   });
 }
 
-function sessionAlbumMediaSignature(photoId, userId, expires) {
+function sessionAlbumMediaSignature(photoId, expires) {
   return crypto
     .createHmac("sha256", config.sessionSecret)
-    .update(`${photoId}:${userId}:${expires}`)
+    .update(`${photoId}:${expires}`)
     .digest("hex");
 }
 
-function sessionAlbumMediaPath(photoId, userId) {
+function sessionAlbumMediaPath(photoId) {
   const expires = Math.floor(Date.now() / 1000) + SESSION_ALBUM_MEDIA_TOKEN_SECONDS;
-  const signature = sessionAlbumMediaSignature(photoId, userId, expires);
-  return `/api/session-album/photos/${photoId}/image?userId=${encodeURIComponent(
-    userId
-  )}&expires=${encodeURIComponent(expires)}&signature=${encodeURIComponent(signature)}`;
+  const signature = sessionAlbumMediaSignature(photoId, expires);
+  return `/api/session-album/photos/${photoId}/image?expires=${encodeURIComponent(
+    expires
+  )}&signature=${encodeURIComponent(signature)}`;
 }
 
 function verifySessionAlbumMediaQuery(photoId, query) {
-  const userId = Number.parseInt(query.get("userId") || "", 10);
   const expires = Number.parseInt(query.get("expires") || "", 10);
   const signature = query.get("signature") || "";
-  if (!userId || !expires || !signature) {
+  if (!expires || !signature) {
     throw forbidden("album media token is required");
   }
   if (expires < Math.floor(Date.now() / 1000)) {
     throw forbidden("album media token expired");
   }
-  const expected = sessionAlbumMediaSignature(photoId, userId, expires);
+  const expected = sessionAlbumMediaSignature(photoId, expires);
   const signatureBuffer = Buffer.from(signature, "hex");
   const expectedBuffer = Buffer.from(expected, "hex");
   if (
@@ -704,20 +703,19 @@ function verifySessionAlbumMediaQuery(photoId, query) {
   ) {
     throw forbidden("album media token is invalid");
   }
-  return userId;
 }
 
-function attachSessionAlbumMediaUrls(album, userId) {
+function attachSessionAlbumMediaUrls(album) {
   return {
     ...album,
     photos: album.photos.map((photo) => ({
       ...photo,
-      image_url: sessionAlbumMediaPath(photo.id, userId)
+      image_url: sessionAlbumMediaPath(photo.id)
     }))
   };
 }
 
-async function serveLocalUploadedObject({ filePath, filename, response }) {
+async function serveLocalUploadedObject({ filePath, filename, response, cacheControl }) {
   let file;
   try {
     file = await fs.readFile(filePath);
@@ -726,28 +724,28 @@ async function serveLocalUploadedObject({ filePath, filename, response }) {
   }
 
   response.writeHead(200, {
-    "cache-control": "public, max-age=31536000, immutable",
+    "cache-control": cacheControl || "public, max-age=31536000, immutable",
     "content-length": file.length,
     "content-type": uploadedObjectContentType(filename)
   });
   response.end(file);
 }
 
-async function serveCosUploadedObject({ key, filename, response }) {
+async function serveCosUploadedObject({ key, filename, response, cacheControl }) {
   const object = await getCosObject({
     key,
     config: config.cos
   });
 
   response.writeHead(200, {
-    "cache-control": "public, max-age=31536000, immutable",
+    "cache-control": cacheControl || "public, max-age=31536000, immutable",
     "content-length": object.body.length,
     "content-type": uploadedObjectContentType(filename, object.headers["content-type"])
   });
   response.end(object.body);
 }
 
-async function serveUploadedObject({ url, prefix, localDir, response }) {
+async function serveUploadedObject({ url, prefix, localDir, response, cacheControl }) {
   const requestedName = decodeURIComponent(url.pathname.slice(prefix.length));
   const filename = path.basename(requestedName);
   if (!filename || filename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(filename)) {
@@ -757,7 +755,7 @@ async function serveUploadedObject({ url, prefix, localDir, response }) {
   const key = cosObjectKeyFromUploadPath(`${prefix}${filename}`, prefix);
   if (isCosUploadStorageEnabled()) {
     try {
-      await serveCosUploadedObject({ key, filename, response });
+      await serveCosUploadedObject({ key, filename, response, cacheControl });
       return;
     } catch (error) {
       if (error.statusCode && error.statusCode !== 404) {
@@ -769,7 +767,8 @@ async function serveUploadedObject({ url, prefix, localDir, response }) {
   await serveLocalUploadedObject({
     filePath: path.join(localDir, filename),
     filename,
-    response
+    response,
+    cacheControl
   });
 }
 
@@ -838,6 +837,7 @@ async function serveUploadedSessionReviewPhoto(url, response) {
 }
 
 async function serveUploadedSessionAlbumPhoto(photo, response) {
+  const cacheControl = "private, no-store";
   try {
     const photoUrl = new URL(photo.photo_url, "http://localhost");
     if (photoUrl.pathname.startsWith("/uploads/session-album/display/")) {
@@ -845,7 +845,8 @@ async function serveUploadedSessionAlbumPhoto(photo, response) {
         url: photoUrl,
         prefix: "/uploads/session-album/display/",
         localDir: sessionAlbumDisplayUploadDir,
-        response
+        response,
+        cacheControl
       });
       return;
     }
@@ -853,7 +854,8 @@ async function serveUploadedSessionAlbumPhoto(photo, response) {
       url: photoUrl,
       prefix: "/uploads/session-album/",
       localDir: sessionAlbumUploadDir,
-      response
+      response,
+      cacheControl
     });
   } catch (error) {
     if (error instanceof AppError) {
@@ -943,8 +945,12 @@ async function route(request, response) {
     /^\/api\/session-album\/photos\/(\d+)\/image$/
   );
   if (request.method === "GET" && sessionAlbumMediaPhotoId) {
-    const userId = verifySessionAlbumMediaQuery(sessionAlbumMediaPhotoId, url.searchParams);
-    const photo = await getVisibleSessionAlbumPhotoForMedia(userId, sessionAlbumMediaPhotoId);
+    const user = await getAuthUser(request);
+    verifySessionAlbumMediaQuery(sessionAlbumMediaPhotoId, url.searchParams);
+    const photo = await getVisibleSessionAlbumPhotoForMedia(
+      user.user.id,
+      sessionAlbumMediaPhotoId
+    );
     await serveUploadedSessionAlbumPhoto(photo, response);
     return;
   }
@@ -1375,7 +1381,7 @@ async function route(request, response) {
     const album = await listSessionAlbum(user, sessionAlbumId);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album, user.user.id)
+      data: attachSessionAlbumMediaUrls(album)
     });
     return;
   }
@@ -1390,7 +1396,7 @@ async function route(request, response) {
     const album = await listSessionAlbum(user, adminSessionAlbumId);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album, user.user.id)
+      data: attachSessionAlbumMediaUrls(album)
     });
     return;
   }
@@ -1461,7 +1467,7 @@ async function route(request, response) {
       ok: true,
       data: {
         ...photo,
-        image_url: sessionAlbumMediaPath(photo.id, user.user.id)
+        image_url: sessionAlbumMediaPath(photo.id)
       }
     });
     return;
@@ -1485,7 +1491,7 @@ async function route(request, response) {
       ok: true,
       data: {
         ...photo,
-        image_url: sessionAlbumMediaPath(photo.id, user.user.id)
+        image_url: sessionAlbumMediaPath(photo.id)
       }
     });
     return;

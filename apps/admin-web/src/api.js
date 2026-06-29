@@ -58,6 +58,21 @@ export async function apiRequest(path, options = {}) {
   return parseResponse(response);
 }
 
+export async function fetchAuthorizedMediaObjectUrl(path) {
+  const auth = getStoredAuth();
+  const response = await fetch(path, {
+    headers: {
+      ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {})
+    }
+  });
+  if (!response.ok) {
+    const error = new Error(`Media request failed: ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return URL.createObjectURL(await response.blob());
+}
+
 async function apiFormDataRequest(path, formData, options = {}) {
   const auth = getStoredAuth();
   const response = await fetch(path, {

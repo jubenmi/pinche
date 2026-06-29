@@ -11,7 +11,7 @@
     <view class="section settings-section">
       <view class="setting-row">
         <view class="setting-copy">
-          <view class="setting-title">别人可以查看我上传的照片</view>
+          <view class="setting-title">其他同车成员可以查看我上传的照片</view>
           <view class="setting-note">关闭后，只有我能看我上传的照片。</view>
         </view>
         <switch
@@ -23,7 +23,7 @@
 
       <view class="setting-row">
         <view class="setting-copy">
-          <view class="setting-title">别人可以查看包含我的照片</view>
+          <view class="setting-title">其他同车成员可以查看包含我的照片</view>
           <view class="setting-note">关闭后，包含我的照片不会对外展示。</view>
         </view>
         <switch
@@ -88,14 +88,14 @@ export default {
         this.statusText = "";
       } catch (error) {
         if (error?.statusCode === 403) {
-          this.statusText = "车局相册会在发车后开放。";
+          this.statusText = "只有发车后的同车成员可以设置相册隐私。";
         } else {
           this.statusText = "隐私设置加载失败，请稍后重试。";
         }
       }
     },
     async savePrivacy() {
-      if (this.saving) {
+      if (this.saving || !this.sessionId) {
         return;
       }
       this.saving = true;
