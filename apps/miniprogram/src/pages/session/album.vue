@@ -4,7 +4,7 @@
 
     <view class="section album-head">
       <view class="title">车局相册</view>
-      <view class="text">可见照片可保存；隐私照片不会展示。</view>
+      <view class="text">同车成员可保存可见照片；隐私照片不会展示。</view>
       <view v-if="statusText" class="notice">{{ statusText }}</view>
       <view class="album-stats">
         <view class="stat-pill">你可见 {{ photos.length }} 张</view>
@@ -16,7 +16,7 @@
         <button class="button" :class="{ disabled: !canUpload || uploading }" @tap="choosePhotos">
           {{ uploading ? "上传中..." : "上传照片" }}
         </button>
-        <button class="button secondary" @tap="goPrivacy">隐私设置</button>
+        <button v-if="canUpload" class="button secondary" @tap="goPrivacy">隐私设置</button>
       </view>
     </view>
 
@@ -43,7 +43,7 @@
       <view v-for="photo in filteredPhotos" :key="photo.id" class="photo-card">
         <image
           class="photo-image"
-          :src="apiUrl(photo.image_url)"
+          :src="photo.display_url || ''"
           mode="aspectFill"
           @tap="previewPhoto(photo)"
         />
@@ -114,7 +114,7 @@
         </view>
 
         <view class="privacy-impact">
-          若其中有人关闭“包含我的照片可见”，外人将看不到这张照片。
+          若其中有人关闭“包含我的照片可见”，其他同车成员将看不到这张照片。
         </view>
 
         <view class="sheet-actions">
@@ -135,9 +135,18 @@ import {
   dataOf,
   ensureLoggedIn,
   getCurrentUser,
+  getToken,
   request,
   uploadSessionAlbumPhoto
 } from "../../utils/api";
+
+function albumMediaCachePath(photoId) {
+  const root =
+    (typeof wx !== "undefined" && wx.env?.USER_DATA_PATH) ||
+    (typeof uni !== "undefined" && uni.env?.USER_DATA_PATH) ||
+    "";
+  return root ? `${root}/session-album-${photoId}.jpg` : "";
+}
 
 export default {
   components: { AuthIdentityBar },
@@ -153,6 +162,7 @@ export default {
       uploading: false,
       savingTags: false,
       currentUserId: "",
+      mediaLoadSerial: 0,
       tagSheetPhoto: null,
       selectedTagKeys: [],
       filters: [
@@ -216,17 +226,85 @@ export default {
         this.photos = data.photos || [];
         this.hiddenCount = Number(data.hidden_count || 0);
         this.canUpload = Boolean(data.can_upload);
-        this.statusText = this.canUpload ? "" : "你可以查看满足隐私条件的照片。";
+        this.statusText = "";
+        await this.preparePhotoMedia();
         if (this.canUpload) {
           await this.loadPeople();
         }
       } catch (error) {
         if (error?.statusCode === 403) {
-          this.statusText = "车局相册会在发车后开放。";
+          this.photos = [];
+          this.canUpload = false;
+          this.statusText = "车局相册发车后仅同车成员可查看。";
         } else {
           this.statusText = "相册加载失败，请稍后重试。";
         }
       }
+    },
+    downloadAlbumImage(photo) {
+      const token = getToken();
+      const filePath = albumMediaCachePath(photo.id);
+      if (!token || !filePath || !photo.image_url) {
+        return Promise.reject(new Error("album image auth unavailable"));
+      }
+      return new Promise((resolve, reject) => {
+        uni.request({
+          url: apiUrl(photo.image_url),
+          method: "GET",
+          responseType: "arraybuffer",
+          header: {
+            Authorization: `Bearer ${token}`
+          },
+          success(response) {
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              reject(new Error(`album image request failed: ${response.statusCode}`));
+              return;
+            }
+            uni.getFileSystemManager().writeFile({
+              filePath,
+              data: response.data,
+              success() {
+                resolve(filePath);
+              },
+              fail: reject
+            });
+          },
+          fail: reject
+        });
+      });
+    },
+    async preparePhotoMedia() {
+      const serial = this.mediaLoadSerial + 1;
+      this.mediaLoadSerial = serial;
+      const photos = this.photos || [];
+      const hydrated = await Promise.all(
+        photos.map(async (photo) => {
+          try {
+            return {
+              ...photo,
+              display_url: await this.downloadAlbumImage(photo)
+            };
+          } catch (error) {
+            return {
+              ...photo,
+              display_url: ""
+            };
+          }
+        })
+      );
+      if (serial === this.mediaLoadSerial) {
+        this.photos = hydrated;
+      }
+    },
+    updatePhotoDisplayUrl(photoId, displayUrl) {
+      this.photos = this.photos.map((photo) =>
+        Number(photo.id) === Number(photoId)
+          ? {
+              ...photo,
+              display_url: displayUrl
+            }
+          : photo
+      );
     },
     async loadPeople() {
       let people = [];
@@ -334,10 +412,27 @@ export default {
         this.uploading = false;
       }
     },
-    previewPhoto(photo) {
+    async previewPhoto(photo) {
+      let previewUrl = photo.display_url;
+      let loadFailed = false;
+      if (!previewUrl) {
+        uni.showLoading({ title: "加载中" });
+        try {
+          previewUrl = await this.downloadAlbumImage(photo);
+          this.updatePhotoDisplayUrl(photo.id, previewUrl);
+        } catch (error) {
+          loadFailed = true;
+        } finally {
+          uni.hideLoading();
+        }
+      }
+      if (loadFailed || !previewUrl) {
+        uni.showToast({ title: "照片加载失败", icon: "none" });
+        return;
+      }
       uni.previewImage({
-        urls: [apiUrl(photo.image_url)],
-        current: apiUrl(photo.image_url)
+        urls: [previewUrl],
+        current: previewUrl
       });
     },
     goPrivacy() {

@@ -150,7 +150,7 @@
           <div v-else-if="!albumError" class="admin-photo-grid">
             <article v-for="photo in filteredPhotos" :key="photo.id" class="admin-photo">
               <button class="photo-preview" type="button" @click="previewPhoto(photo)">
-                <img :src="photo.image_url" alt="" />
+                <img :src="photo.display_url || ''" alt="" />
               </button>
               <div class="photo-info">
                 <strong>{{ tagSummary(photo) }}</strong>
@@ -158,12 +158,25 @@
                 <span>{{ imageMetaText(photo) }}</span>
               </div>
               <div class="photo-actions">
-                <button type="button" class="action-button" @click="openTagDrawer(photo)">
+                <button
+                  v-if="photo.can_tag"
+                  type="button"
+                  class="action-button"
+                  @click="openTagDrawer(photo)"
+                >
                   标注
                 </button>
-                <button type="button" class="action-button danger" @click="deletePhoto(photo)">
+                <button
+                  v-if="photo.is_mine"
+                  type="button"
+                  class="action-button danger"
+                  @click="deletePhoto(photo)"
+                >
                   删除
                 </button>
+                <span v-if="!photo.can_tag && !photo.is_mine" class="status">
+                  仅上传者可管理
+                </span>
               </div>
             </article>
           </div>
@@ -241,14 +254,14 @@
         <p class="status">规则和小程序一致：可见照片可以保存，不可见照片不会出现。</p>
         <label class="privacy-toggle">
           <span>
-            <strong>别人可以查看我上传的照片</strong>
+            <strong>其他同车成员可以查看我上传的照片</strong>
             <small>关闭后，只有我能看我上传的照片。</small>
           </span>
           <input v-model="privacyForm.allowUploadedVisible" type="checkbox" />
         </label>
         <label class="privacy-toggle">
           <span>
-            <strong>别人可以查看包含我的照片</strong>
+            <strong>其他同车成员可以查看包含我的照片</strong>
             <small>关闭后，包含我的照片不会对外展示。</small>
           </span>
           <input v-model="privacyForm.allowTaggedVisible" type="checkbox" />
@@ -272,10 +285,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   createSessionAlbumPhoto,
   deleteSessionAlbumPhoto,
+  fetchAuthorizedMediaObjectUrl,
   getMySessionAlbumPrivacy,
   getSessionAlbum,
   getStoredAuth,
@@ -311,6 +325,7 @@ const privacyForm = ref({
   allowUploadedVisible: true,
   allowTaggedVisible: true
 });
+const mediaObjectUrls = new Set();
 
 const photos = computed(() => album.value?.photos || []);
 const currentUserId = computed(() => getStoredAuth().user?.id || "");
@@ -455,6 +470,7 @@ async function loadAlbum() {
   albumLoading.value = true;
   albumError.value = "";
   albumStatus.value = "";
+  revokeAlbumMedia();
   album.value = null;
   people.value = [];
   try {
@@ -462,11 +478,11 @@ async function loadAlbum() {
       getSessionAlbum(selectedSession.value.id),
       listSessionAlbumPeople(selectedSession.value.id)
     ]);
-    album.value = albumData || { photos: [] };
+    album.value = await prepareAlbumMedia(albumData || { photos: [] });
     people.value = peopleData?.people || [];
     activeAlbumFilter.value = "all";
     albumStatus.value = album.value.can_upload
-      ? "可以上传。给照片标注后，其他成员才会按隐私规则看到。"
+      ? "可以上传。给照片标注后，其他同车成员才会按隐私规则看到。"
       : "你可以查看满足隐私条件的照片，但当前账号不能上传。";
   } catch (err) {
     albumError.value =
@@ -476,6 +492,37 @@ async function loadAlbum() {
   } finally {
     albumLoading.value = false;
   }
+}
+
+function revokeAlbumMedia() {
+  for (const url of mediaObjectUrls) {
+    URL.revokeObjectURL(url);
+  }
+  mediaObjectUrls.clear();
+}
+
+async function prepareAlbumMedia(albumData) {
+  const photosWithMedia = await Promise.all(
+    (albumData.photos || []).map(async (photo) => {
+      try {
+        const displayUrl = await fetchAuthorizedMediaObjectUrl(photo.image_url);
+        mediaObjectUrls.add(displayUrl);
+        return {
+          ...photo,
+          display_url: displayUrl
+        };
+      } catch (err) {
+        return {
+          ...photo,
+          display_url: ""
+        };
+      }
+    })
+  );
+  return {
+    ...albumData,
+    photos: photosWithMedia
+  };
 }
 
 const albumFilters = [
@@ -537,10 +584,17 @@ async function uploadFiles(files) {
 }
 
 function previewPhoto(photo) {
-  window.open(photo.image_url, "_blank", "noopener,noreferrer");
+  if (!photo.display_url) {
+    albumError.value = "照片加载失败，请刷新后重试。";
+    return;
+  }
+  window.open(photo.display_url, "_blank", "noopener,noreferrer");
 }
 
 function openTagDrawer(photo) {
+  if (!photo.can_tag) {
+    return;
+  }
   taggingPhoto.value = photo;
   selectedTagKeys.value = (photo.tags || []).map((tag) => tag.key);
 }
@@ -613,6 +667,9 @@ async function savePrivacy() {
 }
 
 async function deletePhoto(photo) {
+  if (!photo.is_mine) {
+    return;
+  }
   if (!window.confirm("确认删除这张照片？")) {
     return;
   }
@@ -625,4 +682,5 @@ async function deletePhoto(photo) {
 }
 
 onMounted(loadSessions);
+onBeforeUnmount(revokeAlbumMedia);
 </script>

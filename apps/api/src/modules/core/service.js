@@ -2473,10 +2473,8 @@ export async function listSessionAlbum(user, sessionId) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
     const session = await requireSessionAlbumOpen(connection, id);
-    const canUpload = await isSessionAlbumMember(connection, session, user.user.id);
-    const privacy = canUpload
-      ? await getAlbumPrivacy(connection, id, user.user.id)
-      : albumPrivacy();
+    await requireSessionAlbumMember(connection, session, user);
+    const privacy = await getAlbumPrivacy(connection, id, user.user.id);
     const [photoRows] = await connection.query(
       `
         SELECT
@@ -2532,7 +2530,7 @@ export async function listSessionAlbum(user, sessionId) {
     }
     return {
       session_id: id,
-      can_upload: canUpload,
+      can_upload: true,
       privacy,
       visible_count: photos.length,
       hidden_count: hiddenCount,
@@ -2682,7 +2680,10 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
     if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
     }
-    await requireSessionAlbumOpen(connection, photo.session_id);
+    const session = await requireSessionAlbumOpen(connection, photo.session_id);
+    if (!(await isSessionAlbumMember(connection, session, currentUserId))) {
+      throw forbidden("Only session members can view the session album");
+    }
     const tagsMap = await albumTagsForPhotos(connection, [id]);
     const tags = tagsMap.get(id) || [];
     const privacyByUser = await albumPrivacyMap(
