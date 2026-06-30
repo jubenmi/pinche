@@ -251,6 +251,10 @@ function hasPhoto(album, photoId) {
   return (album.data.photos || []).some((photo) => Number(photo.id) === Number(photoId));
 }
 
+function hasSession(sessionList, sessionId) {
+  return (sessionList.data || []).some((session) => Number(session.id) === Number(sessionId));
+}
+
 function photoInAlbum(album, photoId) {
   return (album.data.photos || []).find((photo) => Number(photo.id) === Number(photoId));
 }
@@ -285,6 +289,37 @@ async function main() {
   });
   const seatA = await approveSeat(session.id, seats[0].id, playerA, owner);
   await approveSeat(session.id, seats[1].id, playerB, owner);
+
+  const ownerAlbumSessions = await request(
+    "GET",
+    "/api/users/me/sessions?scope=album&limit=100",
+    undefined,
+    owner.token
+  );
+  assert(
+    hasSession(ownerAlbumSessions, session.id),
+    "album session list should include sessions organized by the current user"
+  );
+  const playerAlbumSessions = await request(
+    "GET",
+    "/api/users/me/sessions?scope=album&limit=100",
+    undefined,
+    playerA.token
+  );
+  assert(
+    hasSession(playerAlbumSessions, session.id),
+    "album session list should include sessions where the current user has a confirmed seat"
+  );
+  const intruderAlbumSessions = await request(
+    "GET",
+    "/api/users/me/sessions?scope=album&limit=100",
+    undefined,
+    intruder.token
+  );
+  assert(
+    !hasSession(intruderAlbumSessions, session.id),
+    "album session list should not include sessions outside the current user's membership"
+  );
 
   const people = await request(
     "GET",
