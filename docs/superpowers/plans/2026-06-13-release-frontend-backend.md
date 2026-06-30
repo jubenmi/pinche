@@ -316,7 +316,7 @@ Expected: The project AppID is `wx2675a606d3bd242c`, and the app can compile wit
 
 - [ ] **Step 1: Upload code from WeChat DevTools**
 
-Use WeChat DevTools upload with a release version such as `0.1.0`.
+Use WeChat DevTools upload with a release version in the `0.YYYYMMDD.N` format, such as `0.20260629.1`.
 
 Expected: Upload succeeds and the WeChat console shows a new development version.
 

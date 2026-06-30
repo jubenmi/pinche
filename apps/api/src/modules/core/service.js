@@ -1594,6 +1594,10 @@ export async function getSessionShareStats(sessionId) {
 }
 
 export async function listMySessions(user, filters = {}) {
+  if (filters.scope === "album") {
+    return listMyAlbumSessions(user, filters);
+  }
+
   return withDatabaseConnection(async (connection) => {
     const where = [
       "session.organizer_user_id = ?",
@@ -1622,6 +1626,59 @@ export async function listMySessions(user, filters = {}) {
         LIMIT ${limitValue(filters.limit)}
       `,
       values
+    );
+    return rows;
+  });
+}
+
+export async function listMyAlbumSessions(user, filters = {}) {
+  const userId = user.user.id;
+  return withDatabaseConnection(async (connection) => {
+    const where = [
+      `
+        (
+          session.organizer_user_id = ?
+          OR session.dm_user_id = ?
+          OR session.npc_user_id = ?
+          OR EXISTS (
+            SELECT 1
+            FROM session_seats member_seat
+            WHERE member_seat.session_id = session.id
+              AND member_seat.confirmed_user_id = ?
+              AND member_seat.status IN ('confirmed', 'locked')
+          )
+        )
+      `
+    ];
+    const values = [userId, userId, userId, userId];
+
+    if (filters.status) {
+      where.push("session.status = ?");
+      values.push(String(filters.status));
+    }
+
+    const [rows] = await connection.query(
+      `
+        SELECT
+          session.*,
+          CASE
+            WHEN session.organizer_user_id = ? THEN 'organizer'
+            WHEN session.dm_user_id = ? THEN 'dm'
+            WHEN session.npc_user_id = ? THEN 'npc'
+            ELSE 'seat'
+          END AS album_membership_role,
+          COUNT(DISTINCT seat.id) AS seat_count,
+          COUNT(DISTINCT signup.id) AS signup_count,
+          COUNT(DISTINCT CASE WHEN signup.status = 'pending' THEN signup.id END) AS pending_signup_count
+        FROM sessions session
+        LEFT JOIN session_seats seat ON seat.session_id = session.id
+        LEFT JOIN signups signup ON signup.session_id = session.id
+        WHERE ${where.join(" AND ")}
+        GROUP BY session.id
+        ORDER BY session.start_at DESC, session.id DESC
+        LIMIT ${limitValue(filters.limit)}
+      `,
+      [userId, userId, userId, ...values]
     );
     return rows;
   });
