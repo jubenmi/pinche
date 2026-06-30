@@ -28,7 +28,10 @@
       <view class="profile-modal" @tap.stop>
         <view class="profile-head">
           <view>
-            <view class="profile-title">{{ profileTitle }}</view>
+            <view class="profile-title-row">
+              <view class="profile-title">{{ profileTitle }}</view>
+              <text v-if="profileOpenidText" class="profile-openid">{{ profileOpenidText }}</text>
+            </view>
             <view class="profile-subtitle">{{ profileSubtitle }}</view>
           </view>
           <button v-if="!profileRequired" class="profile-close" @tap="closeProfileModal">取消</button>
@@ -311,6 +314,10 @@ export default {
     },
     profileTitle() {
       return this.profileRequired ? "完善个人信息" : "个人信息";
+    },
+    profileOpenidText() {
+      const openid = this.user?.openid || this.user?.open_id || "";
+      return openid ? `openid: ${openid}` : "";
     },
     profileSubtitle() {
       return this.profileRequired ? "请选择性别后继续使用。" : "昵称和头像会同步到个人资料。";
@@ -833,11 +840,28 @@ export default {
   gap: 24rpx;
 }
 
+.profile-title-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10rpx 14rpx;
+}
+
 .profile-title {
   color: #143d34;
   font-size: 34rpx;
   font-weight: 700;
   line-height: 1.25;
+}
+
+.profile-openid {
+  max-width: 440rpx;
+  color: rgba(82, 97, 89, 0.58);
+  font-size: 19rpx;
+  font-weight: 400;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .profile-subtitle {

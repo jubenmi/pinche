@@ -7,9 +7,9 @@
       <div class="album-panel-head">
         <div>
           <p class="eyebrow">车局相册</p>
-          <h2>我的发车相册</h2>
+          <h2>我的车局相册</h2>
         </div>
-        <p class="status">仅展示当前管理员自己发起的车局。浏览器优先直传 COS，相册仍按发车后开放规则处理。</p>
+        <p class="status">展示当前账号作为车头、DM/NPC 或已确认成员的车局。浏览器优先直传 COS，相册仍按发车后开放规则处理。</p>
       </div>
 
       <div class="toolbar toolbar-primary">
@@ -34,7 +34,7 @@
     <div class="album-layout">
       <div class="table-card session-list-card">
         <div class="section-head">
-          <h3>我的车</h3>
+          <h3>可访问车局</h3>
           <span>{{ sessions.length }} 场</span>
         </div>
         <div class="session-list">
@@ -63,7 +63,7 @@
               </template>
             </span>
           </button>
-          <div v-if="sessions.length === 0" class="empty-block">还没有符合条件的发车。</div>
+          <div v-if="sessions.length === 0" class="empty-block">还没有可进入相册的车局。</div>
         </div>
       </div>
 
@@ -182,7 +182,7 @@
           </div>
         </template>
 
-        <div v-else class="empty-block">先从左侧选择一辆自己发起的车。</div>
+        <div v-else class="empty-block">先从左侧选择一场车局。</div>
       </div>
     </div>
 
@@ -192,7 +192,7 @@
         <button class="close-button" type="button" @click="closeTagDrawer">关闭</button>
       </div>
       <div class="drawer-body">
-        <img class="tag-preview" :src="taggingPhoto.image_url" alt="" />
+        <img class="tag-preview" :src="taggingPhoto.display_url" alt="" />
         <p class="status">
           未标注照片只有上传者可见。标注座位、DM 或 NPC 后，会按成员隐私设置展示。
         </p>
@@ -433,10 +433,24 @@ function acceptedFile(file) {
   return typeAllowed || nameAllowed;
 }
 
+function isOrganizerAlbumSession(session) {
+  return (
+    session?.album_membership_role === "organizer" ||
+    Number(session?.organizer_user_id || 0) === Number(currentUserId.value || 0)
+  );
+}
+
+function albumRequestOptions(session = selectedSession.value) {
+  return {
+    adminOwner: isOrganizerAlbumSession(session)
+  };
+}
+
 async function loadSessions() {
   error.value = "";
   try {
     const rows = await listMySessions({
+      scope: "album",
       status: statusFilter.value,
       limit: "100"
     });
@@ -474,9 +488,10 @@ async function loadAlbum() {
   album.value = null;
   people.value = [];
   try {
+    const options = albumRequestOptions();
     const [albumData, peopleData] = await Promise.all([
-      getSessionAlbum(selectedSession.value.id),
-      listSessionAlbumPeople(selectedSession.value.id)
+      getSessionAlbum(selectedSession.value.id, options),
+      listSessionAlbumPeople(selectedSession.value.id, options)
     ]);
     album.value = await prepareAlbumMedia(albumData || { photos: [] });
     people.value = peopleData?.people || [];
@@ -569,8 +584,9 @@ async function uploadFiles(files) {
   try {
     for (const [index, file] of validFiles.entries()) {
       albumStatus.value = `正在上传 ${index + 1}/${validFiles.length}：${file.name}`;
-      const upload = await uploadSessionAlbumPhoto(selectedSession.value.id, file);
-      await createSessionAlbumPhoto(selectedSession.value.id, upload.photoUrl);
+      const options = albumRequestOptions();
+      const upload = await uploadSessionAlbumPhoto(selectedSession.value.id, file, options);
+      await createSessionAlbumPhoto(selectedSession.value.id, upload.photoUrl, options);
     }
     albumStatus.value = skippedCount > 0
       ? `上传完成，已跳过 ${skippedCount} 个不符合要求的文件。`

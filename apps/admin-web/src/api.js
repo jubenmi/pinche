@@ -243,18 +243,27 @@ export function listMySessions(filters) {
   return apiRequest(`/api/users/me/sessions?${new URLSearchParams(filters)}`);
 }
 
-export function getSessionAlbum(sessionId) {
-  return apiRequest(`/api/admin/sessions/${sessionId}/album`);
+function sessionAlbumBasePath(sessionId, options = {}) {
+  return options.adminOwner
+    ? `/api/admin/sessions/${sessionId}/album`
+    : `/api/sessions/${sessionId}/album`;
 }
 
-export function listSessionAlbumPeople(sessionId) {
-  return apiRequest(`/api/admin/sessions/${sessionId}/album/people`);
+export function getSessionAlbum(sessionId, options = {}) {
+  return apiRequest(sessionAlbumBasePath(sessionId, options));
 }
 
-async function fallbackUploadSessionAlbumPhoto(sessionId, file) {
+export function listSessionAlbumPeople(sessionId, options = {}) {
+  return apiRequest(`${sessionAlbumBasePath(sessionId, options)}/people`);
+}
+
+async function fallbackUploadSessionAlbumPhoto(sessionId, file, options = {}) {
   const formData = new FormData();
   formData.append("photo", file);
-  const data = await apiFormDataRequest(`/api/admin/sessions/${sessionId}/album/uploads`, formData);
+  const data = await apiFormDataRequest(
+    `${sessionAlbumBasePath(sessionId, options)}/uploads`,
+    formData
+  );
   return data.photoUrl;
 }
 
@@ -265,18 +274,19 @@ async function fallbackUploadSessionReviewPhoto(file) {
   return data.photoUrl;
 }
 
-export async function uploadSessionAlbumPhoto(sessionId, file) {
+export async function uploadSessionAlbumPhoto(sessionId, file, options = {}) {
+  const kind = options.adminOwner ? "adminSessionAlbumPhoto" : "sessionAlbumPhoto";
   const photoUrl = await uploadCosBackedFile({
-    kind: "adminSessionAlbumPhoto",
+    kind,
     file,
     intentData: { sessionId },
-    fallbackUpload: (nextFile) => fallbackUploadSessionAlbumPhoto(sessionId, nextFile)
+    fallbackUpload: (nextFile) => fallbackUploadSessionAlbumPhoto(sessionId, nextFile, options)
   });
   return { photoUrl };
 }
 
-export function createSessionAlbumPhoto(sessionId, photoUrl) {
-  return apiRequest(`/api/admin/sessions/${sessionId}/album/photos`, {
+export function createSessionAlbumPhoto(sessionId, photoUrl, options = {}) {
+  return apiRequest(`${sessionAlbumBasePath(sessionId, options)}/photos`, {
     method: "POST",
     body: { photoUrl }
   });

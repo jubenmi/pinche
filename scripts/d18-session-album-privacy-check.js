@@ -53,7 +53,10 @@ for (const token of [
   "image_byte_size",
   "requiredPositiveInteger",
   "await requireSessionAlbumMember(connection, session, user);",
-  "Only session members can view the session album"
+  "Only session members can view the session album",
+  "listMyAlbumSessions",
+  'filters.scope === "album"',
+  "album_membership_role"
 ]) {
   assert(service.includes(token), `service must include ${token}`);
 }
@@ -138,6 +141,8 @@ for (const token of [
   "PicOperations: upload.picOperations",
   "adminSessionAlbumPhoto",
   "/api/admin/sessions/",
+  "sessionAlbumBasePath",
+  "sessionAlbumPhoto",
   "fallbackUploadSessionAlbumPhoto",
   "getMySessionAlbumPrivacy",
   "updateMySessionAlbumPrivacy",
@@ -158,7 +163,9 @@ for (const token of [
   "我上传的",
   "有我",
   "待标注",
-  "selectedPeople"
+  "selectedPeople",
+  'scope: "album"',
+  "albumRequestOptions"
 ]) {
   assert(adminAlbumWorkspace.includes(token), `admin album workspace must include ${token}`);
 }

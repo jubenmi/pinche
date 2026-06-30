@@ -329,7 +329,8 @@ for (const token of [
   "adminSessionAlbumPhoto",
   "sessionReviewPhoto",
   "/api/admin/sessions/",
-  "/album/uploads"
+  "sessionAlbumBasePath",
+  "}/uploads"
 ]) {
   assert(webApi.includes(token), `admin album upload should use COS-backed upload flow with ${token}`);
 }
