@@ -164,11 +164,18 @@ for (const token of [
   "有我",
   "待标注",
   "selectedPeople",
-  'scope: "album"',
+  "defineProps",
+  "sessionId",
+  "getSession",
   "albumRequestOptions"
 ]) {
   assert(adminAlbumWorkspace.includes(token), `admin album workspace must include ${token}`);
 }
+assert(
+  !adminAlbumWorkspace.includes('scope: "album"') &&
+    !adminAlbumWorkspace.includes("listMySessions"),
+  "admin album workspace must match mini-program single-session album logic"
+);
 
 const pagesJson = read("apps/miniprogram/src/pages.json");
 assert(pagesJson.includes("pages/session/album"), "pages.json must register album page");

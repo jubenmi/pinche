@@ -372,6 +372,31 @@ export function getSessionShareStats(sessionId) {
   return apiRequest(`/api/sessions/${sessionId}/share-stats`);
 }
 
+export function trackShareView(body) {
+  return apiRequest("/api/share-events/view", {
+    method: "POST",
+    body
+  });
+}
+
+export function getSessionChat(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/chat`);
+}
+
+export function sendSessionMessage(sessionId, content) {
+  return apiRequest(`/api/sessions/${sessionId}/messages`, {
+    method: "POST",
+    body: { content }
+  });
+}
+
+export function pinSessionChatMessage(sessionId, pinnedMessageText) {
+  return apiRequest(`/api/sessions/${sessionId}/chat/pin`, {
+    method: "PATCH",
+    body: { pinnedMessageText }
+  });
+}
+
 export function claimSessionSeat(seatId, body = {}) {
   return apiRequest(`/api/session-seats/${seatId}/claim`, {
     method: "POST",

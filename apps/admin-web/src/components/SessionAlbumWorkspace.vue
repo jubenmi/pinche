@@ -7,21 +7,14 @@
       <div class="album-panel-head">
         <div>
           <p class="eyebrow">车局相册</p>
-          <h2>我的车局相册</h2>
+          <h2>{{ selectedSession?.script_name_snapshot || "车局相册" }}</h2>
         </div>
-        <p class="status">展示当前账号作为车头、DM/NPC 或已确认成员的车局。浏览器优先直传 COS，相册仍按发车后开放规则处理。</p>
+        <p class="status">和微信小程序一致：从车详情进入单场相册，发车后同车成员可查看和上传。</p>
       </div>
 
       <div class="toolbar toolbar-primary">
         <div class="filter-group">
-          <select v-model="statusFilter" name="albumSessionStatus" @change="loadSessions">
-            <option value="">全部车局</option>
-            <option value="draft">草稿</option>
-            <option value="recruiting">招募中</option>
-            <option value="locked">已锁车</option>
-            <option value="cancelled">已取消</option>
-          </select>
-          <button type="button" @click="loadSessions">刷新车局</button>
+          <button type="button" :disabled="!selectedSession" @click="loadAlbum">刷新相册</button>
         </div>
         <button class="primary" type="button" :disabled="!selectedSession" @click="loadAlbum">
           刷新相册
@@ -32,41 +25,6 @@
     <p v-if="error" class="error">{{ error }}</p>
 
     <div class="album-layout">
-      <div class="table-card session-list-card">
-        <div class="section-head">
-          <h3>可访问车局</h3>
-          <span>{{ sessions.length }} 场</span>
-        </div>
-        <div class="session-list">
-          <button
-            v-for="session in sessions"
-            :key="session.id"
-            class="session-row"
-            :class="{ active: selectedSession?.id === session.id }"
-            type="button"
-            @click="selectSession(session)"
-          >
-            <span class="session-main">
-              <strong>{{ session.script_name_snapshot || "未命名剧本" }}</strong>
-              <small>{{ session.store_name_snapshot || "未选店家" }}</small>
-            </span>
-            <span class="session-meta">
-              <span class="status-pill" :class="session.status">
-                {{ sessionStatusLabel(session.status) }}
-              </span>
-              <span>{{ formatDate(session.start_at) }}</span>
-            </span>
-            <span class="session-counts">
-              {{ session.seat_count || 0 }} 座 · {{ session.signup_count || 0 }} 申请
-              <template v-if="Number(session.pending_signup_count || 0) > 0">
-                · {{ session.pending_signup_count }} 待审
-              </template>
-            </span>
-          </button>
-          <div v-if="sessions.length === 0" class="empty-block">还没有可进入相册的车局。</div>
-        </div>
-      </div>
-
       <div class="table-card album-detail-card">
         <template v-if="selectedSession">
           <div class="section-head album-detail-head">
@@ -182,7 +140,7 @@
           </div>
         </template>
 
-        <div v-else class="empty-block">先从左侧选择一场车局。</div>
+        <div v-else class="empty-block">请先从车详情进入相册。</div>
       </div>
     </div>
 
@@ -285,15 +243,15 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   createSessionAlbumPhoto,
   deleteSessionAlbumPhoto,
   fetchAuthorizedMediaObjectUrl,
   getMySessionAlbumPrivacy,
+  getSession,
   getSessionAlbum,
   getStoredAuth,
-  listMySessions,
   listSessionAlbumPeople,
   updateMySessionAlbumPrivacy,
   updateSessionAlbumPhotoTags,
@@ -303,9 +261,11 @@ import {
 const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
 
-const sessions = ref([]);
+const props = defineProps({
+  sessionId: { type: [String, Number], default: "" }
+});
+
 const selectedSession = ref(null);
-const statusFilter = ref("");
 const album = ref(null);
 const people = ref([]);
 const error = ref("");
@@ -446,35 +406,24 @@ function albumRequestOptions(session = selectedSession.value) {
   };
 }
 
-async function loadSessions() {
+async function loadSelectedSession() {
   error.value = "";
+  albumError.value = "";
+  albumStatus.value = "";
+  revokeAlbumMedia();
+  album.value = null;
+  people.value = [];
+  if (!props.sessionId) {
+    selectedSession.value = null;
+    return;
+  }
   try {
-    const rows = await listMySessions({
-      scope: "album",
-      status: statusFilter.value,
-      limit: "100"
-    });
-    sessions.value = rows || [];
-    if (
-      !selectedSession.value ||
-      !sessions.value.some((item) => Number(item.id) === Number(selectedSession.value.id))
-    ) {
-      selectedSession.value = sessions.value[0] || null;
-    }
-    if (selectedSession.value) {
-      await loadAlbum();
-    } else {
-      album.value = null;
-      people.value = [];
-    }
+    selectedSession.value = await getSession(props.sessionId);
+    await loadAlbum();
   } catch (err) {
     error.value = err.message;
+    selectedSession.value = null;
   }
-}
-
-async function selectSession(session) {
-  selectedSession.value = session;
-  await loadAlbum();
 }
 
 async function loadAlbum() {
@@ -697,6 +646,7 @@ async function deletePhoto(photo) {
   }
 }
 
-onMounted(loadSessions);
+onMounted(loadSelectedSession);
+watch(() => props.sessionId, loadSelectedSession);
 onBeforeUnmount(revokeAlbumMedia);
 </script>

@@ -818,7 +818,7 @@ td {
 
 .album-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -1334,6 +1334,105 @@ td {
 
 .role-card.female {
   background: #fff8f5;
+}
+
+.role-card.mine,
+.role-card.switching {
+  border-color: var(--admin-accent);
+  background: #eaf6f1;
+}
+
+.role-card.taken {
+  background: #f4f6f5;
+  color: var(--admin-muted);
+}
+
+.role-card.pendingReview {
+  border-color: #dec27a;
+  background: #fff8e5;
+}
+
+.role-card.unavailable {
+  background: #f7f4ee;
+  opacity: 0.76;
+}
+
+.mini-ticket {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #fffefb 0%, #eef5ef 100%);
+}
+
+.mini-ticket strong {
+  color: var(--admin-text);
+  font-size: 18px;
+}
+
+.mini-ticket span {
+  color: var(--admin-muted-strong);
+  font-size: 13px;
+}
+
+.mini-chat-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.mini-chat-list {
+  display: grid;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.mini-chat-message {
+  display: grid;
+  gap: 6px;
+  max-width: 760px;
+  padding: 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.mini-chat-message.mine {
+  justify-self: end;
+  border-color: #c8ddd6;
+  background: #eef8f4;
+}
+
+.mini-chat-message p {
+  margin: 0;
+  color: var(--admin-text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mini-chat-meta,
+.mini-chat-compose {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mini-chat-meta {
+  justify-content: space-between;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.mini-chat-compose input {
+  flex: 1;
+  min-width: 160px;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--admin-text);
 }
 
 .mini-form-grid {

@@ -13,8 +13,8 @@
           type="button"
           @click="activeView = 'catalog'"
         >
-          <span class="nav-icon">库</span>
-          <span class="nav-text">资料库</span>
+          <span class="nav-icon">管</span>
+          <span class="nav-text">管理界面</span>
         </button>
         <button
           class="nav-item"
@@ -24,15 +24,6 @@
         >
           <span class="nav-icon">用</span>
           <span class="nav-text">网页小程序</span>
-        </button>
-        <button
-          class="nav-item"
-          :class="{ active: activeView === 'album' }"
-          type="button"
-          @click="activeView = 'album'"
-        >
-          <span class="nav-icon">图</span>
-          <span class="nav-text">车局相册</span>
         </button>
       </nav>
       <button class="sidebar-collapse" type="button" @click="sidebarCollapsed = !sidebarCollapsed">
@@ -95,8 +86,7 @@
         </div>
       </header>
       <CatalogWorkspace v-if="activeView === 'catalog'" />
-      <MiniProgramWorkspace v-else-if="activeView === 'miniapp'" />
-      <SessionAlbumWorkspace v-else />
+      <MiniProgramWorkspace v-else />
       <div class="app-build-version">{{ buildVersion }}</div>
     </section>
   </div>
@@ -108,7 +98,6 @@ import { assetUrl, clearStoredAuth, getStoredAuth } from "./api";
 import CatalogWorkspace from "./components/CatalogWorkspace.vue";
 import LoginPanel from "./components/LoginPanel.vue";
 import MiniProgramWorkspace from "./components/MiniProgramWorkspace.vue";
-import SessionAlbumWorkspace from "./components/SessionAlbumWorkspace.vue";
 
 const auth = ref(getStoredAuth());
 const sidebarCollapsed = ref(false);
@@ -178,13 +167,10 @@ const fullProfileRows = computed(() => [
   { label: "角色", value: rolesText.value }
 ]);
 const pageTitle = computed(() => {
-  if (activeView.value === "album") {
-    return "我的车局相册";
-  }
   if (activeView.value === "miniapp") {
     return "网页小程序";
   }
-  return "剧本店与剧本管理";
+  return "管理界面";
 });
 
 function formatField(value, emptyText = "未填写") {
