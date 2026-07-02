@@ -40,9 +40,6 @@
           <div class="mini-action-grid">
             <button class="primary" type="button" @click="startCreate">创建车局</button>
             <button class="secondary-action" type="button" @click="openMine">我的</button>
-            <button class="secondary-action" type="button" @click="switchScreen('album')">
-              车局相册
-            </button>
           </div>
         </div>
       </section>
@@ -182,7 +179,7 @@
           <div class="mini-bottom-actions">
             <button class="secondary-action" type="button" @click="createStep = 'role'">上一步</button>
             <button class="primary" type="button" :disabled="busy || !canCreate" @click="createPublishedSession">
-              {{ busy ? "创建中..." : "创建车局并占位" }}
+              {{ busy ? "创建中..." : "创建车局并分享" }}
             </button>
           </div>
         </section>
@@ -203,6 +200,7 @@
             <div class="mini-row-actions">
               <button type="button" class="action-button" @click="openDetail(session.id)">详情</button>
               <button type="button" class="action-button" @click="openManage(session.id)">管理</button>
+              <button type="button" class="action-button" @click="openShare(session.id)">分享</button>
               <button type="button" class="action-button danger" @click="hideOrganized(session)">下架</button>
             </div>
           </div>
@@ -223,6 +221,7 @@
             <div class="mini-row-actions">
               <button type="button" class="action-button" @click="openDetail(signup.session_id)">详情</button>
               <button type="button" class="action-button" @click="openReview(signup.session_id)">记录</button>
+              <button type="button" class="action-button" @click="openShare(signup.session_id)">分享</button>
               <button type="button" class="action-button danger" @click="hideSignup(signup)">下架</button>
             </div>
           </div>
@@ -247,9 +246,11 @@
           </div>
           <div class="mini-action-grid">
             <button class="secondary-action" type="button" @click="copySessionLink">复制详情链接</button>
+            <button class="secondary-action" type="button" @click="openShare(detailSession.id)">选择角色</button>
+            <button class="secondary-action" type="button" @click="copyShareLink">复制分享链接</button>
             <button class="secondary-action" type="button" @click="openManage(detailSession.id)">车头管理</button>
             <button class="secondary-action" type="button" @click="openReview(detailSession.id)">写记录</button>
-            <button class="secondary-action" type="button" @click="switchScreen('album')">车局相册</button>
+            <button class="secondary-action" type="button" @click="openAlbum(detailSession.id)">车局相册</button>
           </div>
         </div>
       </section>
@@ -269,9 +270,12 @@
                 type="button"
                 class="action-button"
                 :disabled="busy || !canClaimSeat(seat)"
-                @click="claimSeat(seat)"
+                @click="openShare(detailSession.id, seat.id)"
               >
                 选择此位
+              </button>
+              <button type="button" class="action-button" @click="copySeatShareLink(seat)">
+                复制此位
               </button>
             </div>
           </div>
@@ -295,6 +299,104 @@
           <div v-if="sessionReviews.length === 0" class="empty-block">还没有记录。</div>
         </div>
       </section>
+
+      <section class="table-card mini-section span-all">
+        <div class="section-head">
+          <h3>车内聊天</h3>
+          <button type="button" class="action-button" @click="loadChat">刷新</button>
+        </div>
+        <div class="mini-body">
+          <p v-if="chatStatusText" class="warning">{{ chatStatusText }}</p>
+          <div v-if="chatState.pinnedMessage" class="detail-line">
+            置顶：{{ chatState.pinnedMessage.content }}
+          </div>
+          <div v-if="!chatState.canChat" class="empty-block">
+            上车后可查看和发送车内聊天。
+          </div>
+          <div v-else class="mini-chat-panel">
+            <div class="mini-chat-list">
+              <div v-if="chatState.messages.length === 0" class="empty-block">
+                还没有留言，先发一句确认信息。
+              </div>
+              <article
+                v-for="message in chatState.messages"
+                :key="message.id"
+                class="mini-chat-message"
+                :class="{ mine: Number(message.sender_user_id) === Number(currentUserId) }"
+              >
+                <div class="mini-chat-meta">
+                  <strong>{{ message.sender_label || "玩家" }}</strong>
+                  <span>{{ formatDate(message.created_at) }}</span>
+                </div>
+                <p>{{ message.content }}</p>
+              </article>
+            </div>
+            <div class="mini-chat-compose">
+              <input v-model="chatDraft" placeholder="输入留言" @keydown.enter="sendChatMessage" />
+              <button class="primary" type="button" :disabled="busy || !chatDraft.trim()" @click="sendChatMessage">
+                发送
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div v-else-if="screen === 'share'" class="mini-grid two">
+      <section class="table-card mini-section">
+        <div class="section-head">
+          <h3>分享票</h3>
+          <span>{{ shareRoleSummaryText }}</span>
+        </div>
+        <div class="mini-body">
+          <div class="mini-ticket">
+            <strong>{{ shareSessionTitle() }}</strong>
+            <span>{{ shareSessionStoreName() }} · {{ formatDate(shareSession.start_at) }}</span>
+            <span>{{ shareRoleOptions.length || 0 }} 人本 · {{ roleDisplayText(currentShareRole) }}</span>
+          </div>
+          <p v-if="shareStatusText" class="warning">{{ shareStatusText }}</p>
+          <div class="mini-action-grid">
+            <button class="secondary-action" type="button" @click="copyShareLink">复制分享链接</button>
+            <button class="secondary-action" type="button" @click="openDetail(shareSession.id)">返回详情</button>
+            <button class="secondary-action" type="button" @click="openManage(shareSession.id)">车头管理</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="table-card mini-section">
+        <div class="section-head">
+          <h3>角色状态</h3>
+          <span>{{ shareRoleOptions.length }} 位</span>
+        </div>
+        <div class="mini-body">
+          <div class="role-card-grid">
+            <button
+              v-for="role in shareRoleCards"
+              :key="role.id"
+              class="role-card"
+              :class="[
+                role.roleGender,
+                role.stateKind,
+                { active: pendingShareRole && isSameRole(role, pendingShareRole) }
+              ]"
+              type="button"
+              @click="chooseShareRole(role)"
+            >
+              <strong>
+                {{ role.name }} {{ roleGenderSymbol(role.roleGender) }}
+                <template v-if="role.crossCast">（反串）</template>
+              </strong>
+              <span>{{ role.note || "角色位" }}</span>
+              <small>{{ role.stateLabel }}</small>
+            </button>
+          </div>
+          <div class="mini-bottom-actions">
+            <button class="primary" type="button" :disabled="busy || !pendingShareRole" @click="confirmShareRole">
+              {{ shareConfirmButtonText }}
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <div v-else-if="screen === 'manage'" class="mini-grid two">
@@ -311,11 +413,33 @@
             <textarea v-model="cancelReason" placeholder="可选"></textarea>
           </label>
           <div class="mini-action-grid">
+            <button class="secondary-action" type="button" :disabled="busy" @click="leaveOrganizer">
+              退出车头
+            </button>
             <button class="secondary-action danger" type="button" :disabled="busy" @click="cancelCurrentSession">
               取消本车
             </button>
             <button class="secondary-action" type="button" @click="openDetail(detailSession.id)">
               返回详情
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="table-card mini-section">
+        <div class="section-head">
+          <h3>置顶信息</h3>
+          <button type="button" class="action-button" @click="loadPinnedMessage">刷新</button>
+        </div>
+        <div class="mini-body">
+          <p v-if="pinnedMessageStatus" class="warning">{{ pinnedMessageStatus }}</p>
+          <label class="mini-textarea-label">
+            <span>给车内成员看的置顶一句话</span>
+            <textarea v-model="pinnedMessageDraft" maxlength="300" placeholder="集合时间、房间号或临时变更"></textarea>
+          </label>
+          <div class="mini-bottom-actions">
+            <button class="primary" type="button" :disabled="busy" @click="savePinnedMessage">
+              保存置顶
             </button>
           </div>
         </div>
@@ -420,7 +544,7 @@
       </div>
     </div>
 
-    <SessionAlbumWorkspace v-else-if="screen === 'album'" />
+    <SessionAlbumWorkspace v-else-if="screen === 'album'" :session-id="activeSessionId" />
   </section>
 </template>
 
@@ -432,6 +556,7 @@ import {
   claimSessionSeat,
   createSessionSeat,
   createUserSession,
+  getSessionChat,
   getSession,
   getSessionShareStats,
   getMySessionReview,
@@ -446,9 +571,13 @@ import {
   listSessionReviews,
   listSessionSignups,
   lockSessionSeat,
+  leaveSessionOrganizer,
+  pinSessionChatMessage,
   publishSession,
   rejectSignup,
   saveMySessionReview,
+  sendSessionMessage,
+  trackShareView,
   transferSessionOrganizer,
   updateSignupDeposit,
   uploadSessionReviewPhoto
@@ -458,8 +587,7 @@ import SessionAlbumWorkspace from "./SessionAlbumWorkspace.vue";
 const tabs = [
   { value: "home", label: "首页" },
   { value: "create", label: "发车" },
-  { value: "mine", label: "我的" },
-  { value: "album", label: "相册" }
+  { value: "mine", label: "我的" }
 ];
 const createSteps = [
   { value: "store", label: "选店" },
@@ -495,6 +623,20 @@ const cancelReason = ref("");
 const reviewState = ref({ can_review: false, review: null });
 const reviewForm = ref({ rating: 5, content: "", photos: [] });
 const reviewFileInput = ref(null);
+const focusedSeatId = ref("");
+const inboundShareCode = ref("");
+const inboundSource = ref("");
+const shareSession = ref({});
+const shareRoleOptions = ref([]);
+const pendingShareRole = ref(null);
+const currentShareRole = ref(null);
+const confirmedCrossCastRoleKey = ref("");
+const shareStatusText = ref("");
+const chatState = ref({ canChat: false, pinnedMessage: null, messages: [] });
+const chatDraft = ref("");
+const chatStatusText = ref("");
+const pinnedMessageDraft = ref("");
+const pinnedMessageStatus = ref("");
 
 const createStepLabel = computed(
   () => createSteps.find((item) => item.value === createStep.value)?.label || "创建"
@@ -506,12 +648,75 @@ const defaultPinnedMessage = computed(() => {
   return `置顶：${script} ${createDate.value} ${createTime.value}，${store}集合。`;
 });
 const canCreate = computed(() => selectedStore.value?.id && selectedScript.value?.id);
+const currentUser = computed(() => getStoredAuth().user || {});
+const currentUserId = computed(() => currentUser.value.id || "");
+const currentUserGender = computed(() => currentUser.value.gender || "");
 const seatSummary = computed(() => {
   const seats = detailSession.value.seats || [];
   const open = seats.filter((seat) => seat.status === "open").length;
   const applied = seats.filter((seat) => seat.status === "applied").length;
   const confirmed = seats.filter((seat) => ["confirmed", "locked"].includes(seat.status)).length;
   return `${seats.length}位，${open}空位，${applied}待审，${confirmed}已上车`;
+});
+const shareRoleCards = computed(() =>
+  shareRoleOptions.value.map((role) => {
+    const mine = isMineShareRole(role);
+    const pending = pendingShareRole.value && isSameRole(role, pendingShareRole.value);
+    const switching = Boolean(pending && currentShareRole.value && !isSameRole(role, currentShareRole.value));
+    const occupied = ["confirmed", "locked", "cancelled"].includes(role.status);
+    const claimable = isShareRoleClaimable(role, mine);
+    const crossCast = (pending || mine) && isCrossCast(currentUserGender.value, role.roleGender);
+    let stateKind = "available";
+    if (switching) {
+      stateKind = "switching";
+    } else if (pending || mine) {
+      stateKind = "mine";
+    } else if (occupied) {
+      stateKind = "taken";
+    } else if (role.status === "applied") {
+      stateKind = "pendingReview";
+    } else if (!claimable) {
+      stateKind = "unavailable";
+    }
+    return {
+      ...role,
+      mine,
+      pending,
+      switching,
+      taken: occupied,
+      claimable,
+      crossCast,
+      stateKind,
+      stateLabel: shareRoleStateLabel(stateKind)
+    };
+  })
+);
+const shareAvailableCount = computed(
+  () => shareRoleCards.value.filter((role) => role.stateKind === "available").length
+);
+const shareMineCount = computed(
+  () => shareRoleCards.value.filter((role) => role.stateKind === "mine").length
+);
+const shareSwitchingCount = computed(
+  () => shareRoleCards.value.filter((role) => role.stateKind === "switching").length
+);
+const shareTakenCount = computed(
+  () => shareRoleCards.value.filter((role) => role.stateKind === "taken").length
+);
+const shareRoleSummaryText = computed(
+  () =>
+    `${shareAvailableCount.value} 个可选，${shareMineCount.value} 个我选，${shareSwitchingCount.value} 个换选，${shareTakenCount.value} 个已选`
+);
+const shareConfirmButtonText = computed(() => {
+  if (
+    shareSession.value.id &&
+    currentShareRole.value &&
+    pendingShareRole.value &&
+    !isSameRole(pendingShareRole.value, currentShareRole.value)
+  ) {
+    return `换选 ${pendingShareRole.value.name}`;
+  }
+  return pendingShareRole.value ? `确认选择 ${pendingShareRole.value.name}` : "确认选择";
 });
 
 function defaultDate() {
@@ -590,10 +795,109 @@ function rolesFromScript(script) {
   }));
 }
 
+function isSameRole(left, right) {
+  return String(left?.seatId || left?.id || left?.name || "") === String(right?.seatId || right?.id || right?.name || "");
+}
+
+function roleKey(role) {
+  return String(role?.seatId || role?.id || role?.name || "");
+}
+
+function isCrossCast(playerGender, roleGender) {
+  const player = String(playerGender || "").trim();
+  const role = normalizeRoleGender(roleGender);
+  return ["male", "female"].includes(player) && ["male", "female"].includes(role) && player !== role;
+}
+
+function shareRoleStateLabel(stateKind) {
+  return {
+    available: "可选",
+    mine: "我选",
+    switching: "换选",
+    taken: "已选",
+    pendingReview: "待审",
+    unavailable: "不可选"
+  }[stateKind] || "可选";
+}
+
+function shareRolesFromSession(session) {
+  return (session.seats || []).map((seat) => ({
+    id: String(seat.id),
+    seatId: seat.id,
+    name: seat.name,
+    note: seat.role_name || seatTypeLabel(seat.seat_type),
+    roleGender: seat.role_gender || "unlimited",
+    seatType: seat.seat_type,
+    status: seat.status,
+    confirmedUserId: seat.confirmed_user_id || ""
+  }));
+}
+
+function isMineShareRole(role) {
+  return Boolean(
+    currentUserId.value &&
+      role.confirmedUserId &&
+      Number(role.confirmedUserId) === Number(currentUserId.value)
+  );
+}
+
+function isShareRoleClaimable(role, mine = false) {
+  if (!shareSession.value.id || mine) {
+    return true;
+  }
+  if (shareSession.value.status === "recruiting") {
+    return !["confirmed", "locked", "cancelled"].includes(role.status);
+  }
+  return shareSession.value.status === "locked" && isShareSessionStarted() && role.status === "open";
+}
+
+function isShareSessionStarted() {
+  const startAtValue = Date.parse(String(shareSession.value.start_at || "").replace(" ", "T"));
+  return Number.isFinite(startAtValue) && startAtValue <= Date.now();
+}
+
+function roleDisplayText(role) {
+  if (!role?.name) {
+    return "待选";
+  }
+  const symbol = roleGenderSymbol(role.roleGender);
+  const suffix = isCrossCast(currentUserGender.value, role.roleGender) ? "（反串）" : "";
+  return `${role.name}${symbol ? ` ${symbol}` : ""}${suffix}`;
+}
+
+function shareSessionTitle() {
+  return shareSession.value.script_name_snapshot || selectedScript.value?.name || "剧本待定";
+}
+
+function shareSessionStoreName() {
+  return shareSession.value.store_name_snapshot || selectedStore.value?.name || "店家待定";
+}
+
+function buildSessionLink(sessionId, extra = {}) {
+  const params = new URLSearchParams();
+  params.set("sessionId", sessionId);
+  Object.entries(extra).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value) !== "") {
+      params.set(key, value);
+    }
+  });
+  return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+}
+
+async function copyText(text, message) {
+  try {
+    await navigator.clipboard?.writeText(text);
+    statusText.value = message;
+  } catch (error) {
+    statusText.value = text;
+  }
+}
+
 function switchScreen(nextScreen) {
   screen.value = nextScreen;
   errorText.value = "";
   statusText.value = "";
+  shareStatusText.value = "";
   if (nextScreen === "mine") {
     loadMine();
   }
@@ -679,8 +983,18 @@ async function createPublishedSession() {
     if (selectedSeat) {
       await claimSessionSeat(selectedSeat.id, { note: "网页小程序创建时选择角色" });
     }
-    statusText.value = "车局已创建。";
-    await openDetail(session.id);
+    try {
+      await pinSessionChatMessage(
+        session.id,
+        pinnedMessageText.value.trim() || defaultPinnedMessage.value
+      );
+    } catch (error) {
+      statusText.value = "车局已创建，但置顶信息保存失败，可在车头管理里重试。";
+    }
+    if (!statusText.value) {
+      statusText.value = "车局已创建。";
+    }
+    await openShare(session.id);
   } catch (error) {
     errorText.value = error.message;
   } finally {
@@ -702,10 +1016,49 @@ async function loadMine() {
   }
 }
 
-async function openDetail(sessionId) {
+async function openShare(sessionId = activeSessionId.value, seatId = "") {
+  if (!sessionId) {
+    errorText.value = "请先选择车局。";
+    return;
+  }
   activeSessionId.value = sessionId;
+  focusedSeatId.value = seatId || "";
+  screen.value = "share";
+  errorText.value = "";
+  shareStatusText.value = "";
+  pendingShareRole.value = null;
+  confirmedCrossCastRoleKey.value = "";
+  try {
+    const session = await getSession(sessionId);
+    shareSession.value = session || {};
+    shareRoleOptions.value = shareRolesFromSession(shareSession.value);
+    currentShareRole.value =
+      shareRoleOptions.value.find((role) => isMineShareRole(role)) || null;
+    if (seatId) {
+      const focusedRole = shareRoleOptions.value.find(
+        (role) => Number(role.seatId || role.id) === Number(seatId)
+      );
+      if (focusedRole && isShareRoleClaimable(focusedRole, isMineShareRole(focusedRole))) {
+        pendingShareRole.value = focusedRole;
+        shareStatusText.value = `已定位到 ${focusedRole.name}。`;
+      } else if (focusedRole) {
+        shareStatusText.value = `${focusedRole.name} 当前不可选择。`;
+      }
+    }
+  } catch (error) {
+    errorText.value = error.message;
+  }
+}
+
+async function openDetail(sessionId, options = {}) {
+  activeSessionId.value = sessionId;
+  focusedSeatId.value = options.seatId || "";
+  inboundShareCode.value = options.shareCode || "";
+  inboundSource.value = options.source || "";
   screen.value = "detail";
   await loadDetail();
+  await loadChat();
+  await trackInboundShareView();
 }
 
 async function loadDetail() {
@@ -727,10 +1080,60 @@ async function loadDetail() {
   }
 }
 
+async function trackInboundShareView() {
+  if (!activeSessionId.value || (!inboundShareCode.value && !inboundSource.value && !focusedSeatId.value)) {
+    return;
+  }
+  try {
+    await trackShareView({
+      sessionId: Number(activeSessionId.value),
+      shareCode: inboundShareCode.value,
+      source: inboundSource.value || "web_admin",
+      path: window.location.pathname + window.location.search,
+      seatId: focusedSeatId.value || null,
+      rawPayload: {
+        source: inboundSource.value,
+        shareCode: inboundShareCode.value,
+        seatId: focusedSeatId.value
+      }
+    });
+    await getSessionShareStats(activeSessionId.value)
+      .then((stats) => {
+        shareStats.value = stats || {};
+      })
+      .catch(() => {});
+  } catch (error) {
+    // Share analytics should not block the admin replacement flow.
+  }
+}
+
 async function openManage(sessionId) {
   activeSessionId.value = sessionId;
   screen.value = "manage";
   await loadManage();
+}
+
+async function openAlbum(sessionId = activeSessionId.value) {
+  if (!sessionId) {
+    statusText.value = "请先从车详情进入相册。";
+    return;
+  }
+  errorText.value = "";
+  try {
+    const session =
+      Number(detailSession.value.id || 0) === Number(sessionId)
+        ? detailSession.value
+        : await getSession(sessionId);
+    if (!isAlbumOpenForSession(session)) {
+      statusText.value = "相册会在发车后开放。";
+      return;
+    }
+    activeSessionId.value = sessionId;
+    detailSession.value = session || {};
+    screen.value = "album";
+  } catch (error) {
+    errorText.value = error.message;
+  }
 }
 
 async function loadManage() {
@@ -745,8 +1148,185 @@ async function loadManage() {
     ]);
     detailSession.value = session || {};
     signups.value = rows || [];
+    await loadPinnedMessage();
   } catch (error) {
     errorText.value = error.message;
+  }
+}
+
+async function chooseShareRole(role) {
+  if (role.taken && !role.mine) {
+    shareStatusText.value = "这个角色已被选择。";
+    return;
+  }
+  if (!role.claimable && !role.mine) {
+    shareStatusText.value = "这个角色暂不可选择。";
+    return;
+  }
+  if (role.taken && role.mine) {
+    shareStatusText.value = "这是你当前选择的角色。";
+    return;
+  }
+  if (pendingShareRole.value && isSameRole(role, pendingShareRole.value)) {
+    await confirmShareRole();
+    return;
+  }
+  if (isCrossCast(currentUserGender.value, role.roleGender)) {
+    const confirmed = window.confirm("反串可能会影响游戏体验，是否确认？");
+    if (!confirmed) {
+      return;
+    }
+    confirmedCrossCastRoleKey.value = roleKey(role);
+  }
+  pendingShareRole.value = role;
+  shareStatusText.value =
+    shareSession.value.id && currentShareRole.value && !isSameRole(role, currentShareRole.value)
+      ? `将从 ${currentShareRole.value.name} 换到 ${role.name}，确认后释放原角色。`
+      : `已选择 ${role.name}，请确认。`;
+}
+
+async function confirmShareRole() {
+  if (!pendingShareRole.value) {
+    shareStatusText.value = "先选择一个可选角色。";
+    return;
+  }
+  const pendingKey = roleKey(pendingShareRole.value);
+  if (
+    isCrossCast(currentUserGender.value, pendingShareRole.value.roleGender) &&
+    confirmedCrossCastRoleKey.value !== pendingKey
+  ) {
+    const confirmed = window.confirm("反串可能会影响游戏体验，是否确认？");
+    if (!confirmed) {
+      pendingShareRole.value = null;
+      return;
+    }
+    confirmedCrossCastRoleKey.value = pendingKey;
+  }
+  busy.value = true;
+  try {
+    const previousRole = currentShareRole.value;
+    await claimSessionSeat(pendingShareRole.value.seatId || pendingShareRole.value.id, {
+      note: "网页小程序分享页直接选择角色"
+    });
+    const claimedName = pendingShareRole.value.name;
+    pendingShareRole.value = null;
+    await openShare(shareSession.value.id);
+    shareStatusText.value =
+      previousRole && previousRole.name !== claimedName
+        ? "角色已换选，原角色已释放。"
+        : "角色已选择，可在车内聊天确认信息。";
+  } catch (error) {
+    if (error.status === 409) {
+      shareStatusText.value = "这个角色刚刚被别人选走了，请换一个。";
+    } else if (error.status === 401) {
+      shareStatusText.value = "请先登录后再选择角色。";
+    } else {
+      shareStatusText.value = error.message || "选择失败，请稍后重试。";
+    }
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function copyShareLink() {
+  const sessionId = activeSessionId.value || shareSession.value.id;
+  if (!sessionId) {
+    return;
+  }
+  const shareCode = `web-${sessionId}-${Date.now()}`;
+  await copyText(
+    buildSessionLink(sessionId, { shareCode, source: "web_share" }),
+    "分享链接已复制。"
+  );
+}
+
+async function copySeatShareLink(seatOrRole) {
+  const sessionId = activeSessionId.value || detailSession.value.id || shareSession.value.id;
+  const seatId = seatOrRole?.seatId || seatOrRole?.id || "";
+  if (!sessionId || !seatId) {
+    return;
+  }
+  const shareCode = `web-${sessionId}-${seatId}-${Date.now()}`;
+  await copyText(
+    buildSessionLink(sessionId, { seatId, shareCode, source: "web_share" }),
+    "指定座位分享链接已复制。"
+  );
+}
+
+async function loadChat() {
+  if (!activeSessionId.value) {
+    chatState.value = { canChat: false, pinnedMessage: null, messages: [] };
+    return;
+  }
+  chatStatusText.value = "";
+  try {
+    const chat = await getSessionChat(activeSessionId.value);
+    chatState.value = {
+      canChat: true,
+      pinnedMessage: chat?.pinnedMessage || null,
+      messages: chat?.messages || []
+    };
+    pinnedMessageDraft.value = chat?.pinnedMessage?.content || pinnedMessageDraft.value || "";
+  } catch (error) {
+    chatState.value = { canChat: false, pinnedMessage: null, messages: [] };
+    if (screen.value === "detail") {
+      chatStatusText.value =
+        error.status === 403
+          ? "只有车头和已上车玩家可以查看与发送聊天。"
+          : "聊天加载失败，请稍后重试。";
+    }
+  }
+}
+
+async function sendChatMessage() {
+  const content = chatDraft.value.trim();
+  if (!content || !activeSessionId.value) {
+    return;
+  }
+  busy.value = true;
+  chatStatusText.value = "";
+  try {
+    await sendSessionMessage(activeSessionId.value, content);
+    chatDraft.value = "";
+    await loadChat();
+  } catch (error) {
+    chatStatusText.value =
+      error.status === 403
+        ? "只有车头和已上车玩家可以发送聊天。"
+        : error.message || "发送失败，请稍后重试。";
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function loadPinnedMessage() {
+  if (!activeSessionId.value) {
+    return;
+  }
+  pinnedMessageStatus.value = "";
+  try {
+    const chat = await getSessionChat(activeSessionId.value);
+    pinnedMessageDraft.value = chat?.pinnedMessage?.content || "";
+  } catch (error) {
+    pinnedMessageDraft.value = "";
+  }
+}
+
+async function savePinnedMessage() {
+  if (!activeSessionId.value || busy.value) {
+    return;
+  }
+  busy.value = true;
+  pinnedMessageStatus.value = "";
+  try {
+    await pinSessionChatMessage(activeSessionId.value, pinnedMessageDraft.value.trim());
+    pinnedMessageStatus.value = "置顶信息已更新。";
+    await loadChat();
+  } catch (error) {
+    pinnedMessageStatus.value =
+      error.status === 403 ? "只有车头可以管理本车。" : error.message || "置顶保存失败。";
+  } finally {
+    busy.value = false;
   }
 }
 
@@ -859,6 +1439,17 @@ async function transferOrganizer(seat) {
   );
 }
 
+async function leaveOrganizer() {
+  if (!window.confirm("确认退出车头吗？系统会交给下一位已上车成员。")) {
+    return;
+  }
+  await runManageAction(
+    () => leaveSessionOrganizer(activeSessionId.value),
+    "已退出车头。"
+  );
+  await openDetail(activeSessionId.value);
+}
+
 async function cancelCurrentSession() {
   if (!window.confirm("确认取消本车吗？")) {
     return;
@@ -910,7 +1501,11 @@ function canClaimSeat(seat) {
 }
 
 function isSessionStarted() {
-  const startAtValue = Date.parse(String(detailSession.value.start_at || "").replace(" ", "T"));
+  return isAlbumOpenForSession(detailSession.value);
+}
+
+function isAlbumOpenForSession(session) {
+  const startAtValue = Date.parse(String(session?.start_at || "").replace(" ", "T"));
   return Number.isFinite(startAtValue) && startAtValue <= Date.now();
 }
 
@@ -1008,9 +1603,7 @@ function assetUrl(path) {
 }
 
 async function copySessionLink() {
-  const url = `${window.location.origin}/?sessionId=${encodeURIComponent(activeSessionId.value)}`;
-  await navigator.clipboard?.writeText(url);
-  statusText.value = "详情链接已复制。";
+  await copyText(buildSessionLink(activeSessionId.value), "详情链接已复制。");
 }
 
 onMounted(() => {
@@ -1018,9 +1611,14 @@ onMounted(() => {
   if (!auth.roles?.includes("system_admin")) {
     errorText.value = "当前入口仅管理员可用。";
   }
-  const sessionId = new URLSearchParams(window.location.search).get("sessionId");
+  const query = new URLSearchParams(window.location.search);
+  const sessionId = query.get("sessionId");
   if (sessionId) {
-    openDetail(sessionId);
+    openDetail(sessionId, {
+      seatId: query.get("seatId") || "",
+      shareCode: query.get("shareCode") || "",
+      source: query.get("source") || ""
+    });
   }
 });
 </script>
