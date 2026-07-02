@@ -153,8 +153,12 @@ for (const token of [
 
 const adminAlbumWorkspace = read("apps/admin-web/src/components/SessionAlbumWorkspace.vue");
 for (const token of [
+  "vue-waterfall-plugin-next",
+  "AuthorizedLazyImage",
   "fetchAuthorizedMediaObjectUrl",
   "display_url",
+  "thumbnail_url",
+  "preview_url",
   "photo.can_tag",
   "photo.is_mine",
   "隐私设置",
@@ -183,6 +187,11 @@ assert(pagesJson.includes("pages/session/albumPrivacy"), "pages.json must regist
 
 const albumPage = read("apps/miniprogram/src/pages/session/album.vue");
 for (const token of [
+  "uv-waterfall",
+  "thumbnail_url",
+  "preview_url",
+  "visiblePhotoMedia",
+  "onPhotoVisible",
   "同车成员可保存",
   "隐私照片不会展示",
   "getToken",
@@ -192,9 +201,22 @@ for (const token of [
   "uploadSessionAlbumPhoto",
   "标注",
   "tagKeys",
-  "apiUrl(photo.image_url)"
+  "mediaUrlForPhoto(photo, variant",
+  "photo.thumbnail_url",
+  "photo.preview_url"
 ]) {
   assert(albumPage.includes(token), `album page must include ${token}`);
+}
+
+for (const token of [
+  "SESSION_ALBUM_THUMBNAIL_RULE",
+  "thumbnail_url",
+  "mediaVariant",
+  "variant === \"thumbnail\"",
+  "getCosObject({",
+  "ciProcess"
+]) {
+  assert(server.includes(token), `album media thumbnails must include ${token}`);
 }
 
 const privacyPage = read("apps/miniprogram/src/pages/session/albumPrivacy.vue");

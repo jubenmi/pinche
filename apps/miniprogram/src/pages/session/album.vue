@@ -39,27 +39,92 @@
       </view>
     </view>
 
-    <view v-else class="photo-grid">
-      <view v-for="photo in filteredPhotos" :key="photo.id" class="photo-card">
-        <image
-          class="photo-image"
-          :src="photo.display_url || ''"
-          mode="aspectFill"
-          @tap="previewPhoto(photo)"
-        />
-        <view class="photo-meta">
-          <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
-            {{ tagSummary(photo) }}
-          </view>
-          <view class="photo-actions">
-            <view v-if="photo.is_mine" class="mine-badge">我上传</view>
-            <button v-if="photo.can_tag" class="tag-button" @tap="openTagSheet(photo)">
-              标注
-            </button>
+    <uv-waterfall
+      v-else
+      ref="albumWaterfall"
+      v-model="waterfallPhotos"
+      class="photo-waterfall"
+      id-key="id"
+      :add-time="20"
+      :column-count="2"
+      column-gap="14rpx"
+      @changeList="changeWaterfallList"
+    >
+      <template v-slot:list1>
+        <view class="waterfall-column">
+          <view
+            v-for="photo in waterfallList1"
+            :id="photoDomId(photo)"
+            :key="photo.id"
+            class="photo-card waterfall-photo-card"
+          >
+            <view
+              class="photo-image-shell"
+              :style="photoImageStyle(photo)"
+              @tap="previewPhoto(photo)"
+            >
+              <image
+                v-if="visiblePhotoMedia[photo.id]?.thumbnail"
+                class="photo-image"
+                :src="visiblePhotoMedia[photo.id].thumbnail"
+                mode="aspectFill"
+              />
+              <view v-else class="photo-placeholder">
+                <view class="photo-loading-dot"></view>
+              </view>
+            </view>
+            <view class="photo-meta">
+              <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
+                {{ tagSummary(photo) }}
+              </view>
+              <view class="photo-actions">
+                <view v-if="photo.is_mine" class="mine-badge">我上传</view>
+                <button v-if="photo.can_tag" class="tag-button" @tap="openTagSheet(photo)">
+                  标注
+                </button>
+              </view>
+            </view>
           </view>
         </view>
-      </view>
-    </view>
+      </template>
+      <template v-slot:list2>
+        <view class="waterfall-column">
+          <view
+            v-for="photo in waterfallList2"
+            :id="photoDomId(photo)"
+            :key="photo.id"
+            class="photo-card waterfall-photo-card"
+          >
+            <view
+              class="photo-image-shell"
+              :style="photoImageStyle(photo)"
+              @tap="previewPhoto(photo)"
+            >
+              <image
+                v-if="visiblePhotoMedia[photo.id]?.thumbnail"
+                class="photo-image"
+                :src="visiblePhotoMedia[photo.id].thumbnail"
+                mode="aspectFill"
+              />
+              <view v-else class="photo-placeholder">
+                <view class="photo-loading-dot"></view>
+              </view>
+            </view>
+            <view class="photo-meta">
+              <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
+                {{ tagSummary(photo) }}
+              </view>
+              <view class="photo-actions">
+                <view v-if="photo.is_mine" class="mine-badge">我上传</view>
+                <button v-if="photo.can_tag" class="tag-button" @tap="openTagSheet(photo)">
+                  标注
+                </button>
+              </view>
+            </view>
+          </view>
+        </view>
+      </template>
+    </uv-waterfall>
 
     <view v-if="tagSheetPhoto" class="tag-mask" @tap="closeTagSheet">
       <view class="tag-sheet" @tap.stop>
@@ -140,12 +205,12 @@ import {
   uploadSessionAlbumPhoto
 } from "../../utils/api";
 
-function albumMediaCachePath(photoId) {
+function albumMediaCachePath(photoId, variant = "preview") {
   const root =
     (typeof wx !== "undefined" && wx.env?.USER_DATA_PATH) ||
     (typeof uni !== "undefined" && uni.env?.USER_DATA_PATH) ||
     "";
-  return root ? `${root}/session-album-${photoId}.jpg` : "";
+  return root ? `${root}/session-album-${photoId}-${variant}.jpg` : "";
 }
 
 export default {
@@ -163,6 +228,11 @@ export default {
       savingTags: false,
       currentUserId: "",
       mediaLoadSerial: 0,
+      waterfallPhotos: [],
+      waterfallList1: [],
+      waterfallList2: [],
+      visiblePhotoMedia: {},
+      photoObservers: [],
       tagSheetPhoto: null,
       selectedTagKeys: [],
       filters: [
@@ -217,17 +287,27 @@ export default {
       await this.loadAlbum();
     }
   },
+  onUnload() {
+    this.disconnectPhotoObservers();
+  },
+  watch: {
+    activeFilter() {
+      this.refreshWaterfall();
+    }
+  },
   methods: {
     apiUrl,
     async loadAlbum() {
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album` });
         const data = dataOf(response) || {};
-        this.photos = data.photos || [];
+        this.disconnectPhotoObservers();
+        this.visiblePhotoMedia = {};
+        this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.hiddenCount = Number(data.hidden_count || 0);
         this.canUpload = Boolean(data.can_upload);
         this.statusText = "";
-        await this.preparePhotoMedia();
+        this.refreshWaterfall();
         if (this.canUpload) {
           await this.loadPeople();
         }
@@ -236,20 +316,39 @@ export default {
           this.photos = [];
           this.canUpload = false;
           this.statusText = "车局相册发车后仅同车成员可查看。";
+          this.refreshWaterfall();
         } else {
           this.statusText = "相册加载失败，请稍后重试。";
         }
       }
     },
-    downloadAlbumImage(photo) {
+    normalizePhotoMedia(photo) {
+      const previewUrl = photo.preview_url || photo.image_url || "";
+      return {
+        ...photo,
+        tags: photo.tags || [],
+        image_url: previewUrl,
+        preview_url: previewUrl,
+        thumbnail_url: photo.thumbnail_url || previewUrl,
+        display_url: ""
+      };
+    },
+    mediaUrlForPhoto(photo, variant = "preview") {
+      if (variant === "thumbnail") {
+        return photo.thumbnail_url || photo.preview_url || photo.image_url || "";
+      }
+      return photo.preview_url || photo.image_url || "";
+    },
+    downloadAlbumImage(photo, variant = "preview") {
       const token = getToken();
-      const filePath = albumMediaCachePath(photo.id);
-      if (!token || !filePath || !photo.image_url) {
+      const filePath = albumMediaCachePath(photo.id, variant);
+      const imageUrl = apiUrl(this.mediaUrlForPhoto(photo, variant));
+      if (!token || !filePath || !imageUrl) {
         return Promise.reject(new Error("album image auth unavailable"));
       }
       return new Promise((resolve, reject) => {
         uni.request({
-          url: apiUrl(photo.image_url),
+          url: imageUrl,
           method: "GET",
           responseType: "arraybuffer",
           header: {
@@ -305,6 +404,117 @@ export default {
             }
           : photo
       );
+    },
+    setVisiblePhotoMedia(photoId, values) {
+      const key = String(photoId);
+      this.visiblePhotoMedia = {
+        ...this.visiblePhotoMedia,
+        [key]: {
+          ...(this.visiblePhotoMedia[key] || {}),
+          ...values
+        }
+      };
+    },
+    async loadVisiblePhotoMedia(photo, variant = "thumbnail") {
+      const key = String(photo.id);
+      const current = this.visiblePhotoMedia[key] || {};
+      if (current[variant]) {
+        return current[variant];
+      }
+      const loadingKey = `${variant}Loading`;
+      if (current[loadingKey]) {
+        return "";
+      }
+      this.setVisiblePhotoMedia(photo.id, { [loadingKey]: true, [`${variant}Failed`]: false });
+      try {
+        const displayUrl = await this.downloadAlbumImage(photo, variant);
+        this.setVisiblePhotoMedia(photo.id, {
+          [variant]: displayUrl,
+          [loadingKey]: false
+        });
+        if (variant === "preview") {
+          this.updatePhotoDisplayUrl(photo.id, displayUrl);
+        }
+        return displayUrl;
+      } catch (error) {
+        this.setVisiblePhotoMedia(photo.id, {
+          [loadingKey]: false,
+          [`${variant}Failed`]: true
+        });
+        return "";
+      }
+    },
+    onPhotoVisible(photo) {
+      this.loadVisiblePhotoMedia(photo, "thumbnail");
+    },
+    disconnectPhotoObservers() {
+      for (const observer of this.photoObservers || []) {
+        if (observer && typeof observer.disconnect === "function") {
+          observer.disconnect();
+        }
+      }
+      this.photoObservers = [];
+    },
+    observeVisiblePhotos() {
+      this.disconnectPhotoObservers();
+      const photos = [...this.waterfallList1, ...this.waterfallList2];
+      if (!photos.length) {
+        return;
+      }
+      if (typeof uni === "undefined" || typeof uni.createIntersectionObserver !== "function") {
+        photos.slice(0, 12).forEach((photo) => this.onPhotoVisible(photo));
+        return;
+      }
+      this.$nextTick(() => {
+        const observers = [];
+        for (const photo of photos) {
+          if (this.visiblePhotoMedia[photo.id]?.thumbnail) {
+            continue;
+          }
+          const observer = uni.createIntersectionObserver(this);
+          observer.relativeToViewport({ bottom: 600 }).observe(`#${this.photoDomId(photo)}`, (entry) => {
+            if (entry.intersectionRatio > 0) {
+              this.onPhotoVisible(photo);
+              observer.disconnect();
+            }
+          });
+          observers.push(observer);
+        }
+        this.photoObservers = observers;
+      });
+    },
+    refreshWaterfall() {
+      this.disconnectPhotoObservers();
+      const nextPhotos = this.filteredPhotos.map((photo) => ({ ...photo }));
+      this.waterfallList1 = [];
+      this.waterfallList2 = [];
+      if (this.$refs.albumWaterfall && typeof this.$refs.albumWaterfall.clear === "function") {
+        this.$refs.albumWaterfall.clear();
+      }
+      this.waterfallPhotos = [];
+      this.$nextTick(() => {
+        this.waterfallPhotos = nextPhotos;
+        this.$nextTick(() => this.observeVisiblePhotos());
+      });
+    },
+    changeWaterfallList(event) {
+      if (event?.name === "list1" || event?.name === "list2") {
+        this[event.name].push(event.value);
+        this.$nextTick(() => this.observeVisiblePhotos());
+      }
+    },
+    photoDomId(photo) {
+      return `album-photo-${photo.id}`;
+    },
+    photoImageStyle(photo) {
+      const columnWidth = Number(photo.width || 0);
+      const imageWidth = Number(photo.image_width || 0);
+      const imageHeight = Number(photo.image_height || 0);
+      if (columnWidth > 0 && imageWidth > 0 && imageHeight > 0) {
+        const ratio = Math.min(1.8, Math.max(0.68, imageHeight / imageWidth));
+        return `height:${Math.round(columnWidth * ratio)}px;`;
+      }
+      return "height:328rpx;";
     },
     async loadPeople() {
       let people = [];
@@ -413,12 +623,12 @@ export default {
       }
     },
     async previewPhoto(photo) {
-      let previewUrl = photo.display_url;
+      let previewUrl = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
       let loadFailed = false;
       if (!previewUrl) {
         uni.showLoading({ title: "加载中" });
         try {
-          previewUrl = await this.downloadAlbumImage(photo);
+          previewUrl = await this.loadVisiblePhotoMedia(photo, "preview");
           this.updatePhotoDisplayUrl(photo.id, previewUrl);
         } catch (error) {
           loadFailed = true;
@@ -538,26 +748,63 @@ export default {
   font-weight: 600;
 }
 
-.photo-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14rpx;
+.photo-waterfall {
+  display: block;
 }
 
-.photo-card {
+.waterfall-column {
   min-width: 0;
 }
 
-.photo-image {
+.photo-card {
+  overflow: hidden;
+  min-width: 0;
+  margin-bottom: 14rpx;
+  border: 1rpx solid rgba(223, 216, 204, 0.88);
+  border-radius: 10rpx;
+  background: rgba(255, 255, 252, 0.96);
+}
+
+.photo-image-shell {
+  position: relative;
+  overflow: hidden;
   width: 100%;
-  aspect-ratio: 1;
-  border-radius: 8rpx;
-  background: #f1f5f9;
+  background: #eef5ef;
+}
+
+.photo-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.photo-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #eef5ef 0%, #f7f4ee 100%);
+}
+
+.photo-loading-dot {
+  width: 34rpx;
+  height: 34rpx;
+  border: 4rpx solid rgba(31, 122, 104, 0.18);
+  border-top-color: rgba(31, 122, 104, 0.72);
+  border-radius: 999rpx;
+  animation: album-spin 0.9s linear infinite;
 }
 
 .photo-meta {
-  min-height: 96rpx;
-  padding-top: 10rpx;
+  min-height: 104rpx;
+  padding: 12rpx 12rpx 14rpx;
+}
+
+@keyframes album-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .tag-line {

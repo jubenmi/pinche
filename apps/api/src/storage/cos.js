@@ -94,7 +94,22 @@ export function buildCosAuthorization({
   ].join("&");
 }
 
-function cosRequest({ method, key, body, contentType, headers: extraHeaders = {}, config }) {
+function encodeCosQueryKey(value) {
+  return String(value || "")
+    .split("/")
+    .map(encodeCosComponent)
+    .join("/");
+}
+
+function cosRequest({
+  method,
+  key,
+  body,
+  contentType,
+  headers: extraHeaders = {},
+  ciProcess,
+  config
+}) {
   const host = cosHost(config);
   const date = new Date().toUTCString();
   const normalizedExtraHeaders = Object.fromEntries(
@@ -126,7 +141,7 @@ function cosRequest({ method, key, body, contentType, headers: extraHeaders = {}
       {
         method,
         hostname: host,
-        path: `/${key}`,
+        path: `/${key}${ciProcess ? `?${encodeCosQueryKey(ciProcess)}` : ""}`,
         headers
       },
       (response) => {
@@ -169,10 +184,11 @@ export async function putCosObject({ key, body, contentType, picOperations, conf
   });
 }
 
-export async function getCosObject({ key, config }) {
+export async function getCosObject({ key, ciProcess, config }) {
   return cosRequest({
     method: "GET",
     key,
+    ciProcess,
     config
   });
 }
