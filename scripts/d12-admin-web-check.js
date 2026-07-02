@@ -131,12 +131,22 @@ assert(
 const webApi = read("apps/admin-web/src/api.js");
 assert(webApi.includes("createLoginTicket"), "web API should create login tickets");
 assert(webApi.includes("pollLoginTicket"), "web API should poll login tickets");
+assert(webApi.includes("export function assetUrl"), "web API should expose assetUrl helper");
+for (const token of [
+  "pinSessionChatMessage",
+  "getSessionChat",
+  "sendSessionMessage",
+  "trackShareView"
+]) {
+  assert(webApi.includes(`export function ${token}`), `web API should export ${token}`);
+}
 assert(!webApi.includes("deleteStore"), "web API should not expose store hard delete");
 assert(!webApi.includes("deleteScript"), "web API should not expose script hard delete");
 assert(webApi.includes("listStoreScripts"), "web API should list store-script links");
 assert(webApi.includes("saveStoreScripts"), "web API should save store-script links");
 
 const adminViteConfigSource = read("apps/admin-web/vite.config.js");
+const adminNginxConfig = read("apps/admin-web/nginx.conf");
 assert(
   adminViteConfigSource.includes("__PINCHE_BUILD_TIME__"),
   "admin web Vite config must inject the build-time version constant"
@@ -144,6 +154,15 @@ assert(
 assert(
   adminViteConfigSource.includes("Asia/Shanghai"),
   "admin web build time must be formatted in Beijing time"
+);
+assert(
+  adminViteConfigSource.includes('"/uploads"'),
+  "admin web dev server should proxy uploaded media paths"
+);
+assert(
+  adminNginxConfig.includes("location /uploads/") &&
+    adminNginxConfig.includes("proxy_pass http://api:3018/uploads/"),
+  "admin web nginx should proxy uploaded media paths"
 );
 const adminViteConfig = await import(
   pathToFileURL(path.join(root, "apps/admin-web/vite.config.js")).href
@@ -202,6 +221,26 @@ const appShell = read("apps/admin-web/src/App.vue");
 for (const token of ["shell-toggle", "user-avatar", "sidebar-collapse"]) {
   assert(appShell.includes(token), `admin shell should include operator workspace ${token}`);
 }
+assert(appShell.includes("管理界面"), "admin shell should name the management area");
+assert(appShell.includes("网页小程序"), "admin shell should name the web miniapp area");
+assert(
+  !appShell.includes("activeView === 'album'"),
+  "album should not be a top-level admin shell area"
+);
+for (const token of [
+  "displayName",
+  "avatarUrl",
+  "genderLabel",
+  "profileDetailsOpen",
+  "profile-detail-popover",
+  "fullProfileRows"
+]) {
+  assert(appShell.includes(token), `admin shell should render profile detail ${token}`);
+}
+assert(
+  appShell.includes("assetUrl") && appShell.includes("handleAvatarError"),
+  "admin shell should resolve uploaded avatars and handle avatar load failures"
+);
 for (const token of ["MiniProgramWorkspace", "网页小程序", "activeView === 'miniapp'"]) {
   assert(appShell.includes(token), `admin shell should expose the admin mini app ${token}`);
 }
@@ -213,6 +252,26 @@ assert(
     appShell.includes("版本号 ${__PINCHE_BUILD_TIME__}"),
   "admin shell should pass the Beijing build-time version to the login home page"
 );
+
+const miniProgramWorkspace = read("apps/admin-web/src/components/MiniProgramWorkspace.vue");
+for (const token of [
+  "screen === 'share'",
+  "openAlbum",
+  "openShare",
+  "shareRoleCards",
+  "pendingShareRole",
+  "confirmShareRole",
+  "confirmedCrossCastRoleKey",
+  "copyShareLink",
+  "copySeatShareLink",
+  "trackShareView",
+  "getSessionChat",
+  "sendSessionMessage",
+  "pinSessionChatMessage",
+  "leaveOrganizer"
+]) {
+  assert(miniProgramWorkspace.includes(token), `web miniapp should include parity token ${token}`);
+}
 
 const catalogWorkspace = read("apps/admin-web/src/components/CatalogWorkspace.vue");
 for (const token of [
@@ -364,6 +423,11 @@ for (const token of [
 ]) {
   assert(miniAppWorkspace.includes(token), `admin mini app should include ${token}`);
 }
+assert(
+  miniAppWorkspace.includes(':session-id="activeSessionId"') &&
+    !miniAppWorkspace.includes("switchScreen('album')"),
+  "admin mini app album entry should match mini-program detail-only album logic"
+);
 
 const setupPage = read("apps/miniprogram/src/pages/session/setup.vue");
 assert(
