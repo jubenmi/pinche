@@ -1012,6 +1012,10 @@ td {
   padding: 0 16px 18px;
 }
 
+.admin-photo-waterfall {
+  padding: 0 16px 18px;
+}
+
 .admin-photo {
   overflow: hidden;
   border: 1px solid var(--admin-border);
@@ -1030,7 +1034,7 @@ td {
 .photo-preview img {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  height: 100%;
   object-fit: cover;
 }
 

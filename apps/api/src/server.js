@@ -100,6 +100,8 @@ const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const AVATAR_WEBP_RULE = "imageMogr2/auto-orient/thumbnail/512x512>/format/webp/quality/80";
 const SESSION_ALBUM_DISPLAY_JPG_RULE =
   "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip";
+const SESSION_ALBUM_THUMBNAIL_RULE =
+  "imageMogr2/auto-orient/thumbnail/640x640>/format/jpg/quality/75/strip";
 const avatarMimeTypes = {
   "image/jpeg": ".jpg",
   "image/png": ".png"
@@ -677,12 +679,24 @@ function sessionAlbumMediaSignature(photoId, expires) {
     .digest("hex");
 }
 
-function sessionAlbumMediaPath(photoId) {
+function sessionAlbumMediaPath(photoId, variant = "preview") {
   const expires = Math.floor(Date.now() / 1000) + SESSION_ALBUM_MEDIA_TOKEN_SECONDS;
   const signature = sessionAlbumMediaSignature(photoId, expires);
-  return `/api/session-album/photos/${photoId}/image?expires=${encodeURIComponent(
+  const path = `/api/session-album/photos/${photoId}/image?expires=${encodeURIComponent(
     expires
   )}&signature=${encodeURIComponent(signature)}`;
+  return variant === "thumbnail" ? `${path}&variant=thumbnail` : path;
+}
+
+function mediaVariant(query) {
+  const variant = query.get("variant") || "preview";
+  if (variant === "thumbnail") {
+    return "thumbnail";
+  }
+  if (variant === "preview") {
+    return "preview";
+  }
+  throw badRequest("unsupported album media variant");
 }
 
 function verifySessionAlbumMediaQuery(photoId, query) {
@@ -710,17 +724,37 @@ function attachSessionAlbumMediaUrls(album) {
     ...album,
     photos: album.photos.map((photo) => ({
       ...photo,
-      image_url: sessionAlbumMediaPath(photo.id)
+      image_url: sessionAlbumMediaPath(photo.id),
+      preview_url: sessionAlbumMediaPath(photo.id, "preview"),
+      thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail")
     }))
   };
 }
 
-async function serveLocalUploadedObject({ filePath, filename, response, cacheControl }) {
+async function sessionAlbumThumbnailBuffer(file) {
+  return sharp(file, { failOn: "none" })
+    .rotate()
+    .resize({
+      width: 640,
+      height: 640,
+      fit: "inside",
+      withoutEnlargement: true
+    })
+    .jpeg({ quality: 75 })
+    .toBuffer();
+}
+
+async function serveLocalUploadedObject({ filePath, filename, response, cacheControl, ciProcess }) {
   let file;
   try {
     file = await fs.readFile(filePath);
   } catch (error) {
     throw notFound();
+  }
+  const isSessionAlbumThumbnail = ciProcess === SESSION_ALBUM_THUMBNAIL_RULE;
+  if (isSessionAlbumThumbnail) {
+    file = await sessionAlbumThumbnailBuffer(file);
+    filename = "album-thumbnail.jpg";
   }
 
   response.writeHead(200, {
@@ -731,9 +765,10 @@ async function serveLocalUploadedObject({ filePath, filename, response, cacheCon
   response.end(file);
 }
 
-async function serveCosUploadedObject({ key, filename, response, cacheControl }) {
+async function serveCosUploadedObject({ key, filename, response, cacheControl, ciProcess }) {
   const object = await getCosObject({
     key,
+    ciProcess,
     config: config.cos
   });
 
@@ -745,7 +780,7 @@ async function serveCosUploadedObject({ key, filename, response, cacheControl })
   response.end(object.body);
 }
 
-async function serveUploadedObject({ url, prefix, localDir, response, cacheControl }) {
+async function serveUploadedObject({ url, prefix, localDir, response, cacheControl, ciProcess }) {
   const requestedName = decodeURIComponent(url.pathname.slice(prefix.length));
   const filename = path.basename(requestedName);
   if (!filename || filename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(filename)) {
@@ -755,7 +790,7 @@ async function serveUploadedObject({ url, prefix, localDir, response, cacheContr
   const key = cosObjectKeyFromUploadPath(`${prefix}${filename}`, prefix);
   if (isCosUploadStorageEnabled()) {
     try {
-      await serveCosUploadedObject({ key, filename, response, cacheControl });
+      await serveCosUploadedObject({ key, filename, response, cacheControl, ciProcess });
       return;
     } catch (error) {
       if (error.statusCode && error.statusCode !== 404) {
@@ -768,7 +803,8 @@ async function serveUploadedObject({ url, prefix, localDir, response, cacheContr
     filePath: path.join(localDir, filename),
     filename,
     response,
-    cacheControl
+    cacheControl,
+    ciProcess
   });
 }
 
@@ -836,8 +872,10 @@ async function serveUploadedSessionReviewPhoto(url, response) {
   }
 }
 
-async function serveUploadedSessionAlbumPhoto(photo, response) {
+async function serveUploadedSessionAlbumPhoto(photo, response, options = {}) {
   const cacheControl = "private, no-store";
+  const ciProcess =
+    options.variant === "thumbnail" ? SESSION_ALBUM_THUMBNAIL_RULE : undefined;
   try {
     const photoUrl = new URL(photo.photo_url, "http://localhost");
     if (photoUrl.pathname.startsWith("/uploads/session-album/display/")) {
@@ -846,7 +884,8 @@ async function serveUploadedSessionAlbumPhoto(photo, response) {
         prefix: "/uploads/session-album/display/",
         localDir: sessionAlbumDisplayUploadDir,
         response,
-        cacheControl
+        cacheControl,
+        ciProcess
       });
       return;
     }
@@ -855,7 +894,8 @@ async function serveUploadedSessionAlbumPhoto(photo, response) {
       prefix: "/uploads/session-album/",
       localDir: sessionAlbumUploadDir,
       response,
-      cacheControl
+      cacheControl,
+      ciProcess
     });
   } catch (error) {
     if (error instanceof AppError) {
@@ -947,11 +987,12 @@ async function route(request, response) {
   if (request.method === "GET" && sessionAlbumMediaPhotoId) {
     const user = await getAuthUser(request);
     verifySessionAlbumMediaQuery(sessionAlbumMediaPhotoId, url.searchParams);
+    const variant = mediaVariant(url.searchParams);
     const photo = await getVisibleSessionAlbumPhotoForMedia(
       user.user.id,
       sessionAlbumMediaPhotoId
     );
-    await serveUploadedSessionAlbumPhoto(photo, response);
+    await serveUploadedSessionAlbumPhoto(photo, response, { variant });
     return;
   }
 
@@ -1467,7 +1508,9 @@ async function route(request, response) {
       ok: true,
       data: {
         ...photo,
-        image_url: sessionAlbumMediaPath(photo.id)
+        image_url: sessionAlbumMediaPath(photo.id),
+        preview_url: sessionAlbumMediaPath(photo.id, "preview"),
+        thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail")
       }
     });
     return;
@@ -1491,7 +1534,9 @@ async function route(request, response) {
       ok: true,
       data: {
         ...photo,
-        image_url: sessionAlbumMediaPath(photo.id)
+        image_url: sessionAlbumMediaPath(photo.id),
+        preview_url: sessionAlbumMediaPath(photo.id, "preview"),
+        thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail")
       }
     });
     return;
