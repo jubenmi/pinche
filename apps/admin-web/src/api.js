@@ -58,6 +58,19 @@ export async function apiRequest(path, options = {}) {
   return parseResponse(response);
 }
 
+export function assetUrl(path) {
+  if (!path) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  if (path.startsWith("/uploads/")) {
+    return path;
+  }
+  return path;
+}
+
 export async function fetchAuthorizedMediaObjectUrl(path) {
   const auth = getStoredAuth();
   const response = await fetch(path, {

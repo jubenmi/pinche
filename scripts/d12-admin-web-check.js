@@ -131,12 +131,14 @@ assert(
 const webApi = read("apps/admin-web/src/api.js");
 assert(webApi.includes("createLoginTicket"), "web API should create login tickets");
 assert(webApi.includes("pollLoginTicket"), "web API should poll login tickets");
+assert(webApi.includes("export function assetUrl"), "web API should expose assetUrl helper");
 assert(!webApi.includes("deleteStore"), "web API should not expose store hard delete");
 assert(!webApi.includes("deleteScript"), "web API should not expose script hard delete");
 assert(webApi.includes("listStoreScripts"), "web API should list store-script links");
 assert(webApi.includes("saveStoreScripts"), "web API should save store-script links");
 
 const adminViteConfigSource = read("apps/admin-web/vite.config.js");
+const adminNginxConfig = read("apps/admin-web/nginx.conf");
 assert(
   adminViteConfigSource.includes("__PINCHE_BUILD_TIME__"),
   "admin web Vite config must inject the build-time version constant"
@@ -144,6 +146,15 @@ assert(
 assert(
   adminViteConfigSource.includes("Asia/Shanghai"),
   "admin web build time must be formatted in Beijing time"
+);
+assert(
+  adminViteConfigSource.includes('"/uploads"'),
+  "admin web dev server should proxy uploaded media paths"
+);
+assert(
+  adminNginxConfig.includes("location /uploads/") &&
+    adminNginxConfig.includes("proxy_pass http://api:3018/uploads/"),
+  "admin web nginx should proxy uploaded media paths"
 );
 const adminViteConfig = await import(
   pathToFileURL(path.join(root, "apps/admin-web/vite.config.js")).href
@@ -202,6 +213,20 @@ const appShell = read("apps/admin-web/src/App.vue");
 for (const token of ["shell-toggle", "user-avatar", "sidebar-collapse"]) {
   assert(appShell.includes(token), `admin shell should include operator workspace ${token}`);
 }
+for (const token of [
+  "displayName",
+  "avatarUrl",
+  "genderLabel",
+  "profileDetailsOpen",
+  "profile-detail-popover",
+  "fullProfileRows"
+]) {
+  assert(appShell.includes(token), `admin shell should render profile detail ${token}`);
+}
+assert(
+  appShell.includes("assetUrl") && appShell.includes("handleAvatarError"),
+  "admin shell should resolve uploaded avatars and handle avatar load failures"
+);
 for (const token of ["MiniProgramWorkspace", "网页小程序", "activeView === 'miniapp'"]) {
   assert(appShell.includes(token), `admin shell should expose the admin mini app ${token}`);
 }
