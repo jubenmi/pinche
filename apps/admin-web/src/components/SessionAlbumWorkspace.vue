@@ -105,11 +105,29 @@
           <div v-else-if="!albumError && filteredPhotos.length === 0" class="empty-block">
             {{ album?.photos?.length ? "没有符合当前筛选的照片。" : "还没有可见照片，上传后会出现在这里。" }}
           </div>
-          <div v-else-if="!albumError" class="admin-photo-grid">
-            <article v-for="photo in filteredPhotos" :key="photo.id" class="admin-photo">
-              <button class="photo-preview" type="button" @click="previewPhoto(photo)">
-                <img :src="photo.display_url || ''" alt="" />
-              </button>
+          <Waterfall
+            v-else-if="!albumError"
+            ref="albumWaterfall"
+            class="admin-photo-waterfall"
+            :list="filteredPhotos"
+            row-key="id"
+            img-selector="thumbnail_url"
+            :breakpoints="albumWaterfallBreakpoints"
+            :gutter="14"
+            :space="14"
+            :has-around-gutter="false"
+            :lazyload="false"
+            background-color="transparent"
+          >
+            <template #default="{ item: photo }">
+              <article class="admin-photo">
+                <button class="photo-preview" type="button" @click="previewPhoto(photo)">
+                  <AuthorizedLazyImage
+                    :src="photo.thumbnail_url || photo.image_url"
+                    :ratio="photoAspectRatio(photo)"
+                    @loaded="rerenderAlbumWaterfall"
+                  />
+                </button>
               <div class="photo-info">
                 <strong>{{ tagSummary(photo) }}</strong>
                 <span>{{ photo.uploader_name || "车友" }} · {{ formatDate(photo.created_at) }}</span>
@@ -136,8 +154,9 @@
                   仅上传者可管理
                 </span>
               </div>
-            </article>
-          </div>
+              </article>
+            </template>
+          </Waterfall>
         </template>
 
         <div v-else class="empty-block">请先从车详情进入相册。</div>
@@ -244,6 +263,9 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { Waterfall } from "vue-waterfall-plugin-next";
+import "vue-waterfall-plugin-next/dist/style.css";
+import AuthorizedLazyImage from "./AuthorizedLazyImage.vue";
 import {
   createSessionAlbumPhoto,
   deleteSessionAlbumPhoto,
@@ -281,11 +303,18 @@ const savingTags = ref(false);
 const activeAlbumFilter = ref("all");
 const privacyDrawerOpen = ref(false);
 const savingPrivacy = ref(false);
+const albumWaterfall = ref(null);
 const privacyForm = ref({
   allowUploadedVisible: true,
   allowTaggedVisible: true
 });
 const mediaObjectUrls = new Set();
+const albumWaterfallBreakpoints = {
+  1280: { rowPerView: 4 },
+  960: { rowPerView: 3 },
+  640: { rowPerView: 2 },
+  420: { rowPerView: 1 }
+};
 
 const photos = computed(() => album.value?.photos || []);
 const currentUserId = computed(() => getStoredAuth().user?.id || "");
@@ -387,6 +416,63 @@ function imageMetaText(photo) {
   return sizeText;
 }
 
+function photoAspectRatio(photo) {
+  const width = Number(photo.image_width || 0);
+  const height = Number(photo.image_height || 0);
+  if (width > 0 && height > 0) {
+    return Math.min(1.8, Math.max(0.68, width / height));
+  }
+  return 1;
+}
+
+function normalizeAlbumMedia(albumData) {
+  return {
+    ...albumData,
+    photos: (albumData.photos || []).map((photo) => {
+      const previewUrl = photo.preview_url || photo.image_url || "";
+      return {
+        ...photo,
+        tags: photo.tags || [],
+        image_url: previewUrl,
+        preview_url: previewUrl,
+        thumbnail_url: photo.thumbnail_url || previewUrl,
+        display_url: ""
+      };
+    })
+  };
+}
+
+function updatePhotoDisplayUrl(photoId, displayUrl) {
+  if (!album.value?.photos) {
+    return;
+  }
+  album.value = {
+    ...album.value,
+    photos: album.value.photos.map((photo) =>
+      Number(photo.id) === Number(photoId)
+        ? {
+            ...photo,
+            display_url: displayUrl
+          }
+        : photo
+    )
+  };
+}
+
+async function ensurePreviewMedia(photo) {
+  if (photo.display_url) {
+    return photo.display_url;
+  }
+  const displayUrl = await fetchAuthorizedMediaObjectUrl(photo.preview_url || photo.image_url);
+  mediaObjectUrls.add(displayUrl);
+  updatePhotoDisplayUrl(photo.id, displayUrl);
+  return displayUrl;
+}
+
+function rerenderAlbumWaterfall() {
+  albumWaterfall.value?.renderer?.();
+}
+
 function acceptedFile(file) {
   const typeAllowed = ACCEPTED_IMAGE_TYPES.has(file.type);
   const nameAllowed = /\.(jpe?g|png)$/i.test(file.name || "");
@@ -442,7 +528,7 @@ async function loadAlbum() {
       getSessionAlbum(selectedSession.value.id, options),
       listSessionAlbumPeople(selectedSession.value.id, options)
     ]);
-    album.value = await prepareAlbumMedia(albumData || { photos: [] });
+    album.value = normalizeAlbumMedia(albumData || { photos: [] });
     people.value = peopleData?.people || [];
     activeAlbumFilter.value = "all";
     albumStatus.value = album.value.can_upload
@@ -463,30 +549,6 @@ function revokeAlbumMedia() {
     URL.revokeObjectURL(url);
   }
   mediaObjectUrls.clear();
-}
-
-async function prepareAlbumMedia(albumData) {
-  const photosWithMedia = await Promise.all(
-    (albumData.photos || []).map(async (photo) => {
-      try {
-        const displayUrl = await fetchAuthorizedMediaObjectUrl(photo.image_url);
-        mediaObjectUrls.add(displayUrl);
-        return {
-          ...photo,
-          display_url: displayUrl
-        };
-      } catch (err) {
-        return {
-          ...photo,
-          display_url: ""
-        };
-      }
-    })
-  );
-  return {
-    ...albumData,
-    photos: photosWithMedia
-  };
 }
 
 const albumFilters = [
@@ -548,19 +610,35 @@ async function uploadFiles(files) {
   }
 }
 
-function previewPhoto(photo) {
-  if (!photo.display_url) {
+async function previewPhoto(photo) {
+  let displayUrl = "";
+  try {
+    displayUrl = await ensurePreviewMedia(photo);
+  } catch (err) {
     albumError.value = "照片加载失败，请刷新后重试。";
     return;
   }
-  window.open(photo.display_url, "_blank", "noopener,noreferrer");
+  if (!displayUrl) {
+    albumError.value = "照片加载失败，请刷新后重试。";
+    return;
+  }
+  window.open(displayUrl, "_blank", "noopener,noreferrer");
 }
 
-function openTagDrawer(photo) {
+async function openTagDrawer(photo) {
   if (!photo.can_tag) {
     return;
   }
-  taggingPhoto.value = photo;
+  try {
+    const displayUrl = await ensurePreviewMedia(photo);
+    taggingPhoto.value = {
+      ...photo,
+      display_url: displayUrl
+    };
+  } catch (err) {
+    albumError.value = "照片加载失败，请刷新后重试。";
+    return;
+  }
   selectedTagKeys.value = (photo.tags || []).map((tag) => tag.key);
 }
 
