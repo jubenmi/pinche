@@ -23,8 +23,6 @@ services:
         condition: service_completed_successfully
       mysql:
         condition: service_healthy
-      redis:
-        condition: service_started
     restart: unless-stopped
 
   admin-web:
@@ -81,12 +79,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    networks:
-      - internal
     restart: unless-stopped
 
 networks:

@@ -583,7 +583,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!shareSource.includes('menus: ["shareAppMessage", "shareTimeline"]')) {
     fail("Share page share menu must enable both friend/group and Moments sharing");
   }
-  for (const requiredFinalShareText of ["claimSeat", "/claim", "loadPublishedSession"]) {
+  for (const requiredFinalShareText of ["claimSeat", "/api/signups", "loadPublishedSession"]) {
     if (!shareSource.includes(requiredFinalShareText)) {
       fail(`Share page must be the final role-selection page: ${requiredFinalShareText}`);
     }
@@ -828,6 +828,65 @@ if (!fs.existsSync(pagesJsonPath)) {
   ];
   for (const [methodName, nextAction, message] of manageButtonChecks) {
     assertBefore(methodBody(manageSource, methodName), "ensureManageActionLogin", nextAction, message);
+  }
+  for (const requiredManageBusyText of [
+    "operationText",
+    "正在处理，请稍候",
+    ':disabled="busyAction"',
+    "{{ busyAction ?",
+    "this.busyAction = true",
+    "this.busyAction = false"
+  ]) {
+    if (!manageSource.includes(requiredManageBusyText)) {
+      fail(`Manage page must lock related controls while busy: ${requiredManageBusyText}`);
+    }
+  }
+
+  const albumSource = fs.existsSync(path.join(srcRoot, "pages/session/album.vue"))
+    ? fs.readFileSync(path.join(srcRoot, "pages/session/album.vue"), "utf8")
+    : "";
+  for (const requiredAlbumBusyText of [
+    "albumBusy",
+    "loadingAlbum",
+    "deletingPhotoId",
+    "operationText",
+    "正在处理，请稍候",
+    ':disabled="albumBusy"',
+    "this.deletingPhotoId = photo.id",
+    "this.deletingPhotoId = null"
+  ]) {
+    if (!albumSource.includes(requiredAlbumBusyText)) {
+      fail(`Album page must lock related controls while busy: ${requiredAlbumBusyText}`);
+    }
+  }
+  const deletePhotoSource = methodBody(albumSource, "deletePhoto");
+  if (!deletePhotoSource.includes("this.albumBusy")) {
+    fail("Album delete action must refuse duplicate deletes while another album action is busy");
+  }
+  for (const requiredAlbumBulkTagText of [
+    "selectionMode",
+    "selectedPhotoIds",
+    "bulkTagging",
+    "toggleSelectionMode",
+    "togglePhotoSelection",
+    "openBulkTagSheet",
+    "selectedPhotoCount",
+    "selectedTagTargetCount",
+    "selection-checkbox",
+    "selection-checkbox-box",
+    "部分照片标注失败",
+    "给 {{ selectedTagTargetCount }} 张照片标注",
+    "for (const photoId of targetPhotoIds)",
+    "url: `/api/session-album/photos/${photoId}/tags`",
+    "data: { tagKeys: this.selectedTagKeys }",
+    "tagPersonTitle",
+    "tagPersonSubtitle",
+    'v-if="tagPersonSubtitle(person)"',
+    "account_name: accountName"
+  ]) {
+    if (!albumSource.includes(requiredAlbumBulkTagText)) {
+      fail(`Album page must support bulk tagging: ${requiredAlbumBulkTagText}`);
+    }
   }
 
   const apiSource = fs.readFileSync(path.join(srcRoot, "utils/api.js"), "utf8");

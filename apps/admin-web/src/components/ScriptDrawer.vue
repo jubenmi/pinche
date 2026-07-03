@@ -2,7 +2,9 @@
   <aside class="drawer wide">
     <header class="drawer-head">
       <h2>{{ model.id ? "编辑剧本" : "新增剧本" }}</h2>
-      <button class="close-button" type="button" @click="$emit('close')">关闭</button>
+      <button class="close-button" type="button" :disabled="saving" @click="$emit('close')">
+        关闭
+      </button>
     </header>
     <form class="drawer-form" @submit.prevent="submit">
       <div class="drawer-body">
@@ -72,12 +74,48 @@
           </div>
         </section>
 
+        <section class="role-editor">
+          <div class="role-head">
+            <div>
+              <h3>NPC角色模板</h3>
+              <p>{{ model.npcRoles.length }} 个 NPC 角色，不计入玩家人数</p>
+            </div>
+            <button class="secondary-action" type="button" @click="addNpcRole">新增NPC</button>
+          </div>
+          <div class="role-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>NPC角色</th>
+                  <th>角色说明</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(npcRole, index) in model.npcRoles" :key="npcRole.id">
+                  <td><input v-model.trim="npcRole.name" :name="`npcRoleName-${index}`" /></td>
+                  <td><input v-model.trim="npcRole.description" :name="`npcRoleDescription-${index}`" /></td>
+                  <td class="row-actions">
+                    <button class="action-button" type="button" @click="moveNpcRole(index, -1)">上移</button>
+                    <button class="action-button" type="button" @click="moveNpcRole(index, 1)">下移</button>
+                    <button type="button" class="action-button danger" @click="removeNpcRole(index)">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <p v-if="roleCountWarning" class="warning">角色数与人数不一致，可保存，但建议检查。</p>
       </div>
 
       <footer class="drawer-footer">
-        <button class="secondary-action" type="button" @click="$emit('close')">取消</button>
-        <button class="primary" type="submit">保存剧本</button>
+        <button class="secondary-action" type="button" :disabled="saving" @click="$emit('close')">
+          取消
+        </button>
+        <button class="primary" type="submit" :disabled="saving">
+          {{ saving ? "保存中..." : "保存剧本" }}
+        </button>
       </footer>
     </form>
   </aside>
@@ -87,10 +125,11 @@
 import { computed, reactive, watch } from "vue";
 
 const props = defineProps({
-  script: { type: Object, required: true }
+  script: { type: Object, required: true },
+  saving: { type: Boolean, default: false }
 });
 const emit = defineEmits(["save", "close"]);
-const model = reactive({ defaultSeatTemplate: [] });
+const model = reactive({ defaultSeatTemplate: [], npcRoles: [] });
 
 function parseJsonArray(value) {
   if (!value) {
@@ -123,6 +162,14 @@ function toEditorRole(role = {}, index = 0) {
   };
 }
 
+function toEditorNpcRole(role = {}, index = 0) {
+  return {
+    id: role.id || `${Date.now()}-npc-${index}`,
+    name: role.name || role.roleName || role.role_name || "",
+    description: role.description || role.note || role.roleDescription || ""
+  };
+}
+
 function typeTagsText(value) {
   const tags = parseJsonArray(value);
   return tags.join(",");
@@ -142,7 +189,10 @@ watch(
       status: script.status || "active",
       defaultSeatTemplate: parseJsonArray(
         script.default_seat_template_json || script.defaultSeatTemplate
-      ).map(toEditorRole)
+      ).map(toEditorRole),
+      npcRoles: parseJsonArray(
+        script.npc_roles !== undefined ? script.npc_roles : script.npcRoles
+      ).map(toEditorNpcRole)
     });
   },
   { immediate: true }
@@ -169,6 +219,23 @@ function moveRole(index, delta) {
   model.defaultSeatTemplate.splice(nextIndex, 0, role);
 }
 
+function addNpcRole() {
+  model.npcRoles.push(toEditorNpcRole({}, model.npcRoles.length));
+}
+
+function removeNpcRole(index) {
+  model.npcRoles.splice(index, 1);
+}
+
+function moveNpcRole(index, delta) {
+  const nextIndex = index + delta;
+  if (nextIndex < 0 || nextIndex >= model.npcRoles.length) {
+    return;
+  }
+  const [role] = model.npcRoles.splice(index, 1);
+  model.npcRoles.splice(nextIndex, 0, role);
+}
+
 function tagsFromText(value) {
   return String(value || "")
     .split(/[，,]/)
@@ -177,6 +244,9 @@ function tagsFromText(value) {
 }
 
 function submit() {
+  if (props.saving) {
+    return;
+  }
   emit("save", {
     id: model.id,
     name: model.name,
@@ -189,7 +259,14 @@ function submit() {
       name: role.name,
       description: role.description,
       roleGender: role.roleGender
-    }))
+    })),
+    npcRoles: model.npcRoles
+      .map((role) => ({
+        id: role.id,
+        name: role.name,
+        description: role.description
+      }))
+      .filter((role) => role.name)
   });
 }
 </script>

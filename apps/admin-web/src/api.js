@@ -229,6 +229,10 @@ export function saveStore(store) {
   return apiRequest(path, { method, body: store });
 }
 
+export function deleteStore(storeId) {
+  return apiRequest(`/api/admin/stores/${storeId}`, { method: "DELETE" });
+}
+
 export function listStoreScripts(storeId) {
   return apiRequest(`/api/admin/stores/${storeId}/scripts`);
 }
@@ -252,6 +256,20 @@ export function saveScript(script) {
   return apiRequest(path, { method, body: script });
 }
 
+export function deleteScript(scriptId) {
+  return apiRequest(`/api/admin/scripts/${scriptId}`, { method: "DELETE" });
+}
+
+export function listAdminSessions(filters) {
+  return apiRequest(`/api/admin/sessions?${new URLSearchParams(filters)}`);
+}
+
+export function deleteAdminSession(sessionId) {
+  return apiRequest(`/api/admin/sessions/${sessionId}`, {
+    method: "DELETE"
+  });
+}
+
 export function listMySessions(filters) {
   return apiRequest(`/api/users/me/sessions?${new URLSearchParams(filters)}`);
 }
@@ -268,6 +286,24 @@ export function getSessionAlbum(sessionId, options = {}) {
 
 export function listSessionAlbumPeople(sessionId, options = {}) {
   return apiRequest(`${sessionAlbumBasePath(sessionId, options)}/people`);
+}
+
+export function listSessionNpcRoles(sessionId) {
+  return apiRequest(`/api/sessions/${sessionId}/npc-roles`);
+}
+
+export function createSessionNpcRole(sessionId, body) {
+  return apiRequest(`/api/sessions/${sessionId}/npc-roles`, {
+    method: "POST",
+    body
+  });
+}
+
+export function updateSessionNpcRole(npcRoleId, body) {
+  return apiRequest(`/api/session-npc-roles/${npcRoleId}`, {
+    method: "PATCH",
+    body
+  });
 }
 
 async function fallbackUploadSessionAlbumPhoto(sessionId, file, options = {}) {
@@ -426,12 +462,6 @@ export function createSignup(body) {
 
 export function listMySignups() {
   return apiRequest("/api/users/me/signups");
-}
-
-export function hideMyOrganizedSession(sessionId) {
-  return apiRequest(`/api/sessions/${sessionId}/hide`, {
-    method: "PATCH"
-  });
 }
 
 export function hideMySignup(signupId) {

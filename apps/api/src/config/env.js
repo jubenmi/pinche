@@ -35,7 +35,7 @@ function loadDotEnv() {
       value = value.slice(1, -1);
     }
 
-    if (!process.env[key]) {
+    if (process.env[key] === undefined) {
       process.env[key] = value;
     }
   }
@@ -62,12 +62,64 @@ function integerEnv(name, fallback) {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
+function integerValue(raw, fallback) {
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 function listEnv(name) {
   const raw = process.env[name] ?? "";
   return raw
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function stringValue(env, name) {
+  const raw = env[name];
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function redisHostForUrl(host) {
+  if (host.includes(":") && !host.startsWith("[") && !host.endsWith("]")) {
+    return `[${host}]`;
+  }
+
+  return host;
+}
+
+function redisAuthForUrl(env) {
+  const username = stringValue(env, "REDIS_USERNAME");
+  const password = typeof env.REDIS_PASSWORD === "string" ? env.REDIS_PASSWORD : "";
+
+  if (!username && !password) {
+    return "";
+  }
+
+  if (!username) {
+    return `:${encodeURIComponent(password)}@`;
+  }
+
+  const encodedUsername = encodeURIComponent(username);
+  const encodedPassword = password ? `:${encodeURIComponent(password)}` : "";
+  return `${encodedUsername}${encodedPassword}@`;
+}
+
+export function buildRedisUrl(env = process.env) {
+  const explicitUrl = stringValue(env, "REDIS_URL");
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  const host = redisHostForUrl(stringValue(env, "REDIS_HOST") || "127.0.0.1");
+  const port = integerValue(env.REDIS_PORT, 6379);
+  const database = stringValue(env, "REDIS_DB");
+  const databasePath = database ? `/${encodeURIComponent(database)}` : "";
+  return `redis://${redisAuthForUrl(env)}${host}:${port}${databasePath}`;
 }
 
 export const config = {
@@ -83,7 +135,7 @@ export const config = {
   },
   redis: {
     enabled: booleanEnv("REDIS_ENABLED", false),
-    url: process.env.REDIS_URL || "redis://127.0.0.1:6379"
+    url: buildRedisUrl()
   },
   cos: {
     enabled: booleanEnv("COS_ENABLED", false),
@@ -96,6 +148,11 @@ export const config = {
     mockLogin: booleanEnv("WECHAT_MOCK_LOGIN", true),
     appId: process.env.WECHAT_APP_ID || "wx-placeholder",
     appSecret: process.env.WECHAT_APP_SECRET || ""
+  },
+  subscribeMessage: {
+    enabled: booleanEnv("WECHAT_SUBSCRIBE_MESSAGE_ENABLED", false),
+    signupCreatedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_CREATED || "",
+    signupReviewedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED || ""
   },
   sessionSecret:
     process.env.SESSION_SECRET ||

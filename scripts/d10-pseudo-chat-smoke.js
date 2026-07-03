@@ -137,17 +137,23 @@ async function main() {
     403
   );
 
-  const claimedSeat = await request(
+  const signup = await request(
     "POST",
-    `/api/session-seats/${targetSeat.id}/claim`,
+    "/api/signups",
     {
-      note: "分享页直接选择角色"
+      seatId: targetSeat.id,
+      contactText: `d10-player-${suffix}`,
+      note: "分享页选择角色后申请上车"
     },
-    player.token
+    player.token,
+    201
   );
+  await request("PATCH", `/api/signups/${signup.data.id}/approve`, {}, owner.token);
+  const afterApproveDetail = await request("GET", `/api/sessions/${session.id}`);
+  const claimedSeat = afterApproveDetail.data.seats.find((seat) => seat.id === targetSeat.id);
   assert(
-    claimedSeat.data.status === "confirmed",
-    "share page direct claim should confirm seat"
+    claimedSeat.status === "confirmed",
+    "approved share page signup should confirm seat"
   );
 
   const initialMessages = await request(

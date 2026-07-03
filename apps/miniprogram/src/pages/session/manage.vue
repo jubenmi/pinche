@@ -5,10 +5,15 @@
     <view class="section">
       <view class="title">{{ session.script_name_snapshot || "车头管理" }}</view>
       <view class="text">{{ summaryText }}</view>
-      <view v-if="statusText" class="notice">{{ statusText }}</view>
+      <view v-if="operationText" class="notice">{{ operationText }}</view>
       <view class="actions">
-        <button class="button" @click="reload">刷新</button>
-        <button class="button secondary" @click="goDetail">车局详情</button>
+        <button class="button" :disabled="busyAction" @click="reload">
+          {{ busyAction ? "处理中..." : "刷新" }}
+        </button>
+        <button class="button secondary" :disabled="busyAction" @click="subscribeSignupReminder">
+          申请提醒
+        </button>
+        <button class="button secondary" :disabled="busyAction" @click="goDetail">车局详情</button>
       </view>
     </view>
 
@@ -19,7 +24,12 @@
       <view class="info-row">状态：{{ sessionStatusLabel(session.status) }}</view>
       <view class="info-row">座位：{{ seatSummary }}</view>
       <view class="actions compact">
-        <button class="mini-button muted" :disabled="busyAction" @click="leaveOrganizer">
+        <button
+          v-if="hasOtherOnboardMembers"
+          class="mini-button muted"
+          :disabled="busyAction"
+          @click="leaveOrganizer"
+        >
           退出车头
         </button>
       </view>
@@ -85,23 +95,36 @@
     </view>
 
     <view v-if="session.id" class="section danger-section">
-      <view class="section-title">取消车</view>
-      <view class="section-note">取消后座位会全部关闭，车内留言会留下取消通知。</view>
-      <textarea
-        v-model="cancelReason"
-        class="textarea"
-        maxlength="200"
-        placeholder="可选：写一句取消原因"
-        placeholder-class="placeholder"
-      />
-      <view class="actions">
-        <button
-          class="button danger"
-          :disabled="busyAction || session.status === 'cancelled'"
-          @click="cancelSession"
-        >
-          取消本车
-        </button>
+      <view v-if="!hasOtherOnboardMembers && !hasActiveAlbumPhotos">
+        <view class="section-title">取消车</view>
+        <view class="section-note">取消后这辆车会被直接删除，座位、报名、聊天和相册记录会一起删除。</view>
+        <textarea
+          v-model="cancelReason"
+          class="textarea"
+          maxlength="200"
+          placeholder="可选：写一句取消原因"
+          placeholder-class="placeholder"
+        />
+        <view class="actions">
+          <button
+            class="button danger"
+            :disabled="busyAction"
+            @click="cancelSession"
+          >
+            取消本车
+          </button>
+        </view>
+      </view>
+      <view v-else-if="hasOtherOnboardMembers">
+        <view class="section-title">退出车头</view>
+        <view class="section-note">已有玩家上车，不能取消删除；请退出车头，系统会转给下一位已上车成员。</view>
+      </view>
+      <view v-else>
+        <view class="section-title">先删照片</view>
+        <view class="section-note">相册已有照片，不能取消删除；请先删除所有照片，避免留下无主照片。</view>
+        <view class="actions">
+          <button class="button secondary" :disabled="busyAction" @click="goAlbum">打开相册</button>
+        </view>
       </view>
     </view>
   </view>
@@ -112,6 +135,7 @@ import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinnedMessage.vue";
 import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
+import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
 
 export default {
   components: { AuthIdentityBar, ManagePinnedMessage },
@@ -123,10 +147,17 @@ export default {
       sessionManageExtensions,
       statusText: "",
       busyAction: false,
+      busyText: "",
       cancelReason: ""
     };
   },
   computed: {
+    operationText() {
+      if (this.busyAction) {
+        return this.busyText || "正在处理，请稍候...";
+      }
+      return this.statusText;
+    },
     summaryText() {
       if (!this.session.id) {
         return "置顶信息、处理上车、释放座位和取消车。";
@@ -143,6 +174,21 @@ export default {
     },
     authTools() {
       return { dataOf, request };
+    },
+    hasOtherOnboardMembers() {
+      const seats = this.session.seats || [];
+      if (seats.length > 0) {
+        return seats.some(
+          (seat) =>
+            ["confirmed", "locked"].includes(seat.status) &&
+            seat.confirmed_user_id &&
+            Number(seat.confirmed_user_id) !== Number(this.session.organizer_user_id)
+        );
+      }
+      return Number(this.session.other_onboard_member_count || 0) > 0;
+    },
+    hasActiveAlbumPhotos() {
+      return Number(this.session.active_album_photo_count || this.session.photo_count || 0) > 0;
     }
   },
   async onLoad(options) {
@@ -226,6 +272,19 @@ export default {
         method: "PATCH"
       });
     },
+    async subscribeSignupReminder() {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
+      const result = await requestSignupCreatedSubscription();
+      this.statusText =
+        result.status === "accept" ||
+        result.status === "acceptWithAudio" ||
+        result.status === "acceptWithAlert"
+          ? "已开启新申请提醒。"
+          : "未开启提醒，也不影响你继续管理申请。";
+    },
     async kickSeat(seat) {
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
@@ -270,17 +329,44 @@ export default {
       if (!auth) {
         return;
       }
-      this.confirmAction("确认取消本车吗？", async () => {
-        await this.runAction("本车已取消。", {
+      if (this.hasActiveAlbumPhotos) {
+        this.confirmAction("相册已有照片，不能取消删除。要先打开相册删除所有照片吗？", () => {
+          this.goAlbum();
+        });
+        return;
+      }
+      this.confirmAction("确认取消本车吗？取消后这辆车会被直接删除。", async () => {
+        await this.runCancelSession();
+      });
+    },
+    async runCancelSession() {
+      if (this.busyAction) {
+        return;
+      }
+      this.busyAction = true;
+      this.busyText = "正在取消本车...";
+      try {
+        await request({
           url: `/api/sessions/${this.sessionId}/cancel`,
           method: "PATCH",
           data: {
             reason: this.cancelReason.trim()
           }
         });
-      });
+        this.statusText = "本车已取消。";
+        uni.showToast({ title: "本车已取消", icon: "none" });
+        uni.redirectTo({ url: "/pages/mine/index" });
+      } catch (error) {
+        this.statusText = this.cancelSessionErrorText(error);
+      } finally {
+        this.busyAction = false;
+        this.busyText = "";
+      }
     },
     confirmAction(content, onConfirm) {
+      if (this.busyAction) {
+        return;
+      }
       uni.showModal({
         title: "确认操作",
         content,
@@ -298,6 +384,7 @@ export default {
         return;
       }
       this.busyAction = true;
+      this.busyText = "正在处理，请稍候...";
       try {
         await request(options);
         await this.reload();
@@ -306,6 +393,7 @@ export default {
         this.statusText = this.actionErrorText(error);
       } finally {
         this.busyAction = false;
+        this.busyText = "";
       }
     },
     async runOrganizerTransition(successText, options) {
@@ -313,6 +401,7 @@ export default {
         return;
       }
       this.busyAction = true;
+      this.busyText = "正在处理，请稍候...";
       try {
         await request(options);
         this.statusText = successText;
@@ -323,6 +412,7 @@ export default {
         this.statusText = this.actionErrorText(error);
       } finally {
         this.busyAction = false;
+        this.busyText = "";
       }
     },
     actionErrorText(error) {
@@ -334,7 +424,26 @@ export default {
       }
       return "操作失败，请稍后重试。";
     },
+    cancelSessionErrorText(error) {
+      if (error?.data?.error?.code === "SESSION_HAS_ONBOARD_MEMBERS") {
+        return "已有玩家上车，不能取消删除；请退出车头。";
+      }
+      if (error?.data?.error?.code === "SESSION_HAS_ALBUM_PHOTOS") {
+        return "相册已有照片，请先删除所有照片后再取消这辆车。";
+      }
+      return this.actionErrorText(error);
+    },
+    goAlbum() {
+      if (this.busyAction) {
+        return;
+      }
+      const id = this.sessionId || "d1-demo";
+      uni.navigateTo({ url: `/pages/session/album?id=${id}` });
+    },
     async goDetail() {
+      if (this.busyAction) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
         return;

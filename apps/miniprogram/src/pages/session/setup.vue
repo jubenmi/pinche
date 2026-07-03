@@ -33,6 +33,19 @@
     </view>
 
     <view class="section">
+      <view class="section-title">本场额外NPC</view>
+      <view class="section-note">店家本场额外设计的NPC角色，每行一个；剧本固定NPC会自动带入。</view>
+      <textarea
+        v-model="extraNpcRolesText"
+        class="textarea"
+        maxlength="300"
+        placeholder="例如：媒人&#10;少年将军"
+        placeholder-class="placeholder"
+        @blur="persistDraft"
+      />
+    </view>
+
+    <view class="section">
       <view class="section-title">聊天置顶信息</view>
       <view class="section-note">留空会使用默认信息，创建后会作为车内聊天的置顶消息保存。</view>
       <textarea
@@ -107,6 +120,7 @@ export default {
       dateValue: defaults.date,
       timeValue: defaults.time,
       today: dateText(new Date()),
+      extraNpcRolesText: "",
       pinnedMessageText: "",
       statusText: "",
       busyAction: false
@@ -148,6 +162,7 @@ export default {
     this.role = flow.role || null;
     this.roleOptions = roleOptionsFromFlow(flow);
     this.selectedRoles = selectedRolesFromFlow(flow);
+    this.extraNpcRolesText = flow.extraNpcRolesText || "";
     this.pinnedMessageText = flow.pinnedMessageText || "";
     if (flow.startAt) {
       this.dateValue = String(flow.startAt).slice(0, 10) || this.dateValue;
@@ -170,8 +185,16 @@ export default {
       writeCreateFlow({
         startAt: this.startAt,
         startText: this.startText,
+        extraNpcRolesText: this.extraNpcRolesText.trim(),
         pinnedMessageText: this.pinnedMessageText.trim()
       });
+    },
+    extraNpcRoles() {
+      return this.extraNpcRolesText
+        .split(/\r?\n|[，,]/)
+        .map((name) => name.trim())
+        .filter(Boolean)
+        .map((name) => ({ name }));
     },
     seatPayload(role) {
       return {
@@ -212,6 +235,7 @@ export default {
             scriptId: Number(this.script.id),
             startAt: this.startAt,
             depositAmount: 0,
+            extraNpcRoles: this.extraNpcRoles(),
             note: "剧本迷·拼车，一起沉浸好本。",
             pinnedMessageText
           }
@@ -254,6 +278,7 @@ export default {
           role: this.role,
           roleOptions: roles,
           selectedRoles: this.selectedRoles,
+          extraNpcRolesText: this.extraNpcRolesText.trim(),
           sessionId: session.id,
           startAt: this.startAt,
           startText: this.startText,

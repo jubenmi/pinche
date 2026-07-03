@@ -1,28 +1,13 @@
 <template>
   <section
     class="album-workspace"
-    :class="{ 'drawer-open': tagDrawerOpen || privacyDrawerOpen }"
+    :class="{
+      'drawer-open': tagDrawerOpen || privacyDrawerOpen,
+      'bulk-selecting': bulkSelectionMode
+    }"
   >
-    <div class="catalog-panel album-panel">
-      <div class="album-panel-head">
-        <div>
-          <p class="eyebrow">车局相册</p>
-          <h2>{{ selectedSession?.script_name_snapshot || "车局相册" }}</h2>
-        </div>
-        <p class="status">和微信小程序一致：从车详情进入单场相册，发车后同车成员可查看和上传。</p>
-      </div>
-
-      <div class="toolbar toolbar-primary">
-        <div class="filter-group">
-          <button type="button" :disabled="!selectedSession" @click="loadAlbum">刷新相册</button>
-        </div>
-        <button class="primary" type="button" :disabled="!selectedSession" @click="loadAlbum">
-          刷新相册
-        </button>
-      </div>
-    </div>
-
     <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="albumActionBusy" class="loading-strip">{{ albumBusyText }}</p>
 
     <div class="album-layout">
       <div class="table-card album-detail-card">
@@ -43,62 +28,159 @@
           <p v-if="albumError" class="warning">{{ albumError }}</p>
           <p v-else-if="albumStatus" class="status album-status">{{ albumStatus }}</p>
 
-          <div class="album-action-row">
-            <div class="filter-chip-row">
+          <div ref="albumCommandSentinel" class="album-command-sentinel" aria-hidden="true"></div>
+          <div
+            class="album-command-bar"
+            :class="{ selecting: bulkSelectionMode, floating: albumCommandFloating }"
+          >
+            <div class="album-command-main">
+              <div class="album-filter-group">
+                <span class="album-control-label">筛选</span>
+                <div class="filter-chip-row">
+                  <button
+                    v-for="filter in albumFilterOptions"
+                    :key="filter.value"
+                    type="button"
+                    class="filter-chip"
+                    :class="{ active: activeAlbumFilter === filter.value }"
+                    :disabled="albumActionBusy"
+                    @click="activeAlbumFilter = filter.value"
+                  >
+                    <span>{{ filter.label }}</span>
+                    <small>{{ filter.count }}</small>
+                  </button>
+                </div>
+                <select
+                  v-model="selectedAlbumRoleFilter"
+                  class="album-role-select"
+                  :disabled="albumActionBusy || albumRoleFilterOptions.length <= 1"
+                  aria-label="按角色筛选照片"
+                >
+                  <option
+                    v-for="option in albumRoleFilterOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </div>
+              <div class="album-command-actions">
+                <button
+                  v-if="!bulkSelectionMode"
+                  class="secondary-action"
+                  type="button"
+                  :disabled="uploadDisabled"
+                  @click="openFilePicker"
+                >
+                  上传
+                </button>
+                <button
+                  v-if="!bulkSelectionMode"
+                  class="secondary-action"
+                  type="button"
+                  :disabled="albumActionBusy || Boolean(albumError)"
+                  @click="openPrivacyDrawer"
+                >
+                  {{ loadingPrivacy ? "载入中..." : "隐私" }}
+                </button>
+                <button
+                  v-if="!bulkSelectionMode"
+                  class="primary"
+                  type="button"
+                  :disabled="albumActionBusy || Boolean(albumError) || taggablePhotos.length === 0"
+                  @click="toggleBulkSelectionMode"
+                >
+                  多选
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="bulkSelectionMode" class="album-selection-toolbar">
+            <div class="album-selection-status">
+              <strong>已选 {{ selectedAlbumPhotoCount }} 张</strong>
+              <span>当前筛选可标注 {{ taggablePhotos.length }} 张</span>
+            </div>
+            <div class="album-selection-actions">
               <button
-                v-for="filter in albumFilters"
-                :key="filter.value"
+                class="secondary-action"
                 type="button"
-                class="filter-chip"
-                :class="{ active: activeAlbumFilter === filter.value }"
-                @click="activeAlbumFilter = filter.value"
+                :disabled="albumActionBusy"
+                @click="toggleBulkSelectionMode"
               >
-                {{ filter.label }}
+                退出多选
+              </button>
+              <button
+                class="secondary-action"
+                type="button"
+                :disabled="albumActionBusy || taggablePhotos.length === 0"
+                @click="toggleSelectFilteredPhotos"
+              >
+                {{ allFilteredTaggableSelected ? "取消全选" : "全选当前筛选" }}
+              </button>
+              <button
+                class="secondary-action"
+                type="button"
+                :disabled="albumActionBusy || selectedAlbumPhotoCount === 0"
+                @click="clearBulkSelection"
+              >
+                清空
+              </button>
+              <button
+                class="primary"
+                type="button"
+                :disabled="albumActionBusy || selectedAlbumPhotoCount === 0"
+                @click="openBulkTagDrawer"
+              >
+                批量标注
               </button>
             </div>
-            <button
-              class="secondary-action"
-              type="button"
-              :disabled="albumLoading || Boolean(albumError)"
-              @click="openPrivacyDrawer"
+          </div>
+
+          <div class="album-workbench">
+            <div
+              v-if="!bulkSelectionMode"
+              class="upload-zone"
+              :class="{ dragging, disabled: uploadDisabled }"
+              @dragenter.prevent="dragging = true"
+              @dragover.prevent="dragging = true"
+              @dragleave.prevent="dragging = false"
+              @drop.prevent="handleDrop"
             >
-              隐私设置
-            </button>
-          </div>
-
-          <div
-            class="upload-zone"
-            :class="{ dragging, disabled: uploadDisabled }"
-            @dragenter.prevent="dragging = true"
-            @dragover.prevent="dragging = true"
-            @dragleave.prevent="dragging = false"
-            @drop.prevent="handleDrop"
-          >
-            <input
-              ref="fileInput"
-              class="sr-only"
-              type="file"
-              accept="image/jpeg,image/png"
-              multiple
-              @change="handleFileChange"
-            />
-            <div>
-              <strong>{{ uploading ? "正在上传照片" : "拖拽照片到这里" }}</strong>
-              <span>支持 JPG、PNG，单张不超过 4MB。上传完成后只把图片路径写入相册。</span>
+              <input
+                ref="fileInput"
+                class="sr-only"
+                type="file"
+                accept="image/jpeg,image/png"
+                multiple
+                @change="handleFileChange"
+              />
+              <span class="album-upload-icon">+</span>
+              <div>
+                <strong>{{ uploading ? "正在上传照片" : "拖拽照片" }}</strong>
+                <span>JPG / PNG，单张不超过 4MB</span>
+              </div>
             </div>
-            <button class="primary" type="button" :disabled="uploadDisabled" @click="openFilePicker">
-              选择照片
-            </button>
-          </div>
 
-          <div class="album-summary">
-            <span>当前 {{ filteredPhotos.length }} 张 / 可见 {{ album?.photos?.length || 0 }} 张</span>
-            <span v-if="Number(album?.hidden_count || 0) > 0">
-              {{ album.hidden_count }} 张因隐私未展示
-            </span>
-            <span v-if="Number(album?.untagged_count || 0) > 0">
-              {{ album.untagged_count }} 张待标注
-            </span>
+            <div class="album-metrics">
+              <div class="album-summary">
+                <span>
+                  当前筛选 {{ filteredPhotos.length }} 张 / 全部可见 {{ visiblePhotoCount }} 张 /
+                  筛选已标注 {{ filteredTaggedPhotoCount }} 张 / 筛选待标注 {{ filteredUntaggedPhotoCount }} 张
+                </span>
+                <span v-if="Number(album?.hidden_count || 0) > 0">
+                  {{ album.hidden_count }} 张因隐私未展示
+                </span>
+              </div>
+
+              <div class="album-progress" aria-label="相册标注进度">
+                <div class="album-progress-bar">
+                  <span class="album-progress-fill" :style="{ width: `${filteredTagProgressPercent}%` }"></span>
+                </div>
+                <span>{{ filteredTagProgressPercent }}%</span>
+              </div>
+            </div>
           </div>
 
           <div v-if="albumLoading" class="empty-block">正在加载相册...</div>
@@ -120,24 +202,46 @@
             background-color="transparent"
           >
             <template #default="{ item: photo }">
-              <article class="admin-photo">
-                <button class="photo-preview" type="button" @click="previewPhoto(photo)">
+              <article
+                class="admin-photo"
+                :class="{
+                  selectable: bulkSelectionMode && photo.can_tag,
+                  selected: bulkSelectionMode && isAlbumPhotoSelected(photo),
+                  disabled: bulkSelectionMode && !photo.can_tag
+                }"
+              >
+                <button
+                  class="photo-preview"
+                  type="button"
+                  :disabled="albumActionBusy || (bulkSelectionMode && !photo.can_tag)"
+                  @click="bulkSelectionMode ? toggleAlbumPhotoSelection(photo) : previewPhoto(photo)"
+                >
                   <AuthorizedLazyImage
                     :src="photo.thumbnail_url || photo.image_url"
                     :ratio="photoAspectRatio(photo)"
                     @loaded="rerenderAlbumWaterfall"
                   />
+                  <span
+                    v-if="bulkSelectionMode"
+                    class="album-selection-checkbox"
+                    :class="{ selected: isAlbumPhotoSelected(photo), disabled: !photo.can_tag }"
+                  >
+                    <span class="album-selection-checkbox-box">
+                      {{ isAlbumPhotoSelected(photo) ? "✓" : "" }}
+                    </span>
+                  </span>
                 </button>
               <div class="photo-info">
                 <strong>{{ tagSummary(photo) }}</strong>
                 <span>{{ photo.uploader_name || "车友" }} · {{ formatDate(photo.created_at) }}</span>
                 <span>{{ imageMetaText(photo) }}</span>
               </div>
-              <div class="photo-actions">
+              <div v-if="!bulkSelectionMode" class="photo-actions">
                 <button
                   v-if="photo.can_tag"
                   type="button"
                   class="action-button"
+                  :disabled="albumActionBusy"
                   @click="openTagDrawer(photo)"
                 >
                   标注
@@ -146,9 +250,10 @@
                   v-if="photo.is_mine"
                   type="button"
                   class="action-button danger"
+                  :disabled="albumActionBusy"
                   @click="deletePhoto(photo)"
                 >
-                  删除
+                  {{ deletingPhotoId === photo.id ? "删除中..." : "删除" }}
                 </button>
                 <span v-if="!photo.can_tag && !photo.is_mine" class="status">
                   仅上传者可管理
@@ -165,13 +270,23 @@
 
     <aside v-if="tagDrawerOpen" class="drawer album-tag-drawer">
       <div class="drawer-head">
-        <h2>标注照片</h2>
-        <button class="close-button" type="button" @click="closeTagDrawer">关闭</button>
+        <h2>{{ bulkTagging ? `给 ${selectedTagTargetCount} 张照片标注` : "标注照片" }}</h2>
+        <button class="close-button" type="button" :disabled="savingTags" @click="closeTagDrawer">
+          关闭
+        </button>
       </div>
       <div class="drawer-body">
-        <img class="tag-preview" :src="taggingPhoto.display_url" alt="" />
+        <img v-if="!bulkTagging" class="tag-preview" :src="taggingPhoto.display_url" alt="" />
+        <div v-else class="bulk-tag-summary">
+          <strong>已选 {{ selectedAlbumPhotoCount }} 张照片</strong>
+          <span>保存后，这些照片会替换成同一组标签。</span>
+        </div>
         <p class="status">
-          未标注照片只有上传者可见。标注座位、DM 或 NPC 后，会按成员隐私设置展示。
+          {{
+            bulkTagging
+              ? "批量标注会逐张保存，沿用单张照片权限校验。"
+              : "未标注照片只有上传者可见。标注“其他”或仅标 NPC 时，同车成员都可见；标注车友后按成员隐私设置展示。"
+          }}
         </p>
         <div class="selected-tag-row">
           <button
@@ -181,7 +296,7 @@
             class="selected-tag"
             @click="toggleTag(person.key)"
           >
-            {{ person.label }} ×
+            {{ tagPersonTitle(person) }} ×
           </button>
           <span v-if="selectedPeople.length === 0">暂未标注，只有上传者可见</span>
         </div>
@@ -193,11 +308,11 @@
               @change="toggleTag(person.key)"
             />
             <span>
-              <strong>{{ person.label }}</strong>
-              <small>{{ person.note || tagTypeLabel(person.tag_type) }}</small>
+              <strong>{{ tagPersonTitle(person) }}</strong>
+              <small v-if="tagPersonSubtitle(person)">{{ tagPersonSubtitle(person) }}</small>
             </span>
           </label>
-          <div v-if="npcPeople.length" class="tag-group-title">DM / NPC</div>
+          <div v-if="npcPeople.length" class="tag-group-title">DM / NPC工作人员</div>
           <label v-for="person in npcPeople" :key="person.key" class="tag-choice">
             <input
               type="checkbox"
@@ -205,8 +320,32 @@
               @change="toggleTag(person.key)"
             />
             <span>
-              <strong>{{ person.label }}</strong>
-              <small>{{ person.note || tagTypeLabel(person.tag_type) }}</small>
+              <strong>{{ tagPersonTitle(person) }}</strong>
+              <small v-if="tagPersonSubtitle(person)">{{ tagPersonSubtitle(person) }}</small>
+            </span>
+          </label>
+          <div v-if="npcRolePeople.length" class="tag-group-title">NPC角色</div>
+          <label v-for="person in npcRolePeople" :key="person.key" class="tag-choice">
+            <input
+              type="checkbox"
+              :checked="selectedTagKeys.includes(person.key)"
+              @change="toggleTag(person.key)"
+            />
+            <span>
+              <strong>{{ tagPersonTitle(person) }}</strong>
+              <small v-if="tagPersonSubtitle(person)">{{ tagPersonSubtitle(person) }}</small>
+            </span>
+          </label>
+          <div v-if="otherPeople.length" class="tag-group-title">其他</div>
+          <label v-for="person in otherPeople" :key="person.key" class="tag-choice">
+            <input
+              type="checkbox"
+              :checked="selectedTagKeys.includes(person.key)"
+              @change="toggleTag(person.key)"
+            />
+            <span>
+              <strong>{{ tagPersonTitle(person) }}</strong>
+              <small v-if="tagPersonSubtitle(person)">{{ tagPersonSubtitle(person) }}</small>
             </span>
           </label>
           <div v-if="people.length === 0" class="empty-block">当前车局没有可标注对象。</div>
@@ -225,7 +364,14 @@
     <aside v-if="privacyDrawerOpen" class="drawer album-privacy-drawer">
       <div class="drawer-head">
         <h2>相册隐私设置</h2>
-        <button class="close-button" type="button" @click="closePrivacyDrawer">关闭</button>
+        <button
+          class="close-button"
+          type="button"
+          :disabled="savingPrivacy"
+          @click="closePrivacyDrawer"
+        >
+          关闭
+        </button>
       </div>
       <div class="drawer-body">
         <p class="status">规则和小程序一致：可见照片可以保存，不可见照片不会出现。</p>
@@ -234,14 +380,14 @@
             <strong>其他同车成员可以查看我上传的照片</strong>
             <small>关闭后，只有我能看我上传的照片。</small>
           </span>
-          <input v-model="privacyForm.allowUploadedVisible" type="checkbox" />
+          <input v-model="privacyForm.allowUploadedVisible" type="checkbox" :disabled="savingPrivacy" />
         </label>
         <label class="privacy-toggle">
           <span>
             <strong>其他同车成员可以查看包含我的照片</strong>
             <small>关闭后，包含我的照片不会对外展示。</small>
           </span>
-          <input v-model="privacyForm.allowTaggedVisible" type="checkbox" />
+          <input v-model="privacyForm.allowTaggedVisible" type="checkbox" :disabled="savingPrivacy" />
         </label>
         <div class="privacy-rule-list">
           <div>我上传的照片，我永远可见</div>
@@ -262,7 +408,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Waterfall } from "vue-waterfall-plugin-next";
 import "vue-waterfall-plugin-next/dist/style.css";
 import AuthorizedLazyImage from "./AuthorizedLazyImage.vue";
@@ -300,10 +446,18 @@ const fileInput = ref(null);
 const taggingPhoto = ref(null);
 const selectedTagKeys = ref([]);
 const savingTags = ref(false);
+const bulkSelectionMode = ref(false);
+const selectedAlbumPhotoIds = ref([]);
+const bulkTagging = ref(false);
 const activeAlbumFilter = ref("all");
+const selectedAlbumRoleFilter = ref("");
 const privacyDrawerOpen = ref(false);
 const savingPrivacy = ref(false);
+const loadingPrivacy = ref(false);
+const deletingPhotoId = ref("");
 const albumWaterfall = ref(null);
+const albumCommandSentinel = ref(null);
+const albumCommandFloating = ref(false);
 const privacyForm = ref({
   allowUploadedVisible: true,
   allowTaggedVisible: true
@@ -317,31 +471,97 @@ const albumWaterfallBreakpoints = {
 };
 
 const photos = computed(() => album.value?.photos || []);
-const currentUserId = computed(() => getStoredAuth().user?.id || "");
-const filteredPhotos = computed(() => {
-  if (activeAlbumFilter.value === "mine") {
-    return photos.value.filter((photo) => photo.is_mine);
+const visiblePhotoCount = computed(() => photos.value.length);
+const visibleUntaggedPhotoCount = computed(
+  () => photos.value.filter((photo) => (photo.tags || []).length === 0).length
+);
+const visibleTaggedPhotoCount = computed(() => visiblePhotoCount.value - visibleUntaggedPhotoCount.value);
+const albumTagProgressPercent = computed(() => {
+  if (visiblePhotoCount.value === 0) {
+    return 0;
   }
-  if (activeAlbumFilter.value === "withMe") {
-    return photos.value.filter((photo) =>
-      (photo.tags || []).some((tag) => Number(tag.user_id) === Number(currentUserId.value))
-    );
-  }
-  if (activeAlbumFilter.value === "untagged") {
-    return photos.value.filter((photo) => (photo.tags || []).length === 0);
-  }
-  return photos.value;
+  return Math.round((visibleTaggedPhotoCount.value / visiblePhotoCount.value) * 100);
 });
+const currentUserId = computed(() => getStoredAuth().user?.id || "");
+const filteredPhotos = computed(() => photosForAlbumFilter(activeAlbumFilter.value));
+const filteredUntaggedPhotoCount = computed(
+  () => filteredPhotos.value.filter((photo) => (photo.tags || []).length === 0).length
+);
+const filteredTaggedPhotoCount = computed(
+  () => filteredPhotos.value.length - filteredUntaggedPhotoCount.value
+);
+const filteredTagProgressPercent = computed(() => {
+  if (filteredPhotos.value.length === 0) {
+    return 0;
+  }
+  return Math.round((filteredTaggedPhotoCount.value / filteredPhotos.value.length) * 100);
+});
+const albumFilterOptions = computed(() =>
+  albumFilters.map((filter) => ({
+    ...filter,
+    count: countAlbumPhotosForFilter(filter.value)
+  }))
+);
+const taggablePhotos = computed(() => filteredPhotos.value.filter((photo) => photo.can_tag));
 const tagDrawerOpen = computed(() => Boolean(taggingPhoto.value));
 const seatPeople = computed(() => people.value.filter((person) => person.tag_type === "seat"));
 const npcPeople = computed(() =>
   people.value.filter((person) => ["dm", "npc"].includes(person.tag_type))
 );
+const npcRolePeople = computed(() =>
+  people.value.filter((person) => person.tag_type === "session_npc_role")
+);
+const otherPeople = computed(() => people.value.filter((person) => person.tag_type === "other"));
 const selectedPeople = computed(() =>
   people.value.filter((person) => selectedTagKeys.value.includes(person.key))
 );
+const albumRoleFilterOptions = computed(() => [
+  { value: "", label: `全部角色 ${photos.value.length}` },
+  ...people.value.map((person) => ({
+    value: person.key,
+    label: `${roleFilterOptionLabel(person)} ${countPhotosForRole(person.key)}`
+  }))
+]);
+const selectedAlbumPhotoCount = computed(() => selectedAlbumPhotoIds.value.length);
+const selectedTagTargetCount = computed(() =>
+  bulkTagging.value ? selectedAlbumPhotoCount.value : taggingPhoto.value ? 1 : 0
+);
+const filteredTaggablePhotoIds = computed(() => taggablePhotos.value.map((photo) => Number(photo.id)));
+const allFilteredTaggableSelected = computed(
+  () =>
+    filteredTaggablePhotoIds.value.length > 0 &&
+    filteredTaggablePhotoIds.value.every((photoId) => selectedAlbumPhotoIds.value.includes(photoId))
+);
+const albumActionBusy = computed(
+  () =>
+    albumLoading.value ||
+    uploading.value ||
+    savingTags.value ||
+    savingPrivacy.value ||
+    loadingPrivacy.value ||
+    Boolean(deletingPhotoId.value)
+);
+const albumBusyText = computed(() => {
+  if (uploading.value) {
+    return albumStatus.value || "正在上传照片...";
+  }
+  if (savingTags.value) {
+    return "正在保存标注...";
+  }
+  if (savingPrivacy.value) {
+    return "正在保存隐私设置...";
+  }
+  if (loadingPrivacy.value) {
+    return "正在载入隐私设置...";
+  }
+  if (deletingPhotoId.value) {
+    return "正在删除照片...";
+  }
+  return "正在加载相册...";
+});
 const uploadDisabled = computed(
   () =>
+    albumActionBusy.value ||
     uploading.value ||
     albumLoading.value ||
     Boolean(albumError.value) ||
@@ -363,9 +583,97 @@ function tagTypeLabel(value) {
   const labels = {
     seat: "车友",
     dm: "DM",
-    npc: "NPC"
+    npc: "NPC",
+    session_npc_role: "NPC角色",
+    other: "其他"
   };
   return labels[value] || "成员";
+}
+
+function inferredSeatRoleName(person) {
+  const parts = String(person?.note || "")
+    .split(" · ")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts[1] || parts[0] || "";
+}
+
+function tagPersonTitle(person) {
+  if (person?.tag_type !== "seat") {
+    return person?.label || tagTypeLabel(person?.tag_type);
+  }
+  return person.role_name || inferredSeatRoleName(person) || person.label || "车友";
+}
+
+function tagPersonSubtitle(person) {
+  if (!person) {
+    return "";
+  }
+  const title = tagPersonTitle(person);
+  if (person.tag_type === "seat") {
+    const accountName = String(person.account_name || person.account_nickname || "").trim();
+    if (accountName && accountName !== title) {
+      return accountName;
+    }
+    const legacyLabel = String(person.label || "").trim();
+    return legacyLabel && legacyLabel !== title ? legacyLabel : "";
+  }
+  if (person.tag_type === "session_npc_role") {
+    const accountName = String(person.account_name || person.bound_user_name || "").trim();
+    if (accountName && accountName !== title) {
+      return accountName;
+    }
+    const legacyBinding = String(person.note || "").split("绑定：")[1]?.split(" · ")[0]?.trim() || "";
+    return legacyBinding && legacyBinding !== title ? legacyBinding : "";
+  }
+  const subtitle = String(person.account_name || person.note || "").trim();
+  return subtitle && subtitle !== person.label ? subtitle : "";
+}
+
+function roleFilterOptionLabel(person) {
+  const title = tagPersonTitle(person);
+  const subtitle = tagPersonSubtitle(person);
+  return subtitle ? `${title} / ${subtitle}` : title;
+}
+
+function photosForAlbumFilter(filterValue, { includeRole = true } = {}) {
+  let scopedPhotos = photos.value;
+  if (filterValue === "mine") {
+    scopedPhotos = scopedPhotos.filter((photo) => photo.is_mine);
+  }
+  if (filterValue === "withMe") {
+    scopedPhotos = scopedPhotos.filter((photo) =>
+      (photo.tags || []).some((tag) => Number(tag.user_id) === Number(currentUserId.value))
+    );
+  }
+  if (filterValue === "untagged") {
+    scopedPhotos = scopedPhotos.filter((photo) => (photo.tags || []).length === 0);
+  }
+  return includeRole ? scopedPhotos.filter((photo) => photoMatchesSelectedRole(photo)) : scopedPhotos;
+}
+
+function countAlbumPhotosForFilter(filterValue) {
+  return photosForAlbumFilter(filterValue).length;
+}
+
+function countPhotosForRole(roleKey) {
+  if (!roleKey) {
+    return photos.value.length;
+  }
+  return photosForAlbumFilter(activeAlbumFilter.value, { includeRole: false }).filter((photo) =>
+    photoMatchesRole(photo, roleKey)
+  ).length;
+}
+
+function photoMatchesSelectedRole(photo) {
+  if (!selectedAlbumRoleFilter.value) {
+    return true;
+  }
+  return photoMatchesRole(photo, selectedAlbumRoleFilter.value);
+}
+
+function photoMatchesRole(photo, roleKey) {
+  return (photo.tags || []).some((tag) => tag.key === roleKey);
 }
 
 function formatDate(value) {
@@ -403,6 +711,49 @@ function tagSummary(photo) {
     return "待标注";
   }
   return `照片里：${photo.tags.map((tag) => tag.label).join("、")}`;
+}
+
+function tagsFromSelectedKeys() {
+  return selectedTagKeys.value
+    .map((key) => people.value.find((person) => person.key === key))
+    .filter(Boolean)
+    .map((person) => ({
+      key: person.key,
+      tag_type: person.tag_type,
+      seat_id: person.seat_id || null,
+      session_npc_role_id: person.session_npc_role_id || null,
+      user_id: person.user_id || null,
+      label: tagPersonTitle(person)
+    }));
+}
+
+function applyAlbumTagUpdates(updatedPhotoIds, tags) {
+  if (!album.value?.photos || updatedPhotoIds.length === 0) {
+    return;
+  }
+  const updatedIdSet = new Set(updatedPhotoIds.map((photoId) => Number(photoId)));
+  let untaggedCount = 0;
+  const nextPhotos = album.value.photos.map((photo) => {
+    if (!updatedIdSet.has(Number(photo.id))) {
+      if ((photo.tags || []).length === 0) {
+        untaggedCount += 1;
+      }
+      return photo;
+    }
+    const nextPhoto = {
+      ...photo,
+      tags: tags.map((tag) => ({ ...tag }))
+    };
+    if (nextPhoto.tags.length === 0) {
+      untaggedCount += 1;
+    }
+    return nextPhoto;
+  });
+  album.value = {
+    ...album.value,
+    photos: nextPhotos,
+    untagged_count: untaggedCount
+  };
 }
 
 function imageMetaText(photo) {
@@ -499,6 +850,7 @@ async function loadSelectedSession() {
   revokeAlbumMedia();
   album.value = null;
   people.value = [];
+  resetBulkSelection();
   if (!props.sessionId) {
     selectedSession.value = null;
     return;
@@ -522,6 +874,7 @@ async function loadAlbum() {
   revokeAlbumMedia();
   album.value = null;
   people.value = [];
+  resetBulkSelection();
   try {
     const options = albumRequestOptions();
     const [albumData, peopleData] = await Promise.all([
@@ -531,9 +884,7 @@ async function loadAlbum() {
     album.value = normalizeAlbumMedia(albumData || { photos: [] });
     people.value = peopleData?.people || [];
     activeAlbumFilter.value = "all";
-    albumStatus.value = album.value.can_upload
-      ? "可以上传。给照片标注后，其他同车成员才会按隐私规则看到。"
-      : "你可以查看满足隐私条件的照片，但当前账号不能上传。";
+    selectedAlbumRoleFilter.value = "";
   } catch (err) {
     albumError.value =
       err.status === 403
@@ -625,8 +976,14 @@ async function previewPhoto(photo) {
   window.open(displayUrl, "_blank", "noopener,noreferrer");
 }
 
+function resetBulkSelection() {
+  bulkSelectionMode.value = false;
+  selectedAlbumPhotoIds.value = [];
+  bulkTagging.value = false;
+}
+
 async function openTagDrawer(photo) {
-  if (!photo.can_tag) {
+  if (albumActionBusy.value || !photo.can_tag) {
     return;
   }
   try {
@@ -642,9 +999,69 @@ async function openTagDrawer(photo) {
   selectedTagKeys.value = (photo.tags || []).map((tag) => tag.key);
 }
 
+function toggleBulkSelectionMode() {
+  if (albumActionBusy.value || taggablePhotos.value.length === 0) {
+    return;
+  }
+  bulkSelectionMode.value = !bulkSelectionMode.value;
+  selectedAlbumPhotoIds.value = [];
+}
+
+function isAlbumPhotoSelected(photo) {
+  return selectedAlbumPhotoIds.value.includes(Number(photo.id));
+}
+
+function toggleAlbumPhotoSelection(photo) {
+  if (!bulkSelectionMode.value || albumActionBusy.value || !photo.can_tag) {
+    return;
+  }
+  const photoId = Number(photo.id);
+  if (selectedAlbumPhotoIds.value.includes(photoId)) {
+    selectedAlbumPhotoIds.value = selectedAlbumPhotoIds.value.filter((id) => id !== photoId);
+    return;
+  }
+  selectedAlbumPhotoIds.value = [...selectedAlbumPhotoIds.value, photoId];
+}
+
+function toggleSelectFilteredPhotos() {
+  if (!bulkSelectionMode.value || albumActionBusy.value || filteredTaggablePhotoIds.value.length === 0) {
+    return;
+  }
+  const filteredIdSet = new Set(filteredTaggablePhotoIds.value);
+  if (allFilteredTaggableSelected.value) {
+    selectedAlbumPhotoIds.value = selectedAlbumPhotoIds.value.filter((photoId) => !filteredIdSet.has(photoId));
+    return;
+  }
+  const selectedIdSet = new Set(selectedAlbumPhotoIds.value);
+  for (const photoId of filteredTaggablePhotoIds.value) {
+    selectedIdSet.add(photoId);
+  }
+  selectedAlbumPhotoIds.value = Array.from(selectedIdSet);
+}
+
+function clearBulkSelection() {
+  if (albumActionBusy.value) {
+    return;
+  }
+  selectedAlbumPhotoIds.value = [];
+}
+
+function openBulkTagDrawer() {
+  if (albumActionBusy.value || selectedAlbumPhotoIds.value.length === 0) {
+    return;
+  }
+  bulkTagging.value = true;
+  taggingPhoto.value = { id: null, display_url: "" };
+  selectedTagKeys.value = [];
+}
+
 function closeTagDrawer() {
+  if (savingTags.value) {
+    return;
+  }
   taggingPhoto.value = null;
   selectedTagKeys.value = [];
+  bulkTagging.value = false;
 }
 
 function toggleTag(key) {
@@ -659,24 +1076,51 @@ async function saveTags() {
   if (!taggingPhoto.value) {
     return;
   }
+  const targetPhotoIds = bulkTagging.value
+    ? [...selectedAlbumPhotoIds.value]
+    : [Number(taggingPhoto.value.id)];
+  if (targetPhotoIds.length === 0) {
+    return;
+  }
   savingTags.value = true;
+  let failedCount = 0;
+  const updatedPhotoIds = [];
+  const nextTags = tagsFromSelectedKeys();
   try {
-    await updateSessionAlbumPhotoTags(taggingPhoto.value.id, selectedTagKeys.value);
-    closeTagDrawer();
-    await loadAlbum();
-  } catch (err) {
-    albumError.value = err.message;
+    for (const photoId of targetPhotoIds) {
+      try {
+        await updateSessionAlbumPhotoTags(photoId, selectedTagKeys.value);
+        updatedPhotoIds.push(photoId);
+      } catch (err) {
+        failedCount += 1;
+      }
+    }
+    const allFailed = failedCount === targetPhotoIds.length;
+    applyAlbumTagUpdates(updatedPhotoIds, nextTags);
+    taggingPhoto.value = null;
+    selectedTagKeys.value = [];
+    bulkTagging.value = false;
+    bulkSelectionMode.value = false;
+    selectedAlbumPhotoIds.value = [];
+    if (allFailed) {
+      albumError.value = "标注保存失败";
+      return;
+    }
+    if (failedCount > 0) {
+      albumStatus.value = `部分照片标注失败：${failedCount} 张`;
+    }
   } finally {
     savingTags.value = false;
   }
 }
 
 async function openPrivacyDrawer() {
-  if (!selectedSession.value) {
+  if (albumActionBusy.value || !selectedSession.value) {
     return;
   }
   albumError.value = "";
   privacyDrawerOpen.value = true;
+  loadingPrivacy.value = true;
   try {
     const privacy = await getMySessionAlbumPrivacy(selectedSession.value.id);
     privacyForm.value = {
@@ -685,6 +1129,8 @@ async function openPrivacyDrawer() {
     };
   } catch (err) {
     albumError.value = err.message;
+  } finally {
+    loadingPrivacy.value = false;
   }
 }
 
@@ -710,21 +1156,55 @@ async function savePrivacy() {
 }
 
 async function deletePhoto(photo) {
-  if (!photo.is_mine) {
+  if (albumActionBusy.value || !photo.is_mine) {
     return;
   }
   if (!window.confirm("确认删除这张照片？")) {
     return;
   }
+  deletingPhotoId.value = photo.id;
   try {
     await deleteSessionAlbumPhoto(photo.id);
     await loadAlbum();
   } catch (err) {
     albumError.value = err.message;
+  } finally {
+    deletingPhotoId.value = "";
   }
 }
 
-onMounted(loadSelectedSession);
+function albumCommandStickyTop() {
+  const rawValue = getComputedStyle(document.documentElement)
+    .getPropertyValue("--admin-album-command-toolbar-top")
+    .trim();
+  return Number.parseFloat(rawValue) || 0;
+}
+
+function updateAlbumCommandFloating() {
+  const sentinel = albumCommandSentinel.value;
+  if (!sentinel) {
+    albumCommandFloating.value = false;
+    return;
+  }
+  albumCommandFloating.value = sentinel.getBoundingClientRect().top <= albumCommandStickyTop();
+}
+
+function queueAlbumCommandFloatingUpdate() {
+  window.requestAnimationFrame(updateAlbumCommandFloating);
+}
+
+onMounted(() => {
+  loadSelectedSession();
+  window.addEventListener("scroll", queueAlbumCommandFloatingUpdate, { passive: true });
+  window.addEventListener("resize", queueAlbumCommandFloatingUpdate);
+  queueAlbumCommandFloatingUpdate();
+});
 watch(() => props.sessionId, loadSelectedSession);
-onBeforeUnmount(revokeAlbumMedia);
+watch(activeAlbumFilter, resetBulkSelection);
+watch(selectedSession, () => nextTick(updateAlbumCommandFloating));
+onBeforeUnmount(() => {
+  window.removeEventListener("scroll", queueAlbumCommandFloatingUpdate);
+  window.removeEventListener("resize", queueAlbumCommandFloatingUpdate);
+  revokeAlbumMedia();
+});
 </script>

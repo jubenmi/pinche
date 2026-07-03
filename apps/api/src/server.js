@@ -23,6 +23,7 @@ import {
   cosHost,
   cosObjectKeyFromUploadPath,
   cosStorageEnabled,
+  deleteCosObject,
   getCosObject,
   putCosObject
 } from "./storage/cos.js";
@@ -38,10 +39,12 @@ import {
   createScript,
   createSeat,
   createSession,
+  createSessionNpcRole,
   createShareEvent,
   createSignup,
   createStore,
   createSubscriptionRequest,
+  deleteAdminSession,
   deleteSessionAlbumPhoto,
   deleteScript,
   deleteStore,
@@ -50,17 +53,18 @@ import {
   getMySessionAlbumPrivacy,
   getMySessionReview,
   getVisibleSessionAlbumPhotoForMedia,
-  hideMyOrganizedSession,
   hideMySignup,
   kickSessionSeat,
   leaveSessionOrganizer,
   listAdminScripts,
+  listAdminSessions,
   listAdminStores,
   listActiveScripts,
   listActiveStores,
   listCatalogRequests,
   listSessionAlbum,
   listSessionAlbumPeople,
+  listSessionNpcRoles,
   listMySignups,
   listMySessions,
   listSessionReviews,
@@ -79,6 +83,7 @@ import {
   updateSession,
   updateMySessionAlbumPrivacy,
   updateSessionAlbumPhotoTags,
+  updateSessionNpcRole,
   updateStore,
   upsertMySessionReview,
   upsertPerformerProfile
@@ -808,6 +813,34 @@ async function serveUploadedObject({ url, prefix, localDir, response, cacheContr
   });
 }
 
+async function deleteUploadedObject({ url, prefix, localDir }) {
+  const requestedName = decodeURIComponent(url.pathname.slice(prefix.length));
+  const filename = path.basename(requestedName);
+  if (!filename || filename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(filename)) {
+    return;
+  }
+
+  const key = cosObjectKeyFromUploadPath(`${prefix}${filename}`, prefix);
+  if (isCosUploadStorageEnabled()) {
+    try {
+      await deleteCosObject({ key, config: config.cos });
+      return;
+    } catch (error) {
+      if (error.statusCode && error.statusCode !== 404) {
+        throw new AppError(502, "COS_STORAGE_ERROR", "COS storage request failed", error.body);
+      }
+    }
+  }
+
+  try {
+    await fs.unlink(path.join(localDir, filename));
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
 async function readUploadedObject({ url, prefix, localDir }) {
   const requestedName = decodeURIComponent(url.pathname.slice(prefix.length));
   const filename = path.basename(requestedName);
@@ -837,6 +870,38 @@ async function readUploadedObject({ url, prefix, localDir }) {
     };
   } catch (error) {
     throw notFound();
+  }
+}
+
+async function deleteUploadedSessionAlbumPhotoObject(photoUrl) {
+  const url = new URL(photoUrl, "http://localhost");
+  if (url.pathname.startsWith("/uploads/session-album/display/")) {
+    await deleteUploadedObject({
+      url,
+      prefix: "/uploads/session-album/display/",
+      localDir: sessionAlbumDisplayUploadDir
+    });
+    return;
+  }
+  if (url.pathname.startsWith("/uploads/session-album/")) {
+    await deleteUploadedObject({
+      url,
+      prefix: "/uploads/session-album/",
+      localDir: sessionAlbumUploadDir
+    });
+  }
+}
+
+async function cleanupUploadedSessionAlbumPhotoObject(photoUrl) {
+  try {
+    await deleteUploadedSessionAlbumPhotoObject(photoUrl);
+  } catch (error) {
+    console.warn("session album COS cleanup failed", {
+      code: error?.code || error?.name || "UNKNOWN",
+      statusCode: error?.statusCode || null,
+      message: error?.message || String(error),
+      path: new URL(photoUrl, "http://localhost").pathname
+    });
   }
 }
 
@@ -1299,6 +1364,27 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/admin/sessions") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listAdminSessions(Object.fromEntries(url.searchParams))
+    });
+    return;
+  }
+
+  const adminSessionId = idMatch(url.pathname, /^\/api\/admin\/sessions\/(\d+)$/);
+  if (request.method === "DELETE" && adminSessionId) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await deleteAdminSession(adminSessionId)
+    });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/admin/catalog-requests") {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
@@ -1370,12 +1456,30 @@ async function route(request, response) {
     return;
   }
 
-  const hideSessionId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/hide$/);
-  if (request.method === "PATCH" && hideSessionId) {
+  const sessionNpcRolesId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/npc-roles$/);
+  if (request.method === "GET" && sessionNpcRolesId) {
     const user = await getAuthUser(request);
     jsonResponse(response, 200, {
       ok: true,
-      data: await hideMyOrganizedSession(user, hideSessionId)
+      data: await listSessionNpcRoles(user, sessionNpcRolesId)
+    });
+    return;
+  }
+  if (request.method === "POST" && sessionNpcRolesId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 201, {
+      ok: true,
+      data: await createSessionNpcRole(user, sessionNpcRolesId, body)
+    });
+    return;
+  }
+
+  const sessionNpcRoleId = idMatch(url.pathname, /^\/api\/session-npc-roles\/(\d+)$/);
+  if (request.method === "PATCH" && sessionNpcRoleId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await updateSessionNpcRole(user, sessionNpcRoleId, body)
     });
     return;
   }
@@ -1548,9 +1652,14 @@ async function route(request, response) {
   );
   if (request.method === "DELETE" && sessionAlbumPhotoId) {
     const user = await getAuthUser(request);
+    const deletedPhoto = await deleteSessionAlbumPhoto(user, sessionAlbumPhotoId);
+    await cleanupUploadedSessionAlbumPhotoObject(deletedPhoto.photo_url);
     jsonResponse(response, 200, {
       ok: true,
-      data: await deleteSessionAlbumPhoto(user, sessionAlbumPhotoId)
+      data: {
+        id: deletedPhoto.id,
+        deleted: true
+      }
     });
     return;
   }
