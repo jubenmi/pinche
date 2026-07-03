@@ -118,6 +118,7 @@ import {
   writeCreateFlow
 } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
+import { requestSignupReviewedSubscription } from "../../utils/subscribeMessages";
 
 export default {
   components: { AuthIdentityBar },
@@ -574,42 +575,30 @@ export default {
     },
     async claimSeat(role) {
       this.statusText = "";
-      const previousRole = this.role;
       try {
-        const response = await request({
-          url: `/api/session-seats/${role.seatId || role.id}/claim`,
+        await request({
+          url: "/api/signups",
           method: "POST",
           data: {
-            note: "分享页直接选择角色"
+            seatId: role.seatId || role.id,
+            note: "分享页选择角色申请上车"
           }
         });
-        const claimedSeat = dataOf(response);
-        this.role = {
-          ...role,
-          status: claimedSeat?.status || "confirmed",
-          confirmedUserId: this.currentUserId
-        };
         this.pendingRole = null;
         await this.loadPublishedSession(this.sessionId);
-        this.statusText =
-          previousRole && !isSameRole(previousRole, role)
-            ? "角色已换选，原角色已释放。"
-            : "角色已选择，可在车内聊天确认信息。";
+        this.statusText = "已提交申请，等待车头审核。";
         uni.showToast({
-          title: previousRole && !isSameRole(previousRole, role) ? "角色已换选" : "角色已选择",
+          title: "已提交申请",
           icon: "none"
         });
+        requestSignupReviewedSubscription();
       } catch (error) {
         if (error?.statusCode === 409) {
-          const message = error?.data?.error?.message || "";
-          this.statusText =
-            message.includes("locked seat")
-              ? `你已锁定 ${this.role?.name || "一个角色"}，暂不能换选。`
-              : "这个角色刚刚被别人选走了，请换一个。";
+          this.statusText = "你已经申请过这个角色，请等待车头审核。";
         } else if (error?.statusCode === 401) {
           this.statusText = "请先登录后再选择角色。";
         } else {
-          this.statusText = "选择失败，请稍后重试。";
+          this.statusText = "申请失败，请稍后重试。";
         }
       }
     },

@@ -60,6 +60,25 @@ assert(mine.includes("我发起"), "Mine page must label created sessions");
 assert(mine.includes("我参与"), "Mine page must label joined sessions");
 assert(mine.includes("loadMySignups"), "Mine page must load joined sessions");
 assert(mine.includes("goReview"), "Mine page must navigate to review page");
+assert(mine.includes("mergeCalendarItems"), "Mine page must merge created and joined calendar rows");
+assert(
+  mine.includes("const itemsBySession = new Map()") &&
+    mine.includes("existing.signup = signup") &&
+    mine.includes("item.key = `calendar-${item.sessionId}`"),
+  "Mine page must dedupe created and joined rows by session id"
+);
+assert(
+  mine.includes("identityTags") &&
+    mine.includes("v-for=\"tag in item.identityTags\"") &&
+    mine.includes(":key=\"tag.key\""),
+  "Mine page must render created/joined identity as row tags"
+);
+assert(
+  !mine.includes("const organizedItems = sessions.value.map") &&
+    !mine.includes("const joinedItems = signups.value.map") &&
+    !mine.includes("return [...organizedItems, ...joinedItems]"),
+  "Mine page must not concatenate created and joined rows into duplicate calendar entries"
+);
 
 const detail = read("apps/miniprogram/src/pages/session/detail.vue");
 assert(detail.includes("车友记录"), "detail page must show review records");

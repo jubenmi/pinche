@@ -5,13 +5,25 @@
     <view class="section">
       <view class="title">{{ session.script_name_snapshot || "车局" }}</view>
       <view class="text">{{ summaryText }}</view>
+      <view v-if="isPostStart" class="post-start-album-card">
+        <view class="post-start-title">相册已开放</view>
+        <view class="post-start-text">{{ postStartAlbumText }}</view>
+      </view>
       <view v-if="loadStatusText" class="notice">{{ loadStatusText }}</view>
       <view v-if="copyStatusText" class="notice">{{ copyStatusText }}</view>
       <view class="actions">
-        <button class="button" @click="goShare">选择角色</button>
+        <button v-if="isPostStart" class="button" @click="goAlbum">{{ albumPrimaryText }}</button>
+        <button v-else class="button" @click="goShare">选择角色</button>
         <button class="button secondary" open-type="share">分享</button>
         <button class="button secondary" @click="goManage">车头管理</button>
-        <button class="button secondary" @click="goAlbum">{{ albumButtonText }}</button>
+        <button v-if="!isPostStart" class="button secondary" @click="goAlbum">{{ albumButtonText }}</button>
+        <button
+          v-if="isPostStart && myReviewState.can_review"
+          class="button secondary"
+          @click="goReview"
+        >
+          {{ myReviewState.review ? "编辑记录" : "写记录" }}
+        </button>
       </view>
     </view>
 
@@ -147,6 +159,9 @@ export default {
       if (!this.session.id) {
         return "基础信息、角色状态和车内留言。";
       }
+      if (this.isPostStart) {
+        return "相册、照片标注和车友记录会沉淀在这里。";
+      }
       return `${this.session.store_name_snapshot} / ${this.session.start_at}`;
     },
     focusedSeat() {
@@ -159,6 +174,18 @@ export default {
     },
     albumButtonText() {
       return this.isAlbumOpen() ? "车局相册" : "相册·发车后";
+    },
+    isPostStart() {
+      return this.isAlbumOpen() && this.session.status !== "cancelled";
+    },
+    albumPrimaryText() {
+      return this.reviews.length > 0 ? "回看相册" : "打开相册";
+    },
+    postStartAlbumText() {
+      if (this.reviews.length > 0) {
+        return `已有 ${this.reviews.length} 条车友记录，一起回看这场车。`;
+      }
+      return "上传那天的照片，标注同车成员，之后就能一起回看。";
     }
   },
   async onLoad(options) {
@@ -470,6 +497,28 @@ export default {
 .empty {
   background: #f8fafc;
   color: #64748b;
+}
+
+.post-start-album-card {
+  margin-top: 22rpx;
+  padding: 22rpx;
+  border: 1rpx solid #d7e6df;
+  border-radius: 14rpx;
+  background: #f1f8f5;
+}
+
+.post-start-title {
+  color: #153f34;
+  font-size: 30rpx;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.post-start-text {
+  margin-top: 10rpx;
+  color: #5d7068;
+  font-size: 25rpx;
+  line-height: 1.55;
 }
 
 .info-row {

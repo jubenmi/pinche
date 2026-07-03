@@ -46,6 +46,7 @@ for (const token of [
   "getVisibleSessionAlbumPhotoForMedia",
   "Only the photo uploader can tag this photo",
   "tags.length === 0",
+  "other:session",
   "session-album",
   "display",
   "image_width",
@@ -72,6 +73,20 @@ assert(
   !/isAlbumPhotoVisibleToUser[\s\S]{0,600}isAdmin/.test(service),
   "album photo visibility must not grant system_admin bypass"
 );
+const albumPeopleSource = service.slice(
+  service.indexOf("async function sessionAlbumPeople"),
+  service.indexOf("function normalizeAlbumTagKeys")
+);
+for (const token of [
+  'const roleLabel = seat.role_name || seat.name || "车友"',
+  "const accountName = seat.confirmed_user_id",
+  "label: roleLabel",
+  "note: accountName",
+  "role_name: seat.role_name",
+  "account_name: accountName"
+]) {
+  assert(albumPeopleSource.includes(token), `album people should separate role labels from account names: ${token}`);
+}
 
 const server = read("apps/api/src/server.js");
 for (const token of [
@@ -109,8 +124,14 @@ assert(
   "album media route must not trust userId from the URL query"
 );
 assert(
-  !server.includes('url.pathname.startsWith("/uploads/session-album/")'),
+  !server.includes('request.method === "GET" && url.pathname.startsWith("/uploads/session-album/")'),
   "album photos must not be exposed as public static uploads"
+);
+assert(
+  server.includes("cleanupUploadedSessionAlbumPhotoObject") &&
+    server.includes("console.warn(\"session album COS cleanup failed\"") &&
+    /deleteSessionAlbumPhoto\(user, sessionAlbumPhotoId\)[\s\S]{0,220}cleanupUploadedSessionAlbumPhotoObject\(deletedPhoto\.photo_url\)/.test(server),
+  "album photo deletion must not fail the user request when COS object cleanup is denied"
 );
 
 const cosStorage = read("apps/api/src/storage/cos.js");
@@ -243,6 +264,8 @@ for (const token of [
   "untagged photo should be hidden from non-uploader",
   "tagged player should see photo containing them",
   "other member should not see when tagged player blocks visibility",
+  "other-tagged photo should be visible to all same-session members",
+  "npc-only photo should be visible to all same-session members",
   "admin must not bypass tagged player privacy",
   "future.session.id"
 ]) {

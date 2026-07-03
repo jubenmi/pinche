@@ -132,7 +132,14 @@
                   <view class="session-main">
                     <view class="session-title-line">
                       <text class="session-title">{{ item.title }}</text>
-                      <text class="type-badge" :class="item.type">{{ item.typeLabel }}</text>
+                      <text
+                        v-for="tag in item.identityTags"
+                        :key="tag.key"
+                        class="type-badge"
+                        :class="tag.tone"
+                      >
+                        {{ tag.label }}
+                      </text>
                     </view>
                     <view class="session-store-line">
                       <image class="row-icon" src="/static/icons/pin.png" mode="aspectFit" />
@@ -158,7 +165,16 @@
                       <text>{{ item.actionLabel }}</text>
                       <image class="action-chevron" src="/static/icons/chevron.png" mode="aspectFit" />
                     </button>
-                    <button class="session-delete" @tap.stop="hideCalendarItem(item)">删除</button>
+                    <button
+                      v-if="item.secondaryActionLabel"
+                      class="session-action secondary-session-action"
+                      @tap.stop="handleCalendarSecondaryAction(item)"
+                    >
+                      <text>{{ item.secondaryActionLabel }}</text>
+                    </button>
+                    <button class="session-delete" @tap.stop="hideCalendarItem(item)">
+                      {{ item.isOrganized ? organizedRemovalActionText(item.session) : "删除" }}
+                    </button>
                   </view>
                 </view>
               </view>
@@ -216,8 +232,12 @@ let authExpiredToastActive = false;
 
 const isAdmin = computed(() => roles.value.includes("system_admin"));
 const rolesText = computed(() => roles.value.join(", "));
-const organizedCount = computed(() => sessions.value.length);
-const joinedCount = computed(() => signups.value.length);
+const organizedCount = computed(
+  () => calendarItems.value.filter((item) => item.isOrganized).length
+);
+const joinedCount = computed(
+  () => calendarItems.value.filter((item) => item.isJoined).length
+);
 const totalCount = computed(() => calendarItems.value.length);
 const pendingCount = computed(
   () => calendarItems.value.filter((item) => item.isPending).length
@@ -244,24 +264,13 @@ const filterTabs = computed(() => [
   { value: "joined", label: "参与", count: joinedCount.value },
   { value: "pending", label: "待处理", count: pendingCount.value }
 ]);
-const calendarItems = computed(() => {
-  const organizedItems = sessions.value.map((session) => normalizeOrganizedSession(session));
-  const joinedItems = signups.value.map((signup) => normalizeJoinedSignup(signup));
-  return [...organizedItems, ...joinedItems]
-    .filter((item) => item.dateKey)
-    .sort((left, right) => {
-      if (left.sortValue !== right.sortValue) {
-        return right.sortValue - left.sortValue;
-      }
-      return left.type === right.type ? 0 : left.type === "organized" ? -1 : 1;
-    });
-});
+const calendarItems = computed(() => mergeCalendarItems(sessions.value, signups.value));
 const filteredCalendarItems = computed(() => {
   if (activeFilter.value === "organized") {
-    return calendarItems.value.filter((item) => item.type === "organized");
+    return calendarItems.value.filter((item) => item.isOrganized);
   }
   if (activeFilter.value === "joined") {
-    return calendarItems.value.filter((item) => item.type === "joined");
+    return calendarItems.value.filter((item) => item.isJoined);
   }
   if (activeFilter.value === "pending") {
     return calendarItems.value.filter((item) => item.isPending);
@@ -540,7 +549,11 @@ function isDayCollapsed(key) {
 }
 
 function handleCalendarAction(item) {
-  if (item.type === "organized") {
+  if (isCalendarItemPostStart(item)) {
+    goAlbum(item.sessionId);
+    return;
+  }
+  if (item.isOrganized) {
     goManage(item.sessionId);
     return;
   }
@@ -551,12 +564,37 @@ function handleCalendarAction(item) {
   goDetail(item.sessionId);
 }
 
-function hideCalendarItem(item) {
-  if (item.type === "organized") {
-    hideOrganizedSession(item.raw);
+function handleCalendarSecondaryAction(item) {
+  if (!item.secondaryActionLabel) {
     return;
   }
-  hideJoinedSession(item.raw);
+  goReview(item.sessionId);
+}
+
+function hideCalendarItem(item) {
+  if (item.isOrganized) {
+    if (hasOtherOnboardMembers(item.session)) {
+      leaveOrganizedSession(item.session);
+      return;
+    }
+    if (hasActiveAlbumPhotos(item.session)) {
+      requireAlbumCleanupBeforeCancel(item.session);
+      return;
+    }
+    cancelOrganizedSession(item.session);
+    return;
+  }
+  hideJoinedSession(item.signup);
+}
+
+function organizedRemovalActionText(session) {
+  if (hasOtherOnboardMembers(session)) {
+    return "退出";
+  }
+  if (hasActiveAlbumPhotos(session)) {
+    return "先删照片";
+  }
+  return "取消";
 }
 
 function goManage(id) {
@@ -571,11 +609,15 @@ function goReview(id) {
   uni.navigateTo({ url: `/pages/session/review?id=${id}` });
 }
 
-function confirmPersonalDownlist(content, onConfirm) {
+function goAlbum(id) {
+  uni.navigateTo({ url: `/pages/session/album?id=${id}` });
+}
+
+function confirmPersonalRemoval(content, confirmText, onConfirm) {
   uni.showModal({
-    title: "删除记录",
+    title: "确认操作",
     content,
-    confirmText: "删除",
+    confirmText,
     cancelText: "再想想",
     success: (result) => {
       if (result.confirm) {
@@ -585,31 +627,85 @@ function confirmPersonalDownlist(content, onConfirm) {
   });
 }
 
-function hideOrganizedSession(session) {
-  confirmPersonalDownlist(
-    "只会从你的列表下架，不会取消车，也不会影响其他车友。之后可以通过车友分享链接重新链接。",
+function cancelOrganizedSession(session) {
+  confirmPersonalRemoval(
+    "取消后这辆车会被直接删除，座位、报名、聊天和相册记录会一起删除。",
+    "取消",
     async () => {
-      sessionStatusText.value = "正在从我的发起下架...";
+      sessionStatusText.value = "正在取消这辆车...";
       try {
         await request({
-          url: `/api/sessions/${session.id}/hide`,
+          url: `/api/sessions/${session.id}/cancel`,
           method: "PATCH"
         });
         await loadCalendar();
-        uni.showToast({ title: "已从列表下架", icon: "none" });
+        uni.showToast({ title: "已取消", icon: "none" });
       } catch (error) {
         if (handleAuthExpired(error)) {
           return;
         }
-        sessionStatusText.value = "删除失败，请稍后重试。";
+        sessionStatusText.value =
+          error?.data?.error?.code === "SESSION_HAS_ALBUM_PHOTOS"
+            ? "相册已有照片，请先删除所有照片后再取消这辆车。"
+            : "删除失败，请稍后重试。";
       }
     }
   );
 }
 
+function requireAlbumCleanupBeforeCancel(session) {
+  confirmPersonalRemoval(
+    "这辆车像微信群一样还有群相册照片，不能直接解散。请先删除所有照片，避免留下无主照片。",
+    "去相册",
+    () => {
+      goAlbum(session.id);
+    }
+  );
+}
+
+function leaveOrganizedSession(session) {
+  confirmPersonalRemoval(
+    "已有玩家上车，不能取消删除。退出车头后，系统会转给下一位已上车成员。",
+    "退出",
+    async () => {
+      sessionStatusText.value = "正在退出车头...";
+      try {
+        await request({
+          url: `/api/sessions/${session.id}/organizer/leave`,
+          method: "PATCH"
+        });
+        await loadCalendar();
+        uni.showToast({ title: "已退出车头", icon: "none" });
+      } catch (error) {
+        if (handleAuthExpired(error)) {
+          return;
+        }
+        sessionStatusText.value = "退出失败，请稍后重试。";
+      }
+    }
+  );
+}
+
+function hasOtherOnboardMembers(session = {}) {
+  if (Array.isArray(session.seats)) {
+    return session.seats.some(
+      (seat) =>
+        ["confirmed", "locked"].includes(seat.status) &&
+        seat.confirmed_user_id &&
+        Number(seat.confirmed_user_id) !== Number(session.organizer_user_id)
+    );
+  }
+  return Number(session.other_onboard_member_count || 0) > 0;
+}
+
+function hasActiveAlbumPhotos(session = {}) {
+  return Number(session.active_album_photo_count || session.photo_count || 0) > 0;
+}
+
 function hideJoinedSession(signup) {
-  confirmPersonalDownlist(
+  confirmPersonalRemoval(
     "只会从你的列表下架，不会影响这台车或其他车友。之后可以通过车友分享链接重新链接。",
+    "删除",
     async () => {
       signupStatusText.value = "正在从我参与下架...";
       try {
@@ -629,51 +725,169 @@ function hideJoinedSession(signup) {
   );
 }
 
-function normalizeOrganizedSession(session) {
-  const startDate = parseStartAt(session.start_at);
-  const pendingSignupCount = Number(session.pending_signup_count || 0);
-  return {
-    key: `organized-${session.id}`,
-    type: "organized",
-    typeLabel: "发起",
-    sessionId: session.id,
-    raw: session,
-    title: session.script_name_snapshot || "未命名车局",
-    storeName: session.store_name_snapshot || "店家待定",
-    dateKey: startDate ? dateKey(startDate) : "",
-    sortValue: startDate ? startDate.getTime() : 0,
-    timeText: startDate ? timeText(startDate) : "时间待定",
-    roleText: "车头",
-    metaText: `${Number(session.seat_count || 0)}位 · ${pendingSignupCount}个待审`,
-    statusText: statusLabel(session.status),
-    statusTone: sessionStatusTone(session.status),
-    actionLabel: "管理",
-    isPending: pendingSignupCount > 0 || session.status === "draft",
-    canReview: false
-  };
+function mergeCalendarItems(createdSessions = [], joinedSignups = []) {
+  const itemsBySession = new Map();
+
+  (createdSessions || []).forEach((session) => {
+    const sessionId = String(session?.id || "");
+    if (!sessionId) {
+      return;
+    }
+    itemsBySession.set(sessionId, createCalendarItem({ session }));
+  });
+
+  (joinedSignups || []).forEach((signup) => {
+    const sessionId = String(signup?.session_id || "");
+    if (!sessionId) {
+      return;
+    }
+    const existing = itemsBySession.get(sessionId);
+    if (existing) {
+      existing.signup = signup;
+      refreshCalendarItem(existing);
+      return;
+    }
+    itemsBySession.set(sessionId, createCalendarItem({ signup }));
+  });
+
+  return Array.from(itemsBySession.values())
+    .map((item) => refreshCalendarItem(item))
+    .filter((item) => item.dateKey)
+    .sort((left, right) => {
+      if (left.sortValue !== right.sortValue) {
+        return right.sortValue - left.sortValue;
+      }
+      return Number(right.sessionId || 0) - Number(left.sessionId || 0);
+    });
 }
 
-function normalizeJoinedSignup(signup) {
-  const startDate = parseStartAt(signup.start_at);
-  return {
-    key: `joined-${signup.id}`,
-    type: "joined",
-    typeLabel: "参与",
-    sessionId: signup.session_id,
-    raw: signup,
-    title: signup.script_name_snapshot || "未命名车局",
-    storeName: signup.store_name_snapshot || "店家待定",
-    dateKey: startDate ? dateKey(startDate) : "",
-    sortValue: startDate ? startDate.getTime() : 0,
-    timeText: startDate ? timeText(startDate) : "时间待定",
-    roleText: signupRoleText(signup),
-    metaText: signup.seat_role_name ? `角色：${signup.seat_role_name}` : "角色待定",
-    statusText: signupStatusLabel(signup.status),
-    statusTone: signupStatusTone(signup.status),
-    actionLabel: signup.can_review ? signup.has_review ? "编辑记录" : "写记录" : "详情",
-    isPending: signup.status === "pending",
-    canReview: Boolean(signup.can_review)
-  };
+function createCalendarItem({ session = null, signup = null }) {
+  return refreshCalendarItem({ session, signup });
+}
+
+function refreshCalendarItem(item) {
+  const source = item.session || item.signup || {};
+  const startDate = parseStartAt(source.start_at);
+  item.sessionId = item.session?.id || item.signup?.session_id || "";
+  item.key = `calendar-${item.sessionId}`;
+  item.isOrganized = Boolean(item.session);
+  item.isJoined = Boolean(item.signup);
+  item.type = item.isOrganized ? "organized" : "joined";
+  item.raw = item.session || item.signup || {};
+  item.sessionStatus = item.session?.status || item.signup?.session_status || "";
+  item.signupStatus = item.signup?.status || "";
+  item.title = source.script_name_snapshot || "未命名车局";
+  item.storeName = source.store_name_snapshot || "店家待定";
+  item.dateKey = startDate ? dateKey(startDate) : "";
+  item.sortValue = startDate ? startDate.getTime() : 0;
+  item.timeText = startDate ? timeText(startDate) : "时间待定";
+  item.roleText = item.isJoined ? signupRoleText(item.signup) : "车头";
+  item.metaText = calendarMetaText(item);
+  item.statusText = "";
+  item.statusTone = item.isOrganized
+    ? sessionStatusTone(item.sessionStatus)
+    : signupStatusTone(item.signupStatus);
+  item.actionLabel = "";
+  item.secondaryActionLabel = "";
+  item.postStart = isStartedAt(source.start_at);
+  item.hasReview = Boolean(item.signup?.has_review);
+  item.canReview = Boolean(item.signup?.can_review);
+  item.identityTags = calendarIdentityTags(item);
+  item.isPending = calendarItemIsPending(item);
+  item.statusText = calendarItemStatusText(item);
+  item.actionLabel = calendarPrimaryActionLabel(item);
+  item.secondaryActionLabel = calendarSecondaryActionLabel(item);
+  return item;
+}
+
+function calendarIdentityTags(item) {
+  const tags = [];
+  if (item.isOrganized) {
+    tags.push({ key: "organized", label: "发起", tone: "organized" });
+  }
+  if (item.isJoined) {
+    tags.push({ key: "joined", label: "参与", tone: "joined" });
+  }
+  return tags;
+}
+
+function calendarItemIsPending(item) {
+  return (
+    Number(item.session?.pending_signup_count || 0) > 0 ||
+    item.sessionStatus === "draft" ||
+    item.signupStatus === "pending"
+  );
+}
+
+function calendarMetaText(item) {
+  if (item.isOrganized) {
+    const pendingSignupCount = Number(item.session?.pending_signup_count || 0);
+    return `${Number(item.session?.seat_count || 0)}位 · ${pendingSignupCount}个待审`;
+  }
+  return item.signup?.seat_role_name ? `角色：${item.signup.seat_role_name}` : "角色待定";
+}
+
+function calendarItemStatusText(item) {
+  if (isCalendarItemPostStart(item)) {
+    return calendarPostStartText(item.raw);
+  }
+  if (item.isOrganized) {
+    return statusLabel(item.sessionStatus);
+  }
+  if (item.isJoined) {
+    return signupStatusLabel(item.signupStatus);
+  }
+  return "-";
+}
+
+function isCalendarItemPostStart(item) {
+  if (!item?.postStart) {
+    return false;
+  }
+  if (item.sessionStatus === "cancelled" || item.signupStatus === "rejected") {
+    return false;
+  }
+  return item.isOrganized || item.signupStatus === "approved";
+}
+
+function isStartedAt(startAt) {
+  const startDate = parseStartAt(startAt);
+  return Boolean(startDate && startDate.getTime() <= Date.now());
+}
+
+function hasAlbumContent(source = {}) {
+  return (
+    Number(source.visible_photo_count || source.photo_count || source.review_count || 0) > 0 ||
+    Boolean(source.has_review)
+  );
+}
+
+function calendarPostStartText(source = {}) {
+  const visibleCount = Number(source.visible_photo_count || source.photo_count || 0);
+  if (visibleCount > 0) {
+    return `已发车 · ${visibleCount} 张可见`;
+  }
+  return "已发车 · 相册开放";
+}
+
+function calendarPrimaryActionLabel(item) {
+  if (isCalendarItemPostStart(item)) {
+    return hasAlbumContent(item.raw) ? "回看相册" : "打开相册";
+  }
+  if (item.isOrganized) {
+    return "管理";
+  }
+  if (item.canReview) {
+    return item.hasReview ? "编辑记录" : "写记录";
+  }
+  return "详情";
+}
+
+function calendarSecondaryActionLabel(item) {
+  if (!isCalendarItemPostStart(item) || !item.canReview) {
+    return "";
+  }
+  return item.hasReview ? "编辑记录" : "写记录";
 }
 
 function groupItemsByDay(items) {
@@ -1551,7 +1765,7 @@ function profileNameWithGenderSymbol(nickname, value) {
   align-items: center;
   justify-content: flex-end;
   gap: 8rpx;
-  width: 112rpx;
+  width: 150rpx;
   height: 46rpx;
   margin: 0;
   padding: 0;
@@ -1560,6 +1774,12 @@ function profileNameWithGenderSymbol(nickname, value) {
   font-size: 25rpx;
   font-weight: 600;
   line-height: 46rpx;
+}
+
+.secondary-session-action {
+  color: #667985;
+  font-size: 23rpx;
+  font-weight: 500;
 }
 
 .action-chevron {

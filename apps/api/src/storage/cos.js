@@ -192,3 +192,11 @@ export async function getCosObject({ key, ciProcess, config }) {
     config
   });
 }
+
+export async function deleteCosObject({ key, config }) {
+  return cosRequest({
+    method: "DELETE",
+    key,
+    config
+  });
+}

@@ -287,18 +287,39 @@ async function main() {
   );
 
   const switchSeat = seats.find((seat) => seat.name === "F4-3");
-  const switchedSeat = await request(
+  const forbiddenDirectSwitch = await request(
     "POST",
     `/api/session-seats/${switchSeat.id}/claim`,
     { note: "same player switches to a second seat" },
-    playerA.token
+    playerA.token,
+    403
   );
   assert(
-    Number(switchedSeat.data.confirmed_user_id) === Number(playerA.user.id),
+    forbiddenDirectSwitch.error?.code === "FORBIDDEN",
+    "player direct seat switch should require organizer review"
+  );
+  const switchSignup = await request(
+    "POST",
+    "/api/signups",
+    {
+      seatId: switchSeat.id,
+      contactText: `d6-player-a-switch-${suffix}`,
+      note: "same player switches to a second seat"
+    },
+    playerA.token,
+    201
+  );
+  await request("PATCH", `/api/signups/${switchSignup.data.id}/approve`, {}, owner.token);
+
+  const afterSwitchDetail = await request("GET", `/api/sessions/${session.id}`);
+  const switchedSeat = afterSwitchDetail.data.seats.find(
+    (seat) => seat.id === switchSeat.id
+  );
+  assert(
+    Number(switchedSeat.confirmed_user_id) === Number(playerA.user.id),
     "switched seat confirmed user should match player"
   );
 
-  const afterSwitchDetail = await request("GET", `/api/sessions/${session.id}`);
   const releasedOriginalSeat = afterSwitchDetail.data.seats.find(
     (seat) => seat.id === targetSeat.id
   );
@@ -308,12 +329,18 @@ async function main() {
     "original seat confirmed user should be cleared after switch"
   );
 
-  await request(
+  const switchBackSignup = await request(
     "POST",
-    `/api/session-seats/${targetSeat.id}/claim`,
-    { note: "same player switches back to original seat" },
-    playerA.token
+    "/api/signups",
+    {
+      seatId: targetSeat.id,
+      contactText: `d6-player-a-return-${suffix}`,
+      note: "same player switches back to original seat"
+    },
+    playerA.token,
+    201
   );
+  await request("PATCH", `/api/signups/${switchBackSignup.data.id}/approve`, {}, owner.token);
   const afterSwitchBackDetail = await request("GET", `/api/sessions/${session.id}`);
   const releasedSwitchSeat = afterSwitchBackDetail.data.seats.find(
     (seat) => seat.id === switchSeat.id
@@ -456,19 +483,40 @@ async function main() {
     owner.token
   );
   const startedOpenSeat = startedSeats.find((seat) => seat.name === "F4-4");
-  const claimedStartedSeat = await request(
+  const forbiddenStartedDirectClaim = await request(
     "POST",
     `/api/session-seats/${startedOpenSeat.id}/claim`,
     { note: "after start empty seat claim" },
-    playerD.token
+    playerD.token,
+    403
   );
   assert(
-    claimedStartedSeat.data.status === "confirmed",
-    "empty seat should be claimable after session start"
+    forbiddenStartedDirectClaim.error?.code === "FORBIDDEN",
+    "post-start empty seat direct claim should require organizer review"
+  );
+  const startedSignup = await request(
+    "POST",
+    "/api/signups",
+    {
+      seatId: startedOpenSeat.id,
+      contactText: `d6-player-d-${suffix}`,
+      note: "after start empty seat signup"
+    },
+    playerD.token,
+    201
+  );
+  await request("PATCH", `/api/signups/${startedSignup.data.id}/approve`, {}, owner.token);
+  const afterStartedApproveDetail = await request("GET", `/api/sessions/${startedSession.id}`);
+  const claimedStartedSeat = afterStartedApproveDetail.data.seats.find(
+    (seat) => seat.id === startedOpenSeat.id
   );
   assert(
-    Number(claimedStartedSeat.data.confirmed_user_id) === Number(playerD.user.id),
-    "post-start empty seat claim should assign the player"
+    claimedStartedSeat.status === "confirmed",
+    "empty seat should be approvable after session start"
+  );
+  assert(
+    Number(claimedStartedSeat.confirmed_user_id) === Number(playerD.user.id),
+    "post-start empty seat approval should assign the player"
   );
   const autoTransferredSession = await request(
     "PATCH",

@@ -11,7 +11,7 @@
           class="nav-item"
           :class="{ active: activeView === 'catalog' }"
           type="button"
-          @click="activeView = 'catalog'"
+          @click="switchActiveView('catalog')"
         >
           <span class="nav-icon">管</span>
           <span class="nav-text">管理界面</span>
@@ -20,7 +20,7 @@
           class="nav-item"
           :class="{ active: activeView === 'miniapp' }"
           type="button"
-          @click="activeView = 'miniapp'"
+          @click="switchActiveView('miniapp')"
         >
           <span class="nav-icon">用</span>
           <span class="nav-text">网页小程序</span>
@@ -85,8 +85,15 @@
           <button type="button" @click="logout">退出</button>
         </div>
       </header>
-      <CatalogWorkspace v-if="activeView === 'catalog'" />
-      <MiniProgramWorkspace v-else />
+      <CatalogWorkspace v-if="activeView === 'catalog'" :initial-tab="initialRoute.catalogTab" />
+      <MiniProgramWorkspace
+        v-else
+        :initial-screen="initialRoute.miniScreen"
+        :initial-session-id="initialRoute.sessionId"
+        :initial-seat-id="initialRoute.seatId"
+        :initial-share-code="initialRoute.shareCode"
+        :initial-source="initialRoute.source"
+      />
       <div class="app-build-version">{{ buildVersion }}</div>
     </section>
   </div>
@@ -95,16 +102,17 @@
 <script setup>
 import { computed, ref } from "vue";
 import { assetUrl, clearStoredAuth, getStoredAuth } from "./api";
+import { parseAdminRouteQuery, writeAdminRoute } from "./adminRoute";
 import CatalogWorkspace from "./components/CatalogWorkspace.vue";
 import LoginPanel from "./components/LoginPanel.vue";
 import MiniProgramWorkspace from "./components/MiniProgramWorkspace.vue";
 
+const initialRoute = ref(parseAdminRouteQuery(window.location.search));
 const auth = ref(getStoredAuth());
 const sidebarCollapsed = ref(false);
 const profileDetailsOpen = ref(false);
 const avatarLoadFailed = ref(false);
-const initialSessionId = new URLSearchParams(window.location.search).get("sessionId");
-const activeView = ref(initialSessionId ? "miniapp" : "catalog");
+const activeView = ref(initialRoute.value.activeView);
 const buildVersion = `版本号 ${__PINCHE_BUILD_TIME__}`;
 const user = computed(() => auth.value.user || {});
 const roles = computed(() => auth.value.roles || []);
@@ -208,6 +216,25 @@ function setAuth(nextAuth) {
 
 function handleAvatarError() {
   avatarLoadFailed.value = true;
+}
+
+function switchActiveView(nextView) {
+  if (activeView.value === nextView) {
+    return;
+  }
+  const currentRoute = parseAdminRouteQuery(window.location.search);
+  initialRoute.value = {
+    ...currentRoute,
+    activeView: nextView,
+    miniScreen: nextView === "miniapp" ? "home" : currentRoute.miniScreen,
+    sessionId: nextView === "miniapp" ? "" : currentRoute.sessionId,
+    seatId: nextView === "miniapp" ? "" : currentRoute.seatId,
+    shareCode: nextView === "miniapp" ? "" : currentRoute.shareCode,
+    source: nextView === "miniapp" ? "" : currentRoute.source
+  };
+  activeView.value = nextView;
+  profileDetailsOpen.value = false;
+  writeAdminRoute(initialRoute.value);
 }
 
 function logout() {
