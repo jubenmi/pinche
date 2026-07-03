@@ -2,7 +2,9 @@
   <aside class="drawer">
     <header class="drawer-head">
       <h2>{{ model.id ? "编辑店家" : "新增店家" }}</h2>
-      <button class="close-button" type="button" @click="$emit('close')">关闭</button>
+      <button class="close-button" type="button" :disabled="saving" @click="$emit('close')">
+        关闭
+      </button>
     </header>
     <form class="drawer-form" @submit.prevent="submit">
       <div class="drawer-body">
@@ -80,8 +82,12 @@
       </div>
 
       <footer class="drawer-footer">
-        <button class="secondary-action" type="button" @click="$emit('close')">取消</button>
-        <button class="primary" type="submit">保存店家</button>
+        <button class="secondary-action" type="button" :disabled="saving" @click="$emit('close')">
+          取消
+        </button>
+        <button class="primary" type="submit" :disabled="saving">
+          {{ saving ? "保存中..." : "保存店家" }}
+        </button>
       </footer>
     </form>
   </aside>
@@ -94,7 +100,8 @@ const props = defineProps({
   store: { type: Object, required: true },
   availableScripts: { type: Array, default: () => [] },
   linkedScripts: { type: Array, default: () => [] },
-  linkedScriptIds: { type: Array, default: () => [] }
+  linkedScriptIds: { type: Array, default: () => [] },
+  saving: { type: Boolean, default: false }
 });
 const emit = defineEmits(["save", "close"]);
 
@@ -184,6 +191,9 @@ watch(
 );
 
 function submit() {
+  if (props.saving) {
+    return;
+  }
   const scriptLinks = (model.scriptIds || []).map((scriptId) => ({
     scriptId: Number(scriptId),
     pricePerPlayer: Number(model.storeScriptPriceYuanById?.[Number(scriptId)] || 0) * 100

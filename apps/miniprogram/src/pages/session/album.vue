@@ -5,7 +5,7 @@
     <view class="section album-head">
       <view class="title">车局相册</view>
       <view class="text">同车成员可保存可见照片；隐私照片不会展示。</view>
-      <view v-if="statusText" class="notice">{{ statusText }}</view>
+      <view v-if="operationText" class="notice">{{ operationText }}</view>
       <view class="album-stats">
         <view class="stat-pill">你可见 {{ photos.length }} 张</view>
         <view v-if="hiddenCount > 0" class="stat-pill muted">
@@ -13,10 +13,32 @@
         </view>
       </view>
       <view class="actions">
-        <button class="button" :class="{ disabled: !canUpload || uploading }" @tap="choosePhotos">
+        <button
+          v-if="canUpload"
+          v-show="!selectionMode"
+          class="button"
+          :class="{ disabled: albumBusy }"
+          :disabled="albumBusy"
+          @tap="choosePhotos"
+        >
           {{ uploading ? "上传中..." : "上传照片" }}
         </button>
-        <button v-if="canUpload" class="button secondary" @tap="goPrivacy">隐私设置</button>
+        <button
+          v-if="canUpload && !selectionMode"
+          class="button secondary"
+          :disabled="albumBusy"
+          @tap="goPrivacy"
+        >
+          隐私设置
+        </button>
+        <button
+          v-if="taggablePhotos.length"
+          class="button secondary"
+          :disabled="albumBusy"
+          @tap="toggleSelectionMode"
+        >
+          {{ selectionMode ? "退出多选" : "多选" }}
+        </button>
       </view>
     </view>
 
@@ -26,6 +48,7 @@
         :key="filter.value"
         class="filter-chip"
         :class="{ active: activeFilter === filter.value }"
+        :disabled="albumBusy"
         @tap="activeFilter = filter.value"
       >
         {{ filter.label }}
@@ -57,11 +80,17 @@
             :id="photoDomId(photo)"
             :key="photo.id"
             class="photo-card waterfall-photo-card"
+            :class="{
+              selectable: selectionMode && photo.can_tag,
+              selected: selectionMode && isPhotoSelected(photo),
+              disabled: selectionMode && !photo.can_tag
+            }"
+            @tap="togglePhotoSelection(photo)"
           >
             <view
               class="photo-image-shell"
               :style="photoImageStyle(photo)"
-              @tap="previewPhoto(photo)"
+              @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
             >
               <image
                 v-if="visiblePhotoMedia[photo.id]?.thumbnail"
@@ -72,15 +101,37 @@
               <view v-else class="photo-placeholder">
                 <view class="photo-loading-dot"></view>
               </view>
+              <view
+                v-if="selectionMode"
+                class="selection-checkbox"
+                :class="{ selected: isPhotoSelected(photo), disabled: !photo.can_tag }"
+              >
+                <view class="selection-checkbox-box">
+                  {{ isPhotoSelected(photo) ? "✓" : "" }}
+                </view>
+              </view>
             </view>
             <view class="photo-meta">
               <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
                 {{ tagSummary(photo) }}
               </view>
-              <view class="photo-actions">
+              <view v-if="!selectionMode" class="photo-actions">
                 <view v-if="photo.is_mine" class="mine-badge">我上传</view>
-                <button v-if="photo.can_tag" class="tag-button" @tap="openTagSheet(photo)">
+                <button
+                  v-if="photo.can_tag"
+                  class="tag-button"
+                  :disabled="albumBusy"
+                  @tap.stop="openTagSheet(photo)"
+                >
                   标注
+                </button>
+                <button
+                  v-if="photo.is_mine"
+                  class="tag-button danger"
+                  :disabled="albumBusy"
+                  @tap.stop="deletePhoto(photo)"
+                >
+                  {{ deletingPhotoId === photo.id ? "删除中" : "删除" }}
                 </button>
               </view>
             </view>
@@ -94,11 +145,17 @@
             :id="photoDomId(photo)"
             :key="photo.id"
             class="photo-card waterfall-photo-card"
+            :class="{
+              selectable: selectionMode && photo.can_tag,
+              selected: selectionMode && isPhotoSelected(photo),
+              disabled: selectionMode && !photo.can_tag
+            }"
+            @tap="togglePhotoSelection(photo)"
           >
             <view
               class="photo-image-shell"
               :style="photoImageStyle(photo)"
-              @tap="previewPhoto(photo)"
+              @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
             >
               <image
                 v-if="visiblePhotoMedia[photo.id]?.thumbnail"
@@ -109,15 +166,37 @@
               <view v-else class="photo-placeholder">
                 <view class="photo-loading-dot"></view>
               </view>
+              <view
+                v-if="selectionMode"
+                class="selection-checkbox"
+                :class="{ selected: isPhotoSelected(photo), disabled: !photo.can_tag }"
+              >
+                <view class="selection-checkbox-box">
+                  {{ isPhotoSelected(photo) ? "✓" : "" }}
+                </view>
+              </view>
             </view>
             <view class="photo-meta">
               <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
                 {{ tagSummary(photo) }}
               </view>
-              <view class="photo-actions">
+              <view v-if="!selectionMode" class="photo-actions">
                 <view v-if="photo.is_mine" class="mine-badge">我上传</view>
-                <button v-if="photo.can_tag" class="tag-button" @tap="openTagSheet(photo)">
+                <button
+                  v-if="photo.can_tag"
+                  class="tag-button"
+                  :disabled="albumBusy"
+                  @tap.stop="openTagSheet(photo)"
+                >
                   标注
+                </button>
+                <button
+                  v-if="photo.is_mine"
+                  class="tag-button danger"
+                  :disabled="albumBusy"
+                  @tap.stop="deletePhoto(photo)"
+                >
+                  {{ deletingPhotoId === photo.id ? "删除中" : "删除" }}
                 </button>
               </view>
             </view>
@@ -126,11 +205,33 @@
       </template>
     </uv-waterfall>
 
+    <view v-if="selectionMode" class="bulk-action-bar">
+      <button class="button secondary" :disabled="albumBusy" @tap="toggleSelectionMode">取消</button>
+      <view class="bulk-count">已选 {{ selectedPhotoCount }} 张</view>
+      <button
+        class="button"
+        :class="{ disabled: albumBusy || selectedPhotoCount === 0 }"
+        :disabled="albumBusy || selectedPhotoCount === 0"
+        @tap="openBulkTagSheet"
+      >
+        批量标注
+      </button>
+    </view>
+
     <view v-if="tagSheetPhoto" class="tag-mask" @tap="closeTagSheet">
       <view class="tag-sheet" @tap.stop>
         <view class="sheet-bar"></view>
-        <view class="sheet-title">这张照片里有谁</view>
-        <view class="sheet-note">标注后会按成员隐私自动决定谁可见。</view>
+        <view class="sheet-title">
+          <text v-if="bulkTagging">给 {{ selectedTagTargetCount }} 张照片标注</text>
+          <text v-else>这张照片里有谁</text>
+        </view>
+        <view class="sheet-note">
+          {{
+            bulkTagging
+              ? "保存后，这些照片会替换成同一组标签。"
+              : "标注后会按成员隐私自动决定谁可见。"
+          }}
+        </view>
 
         <view class="selected-row">
           <view
@@ -139,7 +240,7 @@
             class="selected-chip"
             @tap="togglePerson(person.key)"
           >
-            {{ person.label }} ×
+            {{ tagPersonTitle(person) }} ×
           </view>
           <view v-if="selectedPeople.length === 0" class="selected-empty">
             暂未标注，只有上传者可见
@@ -156,14 +257,14 @@
               :class="{ selected: selectedTagKeys.includes(person.key) }"
               @tap="togglePerson(person.key)"
             >
-              <text>{{ person.label }}</text>
-              <text class="person-note">{{ person.note }}</text>
+              <text>{{ tagPersonTitle(person) }}</text>
+              <text v-if="tagPersonSubtitle(person)" class="person-note">{{ tagPersonSubtitle(person) }}</text>
             </button>
           </view>
         </view>
 
         <view v-if="npcPeople.length" class="people-group">
-          <view class="group-title">DM / NPC</view>
+          <view class="group-title">DM / NPC工作人员</view>
           <view class="people-grid">
             <button
               v-for="person in npcPeople"
@@ -172,19 +273,56 @@
               :class="{ selected: selectedTagKeys.includes(person.key) }"
               @tap="togglePerson(person.key)"
             >
-              <text>{{ person.label }}</text>
-              <text class="person-note">{{ person.note }}</text>
+              <text>{{ tagPersonTitle(person) }}</text>
+              <text v-if="tagPersonSubtitle(person)" class="person-note">{{ tagPersonSubtitle(person) }}</text>
+            </button>
+          </view>
+        </view>
+
+        <view v-if="npcRolePeople.length" class="people-group">
+          <view class="group-title">NPC角色</view>
+          <view class="people-grid">
+            <button
+              v-for="person in npcRolePeople"
+              :key="person.key"
+              class="person-choice npc"
+              :class="{ selected: selectedTagKeys.includes(person.key) }"
+              @tap="togglePerson(person.key)"
+            >
+              <text>{{ tagPersonTitle(person) }}</text>
+              <text v-if="tagPersonSubtitle(person)" class="person-note">{{ tagPersonSubtitle(person) }}</text>
+            </button>
+          </view>
+        </view>
+
+        <view v-if="otherPeople.length" class="people-group">
+          <view class="group-title">其他</view>
+          <view class="people-grid">
+            <button
+              v-for="person in otherPeople"
+              :key="person.key"
+              class="person-choice"
+              :class="{ selected: selectedTagKeys.includes(person.key) }"
+              @tap="togglePerson(person.key)"
+            >
+              <text>{{ tagPersonTitle(person) }}</text>
+              <text v-if="tagPersonSubtitle(person)" class="person-note">{{ tagPersonSubtitle(person) }}</text>
             </button>
           </view>
         </view>
 
         <view class="privacy-impact">
-          若其中有人关闭“包含我的照片可见”，其他同车成员将看不到这张照片。
+          标注“其他”或仅标 NPC 时，同车成员都可见；标注车友后会按成员隐私设置展示。
         </view>
 
         <view class="sheet-actions">
-          <button class="button secondary" @tap="closeTagSheet">取消</button>
-          <button class="button" :class="{ disabled: savingTags }" @tap="saveTags">
+          <button class="button secondary" :disabled="savingTags" @tap="closeTagSheet">取消</button>
+          <button
+            class="button"
+            :class="{ disabled: savingTags }"
+            :disabled="savingTags"
+            @tap="saveTags"
+          >
             {{ savingTags ? "保存中..." : "保存标注" }}
           </button>
         </view>
@@ -224,8 +362,10 @@ export default {
       canUpload: false,
       activeFilter: "all",
       statusText: "",
+      loadingAlbum: false,
       uploading: false,
       savingTags: false,
+      deletingPhotoId: null,
       currentUserId: "",
       mediaLoadSerial: 0,
       waterfallPhotos: [],
@@ -235,6 +375,9 @@ export default {
       photoObservers: [],
       tagSheetPhoto: null,
       selectedTagKeys: [],
+      selectionMode: false,
+      selectedPhotoIds: [],
+      bulkTagging: false,
       filters: [
         { value: "all", label: "全部" },
         { value: "mine", label: "我上传的" },
@@ -258,14 +401,58 @@ export default {
       }
       return this.photos;
     },
+    taggablePhotos() {
+      return this.filteredPhotos.filter((photo) => photo.can_tag);
+    },
     seatPeople() {
       return this.people.filter((person) => person.tag_type === "seat");
     },
     npcPeople() {
       return this.people.filter((person) => ["dm", "npc"].includes(person.tag_type));
     },
+    npcRolePeople() {
+      return this.people.filter((person) => person.tag_type === "session_npc_role");
+    },
+    otherPeople() {
+      return this.people.filter((person) => person.tag_type === "other");
+    },
     selectedPeople() {
       return this.people.filter((person) => this.selectedTagKeys.includes(person.key));
+    },
+    selectedPhotoCount() {
+      return this.selectedPhotoIds.length;
+    },
+    selectedTagTargetCount() {
+      if (this.bulkTagging) {
+        return this.selectedPhotoCount;
+      }
+      return this.tagSheetPhoto ? 1 : 0;
+    },
+    albumBusy() {
+      return (
+        this.loadingAlbum ||
+        this.uploading ||
+        this.savingTags ||
+        Boolean(this.deletingPhotoId)
+      );
+    },
+    operationText() {
+      if (this.loadingAlbum) {
+        return "正在加载相册...";
+      }
+      if (this.uploading) {
+        return this.statusText || "正在上传照片...";
+      }
+      if (this.savingTags) {
+        return "正在保存标注...";
+      }
+      if (this.deletingPhotoId) {
+        return "正在删除照片...";
+      }
+      if (this.albumBusy) {
+        return "正在处理，请稍候...";
+      }
+      return this.statusText;
     }
   },
   async onLoad(options) {
@@ -292,12 +479,65 @@ export default {
   },
   watch: {
     activeFilter() {
+      this.selectionMode = false;
+      this.selectedPhotoIds = [];
       this.refreshWaterfall();
     }
   },
   methods: {
     apiUrl,
+    inferredSeatRoleName(person) {
+      return String(person?.note || "")
+        .split(" · ")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .slice(-1)[0] || "";
+    },
+    tagPersonTitle(person) {
+      if (person?.tag_type !== "seat") {
+        return person?.label || this.tagTypeLabel(person?.tag_type);
+      }
+      return person.role_name || this.inferredSeatRoleName(person) || person.label || "车友";
+    },
+    tagTypeLabel(value) {
+      const labels = {
+        seat: "车友",
+        dm: "DM",
+        npc: "NPC",
+        session_npc_role: "NPC角色",
+        other: "其他"
+      };
+      return labels[value] || "成员";
+    },
+    tagPersonSubtitle(person) {
+      if (!person) {
+        return "";
+      }
+      const title = this.tagPersonTitle(person);
+      if (person.tag_type === "seat") {
+        const accountName = String(person.account_name || person.account_nickname || "").trim();
+        if (accountName && accountName !== title) {
+          return accountName;
+        }
+        const legacyLabel = String(person.label || "").trim();
+        return legacyLabel && legacyLabel !== title ? legacyLabel : "";
+      }
+      if (person.tag_type === "session_npc_role") {
+        const accountName = String(person.account_name || person.bound_user_name || "").trim();
+        if (accountName && accountName !== title) {
+          return accountName;
+        }
+        const legacyBinding = String(person.note || "").split("绑定：")[1]?.split(" · ")[0]?.trim() || "";
+        return legacyBinding && legacyBinding !== title ? legacyBinding : "";
+      }
+      const subtitle = String(person.account_name || person.note || "").trim();
+      return subtitle && subtitle !== person.label ? subtitle : "";
+    },
     async loadAlbum() {
+      if (this.loadingAlbum) {
+        return;
+      }
+      this.loadingAlbum = true;
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album` });
         const data = dataOf(response) || {};
@@ -320,6 +560,8 @@ export default {
         } else {
           this.statusText = "相册加载失败，请稍后重试。";
         }
+      } finally {
+        this.loadingAlbum = false;
       }
     },
     normalizePhotoMedia(photo) {
@@ -537,13 +779,21 @@ export default {
     sessionDetailPeople(session) {
       const people = [];
       for (const seat of session.seats || []) {
+        const accountName =
+          seat.confirmed_user_name ||
+          seat.user_nickname ||
+          seat.user_open_id ||
+          "";
         people.push({
           key: `seat:${seat.id}`,
           tag_type: "seat",
           seat_id: seat.id,
           user_id: seat.confirmed_user_id || null,
           label: seat.role_name || seat.name || "车友",
-          note: [seat.name, seat.role_name].filter(Boolean).join(" · ") || "车友"
+          note: accountName,
+          role_name: seat.role_name || "",
+          seat_name: seat.name || "",
+          account_name: accountName
         });
       }
 
@@ -568,6 +818,29 @@ export default {
         });
       }
 
+      people.push({
+        key: "other:session",
+        tag_type: "other",
+        seat_id: null,
+        user_id: null,
+        label: "其他",
+        note: "风景/主线外照片"
+      });
+
+      for (const role of session.session_npc_roles || []) {
+        const accountName = role.bound_user_name || "";
+        people.push({
+          key: `session-npc:${role.id}`,
+          tag_type: "session_npc_role",
+          seat_id: null,
+          session_npc_role_id: role.id,
+          user_id: role.bound_user_id || null,
+          label: role.name || "NPC角色",
+          note: accountName,
+          account_name: accountName
+        });
+      }
+
       return people;
     },
     mergePeople(people) {
@@ -586,7 +859,7 @@ export default {
       return `照片里：${photo.tags.map((tag) => tag.label).join("、")}`;
     },
     choosePhotos() {
-      if (!this.canUpload || this.uploading) {
+      if (!this.canUpload || this.albumBusy) {
         uni.showToast({ title: "发车后同车成员可上传", icon: "none" });
         return;
       }
@@ -600,7 +873,7 @@ export default {
       });
     },
     async uploadChosenPhotos(paths) {
-      if (paths.length === 0) {
+      if (this.albumBusy || paths.length === 0) {
         return;
       }
       this.uploading = true;
@@ -622,7 +895,43 @@ export default {
         this.uploading = false;
       }
     },
+    deletePhoto(photo) {
+      if (this.albumBusy || !photo.is_mine) {
+        return;
+      }
+      uni.showModal({
+        title: "删除照片",
+        content: "确认删除这张照片？删除后清空相册才能取消这辆车。",
+        confirmText: "删除",
+        cancelText: "再想想",
+        success: async (result) => {
+          if (!result.confirm) {
+            return;
+          }
+          if (this.albumBusy) {
+            return;
+          }
+          this.deletingPhotoId = photo.id;
+          this.statusText = "正在删除照片...";
+          try {
+            await request({
+              url: `/api/session-album/photos/${photo.id}`,
+              method: "DELETE"
+            });
+            this.statusText = "";
+            await this.loadAlbum();
+          } catch (error) {
+            this.statusText = error?.userMessage || "照片删除失败，请稍后重试。";
+          } finally {
+            this.deletingPhotoId = null;
+          }
+        }
+      });
+    },
     async previewPhoto(photo) {
+      if (this.deletingPhotoId) {
+        return;
+      }
       let previewUrl = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
       let loadFailed = false;
       if (!previewUrl) {
@@ -646,18 +955,54 @@ export default {
       });
     },
     goPrivacy() {
+      if (this.albumBusy) {
+        return;
+      }
       uni.navigateTo({ url: `/pages/session/albumPrivacy?id=${this.sessionId}` });
     },
     openTagSheet(photo) {
-      if (!photo.can_tag) {
+      if (this.albumBusy || !photo.can_tag) {
         return;
       }
       this.tagSheetPhoto = photo;
       this.selectedTagKeys = (photo.tags || []).map((tag) => tag.key);
     },
-    closeTagSheet() {
+    toggleSelectionMode() {
+      if (this.albumBusy) {
+        return;
+      }
+      this.selectionMode = !this.selectionMode;
+      this.selectedPhotoIds = [];
+    },
+    isPhotoSelected(photo) {
+      return this.selectedPhotoIds.includes(Number(photo.id));
+    },
+    togglePhotoSelection(photo) {
+      if (!this.selectionMode || this.albumBusy || !photo.can_tag) {
+        return;
+      }
+      const photoId = Number(photo.id);
+      if (this.selectedPhotoIds.includes(photoId)) {
+        this.selectedPhotoIds = this.selectedPhotoIds.filter((id) => id !== photoId);
+        return;
+      }
+      this.selectedPhotoIds = [...this.selectedPhotoIds, photoId];
+    },
+    openBulkTagSheet() {
+      if (this.albumBusy || this.selectedPhotoIds.length === 0) {
+        return;
+      }
+      this.bulkTagging = true;
+      this.tagSheetPhoto = { id: null };
+      this.selectedTagKeys = [];
+    },
+    closeTagSheet(options = {}) {
+      if (this.savingTags && !options.force) {
+        return;
+      }
       this.tagSheetPhoto = null;
       this.selectedTagKeys = [];
+      this.bulkTagging = false;
     },
     togglePerson(key) {
       if (this.selectedTagKeys.includes(key)) {
@@ -667,20 +1012,41 @@ export default {
       this.selectedTagKeys = [...this.selectedTagKeys, key];
     },
     async saveTags() {
-      if (!this.tagSheetPhoto || this.savingTags) {
+      if (!this.tagSheetPhoto || this.albumBusy) {
+        return;
+      }
+      const targetPhotoIds = this.bulkTagging
+        ? [...this.selectedPhotoIds]
+        : [Number(this.tagSheetPhoto.id)];
+      if (targetPhotoIds.length === 0) {
         return;
       }
       this.savingTags = true;
+      let failedCount = 0;
       try {
-        await request({
-          url: `/api/session-album/photos/${this.tagSheetPhoto.id}/tags`,
-          method: "PUT",
-          data: { tagKeys: this.selectedTagKeys }
-        });
-        this.closeTagSheet();
+        for (const photoId of targetPhotoIds) {
+          try {
+            await request({
+              url: `/api/session-album/photos/${photoId}/tags`,
+              method: "PUT",
+              data: { tagKeys: this.selectedTagKeys }
+            });
+          } catch (error) {
+            failedCount += 1;
+          }
+        }
+        const allFailed = failedCount === targetPhotoIds.length;
+        this.closeTagSheet({ force: true });
+        this.selectionMode = false;
+        this.selectedPhotoIds = [];
         await this.loadAlbum();
-      } catch (error) {
-        uni.showToast({ title: "标注保存失败", icon: "none" });
+        if (allFailed) {
+          uni.showToast({ title: "标注保存失败", icon: "none" });
+          return;
+        }
+        if (failedCount > 0) {
+          uni.showToast({ title: "部分照片标注失败", icon: "none" });
+        }
       } finally {
         this.savingTags = false;
       }
@@ -765,6 +1131,19 @@ export default {
   background: rgba(255, 255, 252, 0.96);
 }
 
+.photo-card.selectable {
+  border-color: rgba(31, 111, 91, 0.45);
+}
+
+.photo-card.selected {
+  border-color: #1f6f5b;
+  box-shadow: 0 0 0 3rpx rgba(31, 111, 91, 0.12);
+}
+
+.photo-card.disabled {
+  opacity: 0.62;
+}
+
 .photo-image-shell {
   position: relative;
   overflow: hidden;
@@ -794,6 +1173,51 @@ export default {
   border-top-color: rgba(31, 122, 104, 0.72);
   border-radius: 999rpx;
   animation: album-spin 0.9s linear infinite;
+}
+
+.selection-checkbox {
+  position: absolute;
+  top: 12rpx;
+  right: 12rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52rpx;
+  height: 52rpx;
+  border-radius: 10rpx;
+  background: rgba(15, 23, 42, 0.32);
+}
+
+.selection-checkbox-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34rpx;
+  height: 34rpx;
+  border: 3rpx solid rgba(255, 255, 255, 0.96);
+  border-radius: 7rpx;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 26rpx;
+  font-weight: 700;
+  line-height: 34rpx;
+}
+
+.selection-checkbox.selected {
+  background: #1f6f5b;
+}
+
+.selection-checkbox.selected .selection-checkbox-box {
+  border-color: #ffffff;
+  background: #1f6f5b;
+}
+
+.selection-checkbox.disabled {
+  background: rgba(148, 163, 184, 0.64);
+}
+
+.selection-checkbox.disabled .selection-checkbox-box {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .photo-meta {
@@ -843,6 +1267,11 @@ export default {
   line-height: 40rpx;
 }
 
+.tag-button.danger {
+  background: #fff2f0;
+  color: #c23b32;
+}
+
 .empty-section {
   text-align: center;
 }
@@ -858,6 +1287,29 @@ export default {
   color: #7a857d;
   font-size: 25rpx;
   line-height: 1.5;
+}
+
+.bulk-action-bar {
+  position: fixed;
+  right: 24rpx;
+  bottom: 34rpx;
+  left: 24rpx;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  padding: 16rpx;
+  border: 1rpx solid rgba(223, 216, 204, 0.92);
+  border-radius: 10rpx;
+  background: rgba(255, 255, 252, 0.98);
+  box-shadow: 0 18rpx 42rpx rgba(32, 44, 38, 0.16);
+}
+
+.bulk-count {
+  flex: 1;
+  color: #334155;
+  font-size: 25rpx;
+  text-align: center;
 }
 
 .tag-mask {

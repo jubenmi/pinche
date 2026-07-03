@@ -7,6 +7,8 @@ export const requiredSchemaTables = Object.freeze([
   "user_roles",
   "stores",
   "scripts",
+  "script_npc_roles",
+  "session_npc_roles",
   "admin_web_login_tickets",
   "store_scripts",
   "wechat_identities"

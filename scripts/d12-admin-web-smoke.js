@@ -275,6 +275,36 @@ async function main() {
     normal.token,
     403
   );
+
+  const activeStoreDelete = await request(
+    "DELETE",
+    `/api/admin/stores/${store.data.id}`,
+    undefined,
+    admin.token,
+    409
+  );
+  const activeScriptDelete = await request(
+    "DELETE",
+    `/api/admin/scripts/${otherScript.data.id}`,
+    undefined,
+    admin.token,
+    409
+  );
+  assert(
+    activeStoreDelete.error.code === "CATALOG_ENTITY_ACTIVE",
+    "active store delete should require downlisting first"
+  );
+  assert(
+    activeScriptDelete.error.code === "CATALOG_ENTITY_ACTIVE",
+    "active script delete should require downlisting first"
+  );
+
+  await request(
+    "PATCH",
+    `/api/admin/scripts/${otherScript.data.id}`,
+    { status: "inactive" },
+    admin.token
+  );
   await request("DELETE", `/api/admin/scripts/${otherScript.data.id}`, undefined, admin.token);
 
   const afterScriptDeleteLinks = await request(
@@ -288,10 +318,14 @@ async function main() {
     "hard-deleted script should be removed from store links"
   );
 
-  await request("DELETE", `/api/admin/stores/${store.data.id}`, undefined, admin.token);
-  await request("DELETE", `/api/admin/scripts/${script.data.id}`, undefined, admin.token);
-  await request("DELETE", `/api/admin/scripts/${unlinkedScript.data.id}`, undefined, admin.token);
-  await request("DELETE", `/api/admin/stores/${otherStore.data.id}`, undefined, admin.token);
+  for (const storeId of [store.data.id, otherStore.data.id]) {
+    await request("PATCH", `/api/admin/stores/${storeId}`, { status: "inactive" }, admin.token);
+    await request("DELETE", `/api/admin/stores/${storeId}`, undefined, admin.token);
+  }
+  for (const scriptId of [script.data.id, unlinkedScript.data.id]) {
+    await request("PATCH", `/api/admin/scripts/${scriptId}`, { status: "inactive" }, admin.token);
+    await request("DELETE", `/api/admin/scripts/${scriptId}`, undefined, admin.token);
+  }
 
   const deletedStores = await request(
     "GET",
@@ -363,6 +397,19 @@ async function main() {
     },
     admin.token,
     201
+  );
+
+  await request(
+    "PATCH",
+    `/api/admin/stores/${referencedStore.data.id}`,
+    { status: "inactive" },
+    admin.token
+  );
+  await request(
+    "PATCH",
+    `/api/admin/scripts/${referencedScript.data.id}`,
+    { status: "inactive" },
+    admin.token
   );
 
   const blockedStoreDelete = await request(

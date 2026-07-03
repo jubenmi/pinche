@@ -1,295 +1,298 @@
-# Session Signup Notifications Design
+# 上车审核与订阅通知设计
 
-Date: 2026-07-03
+日期：2026-07-03
 
-## Context
+## 背景
 
-Pinche already has the core approval model for joining a session:
+Pinche 已经有“申请上车 -> 车头审核”的核心模型：
 
-- `POST /api/signups` creates a `pending` signup and moves an open seat to `applied`.
-- `PATCH /api/signups/:id/approve` confirms the applicant into the seat.
-- `PATCH /api/signups/:id/reject` rejects the applicant and can reopen the seat.
-- `pages/session/manage` lets the organizer review pending signups.
+- `POST /api/signups` 创建 `pending` 报名，并把空座位改为 `applied`。
+- `PATCH /api/signups/:id/approve` 通过申请，把申请人确认到座位上。
+- `PATCH /api/signups/:id/reject` 拒绝申请，并在没有其他活跃申请时释放座位。
+- `pages/session/manage` 是车头审核待处理申请的管理页。
 
-The current Mini Program role selection path in `pages/session/share` still uses `POST /api/session-seats/:id/claim`, which directly confirms the user into a role. That conflicts with the product rule that the organizer must approve every rider before they can access role-scoped session privileges, especially post-start album privacy.
+当前小程序 `pages/session/share` 的角色选择仍在调用 `POST /api/session-seats/:id/claim`，会把用户直接确认到角色。这和新的产品规则冲突：所有上车、包括发车后补位，都必须先由车头审核；否则玩家可能绕过角色绑定审核，获得相册等按角色控制的隐私权限。
 
-## Goal
+## 目标
 
-Implement a strict organizer-review join flow with WeChat subscription notifications:
+实现严格的车头审核上车流程，并补齐微信订阅通知：
 
-1. Every player role selection creates a pending signup instead of directly claiming a seat.
-2. The organizer can receive a WeChat subscription message when someone applies.
-3. The applicant can receive a WeChat subscription message when the organizer approves or rejects.
-4. Subscription refusal never blocks signup, review, or session management.
-5. Album and role privacy rely only on approved seat membership, never on pending signups.
+1. 玩家每次选择角色都创建待审核申请，不能直接占座。
+2. 有人申请上车时，车头可收到微信订阅消息。
+3. 车头通过或拒绝后，申请人可收到微信订阅消息。
+4. 用户拒绝订阅不影响申请、审核或管理主流程。
+5. 相册和角色隐私只认审核通过后的座位归属，不认待审核申请。
 
-## Non-Goals
+## 非目标
 
-- Do not add rewards, credits, or benefits for subscribing.
-- Do not send marketing, growth, or share-prompt messages.
-- Do not create a new signup state machine parallel to `signups`.
-- Do not allow direct post-start seat claiming from the Mini Program.
-- Do not require real WeChat notification delivery in local development or smoke tests.
+- 不为订阅提供奖励、积分、权益或补贴。
+- 不发送营销、拉新、转发诱导或无关消息。
+- 不新增一套和 `signups` 并行的报名状态机。
+- 不允许小程序在发车后直接占空位。
+- 不要求本地开发或烟测依赖真实微信消息下发。
 
-## Product Rules
+## 产品规则
 
-### Joining
+### 上车
 
-All player joins, including post-start补位, must use this flow:
+所有玩家上车，包括发车后补位，都必须走同一条链路：
 
 ```text
-player selects role
-  -> player submits pending signup
-  -> organizer reviews signup
-  -> approval binds player to seat and role
-  -> rejection leaves player without seat or album role access
+玩家选择角色
+  -> 玩家提交待审核申请
+  -> 车头审核申请
+  -> 通过后玩家绑定到座位和角色
+  -> 拒绝后玩家不获得座位、角色或相册权限
 ```
 
-The Mini Program must not call direct claim for role selection. The backend must also stop allowing ordinary players to self-claim seats directly, including post-start open seats. Any remaining direct seat assignment path must be limited to organizer/admin maintenance actions and must not grant a player membership without organizer intent.
+小程序不能再用 direct claim 完成角色选择。后端也必须阻止普通玩家直接自助占座，包括发车后的空位。任何保留的直接分配能力都必须限定为车头或管理员维护行为，不能让玩家在没有车头意图的情况下获得成员身份。
 
-### Privacy
+### 隐私
 
-Pending signup users are not onboard members. They must not gain:
+待审核申请人不是已上车成员，不能获得：
 
-- confirmed seat ownership
-- role-bound album visibility
-- same-session member privileges
-- review eligibility
-- post-start album access based solely on applying
+- 已确认座位归属
+- 按角色绑定的相册可见权限
+- 同车成员权限
+- 车友记录资格
+- 发车后仅凭申请获得的相册访问权
 
-Only `confirmed` or `locked` seats with `confirmed_user_id` grant those privileges.
+只有 `confirmed` 或 `locked` 座位上的 `confirmed_user_id` 才能授予这些权限。
 
-### Notifications
+### 通知
 
-Notifications are business reminders tied to explicit user action:
+通知必须绑定明确业务动作：
 
-- Organizer subscribes to "new signup reminder" after publishing a session or from the management page.
-- Player subscribes to "signup review result" after submitting a signup.
+- 车头在发布车后或进入管理页时，可订阅“新申请提醒”。
+- 玩家在提交申请后，可订阅“审核结果提醒”。
 
-If the user rejects, dismisses, or cannot subscribe, the primary business action still succeeds. The result is recorded through the existing subscription request tracking endpoint.
+用户拒绝、关闭或无法订阅时，主流程仍成功。订阅结果记录到现有订阅请求记录接口，方便后续排查或分析。
 
-## Mini Program Design
+## 小程序设计
 
-### Role Selection Page
+### 角色选择页
 
-`apps/miniprogram/src/pages/session/share.vue` changes the published-session confirm action:
+`apps/miniprogram/src/pages/session/share.vue` 的已发布车确认动作需要调整：
 
-- Before: call `POST /api/session-seats/:id/claim`.
-- After: call `POST /api/signups` with the selected `seatId`, contact text, and note.
+- 调整前：调用 `POST /api/session-seats/:id/claim`。
+- 调整后：调用 `POST /api/signups`，提交 `seatId`、联系方式和备注。
 
-Successful signup copy:
+申请成功文案：
 
 ```text
 已提交申请，等待车头审核。
 ```
 
-The selected card should show a pending state after reload because the seat becomes `applied`. The player must not be shown as "我选" unless their user id is the seat `confirmed_user_id`.
+提交后重新加载车局，选中的角色卡应显示为待审核，因为座位已变为 `applied`。只有当前用户确实是座位 `confirmed_user_id` 时，才显示“我选”。
 
-For sessions that have already started, the same pending signup flow applies. The page can still allow selecting open seats, but confirmation creates a pending signup rather than a direct claim.
+已经发车的车局也使用相同逻辑：可以选择开放座位，但确认后创建待审核申请，不能直接占座。
 
-### Detail Page
+### 详情页
 
-`apps/miniprogram/src/pages/session/detail.vue` can continue linking to role selection for `open` or `applied` seats. Any post-start affordance must use the same signup flow. Labels should distinguish:
+`apps/miniprogram/src/pages/session/detail.vue` 可以继续让 `open` 或 `applied` 座位进入角色选择。发车后的补位入口也必须指向同一套申请流程。
 
-- `open`: 可申请
-- `applied`: 待审核
-- `confirmed` / `locked`: 已上车 / 已锁定
+座位状态文案：
 
-### Manage Page
+- `open`：可申请
+- `applied`：待审核
+- `confirmed`：已上车
+- `locked`：已锁定
 
-`apps/miniprogram/src/pages/session/manage.vue` remains the organizer review surface. It should optionally offer a clear subscription entry for new signup reminders, such as a secondary action near the refresh button:
+### 管理页
+
+`apps/miniprogram/src/pages/session/manage.vue` 继续作为车头审核入口。可以在刷新按钮附近提供一个轻量的订阅入口：
 
 ```text
 申请提醒
 ```
 
-This action requests the organizer notification template. Refusal only shows a mild status message and records the result.
+点击后请求车头“新申请提醒”订阅模板。拒绝时只给温和提示，并记录订阅结果。
 
-### Subscription Helper
+### 订阅工具
 
-Create a small Mini Program helper that:
+新增一个小程序订阅工具，负责：
 
-- Checks `wx.requestSubscribeMessage` availability.
-- Requests one template at a time.
-- Normalizes `accept`, `reject`, `ban`, `filter`, unavailable API, and local non-WeChat environments.
-- Posts the normalized result to `/api/subscriptions/request-result`.
+- 检查 `wx.requestSubscribeMessage` 是否可用。
+- 每次请求一个模板。
+- 归一化 `accept`、`reject`、`ban`、`filter`、API 不可用和非微信环境。
+- 把结果提交到 `/api/subscriptions/request-result`。
 
-Scenes:
+订阅场景：
 
 - `organizer_signup_created`
 - `player_signup_reviewed`
 
-Template ids come from Mini Program environment variables, with empty values treated as disabled.
+模板 ID 由小程序环境变量提供。空值视为未启用。
 
-## Backend Design
+## 后端设计
 
-### Configuration
+### 配置
 
-Add environment-backed notification settings:
+新增通知配置：
 
 - `WECHAT_SUBSCRIBE_MESSAGE_ENABLED`
 - `WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_CREATED`
 - `WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED`
 
-When disabled or missing template ids, backend notification calls become no-op results. This keeps local development and CI independent from WeChat network access.
+未启用或缺少模板 ID 时，后端通知调用返回跳过结果，不抛错。这保证本地开发和 CI 不依赖微信网络。
 
-### WeChat Client
+### 微信客户端
 
-Add a focused backend module for subscription message sending. It owns:
+新增一个聚焦的后端订阅消息模块，负责：
 
-- Access token retrieval with the configured `WECHAT_APP_ID` and `WECHAT_APP_SECRET`.
-- `POST /cgi-bin/message/subscribe/send` calls.
-- No-op behavior when disabled or incomplete.
-- Structured results for sent, skipped, and failed sends.
+- 使用 `WECHAT_APP_ID` 和 `WECHAT_APP_SECRET` 获取接口调用凭证。
+- 调用 `/cgi-bin/message/subscribe/send`。
+- 在未启用或配置不完整时返回 no-op。
+- 返回结构化的已发送、已跳过或发送失败结果。
 
-Notification failures must not roll back signup creation or organizer review. They may be logged or returned internally for future observability, but user-facing API success follows the business database transaction.
+通知失败不能回滚申请创建或审核结果。业务 API 的成功与否由数据库事务决定，微信发送失败只作为通知层结果记录或日志。
 
-### Signup Created Notification
+### 新申请通知
 
-After `createSignup` commits a pending signup, notify the session organizer when:
+`createSignup` 事务成功后，满足以下条件时通知车头：
 
-- signup was created successfully
-- organizer has an open id in `users.open_id`
-- the signup belongs to a real session and seat
-- the new-signup template id is configured
+- 报名创建成功。
+- 车头在 `users.open_id` 中有 openid。
+- 报名能关联到真实车局和座位。
+- 新申请模板 ID 已配置。
 
-The message should deep link to:
+消息跳转：
 
 ```text
 /pages/session/manage?id=<session_id>
 ```
 
-Message fields should use approved template keywords only. Candidate semantic fields:
+模板字段必须使用微信审核通过的关键词，语义包括：
 
-- session/script name
-- seat/role name
-- applicant nickname or "新申请"
-- start time
-- status "待审核"
+- 车局或剧本名称
+- 座位或角色名称
+- 申请人昵称或“新申请”
+- 开车时间
+- 状态“待审核”
 
-### Signup Reviewed Notification
+### 审核结果通知
 
-After `approveSignup` or `rejectSignup` commits, notify the applicant when:
+`approveSignup` 或 `rejectSignup` 事务成功后，满足以下条件时通知申请人：
 
-- review operation succeeds
-- applicant has an open id
-- the review-result template id is configured
+- 审核操作成功。
+- 申请人在 `users.open_id` 中有 openid。
+- 审核结果模板 ID 已配置。
 
-The message should deep link to:
+消息跳转：
 
 ```text
 /pages/session/detail?id=<session_id>
 ```
 
-Message fields should describe:
+模板字段语义包括：
 
-- session/script name
-- seat/role name
-- review result
-- start time
+- 车局或剧本名称
+- 座位或角色名称
+- 审核结果
+- 开车时间
 
-### Existing Direct Claim Endpoint
+### Direct Claim 接口
 
-The backend `POST /api/session-seats/:id/claim` must no longer be a public player onboarding path. It should either:
+`POST /api/session-seats/:id/claim` 不能再作为普通玩家上车入口。它应当：
 
-- reject ordinary player calls with a permission error; or
-- be replaced by an organizer/admin-only direct assignment endpoint in a later maintenance spec.
+- 拒绝普通玩家调用；或
+- 在后续维护 spec 中替换为仅车头/管理员可用的直接分配接口。
 
-Existing smoke tests that rely on player self-claiming must be updated to use:
+现有依赖玩家自助 claim 的烟测，需要改为：
 
 ```text
 POST /api/signups
 PATCH /api/signups/:id/approve
 ```
 
-This keeps API behavior aligned with album privacy instead of only hiding the direct claim path from Mini Program UI.
+这样 API 行为和相册隐私一致，而不只是把 direct claim 从小程序 UI 上藏起来。
 
-## Data Model
+## 数据模型
 
-No new tables are required for the MVP implementation.
+本次不新增表。
 
-Use existing tables:
+复用现有表：
 
-- `signups` for pending/approved/rejected state.
-- `session_seats.confirmed_user_id` for actual role membership.
-- `subscription_requests` for client-side subscription request result tracking.
+- `signups`：保存 `pending`、`approved`、`rejected` 状态。
+- `session_seats.confirmed_user_id`：保存实际角色成员归属。
+- `subscription_requests`：记录小程序侧订阅请求结果。
 
-Backend send attempts do not need durable storage in this increment. If delivery audit becomes necessary, add a dedicated notification log in a later spec.
+后端发送尝试本阶段不持久化。如果后续需要投递审计，再单独新增通知日志表。
 
-## API Behavior
+## API 行为
 
 ### `POST /api/signups`
 
-Expected behavior remains:
+行为保持：
 
-- Requires authenticated user.
-- Creates a pending signup.
-- Reuses existing uniqueness constraint for duplicate user-seat signup protection.
-- Moves `open` seat to `applied`.
-- Triggers organizer notification after commit.
+- 要求登录。
+- 创建待审核申请。
+- 继续使用现有用户-座位唯一约束，防止重复申请同一座位。
+- 把 `open` 座位更新为 `applied`。
+- 事务成功后触发车头通知。
 
 ### `PATCH /api/signups/:id/approve`
 
-Expected behavior remains:
+行为保持：
 
-- Requires organizer or admin.
-- Approves only pending signup.
-- Rejects same-seat competing pending signups.
-- Confirms seat for approved user.
-- Triggers applicant review-result notification after commit.
+- 要求车头或管理员。
+- 只允许通过 `pending` 申请。
+- 自动拒绝同座其他待审核申请。
+- 把座位确认给通过的申请人。
+- 事务成功后触发申请人审核结果通知。
 
 ### `PATCH /api/signups/:id/reject`
 
-Expected behavior remains:
+行为保持：
 
-- Requires organizer or admin.
-- Rejects signup.
-- Reopens seat when no active signup remains.
-- Triggers applicant review-result notification after commit.
+- 要求车头或管理员。
+- 把申请更新为 `rejected`。
+- 没有其他活跃申请时释放座位。
+- 事务成功后触发申请人审核结果通知。
 
 ### `POST /api/session-seats/:id/claim`
 
-Expected behavior changes:
+行为改变：
 
-- Must not allow ordinary authenticated players to become confirmed members directly.
-- Must not allow post-start open seats to be claimed without organizer review.
-- Should return a permission or bad-request error for player self-claim attempts.
-- Existing organizer review APIs remain the supported way to confirm membership.
+- 不能允许普通登录玩家直接成为已确认成员。
+- 不能允许发车后的空位绕过审核直接被占。
+- 普通玩家自助 claim 应返回权限或业务错误。
+- 车头审核接口仍是确认成员的唯一正式路径。
 
-## Error Handling
+## 错误处理
 
-- Signup and review failures return existing API errors.
-- Subscription prompt failures do not block UI actions.
-- Backend WeChat send failures do not change API success for signup/review.
-- Missing notification config produces an explicit skipped result, not an exception.
-- Duplicate signup remains a conflict; UI should show the user that they already applied for this role.
+- 申请和审核失败继续返回现有 API 错误。
+- 小程序订阅弹窗失败不阻断 UI 主操作。
+- 后端微信下发失败不改变申请或审核 API 成功结果。
+- 通知配置缺失时返回明确的跳过结果，不抛异常。
+- 重复申请仍返回冲突；小程序提示用户已经申请过该角色。
 
-## Compliance
+## 合规
 
-This design follows the existing WeChat compliance guardrails:
+本设计遵循现有微信合规护栏：
 
-- Subscription happens only after clear business actions.
-- Refusing subscription never blocks signup or management.
-- Notification content is tied to the subscribed purpose.
-- No reward, marketing, or share induction is attached to subscription.
+- 只在明确业务动作后请求订阅。
+- 拒绝订阅不影响申请或管理。
+- 下发内容和订阅用途一致。
+- 不把订阅和奖励、营销、分享诱导绑定。
 
-## Testing
+## 测试
 
-Add or update checks to prove:
+新增或更新检查，证明：
 
-- Mini Program role confirmation no longer references `/api/session-seats/:id/claim`.
-- Published-session role confirmation references `POST /api/signups`.
-- Post-start open-seat selection also follows signup creation semantics.
-- Backend direct claim no longer lets ordinary players bypass organizer review.
-- `POST /api/signups` still creates pending signup and applied seat state.
-- Approve/reject smoke coverage still passes.
-- Backend notification helper returns skipped results when disabled or missing template ids.
-- Existing `npm run check` syntax checks continue to pass.
+- 小程序角色确认不再引用 `/api/session-seats/:id/claim`。
+- 已发布车角色确认调用 `POST /api/signups`。
+- 发车后开放座位也走申请语义。
+- 后端 direct claim 不再允许普通玩家绕过车头审核。
+- `POST /api/signups` 仍创建待审核申请并把座位改为 `applied`。
+- 审核通过/拒绝烟测仍通过。
+- 后端通知 helper 在未启用或缺少模板 ID 时返回跳过结果。
+- 现有 `npm run check` 语法和静态检查继续通过。
 
-## Rollout
+## 上线步骤
 
-1. Deploy backend with notification no-op support and config keys.
-2. Deploy Mini Program signup-flow change.
-3. Configure WeChat subscription templates in production.
-4. Enable `WECHAT_SUBSCRIBE_MESSAGE_ENABLED` after templates are approved.
-5. Verify on a WeChat development/experience build because `wx.requestSubscribeMessage` cannot be fully validated through Node smoke tests.
+1. 先部署带通知 no-op 和配置项的后端。
+2. 再部署小程序申请流程调整。
+3. 在微信公众平台配置订阅消息模板。
+4. 模板审核通过后开启 `WECHAT_SUBSCRIBE_MESSAGE_ENABLED`。
+5. 使用微信开发者工具或体验版验证订阅弹窗和消息跳转，因为 `wx.requestSubscribeMessage` 无法完全通过 Node 烟测验证。

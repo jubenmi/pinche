@@ -1,5 +1,7 @@
 # Admin Session Management Design
 
+> 状态：已被 2026-07-03 的《车局生命周期与删除决策记录》替代。最新规则见 `docs/session-lifecycle-decisions.md`：管理员只能查看车局，不能取消、下架、恢复或删除车局。
+
 ## Context
 
 Admin web currently has two top-level areas: `管理界面` and `网页小程序`. The management area covers stores and scripts, while the web miniapp mirrors user-side flows. Session operations exist for organizers and admins, but admins do not have a global session list. As a result, sessions created by another account, including AI-created test sessions, can exist without appearing in the admin UI.

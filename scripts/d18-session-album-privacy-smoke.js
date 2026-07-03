@@ -173,7 +173,13 @@ async function createPublishedSession(admin, owner, options = {}) {
       typeTags: ["情感", "沉浸"],
       playerCount: 2,
       summaryNoSpoiler: "D18 album privacy smoke script",
-      defaultSeatTemplate: seatTemplate
+      defaultSeatTemplate: seatTemplate,
+      npcRoles: [
+        {
+          name: `D18固定NPC-${suffix}-${options.label || "main"}`,
+          description: "固定 NPC 角色"
+        }
+      ]
     },
     admin.token,
     201
@@ -188,6 +194,12 @@ async function createPublishedSession(admin, owner, options = {}) {
       startAt: startAt(options.hoursFromNow ?? -1),
       dmNameSnapshot: `D18指定DM-${suffix}`,
       npcNameSnapshot: `D18指定NPC-${suffix}`,
+      extraNpcRoles: [
+        {
+          name: `D18本场NPC-${suffix}-${options.label || "main"}`,
+          description: "店家本场额外设计 NPC"
+        }
+      ],
       depositAmount: 5000,
       note: "D18 smoke session"
     },
@@ -266,6 +278,7 @@ async function main() {
   const owner = await login(`dev-d18-owner-${suffix}`);
   const playerA = await login(`dev-d18-player-a-${suffix}`);
   const playerB = await login(`dev-d18-player-b-${suffix}`);
+  const npcStaff = await login(`dev-d18-npc-staff-${suffix}`);
   const intruder = await login(`dev-d18-intruder-${suffix}`);
   await authorizePhone(owner, "d18-owner-phone");
   await authorizePhone(playerA, "d18-player-a-phone");
@@ -289,6 +302,30 @@ async function main() {
   });
   const seatA = await approveSeat(session.id, seats[0].id, playerA, owner);
   await approveSeat(session.id, seats[1].id, playerB, owner);
+  const sessionNpcRoles = await request(
+    "GET",
+    `/api/sessions/${session.id}/npc-roles`,
+    undefined,
+    owner.token
+  );
+  const fixedNpcRole = (sessionNpcRoles.data.npc_roles || []).find(
+    (role) => role.source === "script"
+  );
+  const extraNpcRole = (sessionNpcRoles.data.npc_roles || []).find(
+    (role) => role.source === "session"
+  );
+  assert(fixedNpcRole, "fixed NPC role should be created for the session");
+  assert(extraNpcRole, "extra NPC role should be created for the session");
+  const boundExtraNpcRole = await request(
+    "PATCH",
+    `/api/session-npc-roles/${extraNpcRole.id}`,
+    { boundUserId: npcStaff.user.id },
+    owner.token
+  );
+  assert(
+    Number(boundExtraNpcRole.data.bound_user_id) === Number(npcStaff.user.id),
+    "extra NPC role should bind to a WeChat user"
+  );
 
   const ownerAlbumSessions = await request(
     "GET",
@@ -309,6 +346,16 @@ async function main() {
   assert(
     hasSession(playerAlbumSessions, session.id),
     "album session list should include sessions where the current user has a confirmed seat"
+  );
+  const npcStaffAlbumSessions = await request(
+    "GET",
+    "/api/users/me/sessions?scope=album&limit=100",
+    undefined,
+    npcStaff.token
+  );
+  assert(
+    hasSession(npcStaffAlbumSessions, session.id),
+    "bound NPC role user should see their album session"
   );
   const intruderAlbumSessions = await request(
     "GET",
@@ -331,10 +378,19 @@ async function main() {
   for (const expectedKey of [
     ...seats.map((seat) => `seat:${seat.id}`),
     "dm:session",
-    "npc:session"
+    "npc:session",
+    "other:session"
   ]) {
     assert(peopleKeys.includes(expectedKey), `album people should include ${expectedKey}`);
   }
+  assert(
+    peopleKeys.includes(`session-npc:${fixedNpcRole.id}`),
+    "fixed NPC role should appear in album people"
+  );
+  assert(
+    peopleKeys.includes(`session-npc:${extraNpcRole.id}`),
+    "extra NPC role should appear in album people"
+  );
 
   await request(
     "POST",
@@ -385,7 +441,8 @@ async function main() {
       tagKeys: [
         `seat:${seatA.id}`,
         "dm:session",
-        "npc:session"
+        "npc:session",
+        `session-npc:${extraNpcRole.id}`
       ]
     },
     owner.token
@@ -394,6 +451,10 @@ async function main() {
   for (const expectedKey of ["dm:session", "npc:session"]) {
     assert(taggedKeys.includes(expectedKey), `album tags should save ${expectedKey}`);
   }
+  assert(
+    taggedKeys.includes(`session-npc:${extraNpcRole.id}`),
+    "album tags should save session NPC role"
+  );
 
   const playerTaggedAlbum = await request(
     "GET",
@@ -454,6 +515,60 @@ async function main() {
     owner.token
   );
   assert(hasPhoto(ownerStillVisibleAlbum, photoId), "uploader should still see own photo after tagged privacy block");
+
+  await request(
+    "PUT",
+    `/api/sessions/${session.id}/album/privacy`,
+    { allowUploadedVisible: false, allowTaggedVisible: true },
+    owner.token
+  );
+
+  const otherTaggedPhoto = await request(
+    "POST",
+    `/api/sessions/${session.id}/album/photos`,
+    { photoUrl: await uploadAlbumPhoto(session.id, owner.token, "other-tagged") },
+    owner.token,
+    201
+  );
+  const otherTaggedPhotoId = otherTaggedPhoto.data.id;
+  const otherTagged = await request(
+    "PUT",
+    `/api/session-album/photos/${otherTaggedPhotoId}/tags`,
+    { tagKeys: ["other:session"] },
+    owner.token
+  );
+  const otherTaggedKeys = (otherTagged.data.tags || []).map((tag) => tag.key);
+  assert(otherTaggedKeys.includes("other:session"), "album tags should save other:session");
+
+  const npcOnlyPhoto = await request(
+    "POST",
+    `/api/sessions/${session.id}/album/photos`,
+    { photoUrl: await uploadAlbumPhoto(session.id, owner.token, "npc-only") },
+    owner.token,
+    201
+  );
+  const npcOnlyPhotoId = npcOnlyPhoto.data.id;
+  await request(
+    "PUT",
+    `/api/session-album/photos/${npcOnlyPhotoId}/tags`,
+    { tagKeys: [`session-npc:${extraNpcRole.id}`] },
+    owner.token
+  );
+
+  const otherMemberSpecialAlbum = await request(
+    "GET",
+    `/api/sessions/${session.id}/album`,
+    undefined,
+    playerB.token
+  );
+  assert(
+    hasPhoto(otherMemberSpecialAlbum, otherTaggedPhotoId),
+    "other-tagged photo should be visible to all same-session members"
+  );
+  assert(
+    hasPhoto(otherMemberSpecialAlbum, npcOnlyPhotoId),
+    "npc-only photo should be visible to all same-session members"
+  );
 
   console.log(
     JSON.stringify(

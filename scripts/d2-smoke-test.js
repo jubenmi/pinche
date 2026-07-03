@@ -214,7 +214,30 @@ async function main() {
   );
   assert(playerPhone.data.user.phoneVerifiedAt, "player phone should be verified");
 
-  await request("POST", `/api/session-seats/${seatA.data.id}/claim`, {}, player.token);
+  const forbiddenDirectClaim = await request(
+    "POST",
+    `/api/session-seats/${seatA.data.id}/claim`,
+    {},
+    player.token,
+    403
+  );
+  assert(
+    forbiddenDirectClaim.error?.code === "FORBIDDEN",
+    "player direct seat claim should require organizer review"
+  );
+
+  const firstSignup = await request(
+    "POST",
+    "/api/signups",
+    {
+      seatId: seatA.data.id,
+      contactText: "wx-first-test",
+      note: "先申请一个角色"
+    },
+    player.token,
+    201
+  );
+  await request("PATCH", `/api/signups/${firstSignup.data.id}/approve`, {}, owner.token);
 
   const signup = await request(
     "POST",
