@@ -1647,31 +1647,59 @@ export default {
         }
       });
     },
+    async preparePhotoPreviewUrls(photos) {
+      const previewEntries = [];
+      for (const photo of photos || []) {
+        if (!photo || !this.mediaUrlForPhoto(photo)) {
+          continue;
+        }
+        let previewUrl = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
+        if (!previewUrl) {
+          try {
+            previewUrl = await this.loadVisiblePhotoMedia(photo, "preview");
+            if (previewUrl) {
+              this.updatePhotoDisplayUrl(photo.id, previewUrl);
+            }
+          } catch (error) {
+            previewUrl = "";
+          }
+        }
+        if (previewUrl) {
+          previewEntries.push({
+            photoId: photo.id,
+            url: previewUrl
+          });
+        }
+      }
+      return previewEntries;
+    },
     async previewPhoto(photo) {
       if (this.deletingPhotoId) {
         return;
       }
-      let previewUrl = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
-      let loadFailed = false;
-      if (!previewUrl) {
-        uni.showLoading({ title: "加载中" });
-        try {
-          previewUrl = await this.loadVisiblePhotoMedia(photo, "preview");
-          this.updatePhotoDisplayUrl(photo.id, previewUrl);
-        } catch (error) {
-          loadFailed = true;
-        } finally {
-          uni.hideLoading();
-        }
+      const previewPhotos = [...this.filteredPhotos].reverse();
+      if (!previewPhotos.some((item) => String(item.id) === String(photo.id))) {
+        previewPhotos.unshift(photo);
       }
-      if (loadFailed || !previewUrl) {
+      let previewEntries = [];
+      uni.showLoading({ title: "加载中" });
+      try {
+        previewEntries = await this.preparePhotoPreviewUrls(previewPhotos);
+      } finally {
+        uni.hideLoading();
+      }
+      const currentEntry = previewEntries.find(
+        (entry) => String(entry.photoId) === String(photo.id)
+      );
+      if (!currentEntry) {
         uni.showToast({ title: "照片加载失败", icon: "none" });
         return;
       }
+      const previewUrls = previewEntries.map((entry) => entry.url);
       this.skipNextAlbumRefreshOnShow = true;
       uni.previewImage({
-        urls: [previewUrl],
-        current: previewUrl,
+        urls: previewUrls,
+        current: currentEntry.url,
         fail: () => {
           this.skipNextAlbumRefreshOnShow = false;
         }
