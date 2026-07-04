@@ -745,7 +745,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   assertBefore(
     shareChooseRoleSource,
     "ensureSeatSelectionLogin",
-    "this.pendingRole = role",
+    "this.pendingRole = targetRole",
     "Share role selection must not set a pending role before login"
   );
   assertBefore(
@@ -770,7 +770,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "Share role application must apply the session phone setting before claiming a role"
   );
   if (
-    !/async chooseRole\(role\)\s*\{[\s\S]*ensureSeatSelectionLogin[\s\S]*confirmCrossCastRole[\s\S]*this\.pendingRole = role[\s\S]*await this\.confirmRole\(\);/.test(shareSource)
+    !/async chooseRole\(role\)\s*\{[\s\S]*ensureSeatSelectionLogin[\s\S]*confirmCrossCastRole[\s\S]*this\.pendingRole = targetRole[\s\S]*await this\.confirmRole\(\);/.test(shareSource)
   ) {
     fail("Share role selection should apply immediately after tapping a role card");
   }
@@ -1178,7 +1178,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "people-grid",
     "person-choice",
     "person-note",
-    "group-title"
+    'class="group-title"'
   ]) {
     if (albumSource.includes(forbiddenAlbumTagCardText)) {
       fail(`Album tag role picker must not keep legacy person card styles: ${forbiddenAlbumTagCardText}`);
@@ -1252,6 +1252,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     "openBulkTagSheet",
     "selectedPhotoCount",
     "selectedTagTargetCount",
+    "album-floating-toolbar",
+    "safe-area-inset-bottom",
     "selection-checkbox",
     "selection-checkbox-box",
     "部分照片标注失败",
@@ -1267,6 +1269,64 @@ if (!fs.existsSync(pagesJsonPath)) {
     if (!albumSource.includes(requiredAlbumBulkTagText)) {
       fail(`Album page must support bulk tagging: ${requiredAlbumBulkTagText}`);
     }
+  }
+  const albumFloatingToolbarStyle =
+    albumSource.match(/\.album-floating-toolbar\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  const albumFloatingToolbarDisabledStyle =
+    albumSource.match(/\.floating-toolbar-button\.disabled\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  const albumActionsStyle =
+    albumSource.match(/\.album-actions\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  const albumStickyActionsFloatingStyle =
+    albumSource.match(/\.album-sticky-actions\.floating\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  const albumActionsShellFloatingStyle =
+    albumSource.match(/\.album-actions-shell\.floating\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  const albumSelectionPageStyle =
+    albumSource.match(/\.album-page\.selection-active\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  const albumToolbarFilterPanelStyle =
+    albumSource.match(/\.album-toolbar-filter-panel\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  if (/(^|[;{\n\r])\s*bottom:\s*calc\(/.test(albumFloatingToolbarStyle)) {
+    fail("Album floating toolbar must keep a plain bottom fallback so it appears immediately in WeChat DevTools");
+  }
+  if (
+    albumSource.includes('<scroll-view scroll-y class="album-scroll">') ||
+    albumSource.includes('class="album-scroll-content"')
+  ) {
+    fail("Album page must use native page scrolling; wrapping the album in scroll-view hides the fixed selection toolbar in WeChat DevTools");
+  }
+  if (
+    !albumSource.includes('<view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">')
+  ) {
+    fail("Album selection toolbar must be a root-level fixed view so it appears immediately above the photo list");
+  }
+  if (
+    !albumFloatingToolbarStyle.includes("height: 132rpx") ||
+    !/(^|[;{\n\r])\s*position:\s*fixed/.test(albumFloatingToolbarStyle) ||
+    !/(^|[;{\n\r])\s*bottom:\s*0/.test(albumFloatingToolbarStyle) ||
+    !/(^|[;{\n\r])\s*left:\s*0/.test(albumFloatingToolbarStyle) ||
+    !/(^|[;{\n\r])\s*right:\s*0/.test(albumFloatingToolbarStyle) ||
+    !/(^|[;{\n\r])\s*z-index:\s*1000/.test(albumFloatingToolbarStyle) ||
+    !/(^|[;{\n\r])\s*display:\s*flex/.test(albumFloatingToolbarStyle) ||
+    !/(^|[;{\n\r])\s*gap:/.test(albumFloatingToolbarStyle) ||
+    !albumFloatingToolbarStyle.includes("box-shadow:")
+  ) {
+    fail("Album selection toolbar must be a fixed bottom toolbar that paints immediately in WeChat DevTools");
+  }
+  if (!albumSelectionPageStyle.includes("padding-bottom: 190rpx")) {
+    fail("Album selection mode must reserve scroll content space behind the fixed bottom toolbar");
+  }
+  if (
+    !albumFloatingToolbarDisabledStyle.includes("background-color: #d7dbd6") ||
+    !albumFloatingToolbarDisabledStyle.includes("color: #7a857d") ||
+    !albumFloatingToolbarDisabledStyle.includes("opacity: 1")
+  ) {
+    fail("Album bulk toolbar action must be gray while disabled and become green after selecting photos");
+  }
+  const selectedTagTargetCountSource = methodBody(albumSource, "selectedTagTargetCount");
+  if (
+    !selectedTagTargetCountSource.includes('this.selectionModePurpose === "tag"') ||
+    !selectedTagTargetCountSource.includes("return this.selectedTaggablePhotoIds.length")
+  ) {
+    fail("Album bulk tag button must become active after selecting taggable photos");
   }
   for (const requiredAlbumAdminParityText of [
     "albumFilterOptions",
@@ -1287,7 +1347,9 @@ if (!fs.existsSync(pagesJsonPath)) {
     "标注 {{ filteredTagProgressPercent }}%",
     "photoDetailText",
     "formatDate(photo.created_at)",
-    "按标注角色筛选"
+    "album-filter-panel",
+    "查看照片",
+    "角色"
   ]) {
     if (!albumSource.includes(requiredAlbumAdminParityText)) {
       fail(`Album page must match admin album filter and info affordances: ${requiredAlbumAdminParityText}`);
@@ -1311,6 +1373,12 @@ if (!fs.existsSync(pagesJsonPath)) {
     "photo-caption-title",
     "photo-actions-row",
     "photo-status-slot",
+    "photo-source-badge",
+    "photo-source-icon",
+    "photo-source-label",
+    "photoSourceIcon(photo)",
+    "/static/icons/user.png",
+    "/static/icons/group.png",
     "photo-safe-actions",
     "photo-action-text",
     "photo-danger-action",
@@ -1326,6 +1394,12 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`Album photo cards must use the compact caption footer layout: ${requiredAlbumCardCaptionText}`);
     }
   }
+  if (/\.photo-meta\s*\{[\s\S]*min-height:\s*116rpx;/.test(albumSource)) {
+    fail("Album photo card footer must not keep fixed 116rpx min-height after compact footer redesign");
+  }
+  if (/\.photo-upload-source\s*\{[\s\S]*line-height:\s*52rpx;/.test(albumSource)) {
+    fail("Album photo source indicator must not rely on 52rpx text line-height that truncates in narrow cards");
+  }
   assertBefore(
     albumSource,
     'class="photo-safe-actions"',
@@ -1334,9 +1408,9 @@ if (!fs.existsSync(pagesJsonPath)) {
   );
   assertBefore(
     albumSource,
-    'class="role-filter-row"',
     'class="filter-row"',
-    "Album role filter must appear before album filter chips so it stays visible after the compact header"
+    'class="role-filter-row"',
+    "Album photo scope filters must appear before the role picker in the grouped filter panel"
   );
   for (const requiredAlbumDownloadText of [
     "downloading",
@@ -1360,6 +1434,54 @@ if (!fs.existsSync(pagesJsonPath)) {
     if (!albumSource.includes(requiredAlbumDownloadText)) {
       fail(`Album page must support single, selected and all-photo downloads: ${requiredAlbumDownloadText}`);
     }
+  }
+  for (const requiredAlbumActionGroupText of [
+    "album-primary-actions",
+    "album-actions-shell",
+    "album-sticky-actions",
+    "topActionsFloating",
+    "onPageScroll",
+    "updateTopActionsFloating",
+    "album-action-groups",
+    "album-action-group",
+    "album-action-group-title",
+    "保存到手机",
+    "整理标注",
+    "album-filter-panel",
+    "filter-panel-head",
+    "查看照片",
+    "角色",
+    "openDownloadSelectionMode",
+    "openTagSelectionMode"
+  ]) {
+    if (!albumSource.includes(requiredAlbumActionGroupText)) {
+      fail(`Album page must group header actions by user task: ${requiredAlbumActionGroupText}`);
+    }
+  }
+  if (
+    !albumSource.includes(':class="{ floating: topActionsFloating }"') ||
+    !albumActionsShellFloatingStyle.includes("min-height:") ||
+    !/(^|[;{\n\r])\s*position:\s*fixed/.test(albumStickyActionsFloatingStyle) ||
+    !/(^|[;{\n\r])\s*top:\s*0/.test(albumStickyActionsFloatingStyle) ||
+    !/(^|[;{\n\r])\s*left:\s*20rpx/.test(albumStickyActionsFloatingStyle) ||
+    !/(^|[;{\n\r])\s*right:\s*20rpx/.test(albumStickyActionsFloatingStyle) ||
+    !/(^|[;{\n\r])\s*z-index:\s*900/.test(albumStickyActionsFloatingStyle) ||
+    !albumActionsStyle.includes("box-shadow:")
+  ) {
+    fail("Album header actions must become a fixed top toolbar while scrolling the photo list");
+  }
+  const albumStickyActionsIndex = albumSource.indexOf('class="album-actions album-sticky-actions"');
+  const albumToolbarFilterIndex = albumSource.indexOf(
+    'class="album-filter-panel album-toolbar-filter-panel"'
+  );
+  if (
+    albumStickyActionsIndex < 0 ||
+    albumToolbarFilterIndex < albumStickyActionsIndex ||
+    !albumSource.includes(".album-toolbar-filter-panel") ||
+    !albumToolbarFilterPanelStyle.includes("border-top:") ||
+    !albumToolbarFilterPanelStyle.includes("background: transparent")
+  ) {
+    fail("Album filters must be attached to the fixed top toolbar while scrolling");
   }
   const downloadPhotosSource = methodBody(albumSource, "downloadPhotos");
   const confirmDownloadPhotosSource = methodBody(albumSource, "confirmDownloadPhotos");
@@ -1404,11 +1526,41 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
   }
   const albumOnLoadSource = methodBody(albumSource, "onLoad");
+  const albumOnShowSource = methodBody(albumSource, "onShow");
+  const previewPhotoSource = methodBody(albumSource, "previewPhoto");
   assertBefore(
     albumOnLoadSource,
     "if (this.timelineMode)",
     "ensureLoggedIn",
     "Album timeline mode must load public album before any login prompt"
+  );
+  for (const requiredAlbumPreviewLifecycleText of [
+    "skipNextAlbumRefreshOnShow",
+    "consumePreviewReturnRefreshSkip",
+    "this.skipNextAlbumRefreshOnShow = true",
+    "this.skipNextAlbumRefreshOnShow = false"
+  ]) {
+    if (!albumSource.includes(requiredAlbumPreviewLifecycleText)) {
+      fail(`Album photo preview must not refresh the whole album after closing: ${requiredAlbumPreviewLifecycleText}`);
+    }
+  }
+  assertBefore(
+    albumOnShowSource,
+    "consumePreviewReturnRefreshSkip",
+    "loadAlbum",
+    "Album onShow must consume photo-preview return before refreshing the member album"
+  );
+  assertBefore(
+    albumOnShowSource,
+    "consumePreviewReturnRefreshSkip",
+    "loadPublicAlbum",
+    "Album onShow must consume photo-preview return before refreshing the public album"
+  );
+  assertBefore(
+    previewPhotoSource,
+    "this.skipNextAlbumRefreshOnShow = true",
+    "uni.previewImage",
+    "Album preview must mark the next onShow before opening the system image viewer"
   );
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
   if (
@@ -1417,6 +1569,29 @@ if (!fs.existsSync(pagesJsonPath)) {
     !albumShareAppMessageSource.includes("source=wechat_share")
   ) {
     fail("Album friend/group sharing must route to the album-entry share page");
+  }
+  if (
+    albumShareAppMessageSource.includes('"车局相册"') ||
+    albumShareAppMessageSource.includes("'车局相册'")
+  ) {
+    fail("Album friend/group sharing title must include script and store names, not generic 车局相册");
+  }
+  if (!albumShareAppMessageSource.includes("imageUrl:")) {
+    fail("Album friend/group sharing must set a privacy-safe imageUrl instead of using the live page screenshot");
+  }
+  const albumShareTitleSource = methodBody(albumSource, "albumShareTitle");
+  if (
+    !albumShareTitleSource.includes("albumShareSessionTitle") ||
+    !albumShareTitleSource.includes("相册邀请")
+  ) {
+    fail("Album friend/group sharing title must include script and store names with 相册邀请");
+  }
+  const albumShareSessionTitleSource = methodBody(albumSource, "albumShareSessionTitle");
+  if (
+    !albumShareSessionTitleSource.includes("albumScriptName") ||
+    !albumShareSessionTitleSource.includes("albumStoreName")
+  ) {
+    fail("Album sharing session title must be built from script and store names");
   }
   const albumShareTimelineSource = methodBody(albumSource, "onShareTimeline");
   if (!albumShareTimelineSource.includes("query:") || albumShareTimelineSource.includes("path:")) {
@@ -1433,8 +1608,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Album share token prefetch must clear share subject when the current user cannot create a seat-scoped token");
   }
   for (const requiredAlbumReadOnlyText of [
-    'v-if="!timelineMode" class="actions album-actions"',
-    'v-if="!timelineMode" class="filter-row"',
+    'v-if="!timelineMode && (canUpload || photos.length || taggablePhotos.length)"',
+    'class="album-filter-panel album-toolbar-filter-panel"',
     'v-if="!timelineMode && selectionMode"',
     'v-if="!timelineMode && tagSheetPhoto"'
   ]) {
@@ -1568,7 +1743,10 @@ if (!fs.existsSync(pagesJsonPath)) {
     const rootStart = source.match(/<template>\s*<view\b[^>]*class="[^"]*\bpage\b[^"]*"[^>]*>/);
     if (rootStart) {
       const afterRoot = source.slice(rootStart.index + rootStart[0].length);
-      if (!/^\s*<AuthIdentityBar\b/.test(afterRoot)) {
+      const authIsFirstRootChild = /^\s*<AuthIdentityBar\b/.test(afterRoot);
+      const authIsFirstScrollContentChild =
+        /^\s*<scroll-view\b[^>]*>\s*<view\b[^>]*>\s*<AuthIdentityBar\b/.test(afterRoot);
+      if (!authIsFirstRootChild && !authIsFirstScrollContentChild) {
         fail(`Auth identity bar must be the first page element: ${pagePath}`);
       }
     } else if (rootViewMatch) {

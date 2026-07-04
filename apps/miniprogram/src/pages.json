@@ -69,7 +69,7 @@
     {
       "path": "pages/session/album",
       "style": {
-        "navigationBarTitleText": "车局相册"
+        "navigationBarTitleText": "相册"
       }
     },
     {
