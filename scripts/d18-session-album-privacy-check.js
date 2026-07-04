@@ -57,7 +57,9 @@ for (const token of [
   "Only session members can view the session album",
   "listMyAlbumSessions",
   'filters.scope === "album"',
-  "album_membership_role"
+  "album_membership_role",
+  "hasOnlyAlbumMemberPublicTags",
+  "isAlbumMemberPublicTag"
 ]) {
   assert(service.includes(token), `service must include ${token}`);
 }
@@ -72,6 +74,10 @@ assert(
 assert(
   !/isAlbumPhotoVisibleToUser[\s\S]{0,600}isAdmin/.test(service),
   "album photo visibility must not grant system_admin bypass"
+);
+assert(
+  /isAlbumPhotoVisibleToUser[\s\S]{0,900}hasOnlyAlbumMemberPublicTags\(tags,\s*privacyByUser\)/.test(service),
+  "album member visibility must allow member-public special tags"
 );
 const albumPeopleSource = service.slice(
   service.indexOf("async function sessionAlbumPeople"),
@@ -228,6 +234,43 @@ for (const token of [
 ]) {
   assert(albumPage.includes(token), `album page must include ${token}`);
 }
+for (const token of [
+  "albumSession",
+  "albumDisplayTitle",
+  "currentAlbumRoleName",
+  "albumRoleNameFromMineTags",
+  "applyAlbumSessionFallback",
+  "applyAlbumNavigationTitle",
+  "setNavigationBarTitle",
+  "script_name_snapshot"
+]) {
+  assert(albumPage.includes(token), `album title must use role and script metadata: ${token}`);
+}
+assert(
+  /albumDisplayTitle\(\)[\s\S]{0,500}\[\$\{this\.currentAlbumRoleName\}·\$\{this\.albumScriptName\}\] 相册/.test(albumPage),
+  "album page title must render as '[<role>·<script>] 相册'"
+);
+assert(
+  /currentAlbumRoleName\(\)[\s\S]{0,900}this\.albumRoleNameFromMineTags\(\)/.test(albumPage),
+  "album title must fall back to the current uploader's tagged role when the user is not bound to a seat"
+);
+assert(
+  /albumRoleNameFromMineTags\(\)[\s\S]{0,1600}photo\.is_mine[\s\S]{0,1600}tag\.tag_type === "seat"/.test(albumPage),
+  "album title fallback must infer role names from the current user's own seat-tagged photos"
+);
+assert(
+  /loadSessionPeopleFallback\(\)[\s\S]{0,600}this\.applyAlbumSessionFallback\(session\)/.test(albumPage),
+  "album page must fall back to session detail metadata when album API lacks script name"
+);
+assert(
+  /applyAlbumSessionFallback\(session\)[\s\S]{0,900}this\.albumScriptName[\s\S]{0,900}this\.albumSessionSummary\(session\)/.test(albumPage),
+  "album page session fallback must populate missing script metadata without overwriting loaded album metadata"
+);
+assert(
+  /export async function listSessionAlbum[\s\S]*?^}/m.test(service) &&
+    /export async function listSessionAlbum[\s\S]*?script_name_snapshot:\s*session\.script_name_snapshot[\s\S]*?^}/m.test(service),
+  "album API must expose session script name for the member album title"
+);
 
 for (const token of [
   "SESSION_ALBUM_THUMBNAIL_RULE",
@@ -245,7 +288,7 @@ for (const token of [
   "相册分享隐私设置",
   "允许我上传的照片出现在分享展示里",
   "允许包含我的照片出现在分享展示里",
-  "完整相册只展示你上传或标注了你的照片",
+  "完整相册会展示你上传、标注了你或标为 NPC/其他的照片",
   "车头也不能越权查看原图",
   "allowUploadedVisible",
   "allowTaggedVisible"
@@ -267,8 +310,13 @@ for (const token of [
   "tagged player should see photo containing them",
   "other confirmed seat should not see another role's tagged photo",
   "other confirmed seat should stay blocked when tagged player blocks visibility",
-  "other-tagged photo should not be visible to unrelated same-session members",
-  "npc-only photo should not be visible to unrelated same-session members",
+  "other-tagged photo should be visible to unrelated same-session members",
+  "other-tagged same-session member should open media",
+  "npc-only photo should be visible to unrelated same-session members",
+  "npc-only same-session member should open media",
+  "legacy NPC-only photo should be visible to unrelated same-session members",
+  "bound NPC role privacy should hide npc-only photo from unrelated same-session members",
+  "unbound legacy NPC-only photo should stay visible to unrelated same-session members",
   "bound NPC role user should see their NPC-only photo",
   "admin must not bypass tagged player privacy",
   "future.session.id"

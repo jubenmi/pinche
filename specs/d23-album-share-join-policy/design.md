@@ -269,9 +269,9 @@ joinPolicy: this.joinPolicy
 
 ```js
 return {
-  title: `${this.sessionTitle}｜相册邀请`,
+  title: `${this.scriptName}｜${this.storeName}｜相册邀请`,
   path: `/pages/session/share?id=${this.sessionId}&entry=album&shareCode=${shareCode}&source=wechat_share`,
-  imageUrl: this.shareImage
+  imageUrl: this.shareImage // 固定安全封面，不使用当前相册页截图
 }
 ```
 

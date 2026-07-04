@@ -100,6 +100,17 @@
           批量删除
         </button>
       </div>
+      <div v-if="tab === 'sessions' && selectedSessionCount > 0" class="bulk-actions">
+        <span>已选 {{ selectedSessionCount }} 个车局</span>
+        <button
+          type="button"
+          class="danger"
+          :disabled="operationPending"
+          @click="batchForceDeleteSessions"
+        >
+          批量强制删除
+        </button>
+      </div>
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
@@ -143,6 +154,15 @@
             <th>操作</th>
           </tr>
           <tr v-else>
+            <th class="selection-cell">
+              <input
+                type="checkbox"
+                :checked="allVisibleSelected"
+                :disabled="operationPending || visibleSelectableItems.length === 0"
+                aria-label="选择全部车局"
+                @change="toggleSelectAllVisible"
+              />
+            </th>
             <th>ID</th>
             <th>剧本</th>
             <th>店家</th>
@@ -205,6 +225,15 @@
               </td>
             </template>
             <template v-else>
+              <td class="selection-cell">
+                <input
+                  type="checkbox"
+                  :checked="isItemSelected(item)"
+                  :disabled="operationPending"
+                  :aria-label="`选择车局${item.id}`"
+                  @change="setItemSelected(item, $event.target.checked)"
+                />
+              </td>
               <td>#{{ item.id }}</td>
               <td>
                 <div class="cell-title">{{ item.script_name_snapshot || "未命名车局" }}</div>
@@ -259,7 +288,7 @@
             </td>
           </tr>
           <tr v-if="items.length === 0">
-            <td class="empty-cell" :colspan="tab === 'sessions' ? 8 : 7">
+            <td class="empty-cell" :colspan="tab === 'sessions' ? 9 : 7">
               {{ tab === "sessions" ? "没有匹配的车局" : "没有匹配的数据" }}
             </td>
           </tr>
@@ -334,12 +363,15 @@ const selectedItemIds = ref([]);
 const keywordPlaceholder = ref(tabPlaceholder(tab.value));
 const operationPending = computed(() => Boolean(pendingOperation.value));
 const operationText = computed(() => pendingOperationText.value || "正在处理，请稍候...");
-const visibleSelectableItems = computed(() => (tab.value === "sessions" ? [] : items.value));
+const visibleSelectableItems = computed(() => items.value);
 const selectedIdSet = computed(() => new Set(selectedItemIds.value));
 const selectedItems = computed(() =>
   visibleSelectableItems.value.filter((item) => selectedIdSet.value.has(String(item.id)))
 );
 const selectedCount = computed(() => selectedItems.value.length);
+const selectedSessionCount = computed(() =>
+  tab.value === "sessions" ? selectedItems.value.length : 0
+);
 const allVisibleSelected = computed(
   () =>
     visibleSelectableItems.value.length > 0 &&
@@ -715,6 +747,42 @@ async function batchDeleteSelected() {
     error.value = err.message;
   } finally {
     endOperation("batchDelete");
+  }
+}
+
+async function batchForceDeleteSessions() {
+  if (operationPending.value || tab.value !== "sessions") {
+    return;
+  }
+  const rows = [...selectedItems.value];
+  if (rows.length === 0) {
+    return;
+  }
+  if (
+    !window.confirm(
+      `确认批量强制删除${rows.length}个车局？这会删除车局、座位、报名、聊天、记录和相册记录等数据库关联数据。`
+    )
+  ) {
+    return;
+  }
+  if (!beginOperation("batchForceDeleteSessions", "正在批量强制删除车局...")) {
+    return;
+  }
+  error.value = "";
+  try {
+    for (const item of rows) {
+      try {
+        await deleteAdminSession(item.id);
+      } catch (err) {
+        const sessionName = item.script_name_snapshot || `#${item.id}`;
+        throw new Error(`${sessionName}删除失败：${err.message}`);
+      }
+    }
+    await loadItems();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    endOperation("batchForceDeleteSessions");
   }
 }
 

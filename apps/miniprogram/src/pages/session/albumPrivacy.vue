@@ -4,7 +4,7 @@
 
     <view class="section">
       <view class="title">相册分享隐私设置</view>
-      <view class="text">完整相册只展示与你相关的照片；这里控制分享展示里的可见性。</view>
+      <view class="text">完整相册会展示与你相关的照片，以及 NPC、其他/风景/主线外照片；这里控制分享展示里的可见性。</view>
       <view v-if="statusText" class="notice">{{ statusText }}</view>
     </view>
 
@@ -36,7 +36,7 @@
 
     <view class="section rule-section">
       <view class="section-title">这套规则怎么生效</view>
-      <view class="rule-row">完整相册只展示你上传或标注了你的照片</view>
+      <view class="rule-row">完整相册会展示你上传、标注了你或标为 NPC/其他的照片</view>
       <view class="rule-row">分享展示会继续尊重这两项设置</view>
       <view class="rule-row">车头也不能越权查看原图</view>
       <view class="rule-note">能看到的照片可以保存；看不到的照片不会出现。</view>
