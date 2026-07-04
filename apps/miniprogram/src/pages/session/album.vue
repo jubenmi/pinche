@@ -378,6 +378,44 @@
       </view>
     </view>
 
+    <view
+      v-if="previewOverlayVisible"
+      class="photo-preview-mask"
+      @touchstart="handlePreviewTouchStart"
+      @touchmove="handlePreviewTouchMove"
+      @touchend="handlePreviewTouchEnd"
+      @tap.stop
+    >
+      <swiper
+        class="photo-preview-swiper"
+        :current="previewSwiperIndex"
+        :duration="220"
+        @change="handlePreviewSwiperChange"
+      >
+        <swiper-item
+          v-for="photo in previewPhotos"
+          :key="photo.id"
+          class="photo-preview-slide"
+        >
+          <view class="photo-preview-content">
+            <image
+              v-if="photoPreviewImageUrl(photo)"
+              class="photo-preview-image"
+              :src="photoPreviewImageUrl(photo)"
+              mode="aspectFit"
+            />
+            <view v-else class="photo-preview-loading">
+              <view class="photo-loading-dot"></view>
+            </view>
+          </view>
+        </swiper-item>
+      </swiper>
+      <view class="photo-preview-topbar">
+        <view class="photo-preview-counter">{{ previewCounterText }}</view>
+        <view class="photo-preview-close" @tap.stop="closePhotoPreview">×</view>
+      </view>
+    </view>
+
     <view v-if="!timelineMode && tagSheetPhoto" class="tag-mask" @tap="closeTagSheet">
       <view class="tag-sheet" @tap.stop>
         <view class="sheet-bar"></view>
@@ -504,6 +542,13 @@ export default {
       selectionModePurpose: "tag",
       selectedPhotoIds: [],
       bulkTagging: false,
+      previewOverlayVisible: false,
+      previewPhotos: [],
+      previewCurrentIndex: 0,
+      previewSwiperIndex: 0,
+      previewPreloadRadius: 2,
+      previewTouchStartX: 0,
+      previewTouchStartY: 0,
       filters: [
         { value: "all", label: "我的照片" },
         { value: "mine", label: "我上传的" },
@@ -661,6 +706,15 @@ export default {
         return this.selectedTaggablePhotoIds.length;
       }
       return this.tagSheetPhoto ? 1 : 0;
+    },
+    previewCurrentPhoto() {
+      return this.previewPhotos[this.previewCurrentIndex] || null;
+    },
+    previewCounterText() {
+      if (!this.previewPhotos.length) {
+        return "";
+      }
+      return `${this.previewPhotos.length - this.previewCurrentIndex}/${this.previewPhotos.length}`;
     },
     albumBusy() {
       return (
@@ -1647,63 +1701,77 @@ export default {
         }
       });
     },
-    async preparePhotoPreviewUrls(photos) {
-      const previewEntries = [];
-      for (const photo of photos || []) {
-        if (!photo || !this.mediaUrlForPhoto(photo)) {
-          continue;
-        }
-        let previewUrl = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
-        if (!previewUrl) {
-          try {
-            previewUrl = await this.loadVisiblePhotoMedia(photo, "preview");
-            if (previewUrl) {
-              this.updatePhotoDisplayUrl(photo.id, previewUrl);
-            }
-          } catch (error) {
-            previewUrl = "";
-          }
-        }
-        if (previewUrl) {
-          previewEntries.push({
-            photoId: photo.id,
-            url: previewUrl
-          });
-        }
-      }
-      return previewEntries;
-    },
-    async previewPhoto(photo) {
+    previewPhoto(photo) {
       if (this.deletingPhotoId) {
         return;
       }
+      this.openPhotoPreview(photo);
+    },
+    openPhotoPreview(photo) {
       const previewPhotos = [...this.filteredPhotos].reverse();
       if (!previewPhotos.some((item) => String(item.id) === String(photo.id))) {
         previewPhotos.unshift(photo);
       }
-      let previewEntries = [];
-      uni.showLoading({ title: "加载中" });
-      try {
-        previewEntries = await this.preparePhotoPreviewUrls(previewPhotos);
-      } finally {
-        uni.hideLoading();
-      }
-      const currentEntry = previewEntries.find(
-        (entry) => String(entry.photoId) === String(photo.id)
+      const currentIndex = Math.max(
+        0,
+        previewPhotos.findIndex((item) => String(item.id) === String(photo.id))
       );
-      if (!currentEntry) {
-        uni.showToast({ title: "照片加载失败", icon: "none" });
+      this.previewPhotos = previewPhotos;
+      this.previewCurrentIndex = currentIndex;
+      this.previewSwiperIndex = currentIndex;
+      this.previewOverlayVisible = true;
+      this.hydratePreviewWindow(currentIndex);
+    },
+    closePhotoPreview() {
+      this.previewOverlayVisible = false;
+      this.previewPhotos = [];
+      this.previewCurrentIndex = 0;
+      this.previewSwiperIndex = 0;
+      this.previewTouchStartX = 0;
+      this.previewTouchStartY = 0;
+      this.skipNextAlbumRefreshOnShow = false;
+    },
+    photoPreviewImageUrl(photo) {
+      if (!photo) {
+        return "";
+      }
+      return this.visiblePhotoMedia[photo.id]?.preview || photo.display_url || "";
+    },
+    hydratePreviewWindow(centerIndex) {
+      const start = Math.max(0, centerIndex - this.previewPreloadRadius);
+      const end = Math.min(this.previewPhotos.length, centerIndex + this.previewPreloadRadius + 1);
+      this.previewPhotos.slice(start, end).forEach((photo) => {
+        if (!photo || !this.mediaUrlForPhoto(photo) || this.photoPreviewImageUrl(photo)) {
+          return;
+        }
+        this.loadVisiblePhotoMedia(photo, "preview");
+      });
+    },
+    handlePreviewSwiperChange(event) {
+      const nextIndex = Number(event?.detail?.current || 0);
+      this.previewCurrentIndex = nextIndex;
+      this.previewSwiperIndex = nextIndex;
+      this.hydratePreviewWindow(nextIndex);
+    },
+    handlePreviewTouchStart(event) {
+      const touch = event?.touches?.[0];
+      if (!touch) {
         return;
       }
-      const previewUrls = previewEntries.map((entry) => entry.url);
-      this.skipNextAlbumRefreshOnShow = true;
-      uni.previewImage({
-        urls: previewUrls,
-        current: currentEntry.url,
-        fail: () => {
-          this.skipNextAlbumRefreshOnShow = false;
-        }
-      });
+      this.previewTouchStartX = Number(touch.clientX || 0);
+      this.previewTouchStartY = Number(touch.clientY || 0);
+    },
+    handlePreviewTouchMove() {},
+    handlePreviewTouchEnd(event) {
+      const touch = event?.changedTouches?.[0];
+      if (!touch) {
+        return;
+      }
+      const deltaX = Number(touch.clientX || 0) - this.previewTouchStartX;
+      const deltaY = Number(touch.clientY || 0) - this.previewTouchStartY;
+      if (deltaY > 90 && deltaY > Math.abs(deltaX) * 1.2) {
+        this.closePhotoPreview();
+      }
     },
     async downloadSinglePhoto(photo) {
       await this.downloadPhotos([photo], {
@@ -2616,6 +2684,78 @@ export default {
   font-size: 25rpx;
   line-height: 1.2;
   text-align: center;
+}
+
+.photo-preview-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  overflow: hidden;
+  background: #050505;
+}
+
+.photo-preview-swiper {
+  width: 100%;
+  height: 100vh;
+}
+
+.photo-preview-slide,
+.photo-preview-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.photo-preview-image {
+  width: 100%;
+  height: 100%;
+}
+
+.photo-preview-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: #050505;
+}
+
+.photo-preview-topbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28rpx 28rpx 0;
+  padding-top: calc(28rpx + env(safe-area-inset-top));
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.photo-preview-counter,
+.photo-preview-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 80rpx;
+  height: 58rpx;
+  border-radius: 999rpx;
+  background: rgba(0, 0, 0, 0.38);
+  color: #ffffff;
+  font-size: 24rpx;
+  line-height: 1;
+}
+
+.photo-preview-close {
+  width: 58rpx;
+  min-width: 58rpx;
+  font-size: 42rpx;
+  pointer-events: auto;
 }
 
 .tag-mask {
