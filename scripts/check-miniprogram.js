@@ -505,6 +505,36 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!fs.existsSync(sessionCalendarPath)) {
     fail("D22 must extract the shared session calendar component: components/SessionCalendar.vue");
   }
+  const sessionCalendarSource = fs.existsSync(sessionCalendarPath)
+    ? fs.readFileSync(sessionCalendarPath, "utf8")
+    : "";
+  if (
+    !sessionCalendarSource.includes('v-if="item.canManage"') ||
+    !sessionCalendarSource.includes('@tap.stop="goManage(item.sessionId)"') ||
+    !sessionCalendarSource.includes(">管理</button>")
+  ) {
+    fail("Session calendar cards must expose a direct management button when the user can manage the session");
+  }
+  if (!sessionCalendarSource.includes("item.canManage = item.isOrganized")) {
+    fail("Session calendar management button must only appear for sessions the user organizes");
+  }
+  for (const requiredCalendarStripeText of [
+    ':class="item.stripeTone"',
+    "calendarStripeTone",
+    ".session-stripe.amber",
+    ".session-stripe.green",
+    ".session-stripe.red",
+    "return \"green\"",
+    "return \"amber\"",
+    "return \"red\""
+  ]) {
+    if (!sessionCalendarSource.includes(requiredCalendarStripeText)) {
+      fail(`Session calendar stripe must use traffic-light session status colors: ${requiredCalendarStripeText}`);
+    }
+  }
+  if (sessionCalendarSource.includes(".session-row.joined .session-stripe")) {
+    fail("Session calendar stripe must represent car state, not joined/organized identity");
+  }
   if (!mineSource.includes("SessionCalendar")) {
     fail("Mine page must reuse the shared SessionCalendar component");
   }
@@ -574,17 +604,31 @@ if (!fs.existsSync(pagesJsonPath)) {
   const shareSource = fs.existsSync(firstFlowFiles["share step"])
     ? fs.readFileSync(firstFlowFiles["share step"], "utf8")
     : "";
-  for (const requiredShareText of ["角色状态", "可选", "我选", "已选", "确认选择", "换选"]) {
+  const sharedRoleSeatBoardSourceForShare = fs.existsSync(
+    path.join(srcRoot, "components/RoleSeatBoard.vue")
+  )
+    ? fs.readFileSync(path.join(srcRoot, "components/RoleSeatBoard.vue"), "utf8")
+    : "";
+  for (const requiredShareText of ["角色状态", "可选", "我选", "已选", "换选"]) {
     if (!shareSource.includes(requiredShareText)) {
       fail(`Share page must let invited players inspect and choose open roles: ${requiredShareText}`);
     }
+  }
+  if (shareSource.includes('class="button role-action"') || shareSource.includes("role-action")) {
+    fail("Share page must not render a separate confirm role button; tapping a role card should act directly");
+  }
+  if (shareSource.includes(">确认选择<") || shareSource.includes('"确认选择"')) {
+    fail("Share page must not show legacy confirm selection copy");
   }
   for (const requiredSwitchingText of [
     "switchingCount",
     'stateKind === "switching"',
     ".role-choice.switching"
   ]) {
-    if (!shareSource.includes(requiredSwitchingText)) {
+    const switchingSource = requiredSwitchingText.startsWith(".role-choice")
+      ? sharedRoleSeatBoardSourceForShare
+      : shareSource;
+    if (!switchingSource.includes(requiredSwitchingText)) {
       fail(`Share page must distinguish switching roles from current roles: ${requiredSwitchingText}`);
     }
   }
@@ -670,7 +714,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Share page must let invited users browse before login");
   }
   if (!/async confirmRole\(\)\s*\{[\s\S]*ensureSeatSelectionLogin\s*\(/.test(shareSource)) {
-    fail("Share page must require login before confirming a role selection");
+    fail("Share page must require login before applying a role selection");
   }
   const shareChooseRoleSource = methodBody(shareSource, "chooseRole");
   const shareConfirmRoleSource = methodBody(shareSource, "confirmRole");
@@ -708,27 +752,30 @@ if (!fs.existsSync(pagesJsonPath)) {
     shareConfirmRoleSource,
     "ensureSeatSelectionLogin",
     "claimSeat",
-    "Share confirm button must request login before claiming a role"
+    "Share role application must request login before claiming a role"
   );
   assertBefore(
     shareConfirmRoleSource,
     "ensureSeatSelectionLogin",
     "this.role = this.pendingRole",
-    "Share confirm button must request login before updating local role state"
+    "Share role application must request login before updating local role state"
   );
-  if (!shareConfirmRoleSource.includes("requirePhone: true")) {
-    fail("Share confirm button must require phone before claiming a role");
+  if (!shareConfirmRoleSource.includes("requirePhone: this.joinRequiresPhone")) {
+    fail("Share role application must use the session phone setting before claiming a role");
   }
   assertBefore(
     shareConfirmRoleSource,
-    "requirePhone: true",
+    "requirePhone: this.joinRequiresPhone",
     "claimSeat",
-    "Share confirm button must require phone before claiming a role"
+    "Share role application must apply the session phone setting before claiming a role"
   );
   if (
-    !/async chooseRole\(role\)\s*\{[\s\S]*this\.pendingRole[\s\S]*isSameRole\(role,\s*this\.pendingRole\)[\s\S]*await this\.confirmRole\(\);[\s\S]*return;[\s\S]*confirmCrossCastRole/.test(shareSource)
+    !/async chooseRole\(role\)\s*\{[\s\S]*ensureSeatSelectionLogin[\s\S]*confirmCrossCastRole[\s\S]*this\.pendingRole = role[\s\S]*await this\.confirmRole\(\);/.test(shareSource)
   ) {
-    fail("Share role selection should confirm when tapping the pending role again");
+    fail("Share role selection should apply immediately after tapping a role card");
+  }
+  if (!shareSource.includes("confirmSwitchRole")) {
+    fail("Share role selection must keep a confirmation dialog before switching away from the current role");
   }
   for (const forbiddenShareActionText of [
     "分享到群",
@@ -793,7 +840,6 @@ if (!fs.existsSync(pagesJsonPath)) {
   for (const requiredSetupText of [
     'mode="date"',
     'mode="time"',
-    "extraNpcRolesPlaceholder",
     "pinnedMessageText",
     "defaultPinnedMessage",
     "createPublishedSession",
@@ -805,16 +851,54 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`Setup step must collect and persist start time plus pinned chat info: ${requiredSetupText}`);
     }
   }
+  for (const forbiddenSetupExtraNpcText of [
+    "本场额外NPC",
+    "extraNpcRolesPlaceholder",
+    "extraNpcRolesText",
+    "extraNpcRoles:"
+  ]) {
+    if (setupSource.includes(forbiddenSetupExtraNpcText)) {
+      fail(`Setup step must not expose per-session extra NPC creation yet: ${forbiddenSetupExtraNpcText}`);
+    }
+  }
   for (const requiredJoinPolicyText of [
     "joinPolicy",
     "review_required",
     "direct",
     "setJoinPolicy",
-    "需要车头审核",
-    "可直接上车"
+    "上车审核",
+    "需要审核",
+    "直接上车"
   ]) {
     if (!setupSource.includes(requiredJoinPolicyText)) {
       fail(`Setup step must expose D23 join policy control: ${requiredJoinPolicyText}`);
+    }
+  }
+  for (const requiredSetupSettingsSwitchText of [
+    "setting-switch-row",
+    "setting-switch-meta",
+    "<switch",
+    'color="#1f7a68"',
+    ':checked="joinPolicy === \'review_required\'"',
+    '@change="setJoinPolicy($event.detail.value ? \'review_required\' : \'direct\')"',
+    ':checked="joinPhoneRequired"',
+    "@change=\"setJoinPhoneRequired($event.detail.value)\"",
+    ':checked="npcJoinEnabled"',
+    "@change=\"setNpcJoinEnabled($event.detail.value)\""
+  ]) {
+    if (!setupSource.includes(requiredSetupSettingsSwitchText)) {
+      fail(`Setup step settings must use unified native switches: ${requiredSetupSettingsSwitchText}`);
+    }
+  }
+  for (const forbiddenSetupSettingsToggleText of [
+    "policy-toggle",
+    "policy-option",
+    "npc-join-toggle",
+    "toggleJoinPhoneRequired",
+    "toggleNpcJoinEnabled"
+  ]) {
+    if (setupSource.includes(forbiddenSetupSettingsToggleText)) {
+      fail(`Setup step settings must not keep legacy button toggles: ${forbiddenSetupSettingsToggleText}`);
     }
   }
   if (/placeholder="[^"]*(?:&#10;|\n)[^"]*"/.test(setupSource)) {
@@ -873,6 +957,72 @@ if (!fs.existsSync(pagesJsonPath)) {
   const detailSource = fs.existsSync(path.join(srcRoot, "pages/session/detail.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/session/detail.vue"), "utf8")
     : "";
+  const roleSeatBoardPath = path.join(srcRoot, "components/RoleSeatBoard.vue");
+  const roleSeatBoardSource = fs.existsSync(roleSeatBoardPath)
+    ? fs.readFileSync(roleSeatBoardPath, "utf8")
+    : "";
+  if (!fs.existsSync(roleSeatBoardPath)) {
+    fail("Seat and role displays must share components/RoleSeatBoard.vue");
+  }
+  for (const requiredRoleSeatBoardText of [
+    "role-board",
+    "role-choice",
+    "role-choice-top",
+    "role-choice-name",
+    "role-choice-title",
+    "role-state",
+    "role-choice-note",
+    "role-actions",
+    "role-meta",
+    "role-meta-line",
+    "mine",
+    "switching",
+    "pending",
+    "taken",
+    "unavailable",
+    "male",
+    "female"
+  ]) {
+    if (!roleSeatBoardSource.includes(requiredRoleSeatBoardText)) {
+      fail(`Shared role seat board must render the approved visual system: ${requiredRoleSeatBoardText}`);
+    }
+  }
+  for (const requiredRoleSeatBoardOverflowText of [
+    ".role-choice-title",
+    "overflow: hidden",
+    "text-overflow: ellipsis",
+    "white-space: nowrap"
+  ]) {
+    if (!roleSeatBoardSource.includes(requiredRoleSeatBoardOverflowText)) {
+      fail(`Shared role seat board must truncate overflowing names: ${requiredRoleSeatBoardOverflowText}`);
+    }
+  }
+  for (const [pageLabel, pagePath] of Object.entries({
+    "role page": path.join(srcRoot, "pages/session/role.vue"),
+    "share page": path.join(srcRoot, "pages/session/share.vue"),
+    "detail page": path.join(srcRoot, "pages/session/detail.vue"),
+    "manage page": path.join(srcRoot, "pages/session/manage.vue"),
+    "album page": path.join(srcRoot, "pages/session/album.vue")
+  })) {
+    const pageSource = fs.existsSync(pagePath) ? fs.readFileSync(pagePath, "utf8") : "";
+    if (!pageSource.includes("RoleSeatBoard") || !pageSource.includes("<RoleSeatBoard")) {
+      fail(`${pageLabel} must use the shared RoleSeatBoard component`);
+    }
+  }
+  if (detailSource.includes('class="seat-card"')) {
+    fail("Detail page role and seat list must use RoleSeatBoard instead of legacy seat-card layout");
+  }
+  for (const requiredDetailNpcRoleSeatText of [
+    ':sections="detailRoleSeatSections"',
+    "detailNpcRoleCards",
+    "session.session_npc_roles",
+    'key: "npc"',
+    'title: "NPC角色"'
+  ]) {
+    if (!detailSource.includes(requiredDetailNpcRoleSeatText)) {
+      fail(`Detail page role and seat board must include NPC role section: ${requiredDetailNpcRoleSeatText}`);
+    }
+  }
   for (const requiredDetailExtensionText of [
     "sessionDetailExtensions",
     "sessionDetailExtensionRefs",
@@ -912,6 +1062,79 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!/ensureManageActionLogin/.test(manageSource)) {
     fail("Manage action buttons must guard login before requests or confirmation dialogs");
   }
+  for (const requiredManageOverviewText of [
+    "车局总览",
+    "overview-card",
+    "overview-actions",
+    "overview-pinned",
+    ':embedded="true"',
+    "车局详情"
+  ]) {
+    if (!manageSource.includes(requiredManageOverviewText)) {
+      fail(`Manage page must integrate top actions, status, and pinned message into one overview block: ${requiredManageOverviewText}`);
+    }
+  }
+  if (/section-title">\s*车况/.test(manageSource)) {
+    fail("Manage page must not keep a separate 车况 section after overview consolidation");
+  }
+  if (manageSource.includes('class="seat-card"')) {
+    fail("Manage page seat status list must use RoleSeatBoard instead of legacy seat-card layout");
+  }
+  for (const requiredManageNpcRoleSeatText of [
+    ':sections="manageRoleSeatSections"',
+    "manageNpcRoleCards",
+    "session.session_npc_roles",
+    'key: "npc"',
+    'title: "NPC角色"',
+    "releaseNpcRole"
+  ]) {
+    if (!manageSource.includes(requiredManageNpcRoleSeatText)) {
+      fail(`Manage page seat status board must include NPC role section and actions: ${requiredManageNpcRoleSeatText}`);
+    }
+  }
+  if (manageSource.includes('class="signup-card"') || manageSource.includes("seat-header")) {
+    fail("Manage page signup target cards must use RoleSeatBoard instead of legacy signup-card layout");
+  }
+  for (const requiredManageSettingsSwitchText of [
+    "setting-switch-row",
+    "setting-switch-meta",
+    "<switch",
+    'color="#1f7a68"',
+    ':checked="joinPolicy === \'review_required\'"',
+    '@change="setJoinPolicy($event.detail.value ? \'review_required\' : \'direct\')"',
+    ':checked="joinPhoneRequired"',
+    "@change=\"setJoinPhoneRequired($event.detail.value)\"",
+    ':checked="npcJoinEnabled"',
+    "@change=\"setNpcJoinEnabled($event.detail.value)\""
+  ]) {
+    if (!manageSource.includes(requiredManageSettingsSwitchText)) {
+      fail(`Manage page settings must use unified native switches: ${requiredManageSettingsSwitchText}`);
+    }
+  }
+  for (const forbiddenManageSettingsToggleText of [
+    "settings-toggle",
+    "setting-option",
+    "setting-toggle",
+    "toggleJoinPhoneRequired",
+    "toggleNpcJoinEnabled"
+  ]) {
+    if (manageSource.includes(forbiddenManageSettingsToggleText)) {
+      fail(`Manage page settings must not keep legacy button toggles: ${forbiddenManageSettingsToggleText}`);
+    }
+  }
+  const pinnedManagerSource = fs.existsSync(path.join(root, "packages/talk/miniprogram/ManagePinnedMessage.vue"))
+    ? fs.readFileSync(path.join(root, "packages/talk/miniprogram/ManagePinnedMessage.vue"), "utf8")
+    : "";
+  for (const requiredPinnedManagerText of [
+    "embedded",
+    "pinned-manager",
+    ".pinned-manager.embedded",
+    "保存置顶"
+  ]) {
+    if (!pinnedManagerSource.includes(requiredPinnedManagerText)) {
+      fail(`Pinned-message manager must support embedded overview rendering: ${requiredPinnedManagerText}`);
+    }
+  }
   const manageButtonChecks = [
     ["reload", "loadSession", "Manage refresh button must request login before loading data"],
     ["goDetail", "uni.navigateTo", "Manage detail button must request login before navigating"],
@@ -939,6 +1162,28 @@ if (!fs.existsSync(pagesJsonPath)) {
   const albumSource = fs.existsSync(path.join(srcRoot, "pages/session/album.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/session/album.vue"), "utf8")
     : "";
+  for (const requiredAlbumRoleSeatBoardText of [
+    "albumTagSections",
+    "albumTagSection",
+    "albumTagCard",
+    "handleAlbumTagTap",
+    'role_gender: seat.role_gender || "unlimited"',
+    '<RoleSeatBoard'
+  ]) {
+    if (!albumSource.includes(requiredAlbumRoleSeatBoardText)) {
+      fail(`Album tag role picker must use RoleSeatBoard: ${requiredAlbumRoleSeatBoardText}`);
+    }
+  }
+  for (const forbiddenAlbumTagCardText of [
+    "people-grid",
+    "person-choice",
+    "person-note",
+    "group-title"
+  ]) {
+    if (albumSource.includes(forbiddenAlbumTagCardText)) {
+      fail(`Album tag role picker must not keep legacy person card styles: ${forbiddenAlbumTagCardText}`);
+    }
+  }
   for (const requiredAlbumBusyText of [
     "albumBusy",
     "loadingAlbum",
@@ -960,6 +1205,33 @@ if (!fs.existsSync(pagesJsonPath)) {
   const changeWaterfallListSource = methodBody(albumSource, "changeWaterfallList");
   if (changeWaterfallListSource.includes("this[event.name].push")) {
     fail("Album waterfall callback must not push into uv-waterfall internal list names directly");
+  }
+  const uvWaterfallSource = fs.existsSync(
+    path.join(srcRoot, "uni_modules/uv-ui-tools/components/uv-waterfall/uv-waterfall.vue")
+  )
+    ? fs.readFileSync(
+        path.join(srcRoot, "uni_modules/uv-ui-tools/components/uv-waterfall/uv-waterfall.vue"),
+        "utf8"
+      )
+    : "";
+  for (const requiredWaterfallWidthText of [
+    ".photo-waterfall",
+    "display: flex",
+    "width: 100%",
+    "max-width: 100%",
+    "overflow-x: hidden",
+    ".waterfall-column",
+    ".waterfall-photo-card",
+    "box-sizing: border-box",
+    "flex: 1 1 0",
+    "min-width: 0"
+  ]) {
+    if (!albumSource.includes(requiredWaterfallWidthText) && !uvWaterfallSource.includes(requiredWaterfallWidthText)) {
+      fail(`Album waterfall must clamp columns after operation reflow: ${requiredWaterfallWidthText}`);
+    }
+  }
+  if (/\.photo-waterfall\s*\{[^}]*display:\s*block;/.test(albumSource)) {
+    fail("Album waterfall root must not override uv-waterfall flex layout with display:block");
   }
   for (const requiredWaterfallCallbackText of [
     "targetListName",
@@ -989,17 +1261,136 @@ if (!fs.existsSync(pagesJsonPath)) {
     "data: { tagKeys: this.selectedTagKeys }",
     "tagPersonTitle",
     "tagPersonSubtitle",
-    'v-if="tagPersonSubtitle(person)"',
+    "note: this.tagPersonSubtitle(person)",
     "account_name: accountName"
   ]) {
     if (!albumSource.includes(requiredAlbumBulkTagText)) {
       fail(`Album page must support bulk tagging: ${requiredAlbumBulkTagText}`);
     }
   }
+  for (const requiredAlbumAdminParityText of [
+    "albumFilterOptions",
+    "countAlbumPhotosForFilter",
+    "selectedRoleFilter",
+    "albumRoleFilterOptions",
+    "handleRoleFilterChange",
+    "photoMatchesSelectedRole",
+    "roleFilterOptionLabel",
+    "album-metrics",
+    "metric-value",
+    "{{ filteredPhotos.length }}",
+    "{{ filteredTaggedPhotoCount }}",
+    "{{ filteredUntaggedPhotoCount }}",
+    "当前筛选",
+    "已标注",
+    "待标注",
+    "标注 {{ filteredTagProgressPercent }}%",
+    "photoDetailText",
+    "formatDate(photo.created_at)",
+    "按标注角色筛选"
+  ]) {
+    if (!albumSource.includes(requiredAlbumAdminParityText)) {
+      fail(`Album page must match admin album filter and info affordances: ${requiredAlbumAdminParityText}`);
+    }
+  }
+  for (const outdatedAlbumCardText of [
+    "photo-info-grid",
+    "photo-info-item",
+    "photo-info-label",
+    "photo-info-value",
+    "photo-action-rail",
+    "photo-caption-facts",
+    "photo-caption-meta"
+  ]) {
+    if (albumSource.includes(outdatedAlbumCardText)) {
+      fail(`Album photo cards must not use the bulky Info Ledger footer layout: ${outdatedAlbumCardText}`);
+    }
+  }
+  for (const requiredAlbumCardCaptionText of [
+    "photo-caption-body",
+    "photo-caption-title",
+    "photo-actions-row",
+    "photo-status-slot",
+    "photo-safe-actions",
+    "photo-action-text",
+    "photo-danger-action",
+    "showPhotoInfo(photo)",
+    '@longpress.stop="showPhotoInfo(photo)"',
+    "图片信息",
+    "上传者",
+    "时间",
+    "尺寸",
+    "photoActionDateText(photo)"
+  ]) {
+    if (!albumSource.includes(requiredAlbumCardCaptionText)) {
+      fail(`Album photo cards must use the compact caption footer layout: ${requiredAlbumCardCaptionText}`);
+    }
+  }
+  assertBefore(
+    albumSource,
+    'class="photo-safe-actions"',
+    'class="photo-action-text danger photo-danger-action"',
+    "Album download and delete actions must be separated into safe and danger zones"
+  );
+  assertBefore(
+    albumSource,
+    'class="role-filter-row"',
+    'class="filter-row"',
+    "Album role filter must appear before album filter chips so it stays visible after the compact header"
+  );
+  for (const requiredAlbumDownloadText of [
+    "downloading",
+    "downloadProgressText",
+    "downloadSinglePhoto",
+    "downloadSelectedPhotos",
+    "downloadAllPhotos",
+    "confirmDownloadPhotos",
+    "openDownloadSelectionMode",
+    "saveImageToPhotosAlbum",
+    "scope.writePhotosAlbum",
+    "ensurePhotosAlbumPermission",
+    "saveAlbumImageToPhotosAlbum",
+    "全部下载",
+    "多选下载",
+    "下载所选",
+    "下载照片",
+    "this.downloading = true",
+    "this.downloadProgressText = `正在保存 ${index + 1}/${photos.length} 张照片...`"
+  ]) {
+    if (!albumSource.includes(requiredAlbumDownloadText)) {
+      fail(`Album page must support single, selected and all-photo downloads: ${requiredAlbumDownloadText}`);
+    }
+  }
+  const downloadPhotosSource = methodBody(albumSource, "downloadPhotos");
+  const confirmDownloadPhotosSource = methodBody(albumSource, "confirmDownloadPhotos");
+  if (!downloadPhotosSource.includes("await this.confirmDownloadPhotos")) {
+    fail("Album downloads must ask for confirmation before saving photos");
+  }
+  assertBefore(
+    downloadPhotosSource,
+    "await this.confirmDownloadPhotos",
+    "this.downloading = true",
+    "Album download confirmation must happen before entering downloading state"
+  );
+  for (const requiredDownloadConfirmText of [
+    "uni.showModal",
+    "确认下载",
+    "confirmText: \"下载\"",
+    "resolve(Boolean(result.confirm))",
+    "将保存这张照片到系统相册",
+    "将保存所选",
+    "将保存我的相册中"
+  ]) {
+    if (!confirmDownloadPhotosSource.includes(requiredDownloadConfirmText) && !albumSource.includes(requiredDownloadConfirmText)) {
+      fail(`Album downloads must confirm every download entry point: ${requiredDownloadConfirmText}`);
+    }
+  }
   for (const requiredAlbumShareText of [
     "timelineMode",
     "albumShareToken",
     "loadPublicAlbum",
+    "localAlbumShareSubject",
+    "canRequestAlbumShareToken",
     "/album/public-share",
     "/album/share-token",
     "entry=album",
@@ -1031,8 +1422,18 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!albumShareTimelineSource.includes("query:") || albumShareTimelineSource.includes("path:")) {
     fail("Album Moments sharing must return query only");
   }
+  const ensureAlbumShareTokenSource = methodBody(albumSource, "ensureAlbumShareToken");
+  assertBefore(
+    ensureAlbumShareTokenSource,
+    "canRequestAlbumShareToken",
+    "/album/share-token",
+    "Album share token prefetch must check for a confirmed local seat before requesting the token endpoint"
+  );
+  if (!ensureAlbumShareTokenSource.includes("this.shareSubject = null")) {
+    fail("Album share token prefetch must clear share subject when the current user cannot create a seat-scoped token");
+  }
   for (const requiredAlbumReadOnlyText of [
-    'v-if="!timelineMode" class="actions"',
+    'v-if="!timelineMode" class="actions album-actions"',
     'v-if="!timelineMode" class="filter-row"',
     'v-if="!timelineMode && selectionMode"',
     'v-if="!timelineMode && tagSheetPhoto"'

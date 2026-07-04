@@ -24,11 +24,10 @@ for (const token of [
   "isCalendarItemPostStart",
   "albumFirst",
   "album-first-row",
-  "albumCtaText",
+  "albumCtaNote",
   "handleCalendarCardTap",
   "calendarPostStartText",
   "goAlbum",
-  "上传照片",
   "已发车 · 相册开放"
 ]) {
   assert(calendar.includes(token), `mini-program mine calendar must include ${token}`);
@@ -36,6 +35,12 @@ for (const token of [
 assert(
   !calendar.includes("calendarPrimaryActionLabel") && !calendar.includes("calendarSecondaryActionLabel"),
   "mini-program mine calendar must not reintroduce separate lifecycle action buttons"
+);
+assert(
+  !calendar.includes("album-cta-button") &&
+    !calendar.includes("calendarAlbumCtaText") &&
+    !calendar.includes("回看相册"),
+  "mini-program mine calendar must not render a duplicate album review button because the card itself opens album"
 );
 
 const detail = read("apps/miniprogram/src/pages/session/detail.vue");

@@ -253,10 +253,17 @@
 	@import '../../libs/css/components.scss';
 	.uv-waterfall {
 		@include flex(row);
+		width: 100%;
+		max-width: 100%;
+		overflow-x: hidden;
+		box-sizing: border-box;
 		align-items: flex-start;
 		&__column {
 			@include flex(column);
-			flex: 1;
+			flex: 1 1 0;
+			min-width: 0;
+			max-width: 100%;
+			box-sizing: border-box;
 			// #ifndef APP-NVUE
 			height: auto;
 			// #endif

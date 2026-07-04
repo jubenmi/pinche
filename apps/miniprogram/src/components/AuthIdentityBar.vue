@@ -21,7 +21,60 @@
           <text class="auth-name-text">{{ displayName }}</text>
         </view>
       </view>
-      <view v-if="rolesText" class="auth-roles">{{ rolesText }}</view>
+      <view class="auth-side">
+        <view v-if="rolesText" class="auth-roles">{{ rolesText }}</view>
+        <button
+          v-if="messageBadgeText"
+          class="auth-message-chip"
+          hover-class="auth-message-chip-hover"
+          @tap.stop="toggleMessagePanel"
+        >
+          <text>消息</text>
+          <text class="auth-message-count">{{ messageBadgeText }}</text>
+        </button>
+      </view>
+    </view>
+
+    <view v-if="messagePanelVisible" class="message-panel" @tap.stop>
+      <view class="message-panel-head">
+        <view>
+          <view class="message-panel-title">待处理申请</view>
+          <view class="message-panel-subtitle">{{ messagePanelSummary }}</view>
+        </view>
+        <view class="message-panel-actions">
+          <button
+            class="message-panel-tool"
+            :class="{ disabled: messagesLoading }"
+            :disabled="messagesLoading"
+            @tap.stop="refreshOrganizerMessages"
+          >
+            刷新
+          </button>
+          <button class="message-panel-tool" @tap.stop="closeMessagePanel">收起</button>
+        </view>
+      </view>
+
+      <view v-if="messagesLoading" class="message-empty">正在同步消息...</view>
+      <view v-else-if="messagesError" class="message-empty error">{{ messagesError }}</view>
+      <view v-else-if="organizerMessages.length === 0" class="message-empty">暂无待处理申请。</view>
+      <block v-else>
+        <button
+          v-for="message in organizerMessages"
+          :key="message.key"
+          class="message-item"
+          hover-class="message-item-hover"
+          @tap.stop="goManageFromMessage(message)"
+        >
+          <view class="message-copy">
+            <view class="message-title-row">
+              <text class="message-title">{{ message.title }}</text>
+              <text class="message-count">{{ message.count }}待审</text>
+            </view>
+            <text class="message-subtitle">{{ message.subtitle }}</text>
+          </view>
+          <text class="message-action">{{ message.actionText }}</text>
+        </button>
+      </block>
     </view>
 
     <view v-if="profileVisible" class="profile-mask" @tap="handleProfileBackdropTap">
@@ -175,8 +228,14 @@ import {
   updateUserPhoneFromWechatPhoneCode,
   updateUserGender,
   updateUserProfile,
+  dataOf,
+  request,
   userGenderLabel
 } from "../utils/api";
+import {
+  buildOrganizerSignupMessages,
+  totalOrganizerSignupMessageCount
+} from "../utils/authMessages";
 
 const DEFAULT_AVATARS = {
   male: {
@@ -244,6 +303,10 @@ export default {
       draftAvatarTempPath: "",
       avatarChoosing: false,
       avatarChooseTimer: null,
+      organizerMessages: [],
+      messagesLoading: false,
+      messagesError: "",
+      messagePanelVisible: false,
       phoneVisible: false,
       phoneRequired: false,
       phoneRequestId: "",
@@ -349,6 +412,27 @@ export default {
     },
     phoneButtonText() {
       return this.savingPhone ? "授权中..." : "授权手机号";
+    },
+    organizerMessageCount() {
+      return totalOrganizerSignupMessageCount(this.organizerMessages);
+    },
+    messageBadgeText() {
+      if (!this.user || this.organizerMessageCount < 1) {
+        return "";
+      }
+      return this.organizerMessageCount > 99 ? "99+" : String(this.organizerMessageCount);
+    },
+    messagePanelSummary() {
+      if (this.messagesLoading) {
+        return "正在同步车头消息";
+      }
+      if (this.messagesError) {
+        return "稍后可以再试一次";
+      }
+      if (this.organizerMessageCount < 1) {
+        return "没有新的上车申请";
+      }
+      return `${this.organizerMessages.length}辆车，${this.organizerMessageCount}个待审核`;
     }
   },
   created() {
@@ -391,6 +475,56 @@ export default {
       }
       this.openProfileModal(false);
     },
+    clearOrganizerMessages() {
+      this.organizerMessages = [];
+      this.messagesError = "";
+      this.messagesLoading = false;
+      this.messagePanelVisible = false;
+    },
+    async refreshOrganizerMessages() {
+      if (!this.user || !getToken()) {
+        this.clearOrganizerMessages();
+        return;
+      }
+      if (this.messagesLoading) {
+        return;
+      }
+
+      this.messagesLoading = true;
+      this.messagesError = "";
+      try {
+        const response = await request({ url: "/api/users/me/sessions?limit=50" });
+        this.organizerMessages = buildOrganizerSignupMessages(dataOf(response) || []);
+        if (this.organizerMessages.length === 0) {
+          this.messagePanelVisible = false;
+        }
+      } catch (error) {
+        if (error?.statusCode === 401) {
+          clearAuth();
+          this.refreshIdentity();
+          return;
+        }
+        this.messagesError = "消息加载失败，请稍后重试。";
+      } finally {
+        this.messagesLoading = false;
+      }
+    },
+    toggleMessagePanel() {
+      if (!this.user) {
+        return;
+      }
+      this.messagePanelVisible = !this.messagePanelVisible;
+    },
+    closeMessagePanel() {
+      this.messagePanelVisible = false;
+    },
+    goManageFromMessage(message) {
+      if (!message?.sessionId) {
+        return;
+      }
+      this.messagePanelVisible = false;
+      uni.navigateTo({ url: `/pages/session/manage?id=${message.sessionId}` });
+    },
     clearAvatarChoosing() {
       this.avatarChoosing = false;
       if (this.avatarChooseTimer) {
@@ -402,6 +536,11 @@ export default {
       const auth = getCurrentUser();
       this.user = auth.user || null;
       this.roles = auth.roles || [];
+      if (this.user && getToken()) {
+        this.refreshOrganizerMessages();
+      } else {
+        this.clearOrganizerMessages();
+      }
       if (!this.profileVisible && !this.phoneVisible) {
         this.syncProfileDrafts();
       }
@@ -462,6 +601,7 @@ export default {
       }
 
       this.profileRequired = Boolean(required);
+      this.messagePanelVisible = false;
       this.profileVisible = true;
       this.syncProfileDrafts();
     },
@@ -674,6 +814,7 @@ export default {
       clearAuth();
       this.user = null;
       this.roles = [];
+      this.clearOrganizerMessages();
       this.profileVisible = false;
       this.profileRequired = false;
       this.profileRequestId = "";
@@ -762,6 +903,7 @@ export default {
 
 .auth-main {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 12rpx;
   min-width: 0;
@@ -801,15 +943,206 @@ export default {
   white-space: nowrap;
 }
 
+.auth-side {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8rpx;
+  max-width: 52%;
+  min-width: 0;
+}
+
 .auth-roles {
   overflow: hidden;
-  flex-shrink: 0;
-  max-width: 38%;
+  flex: 0 1 auto;
+  min-width: 0;
   color: #8d7b55;
   font-size: 21rpx;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.auth-message-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6rpx;
+  height: 36rpx;
+  min-width: 82rpx;
+  margin: 0;
+  padding: 0 12rpx;
+  border: 1rpx solid rgba(31, 111, 91, 0.22);
+  border-radius: 18rpx;
+  background: #e9f4ef;
+  color: #1f6f5b;
+  font-size: 20rpx;
+  font-weight: 700;
+  line-height: 34rpx;
+}
+
+.auth-message-chip::after,
+.message-panel-tool::after,
+.message-item::after {
+  border: 0;
+}
+
+.auth-message-chip-hover,
+.message-item-hover {
+  opacity: 0.82;
+}
+
+.auth-message-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28rpx;
+  height: 28rpx;
+  padding: 0 6rpx;
+  box-sizing: border-box;
+  border-radius: 14rpx;
+  background: #c94d3f;
+  color: #ffffff;
+  font-size: 18rpx;
+  line-height: 28rpx;
+}
+
+.message-panel {
+  position: absolute;
+  top: 66rpx;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 22rpx;
+  box-sizing: border-box;
+  border: 1rpx solid #ded8ca;
+  border-radius: 12rpx;
+  background: #fffef9;
+  box-shadow: 0 18rpx 48rpx rgba(23, 41, 35, 0.16);
+}
+
+.message-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.message-panel-title {
+  color: #143d34;
+  font-size: 27rpx;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.message-panel-subtitle {
+  margin-top: 6rpx;
+  color: #6f7b73;
+  font-size: 22rpx;
+  line-height: 1.35;
+}
+
+.message-panel-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10rpx;
+}
+
+.message-panel-tool {
+  width: 72rpx;
+  height: 44rpx;
+  margin: 0;
+  padding: 0;
+  border: 1rpx solid #e5dece;
+  border-radius: 8rpx;
+  background: #ffffff;
+  color: #526159;
+  font-size: 22rpx;
+  font-weight: 600;
+  line-height: 42rpx;
+}
+
+.message-panel-tool.disabled {
+  color: #9aa39d;
+}
+
+.message-empty {
+  margin-top: 18rpx;
+  padding: 18rpx 0 4rpx;
+  color: #6f7b73;
+  font-size: 23rpx;
+  line-height: 1.4;
+}
+
+.message-empty.error {
+  color: #a4473d;
+}
+
+.message-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  width: 100%;
+  min-height: 92rpx;
+  margin: 18rpx 0 0;
+  padding: 16rpx 0;
+  border-top: 1rpx solid #eee8da;
+  border-radius: 0;
+  background: transparent;
+  color: #183d34;
+  text-align: left;
+}
+
+.message-copy {
+  min-width: 0;
+}
+
+.message-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  min-width: 0;
+}
+
+.message-title {
+  overflow: hidden;
+  min-width: 0;
+  color: #183d34;
+  font-size: 25rpx;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-count {
+  flex: 0 0 auto;
+  color: #c94d3f;
+  font-size: 21rpx;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.message-subtitle {
+  display: block;
+  overflow: hidden;
+  margin-top: 6rpx;
+  color: #6f7b73;
+  font-size: 22rpx;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-action {
+  flex: 0 0 auto;
+  color: #1f6f5b;
+  font-size: 23rpx;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .profile-mask {

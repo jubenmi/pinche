@@ -409,7 +409,7 @@ onShareTimeline(() => ({
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  padding-top: 72rpx;
+  padding-top: 16rpx;
   padding-bottom: 72rpx;
 }
 

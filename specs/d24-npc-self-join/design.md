@@ -275,6 +275,8 @@ if join_result = pending_review:
 
 审核按钮复用现有 approve/reject 接口。通过 NPC 申请后刷新报名列表和车局 NPC 角色状态。
 
+小程序车头管理页的 NPC 角色卡与玩家座位保持同一管理语义：未绑定且无待审申请的 active NPC 角色显示 `关闭角色`，inactive NPC 角色显示 `开放角色`，已绑定工作人员的 NPC 角色显示 `移除成员`。
+
 网页小程序创建车局时也提供 `npcJoinEnabled` 开关，默认开启，并在 `createUserSession` 中提交。
 
 ## Error Handling

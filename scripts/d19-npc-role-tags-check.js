@@ -93,7 +93,10 @@ for (const token of [
   "extraNpcRoles",
   "本场额外NPC"
 ]) {
-  assert(miniSetup.includes(token), `mini-program setup must include ${token}`);
+  assert(
+    !miniSetup.includes(token),
+    `mini-program setup must not expose per-session extra NPC creation yet: ${token}`
+  );
 }
 
 const miniAlbum = read("apps/miniprogram/src/pages/session/album.vue");

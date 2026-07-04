@@ -888,7 +888,7 @@ assert(
 );
 assert(
   sessionAlbumWorkspace.includes("当前筛选 {{ filteredPhotos.length }} 张") &&
-    sessionAlbumWorkspace.includes("全部可见 {{ visiblePhotoCount }} 张") &&
+    sessionAlbumWorkspace.includes("我的照片 {{ visiblePhotoCount }} 张") &&
     sessionAlbumWorkspace.includes("筛选已标注 {{ filteredTaggedPhotoCount }} 张") &&
     sessionAlbumWorkspace.includes("筛选待标注 {{ filteredUntaggedPhotoCount }} 张") &&
     sessionAlbumWorkspace.includes("width: `${filteredTagProgressPercent}%`"),

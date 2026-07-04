@@ -172,23 +172,28 @@ const checks = [
     test: (source) => source.includes("isCrossCast")
   },
   {
-    label: "role page shows role gender symbols",
-    file: "apps/miniprogram/src/pages/session/role.vue",
-    test: (source) => source.includes("roleGenderSymbol")
-  },
-  {
-    label: "role pages tint male and female role cards",
-    file: "apps/miniprogram/src/pages/session/role.vue",
+    label: "shared role board shows role gender symbols",
+    file: "apps/miniprogram/src/components/RoleSeatBoard.vue",
     test: (source) =>
-      source.includes("roleGenderClass") &&
-      source.includes(".role-tile.male") &&
-      source.includes(".role-tile.female")
+      source.includes("roleGenderSymbol") &&
+      source.includes("role-gender-symbol")
   },
   {
-    label: "role page selected state preserves gender tint with yellow ring",
-    file: "apps/miniprogram/src/pages/session/role.vue",
+    label: "shared role board tints male and female role cards",
+    file: "apps/miniprogram/src/components/RoleSeatBoard.vue",
+    test: (source) =>
+      source.includes("roleToneClass") &&
+      source.includes(".role-choice.male") &&
+      source.includes(".role-choice.female")
+  },
+  {
+    label: "shared role board selected state preserves gender tint with yellow ring",
+    file: "apps/miniprogram/src/components/RoleSeatBoard.vue",
     test: (source) => {
-      const block = cssBlock(source, ".role-tile.selected");
+      const block = cssBlock(
+        source,
+        ".role-choice.pending,\n.role-choice.mine,\n.role-choice.switching,\n.role-choice.selected,\n.role-choice.focused"
+      );
       return (
         hasYellowSelectionRing(block) &&
         !block.includes("border-color:") &&
@@ -206,11 +211,16 @@ const checks = [
   {
     label: "role page refreshes selected cross-cast after gender update",
     file: "apps/miniprogram/src/pages/session/role.vue",
-    test: (source) =>
-      source.includes("AUTH_CHANGE_EVENT") &&
-      source.includes("refreshCurrentUserGender") &&
-      source.includes("isSelectedCrossCast") &&
-      source.includes("cross-cast-tag")
+    test: (source) => {
+      const boardSource = read("apps/miniprogram/src/components/RoleSeatBoard.vue");
+      return (
+        source.includes("AUTH_CHANGE_EVENT") &&
+        source.includes("refreshCurrentUserGender") &&
+        source.includes("isSelectedCrossCast") &&
+        source.includes("<RoleSeatBoard") &&
+        boardSource.includes("cross-cast-tag")
+      );
+    }
   },
   {
     label: "setup sends roleGender when creating seats",
@@ -223,20 +233,21 @@ const checks = [
     test: (source) => source.includes("反串") && source.includes("isCrossCast")
   },
   {
-    label: "share page tints male and female role cards",
+    label: "share page uses shared role board for gender-tinted role cards",
     file: "apps/miniprogram/src/pages/session/share.vue",
     test: (source) =>
-      source.includes("roleGenderClass") &&
-      source.includes(".role-choice.male") &&
-      source.includes(".role-choice.female")
+      source.includes("<RoleSeatBoard") &&
+      source.includes("roleSeatSections") &&
+      read("apps/miniprogram/src/components/RoleSeatBoard.vue").includes(".role-choice.male") &&
+      read("apps/miniprogram/src/components/RoleSeatBoard.vue").includes(".role-choice.female")
   },
   {
-    label: "share page selected states preserve gender tint with yellow ring",
-    file: "apps/miniprogram/src/pages/session/share.vue",
+    label: "shared role board selected states preserve gender tint with yellow ring",
+    file: "apps/miniprogram/src/components/RoleSeatBoard.vue",
     test: (source) => {
       const sharedStateBlock = cssBlock(
         source,
-        ".role-choice.pending,\n.role-choice.mine,\n.role-choice.switching"
+        ".role-choice.pending,\n.role-choice.mine,\n.role-choice.switching,\n.role-choice.selected,\n.role-choice.focused"
       );
       return (
         hasYellowSelectionRing(sharedStateBlock) &&

@@ -35,35 +35,50 @@
     <view class="section">
       <view class="section-title">上车权限</view>
       <view class="section-note">分享到群后，未上车玩家选择角色时使用此规则。</view>
-      <view class="policy-toggle">
-        <button
-          class="policy-option"
-          :class="{ active: joinPolicy === 'review_required' }"
-          @click="setJoinPolicy('review_required')"
-        >
-          需要车头审核
-        </button>
-        <button
-          class="policy-option"
-          :class="{ active: joinPolicy === 'direct' }"
-          @click="setJoinPolicy('direct')"
-        >
-          可直接上车
-        </button>
+      <view class="setting-switch-row">
+        <view class="setting-switch-copy">
+          <view class="setting-switch-title">上车审核</view>
+          <view class="section-note">开启后，玩家和NPC申请需要车头通过；关闭后可直接上车。</view>
+        </view>
+        <view class="setting-switch-meta">
+          <view class="setting-switch-label">
+            {{ joinPolicy === "review_required" ? "需要审核" : "直接上车" }}
+          </view>
+          <switch
+            color="#1f7a68"
+            :checked="joinPolicy === 'review_required'"
+            @change="setJoinPolicy($event.detail.value ? 'review_required' : 'direct')"
+          />
+        </view>
       </view>
-    </view>
-
-    <view class="section">
-      <view class="section-title">本场额外NPC</view>
-      <view class="section-note">店家本场额外设计的NPC角色，每行一个；剧本固定NPC会自动带入。</view>
-      <textarea
-        v-model="extraNpcRolesText"
-        class="textarea"
-        maxlength="300"
-        :placeholder="extraNpcRolesPlaceholder"
-        placeholder-class="placeholder"
-        @blur="persistDraft"
-      />
+      <view class="setting-switch-row">
+        <view class="setting-switch-copy">
+          <view class="setting-switch-title">上车必须留电话</view>
+          <view class="section-note">关闭后，玩家和NPC仍需登录，但可不授权手机号也能上车或提交申请</view>
+        </view>
+        <view class="setting-switch-meta">
+          <view class="setting-switch-label">{{ joinPhoneRequired ? "已开启" : "已关闭" }}</view>
+          <switch
+            color="#1f7a68"
+            :checked="joinPhoneRequired"
+            @change="setJoinPhoneRequired($event.detail.value)"
+          />
+        </view>
+      </view>
+      <view class="setting-switch-row">
+        <view class="setting-switch-copy">
+          <view class="setting-switch-title">允许NPC工作人员自选角色</view>
+          <view class="section-note">关闭后由车头手动安排NPC角色</view>
+        </view>
+        <view class="setting-switch-meta">
+          <view class="setting-switch-label">{{ npcJoinEnabled ? "已开启" : "已关闭" }}</view>
+          <switch
+            color="#1f7a68"
+            :checked="npcJoinEnabled"
+            @change="setNpcJoinEnabled($event.detail.value)"
+          />
+        </view>
+      </view>
     </view>
 
     <view class="section">
@@ -141,10 +156,10 @@ export default {
       dateValue: defaults.date,
       timeValue: defaults.time,
       today: dateText(new Date()),
-      extraNpcRolesPlaceholder: "例如：媒人\n少年将军",
-      extraNpcRolesText: "",
       pinnedMessageText: "",
       joinPolicy: "review_required",
+      joinPhoneRequired: true,
+      npcJoinEnabled: true,
       statusText: "",
       busyAction: false
     };
@@ -185,9 +200,11 @@ export default {
     this.role = flow.role || null;
     this.roleOptions = roleOptionsFromFlow(flow);
     this.selectedRoles = selectedRolesFromFlow(flow);
-    this.extraNpcRolesText = flow.extraNpcRolesText || "";
     this.pinnedMessageText = flow.pinnedMessageText || "";
     this.joinPolicy = flow.joinPolicy === "direct" ? "direct" : "review_required";
+    this.joinPhoneRequired =
+      flow.joinPhoneRequired === undefined ? true : Boolean(flow.joinPhoneRequired);
+    this.npcJoinEnabled = flow.npcJoinEnabled === undefined ? true : Boolean(flow.npcJoinEnabled);
     if (flow.startAt) {
       this.dateValue = String(flow.startAt).slice(0, 10) || this.dateValue;
       this.timeValue = String(flow.startAt).slice(11, 16) || this.timeValue;
@@ -209,21 +226,23 @@ export default {
       this.joinPolicy = value === "direct" ? "direct" : "review_required";
       this.persistDraft();
     },
+    setJoinPhoneRequired(value) {
+      this.joinPhoneRequired = Boolean(value);
+      this.persistDraft();
+    },
+    setNpcJoinEnabled(value) {
+      this.npcJoinEnabled = Boolean(value);
+      this.persistDraft();
+    },
     persistDraft() {
       writeCreateFlow({
         startAt: this.startAt,
         startText: this.startText,
-        extraNpcRolesText: this.extraNpcRolesText.trim(),
         pinnedMessageText: this.pinnedMessageText.trim(),
-        joinPolicy: this.joinPolicy
+        joinPolicy: this.joinPolicy,
+        joinPhoneRequired: this.joinPhoneRequired,
+        npcJoinEnabled: this.npcJoinEnabled
       });
-    },
-    extraNpcRoles() {
-      return this.extraNpcRolesText
-        .split(/\r?\n|[，,]/)
-        .map((name) => name.trim())
-        .filter(Boolean)
-        .map((name) => ({ name }));
     },
     seatPayload(role) {
       return {
@@ -265,7 +284,8 @@ export default {
             startAt: this.startAt,
             depositAmount: 0,
             joinPolicy: this.joinPolicy,
-            extraNpcRoles: this.extraNpcRoles(),
+            joinPhoneRequired: this.joinPhoneRequired,
+            npcJoinEnabled: this.npcJoinEnabled,
             note: "剧本迷·拼车，一起沉浸好本。",
             pinnedMessageText
           }
@@ -308,12 +328,13 @@ export default {
           role: this.role,
           roleOptions: roles,
           selectedRoles: this.selectedRoles,
-          extraNpcRolesText: this.extraNpcRolesText.trim(),
           sessionId: session.id,
           startAt: this.startAt,
           startText: this.startText,
           pinnedMessageText,
           joinPolicy: this.joinPolicy,
+          joinPhoneRequired: this.joinPhoneRequired,
+          npcJoinEnabled: this.npcJoinEnabled,
           note: "剧本迷·拼车，一起沉浸好本。"
         });
         uni.redirectTo({ url: `/pages/session/share?id=${session.id}` });
@@ -392,26 +413,49 @@ export default {
   font-weight: 600;
 }
 
-.policy-toggle {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16rpx;
+.setting-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding: 22rpx 0;
+  border-top: 1rpx solid rgba(222, 216, 202, 0.72);
 }
 
-.policy-option {
-  height: 86rpx;
-  border: 1rpx solid #ded8ca;
-  border-radius: 12rpx;
-  background: #fffefb;
-  color: #50625c;
+.section-note + .setting-switch-row {
+  margin-top: 12rpx;
+}
+
+.setting-switch-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.setting-switch-title {
+  margin-bottom: 6rpx;
+  color: #153f34;
   font-size: 26rpx;
   font-weight: 600;
 }
 
-.policy-option.active {
-  border-color: #1f7a68;
-  background: #edf7f2;
+.setting-switch-row .section-note {
+  margin-bottom: 0;
+}
+
+.setting-switch-meta {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.setting-switch-label {
+  min-width: 88rpx;
   color: #153f34;
+  font-size: 24rpx;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: right;
 }
 
 .textarea {
