@@ -134,6 +134,23 @@ function normalizeJoinPolicy(value) {
   return policy;
 }
 
+function normalizeJoinPhoneRequired(value) {
+  if (value === undefined || value === null || value === "") {
+    return true;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "required", "enabled"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "optional", "disabled"].includes(normalized)) {
+    return false;
+  }
+  throw badRequest("joinPhoneRequired must be true or false");
+}
+
 function nonNegativeIntValue(value, label) {
   const parsed = intValue(value, 0);
   if (parsed < 0) {
@@ -274,6 +291,12 @@ function assertPayable(basePrice, adjustment) {
 function requireVerifiedPhone(user) {
   if (!user?.user?.phoneVerifiedAt) {
     throw phoneRequired();
+  }
+}
+
+function requireJoinPhoneIfNeeded(user, sessionLike) {
+  if (Number(sessionLike.join_phone_required ?? 1) === 1) {
+    requireVerifiedPhone(user);
   }
 }
 
@@ -1867,9 +1890,10 @@ export async function createSession(user, body) {
           (
             organizer_user_id, script_id, script_name_snapshot, store_id,
             store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
-            npc_user_id, npc_name_snapshot, deposit_amount, visibility, join_policy, note
+            npc_user_id, npc_name_snapshot, deposit_amount, visibility,
+            join_policy, join_phone_required, note
           )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         user.user.id,
@@ -1885,6 +1909,7 @@ export async function createSession(user, body) {
         intValue(body.depositAmount, 0),
         body.visibility || "share_only",
         normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+        normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
         optionalText(body.note)
       ]
     );
@@ -1923,6 +1948,7 @@ export async function getSession(id) {
     return {
       ...publicSession,
       join_policy: publicSession.join_policy || "review_required",
+      join_phone_required: Boolean(Number(publicSession.join_phone_required ?? 1)),
       active_album_photo_count: activeAlbumPhotoCount,
       photo_count: activeAlbumPhotoCount,
       seats,
@@ -2386,7 +2412,13 @@ export async function updateSession(user, id, body) {
       joinPolicy:
         body.joinPolicy === undefined && body.join_policy === undefined
           ? undefined
-          : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy)
+          : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+      joinPhoneRequired:
+        body.joinPhoneRequired === undefined && body.join_phone_required === undefined
+          ? undefined
+          : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required)
+            ? 1
+            : 0
     };
     return updateAllowed(connection, "sessions", id, normalized, [
       ["startAt", "start_at"],
@@ -2397,6 +2429,7 @@ export async function updateSession(user, id, body) {
       ["depositAmount", "deposit_amount"],
       ["visibility", "visibility"],
       ["joinPolicy", "join_policy"],
+      ["joinPhoneRequired", "join_phone_required"],
       ["note", "note"],
       ["status", "status"]
     ]);
@@ -2680,6 +2713,7 @@ export async function createSignup(user, body) {
       `
         SELECT
           seat.*,
+          session.join_phone_required,
           session.status AS session_status,
           (session.start_at <= CURRENT_TIMESTAMP) AS session_started
         FROM session_seats seat
@@ -2705,6 +2739,7 @@ export async function createSignup(user, body) {
     if (["confirmed", "locked", "cancelled"].includes(seat.status)) {
       throw conflict("Seat is not open for signup");
     }
+    requireJoinPhoneIfNeeded(user, seat);
 
     const contactText = optionalText(body.contactText);
     const note = optionalText(body.note);
@@ -2780,8 +2815,6 @@ function forbidPlayerDirectClaim(user, seat) {
 }
 
 export async function claimSessionSeat(user, seatId, body = {}) {
-  requireVerifiedPhone(user);
-
   return withTransaction(async (connection) => {
     const [seatRefs] = await connection.query(
       "SELECT session_id FROM session_seats WHERE id = ?",
@@ -2800,6 +2833,7 @@ export async function claimSessionSeat(user, seatId, body = {}) {
           seat.*,
           session.organizer_user_id,
           session.join_policy,
+          session.join_phone_required,
           session.status AS session_status,
           (session.start_at <= CURRENT_TIMESTAMP) AS session_started
         FROM session_seats seat
@@ -2813,6 +2847,7 @@ export async function claimSessionSeat(user, seatId, body = {}) {
       throw notFound("Seat not found");
     }
     forbidPlayerDirectClaim(user, seat);
+    requireJoinPhoneIfNeeded(user, seat);
     const canClaimStartedOpenSeat =
       seat.session_status === "locked" &&
       Number(seat.session_started || 0) === 1 &&

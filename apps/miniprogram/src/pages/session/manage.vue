@@ -35,6 +35,38 @@
       </view>
     </view>
 
+    <view v-if="session.id" class="section">
+      <view class="section-head">
+        <view>
+          <view class="section-title">车局设置</view>
+          <view class="section-note">车头可以随时调整后续上车规则。</view>
+        </view>
+        <button
+          class="mini-button"
+          :class="{ disabled: busyAction || !settingsDirty }"
+          :disabled="busyAction || !settingsDirty"
+          @click="updateSessionSettings"
+        >
+          {{ settingsDirty ? "保存" : "已保存" }}
+        </button>
+      </view>
+      <view class="setting-switch-row">
+        <view class="setting-switch-copy">
+          <view class="setting-title">上车必须留电话</view>
+          <view class="section-note">关闭后，玩家可以不授权手机号也能上车或申请。</view>
+        </view>
+        <view class="setting-switch-meta">
+          <view class="setting-switch-label">{{ joinPhoneRequired ? "已开启" : "已关闭" }}</view>
+          <switch
+            color="#1f7a68"
+            :checked="joinPhoneRequired"
+            :disabled="busyAction"
+            @change="setJoinPhoneRequired($event.detail.value)"
+          />
+        </view>
+      </view>
+    </view>
+
     <ManagePinnedMessage
       v-for="extension in sessionManageExtensions"
       :key="extension.id"
@@ -137,6 +169,16 @@ import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
 
+function booleanSetting(value, fallback = true) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return ["1", "true", "enabled", "required"].includes(String(value).trim().toLowerCase());
+}
+
 export default {
   components: { AuthIdentityBar, ManagePinnedMessage },
   data() {
@@ -145,6 +187,7 @@ export default {
       session: {},
       signups: [],
       sessionManageExtensions,
+      joinPhoneRequired: true,
       statusText: "",
       busyAction: false,
       busyText: "",
@@ -189,6 +232,12 @@ export default {
     },
     hasActiveAlbumPhotos() {
       return Number(this.session.active_album_photo_count || this.session.photo_count || 0) > 0;
+    },
+    settingsDirty() {
+      if (!this.session.id) {
+        return false;
+      }
+      return this.joinPhoneRequired !== this.sessionJoinPhoneRequired();
     }
   },
   async onLoad(options) {
@@ -229,6 +278,7 @@ export default {
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
         this.session = dataOf(response) || {};
+        this.syncSessionSettings();
       } catch (error) {
         this.statusText = "车详情加载失败，请稍后重试。";
       }
@@ -251,6 +301,44 @@ export default {
     },
     setStatus(statusText) {
       this.statusText = statusText;
+    },
+    sessionJoinPhoneRequired() {
+      return booleanSetting(this.session.join_phone_required, true);
+    },
+    syncSessionSettings() {
+      this.joinPhoneRequired = this.sessionJoinPhoneRequired();
+    },
+    setJoinPhoneRequired(value) {
+      this.joinPhoneRequired = Boolean(value);
+    },
+    async updateSessionSettings() {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth || !this.settingsDirty || this.busyAction) {
+        return;
+      }
+      const nextJoinPhoneRequired = this.joinPhoneRequired;
+      this.busyAction = true;
+      this.busyText = "正在处理，请稍候...";
+      try {
+        await request({
+          url: `/api/sessions/${this.sessionId}`,
+          method: "PATCH",
+          data: {
+            joinPhoneRequired: nextJoinPhoneRequired,
+            join_phone_required: nextJoinPhoneRequired
+          }
+        });
+        await this.reload();
+        this.statusText =
+          this.joinPhoneRequired === nextJoinPhoneRequired
+            ? "车局设置已更新。"
+            : "车局设置没有生效，请确认后端已部署最新车局设置接口。";
+      } catch (error) {
+        this.statusText = this.actionErrorText(error);
+      } finally {
+        this.busyAction = false;
+        this.busyText = "";
+      }
     },
     async approve(signup) {
       const auth = await this.ensureManageActionLogin();
@@ -534,6 +622,44 @@ export default {
   line-height: 1.45;
 }
 
+.setting-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-top: 18rpx;
+  padding-top: 18rpx;
+  border-top: 1rpx solid rgba(222, 216, 202, 0.72);
+}
+
+.setting-switch-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.setting-switch-meta {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.setting-switch-label {
+  min-width: 88rpx;
+  color: #153f34;
+  font-size: 24rpx;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: right;
+}
+
+.setting-title {
+  margin-bottom: 6rpx;
+  color: #153f34;
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
 .notice,
 .empty {
   margin-top: 14rpx;
@@ -619,6 +745,11 @@ export default {
   color: #ffffff;
   font-size: 24rpx;
   line-height: 64rpx;
+}
+
+.mini-button.disabled,
+.mini-button[disabled] {
+  opacity: 0.45;
 }
 
 .mini-button.muted {
