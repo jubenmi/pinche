@@ -711,6 +711,21 @@ async function main() {
     owner.token
   );
 
+  const legacyNpcOnlyPhoto = await request(
+    "POST",
+    `/api/sessions/${session.id}/album/photos`,
+    { photoUrl: await uploadAlbumPhoto(session.id, owner.token, "legacy-npc-only") },
+    owner.token,
+    201
+  );
+  const legacyNpcOnlyPhotoId = legacyNpcOnlyPhoto.data.id;
+  await request(
+    "PUT",
+    `/api/session-album/photos/${legacyNpcOnlyPhotoId}/tags`,
+    { tagKeys: ["npc:session"] },
+    owner.token
+  );
+
   const otherMemberSpecialAlbum = await request(
     "GET",
     `/api/sessions/${session.id}/album`,
@@ -718,12 +733,59 @@ async function main() {
     playerB.token
   );
   assert(
-    !hasPhoto(otherMemberSpecialAlbum, otherTaggedPhotoId),
-    "other-tagged photo should not be visible to unrelated same-session members"
+    hasPhoto(otherMemberSpecialAlbum, otherTaggedPhotoId),
+    "other-tagged photo should be visible to unrelated same-session members"
+  );
+  const otherMemberOtherPhoto = photoInAlbum(otherMemberSpecialAlbum, otherTaggedPhotoId);
+  const otherMemberOtherMedia = await rawRequest(
+    "GET",
+    otherMemberOtherPhoto.image_url,
+    undefined,
+    playerB.token
   );
   assert(
-    !hasPhoto(otherMemberSpecialAlbum, npcOnlyPhotoId),
-    "npc-only photo should not be visible to unrelated same-session members"
+    (otherMemberOtherMedia.headers.get("content-type") || "").includes("image/jpeg"),
+    "other-tagged same-session member should open media"
+  );
+  assert(
+    hasPhoto(otherMemberSpecialAlbum, npcOnlyPhotoId),
+    "npc-only photo should be visible to unrelated same-session members"
+  );
+  const otherMemberNpcPhoto = photoInAlbum(otherMemberSpecialAlbum, npcOnlyPhotoId);
+  const otherMemberNpcMedia = await rawRequest(
+    "GET",
+    otherMemberNpcPhoto.image_url,
+    undefined,
+    playerB.token
+  );
+  assert(
+    (otherMemberNpcMedia.headers.get("content-type") || "").includes("image/jpeg"),
+    "npc-only same-session member should open media"
+  );
+  assert(
+    hasPhoto(otherMemberSpecialAlbum, legacyNpcOnlyPhotoId),
+    "legacy NPC-only photo should be visible to unrelated same-session members"
+  );
+
+  await request(
+    "PUT",
+    `/api/sessions/${session.id}/album/privacy`,
+    { allowUploadedVisible: true, allowTaggedVisible: false },
+    npcStaff.token
+  );
+  const otherMemberNpcPrivacyAlbum = await request(
+    "GET",
+    `/api/sessions/${session.id}/album`,
+    undefined,
+    playerB.token
+  );
+  assert(
+    !hasPhoto(otherMemberNpcPrivacyAlbum, npcOnlyPhotoId),
+    "bound NPC role privacy should hide npc-only photo from unrelated same-session members"
+  );
+  assert(
+    hasPhoto(otherMemberNpcPrivacyAlbum, legacyNpcOnlyPhotoId),
+    "unbound legacy NPC-only photo should stay visible to unrelated same-session members"
   );
 
   const npcStaffSpecialAlbum = await request(

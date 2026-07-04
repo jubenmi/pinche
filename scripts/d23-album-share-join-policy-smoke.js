@@ -174,6 +174,7 @@ async function createPublishedSession(admin, owner, label, joinPolicy) {
       scriptId: script.data.id,
       startAt: startAt(-1),
       joinPolicy,
+      npcNameSnapshot: `D23指定NPC-${suffix}-${label}`,
       depositAmount: 5000,
       note: "D23 smoke session"
     },
@@ -318,6 +319,12 @@ async function main() {
     "other-only",
     ["other:session"]
   );
+  const hiddenNpcOnlyPhoto = await createTaggedPhoto(
+    direct.session.id,
+    owner,
+    "npc-only",
+    ["npc:session"]
+  );
 
   const publicAlbum = await request(
     "GET",
@@ -330,6 +337,7 @@ async function main() {
   assert(!publicIds.has(Number(hiddenOtherSeatPhoto.id)), "public album should hide other-seat photo");
   assert(!publicIds.has(Number(hiddenUntaggedPhoto.id)), "public album should hide untagged photo");
   assert(!publicIds.has(Number(hiddenOtherOnlyPhoto.id)), "public album should hide other-only photo");
+  assert(!publicIds.has(Number(hiddenNpcOnlyPhoto.id)), "public album should hide npc-only photo");
 
   const publicOwn = publicPhoto(publicAlbum, publicOwnPhoto.id);
   assert(publicOwn?.image_url, "public album photo should include public image URL");

@@ -343,9 +343,9 @@ isTimelineShare = options.source === "wechat_timeline" || Boolean(options.albumS
 
 ```js
 return {
-  title: `${scriptName}｜相册邀请`,
+  title: `${scriptName}｜${storeName}｜相册邀请`,
   path: `/pages/session/share?id=${sessionId}&entry=album&shareCode=${shareCode}&source=wechat_share`,
-  imageUrl: shareImage
+  imageUrl: shareImage // 固定安全封面，不使用当前相册页截图
 }
 ```
 

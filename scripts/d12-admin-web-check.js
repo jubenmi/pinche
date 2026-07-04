@@ -514,6 +514,23 @@ assert(
     catalogWorkspace.includes("clearSelection()"),
   "catalog batch controls should be scoped away from sessions and clear selection on context changes"
 );
+for (const token of [
+  'aria-label="选择全部车局"',
+  "`选择车局${item.id}`",
+  "batchForceDeleteSessions",
+  "批量强制删除",
+  "selectedSessionCount"
+]) {
+  assert(
+    catalogWorkspace.includes(token),
+    `catalog workspace should support bulk session deletion with ${token}`
+  );
+}
+assert(
+  catalogWorkspace.includes('visibleSelectableItems = computed(() => items.value)') &&
+    catalogWorkspace.includes('v-if="tab === \'sessions\' && selectedSessionCount > 0"'),
+  "catalog workspace should let session rows be selected and expose session-specific bulk actions"
+);
 assert(
   catalogWorkspace.includes("toggleStatus"),
   "catalog workspace should provide status-based archive toggle"

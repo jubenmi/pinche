@@ -63,6 +63,7 @@ import {
   dataOf,
   ensureLoggedIn,
   getCurrentUser,
+  getToken,
   request
 } from "../../utils/api";
 import {
@@ -430,6 +431,10 @@ export default {
       const query = flowToQuery(this.persistFlow()).replace(/^\?/, "");
       return query ? `${query}&source=wechat_timeline` : "source=wechat_timeline";
     },
+    hasSeatSelectionLogin() {
+      const auth = getCurrentUser();
+      return Boolean(auth.user && getToken());
+    },
     bindAuthChangeListener() {
       if (typeof uni.$on === "function") {
         uni.$on(AUTH_CHANGE_EVENT, this.refreshCurrentUserGender);
@@ -458,6 +463,7 @@ export default {
       this.confirmedCrossCastRoleKey = "";
     },
     async ensureSeatSelectionLogin(options = {}) {
+      const wasLoggedIn = this.hasSeatSelectionLogin();
       const auth = await ensureLoggedIn({
         content: "登录后可以选择角色并锁定你的位置。",
         ...options
@@ -468,6 +474,14 @@ export default {
       }
       this.currentUserId = auth.user.id || "";
       this.refreshCurrentUserGender(auth);
+      if (options.refreshAfterFreshLogin === true && !wasLoggedIn) {
+        if (this.sessionId) {
+          await this.loadPublishedSession(this.sessionId);
+          if (this.redirectAlbumMemberIfNeeded()) {
+            return null;
+          }
+        }
+      }
       return auth;
     },
     async loadPublishedSession(sessionId) {
@@ -584,43 +598,46 @@ export default {
       });
     },
     async chooseRole(role) {
+      const selectedRoleKey = this.roleKey(role);
+      const auth = await this.ensureSeatSelectionLogin({
+        refreshAfterFreshLogin: true
+      });
+      if (!auth) {
+        return;
+      }
+      const targetRole =
+        this.sessionId
+          ? this.roleCards.find((item) => this.roleKey(item) === selectedRoleKey) || role
+          : role;
       if (this.isAlbumEntry && !this.currentUserId) {
-        const auth = await this.ensureSeatSelectionLogin();
-        if (!auth) {
-          return;
-        }
         await this.loadPublishedSession(this.sessionId);
         if (this.redirectAlbumMemberIfNeeded()) {
           return;
         }
       }
-      if (role.taken && !role.mine) {
+      if (targetRole.taken && !targetRole.mine) {
         uni.showToast({ title: "这个角色已被选择", icon: "none" });
         return;
       }
-      if (!role.claimable && !role.mine) {
+      if (!targetRole.claimable && !targetRole.mine) {
         uni.showToast({ title: "这个角色暂不可选择", icon: "none" });
         return;
       }
-      if (role.taken && role.mine) {
+      if (targetRole.taken && targetRole.mine) {
         uni.showToast({ title: "这是你当前选择的角色", icon: "none" });
         return;
       }
-      const auth = await this.ensureSeatSelectionLogin();
-      if (!auth) {
-        return;
-      }
-      const switchConfirmed = await this.confirmSwitchRole(role);
+      const switchConfirmed = await this.confirmSwitchRole(targetRole);
       if (!switchConfirmed) {
         return;
       }
-      const confirmed = await this.confirmCrossCastRole(role);
+      const confirmed = await this.confirmCrossCastRole(targetRole);
       if (!confirmed) {
         return;
       }
-      this.confirmedCrossCastRoleKey = this.roleKey(role);
+      this.confirmedCrossCastRoleKey = this.roleKey(targetRole);
       this.statusText = "";
-      this.pendingRole = role;
+      this.pendingRole = targetRole;
       await this.confirmRole();
     },
     handleSharedRoleTap(payload) {
@@ -665,6 +682,7 @@ export default {
         return;
       }
       const auth = await this.ensureSeatSelectionLogin({
+        refreshAfterFreshLogin: true,
         requirePhone: this.joinRequiresPhone,
         phoneRequiredTitle: "授权手机号后上车",
         phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
@@ -752,6 +770,28 @@ export default {
       }
     },
     async chooseNpcRole(npcRole) {
+      if (!npcRole.mine) {
+        if (npcRole.stateKind === "pendingReview") {
+          this.statusText = "已提交NPC角色申请，等待车头审核。";
+          return;
+        }
+        if (!this.npcSelfJoinEnabled) {
+          this.statusText = "本场NPC由车头安排。";
+          return;
+        }
+        if (!npcRole.claimable) {
+          uni.showToast({ title: "这个NPC角色已被选择", icon: "none" });
+          return;
+        }
+      }
+
+      const loginAuth = await this.ensureSeatSelectionLogin({
+        refreshAfterFreshLogin: true
+      });
+      if (!loginAuth) {
+        return;
+      }
+
       if (npcRole.mine) {
         if (this.isAlbumEntry) {
           uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
@@ -760,19 +800,9 @@ export default {
         }
         return;
       }
-      if (npcRole.stateKind === "pendingReview") {
-        this.statusText = "已提交NPC角色申请，等待车头审核。";
-        return;
-      }
-      if (!this.npcSelfJoinEnabled) {
-        this.statusText = "本场NPC由车头安排。";
-        return;
-      }
-      if (!npcRole.claimable) {
-        uni.showToast({ title: "这个NPC角色已被选择", icon: "none" });
-        return;
-      }
+
       const auth = await this.ensureSeatSelectionLogin({
+        refreshAfterFreshLogin: true,
         requirePhone: this.joinRequiresPhone,
         phoneRequiredTitle: "授权手机号后上车",
         phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
@@ -780,6 +810,7 @@ export default {
       if (!auth) {
         return;
       }
+
       try {
         const response = await request({
           url: `/api/session-npc-roles/${npcRole.id}/claim`,

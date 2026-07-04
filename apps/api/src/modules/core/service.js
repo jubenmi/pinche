@@ -1346,6 +1346,30 @@ function isAlbumTagInPersonalScope(tag, scope) {
   );
 }
 
+function isAlbumMemberPublicTag(tag) {
+  return ["other", "npc", "session_npc_role"].includes(tag.tag_type);
+}
+
+function hasOnlyAlbumMemberPublicTags(tags, privacyByUser) {
+  if (tags.length === 0 || !tags.every((tag) => isAlbumMemberPublicTag(tag))) {
+    return false;
+  }
+  for (const tag of tags) {
+    if (!["npc", "session_npc_role"].includes(tag.tag_type)) {
+      continue;
+    }
+    const taggedUserId = Number(tag.user_id || 0);
+    if (!taggedUserId) {
+      continue;
+    }
+    const taggedPrivacy = privacyByUser.get(taggedUserId) || albumPrivacy();
+    if (!taggedPrivacy.allow_tagged_visible) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, userId, personalScope = null) {
   const scope = personalScope || {
     userId: Number(userId),
@@ -1358,6 +1382,9 @@ function isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, userId, personalS
   }
 
   if (tags.some((tag) => isAlbumTagInPersonalScope(tag, scope))) {
+    return true;
+  }
+  if (hasOnlyAlbumMemberPublicTags(tags, privacyByUser)) {
     return true;
   }
   return false;
@@ -4034,6 +4061,9 @@ export async function listSessionAlbum(user, sessionId) {
     }
     return {
       session_id: id,
+      script_name_snapshot: session.script_name_snapshot,
+      store_name_snapshot: session.store_name_snapshot,
+      start_at: session.start_at,
       can_upload: true,
       privacy,
       visible_count: photos.length,
