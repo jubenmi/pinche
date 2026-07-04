@@ -1562,6 +1562,20 @@ if (!fs.existsSync(pagesJsonPath)) {
     "uni.previewImage",
     "Album preview must mark the next onShow before opening the system image viewer"
   );
+  for (const requiredFilteredPreviewText of [
+    "preparePhotoPreviewUrls",
+    "const previewPhotos = [...this.filteredPhotos].reverse()",
+    "await this.preparePhotoPreviewUrls(previewPhotos)",
+    "const previewUrls = previewEntries.map((entry) => entry.url)",
+    "urls: previewUrls"
+  ]) {
+    if (!albumSource.includes(requiredFilteredPreviewText)) {
+      fail(`Album preview must swipe through the current filtered photo list: ${requiredFilteredPreviewText}`);
+    }
+  }
+  if (previewPhotoSource.includes("urls: [previewUrl]")) {
+    fail("Album preview must pass the current filtered photo list to uni.previewImage, not a single URL");
+  }
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
   if (
     !albumShareAppMessageSource.includes("/pages/session/share") ||
