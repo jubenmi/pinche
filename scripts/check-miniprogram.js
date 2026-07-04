@@ -1537,7 +1537,6 @@ if (!fs.existsSync(pagesJsonPath)) {
   for (const requiredAlbumPreviewLifecycleText of [
     "skipNextAlbumRefreshOnShow",
     "consumePreviewReturnRefreshSkip",
-    "this.skipNextAlbumRefreshOnShow = true",
     "this.skipNextAlbumRefreshOnShow = false"
   ]) {
     if (!albumSource.includes(requiredAlbumPreviewLifecycleText)) {
@@ -1556,25 +1555,33 @@ if (!fs.existsSync(pagesJsonPath)) {
     "loadPublicAlbum",
     "Album onShow must consume photo-preview return before refreshing the public album"
   );
-  assertBefore(
-    previewPhotoSource,
-    "this.skipNextAlbumRefreshOnShow = true",
-    "uni.previewImage",
-    "Album preview must mark the next onShow before opening the system image viewer"
-  );
-  for (const requiredFilteredPreviewText of [
-    "preparePhotoPreviewUrls",
+  for (const requiredWindowedPreviewText of [
+    'class="photo-preview-mask"',
+    "<swiper",
+    '@change="handlePreviewSwiperChange"',
+    '@touchend="handlePreviewTouchEnd"',
+    "previewOverlayVisible",
+    "previewPreloadRadius: 2",
+    "photoPreviewImageUrl(photo)",
+    "openPhotoPreview",
+    "hydratePreviewWindow",
     "const previewPhotos = [...this.filteredPhotos].reverse()",
-    "await this.preparePhotoPreviewUrls(previewPhotos)",
-    "const previewUrls = previewEntries.map((entry) => entry.url)",
-    "urls: previewUrls"
+    "this.previewPhotos = previewPhotos",
+    "this.hydratePreviewWindow(currentIndex)",
+    "const start = Math.max(0, centerIndex - this.previewPreloadRadius)",
+    "const end = Math.min(this.previewPhotos.length, centerIndex + this.previewPreloadRadius + 1)"
   ]) {
-    if (!albumSource.includes(requiredFilteredPreviewText)) {
-      fail(`Album preview must swipe through the current filtered photo list: ${requiredFilteredPreviewText}`);
+    if (!albumSource.includes(requiredWindowedPreviewText)) {
+      fail(`Album preview must use a dynamic ±2 filtered-photo preview window: ${requiredWindowedPreviewText}`);
     }
   }
-  if (previewPhotoSource.includes("urls: [previewUrl]")) {
-    fail("Album preview must pass the current filtered photo list to uni.previewImage, not a single URL");
+  if (
+    previewPhotoSource.includes("uni.showLoading") ||
+    previewPhotoSource.includes("uni.previewImage") ||
+    albumSource.includes("preparePhotoPreviewUrls") ||
+    albumSource.includes("this.skipNextAlbumRefreshOnShow = true")
+  ) {
+    fail("Album preview must open immediately and dynamically hydrate nearby photos instead of blocking on native preview URLs");
   }
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
   if (
