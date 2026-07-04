@@ -33,13 +33,34 @@
     </view>
 
     <view class="section">
+      <view class="section-title">上车权限</view>
+      <view class="section-note">分享到群后，未上车玩家选择角色时使用此规则。</view>
+      <view class="policy-toggle">
+        <button
+          class="policy-option"
+          :class="{ active: joinPolicy === 'review_required' }"
+          @click="setJoinPolicy('review_required')"
+        >
+          需要车头审核
+        </button>
+        <button
+          class="policy-option"
+          :class="{ active: joinPolicy === 'direct' }"
+          @click="setJoinPolicy('direct')"
+        >
+          可直接上车
+        </button>
+      </view>
+    </view>
+
+    <view class="section">
       <view class="section-title">本场额外NPC</view>
       <view class="section-note">店家本场额外设计的NPC角色，每行一个；剧本固定NPC会自动带入。</view>
       <textarea
         v-model="extraNpcRolesText"
         class="textarea"
         maxlength="300"
-        placeholder="例如：媒人&#10;少年将军"
+        :placeholder="extraNpcRolesPlaceholder"
         placeholder-class="placeholder"
         @blur="persistDraft"
       />
@@ -120,8 +141,10 @@ export default {
       dateValue: defaults.date,
       timeValue: defaults.time,
       today: dateText(new Date()),
+      extraNpcRolesPlaceholder: "例如：媒人\n少年将军",
       extraNpcRolesText: "",
       pinnedMessageText: "",
+      joinPolicy: "review_required",
       statusText: "",
       busyAction: false
     };
@@ -164,6 +187,7 @@ export default {
     this.selectedRoles = selectedRolesFromFlow(flow);
     this.extraNpcRolesText = flow.extraNpcRolesText || "";
     this.pinnedMessageText = flow.pinnedMessageText || "";
+    this.joinPolicy = flow.joinPolicy === "direct" ? "direct" : "review_required";
     if (flow.startAt) {
       this.dateValue = String(flow.startAt).slice(0, 10) || this.dateValue;
       this.timeValue = String(flow.startAt).slice(11, 16) || this.timeValue;
@@ -181,12 +205,17 @@ export default {
       this.timeValue = event.detail.value;
       this.persistDraft();
     },
+    setJoinPolicy(value) {
+      this.joinPolicy = value === "direct" ? "direct" : "review_required";
+      this.persistDraft();
+    },
     persistDraft() {
       writeCreateFlow({
         startAt: this.startAt,
         startText: this.startText,
         extraNpcRolesText: this.extraNpcRolesText.trim(),
-        pinnedMessageText: this.pinnedMessageText.trim()
+        pinnedMessageText: this.pinnedMessageText.trim(),
+        joinPolicy: this.joinPolicy
       });
     },
     extraNpcRoles() {
@@ -235,6 +264,7 @@ export default {
             scriptId: Number(this.script.id),
             startAt: this.startAt,
             depositAmount: 0,
+            joinPolicy: this.joinPolicy,
             extraNpcRoles: this.extraNpcRoles(),
             note: "剧本迷·拼车，一起沉浸好本。",
             pinnedMessageText
@@ -283,6 +313,7 @@ export default {
           startAt: this.startAt,
           startText: this.startText,
           pinnedMessageText,
+          joinPolicy: this.joinPolicy,
           note: "剧本迷·拼车，一起沉浸好本。"
         });
         uni.redirectTo({ url: `/pages/session/share?id=${session.id}` });
@@ -359,6 +390,28 @@ export default {
   color: #183d34;
   font-size: 28rpx;
   font-weight: 600;
+}
+
+.policy-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16rpx;
+}
+
+.policy-option {
+  height: 86rpx;
+  border: 1rpx solid #ded8ca;
+  border-radius: 12rpx;
+  background: #fffefb;
+  color: #50625c;
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.policy-option.active {
+  border-color: #1f7a68;
+  background: #edf7f2;
+  color: #153f34;
 }
 
 .textarea {

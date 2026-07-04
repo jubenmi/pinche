@@ -197,3 +197,39 @@ Result: `node scripts/d20-album-first-lifecycle-check.js`, `node scripts/d12-adm
 Run: `git diff -- scripts/d20-album-first-lifecycle-check.js apps/miniprogram/src/pages/mine/index.vue apps/miniprogram/src/pages/session/detail.vue apps/admin-web/src/components/MiniProgramWorkspace.vue package.json`
 
 Expected: changes map only to album-first lifecycle behavior and the static check.
+
+### Task 5: Strengthen Mini-Program Album Prominence
+
+**Files:**
+- Modify: `scripts/d20-album-first-lifecycle-check.js`
+- Modify: `apps/miniprogram/src/components/SessionCalendar.vue`
+- Modify: `apps/miniprogram/src/pages/session/detail.vue`
+- Modify: `apps/miniprogram/src/pages/session/album.vue`
+
+- [x] **Step 1: Extend the static check for the approved prominence pass**
+
+Add assertions that require:
+
+- post-start calendar rows to carry an album-first visual state and CTA text.
+- post-start detail to show album stats and stronger upload/revisit copy.
+- the album empty state to include a direct `上传第一张照片` action.
+
+Result: `node scripts/d20-album-first-lifecycle-check.js` failed first on missing `albumFirst`, then passed after implementation.
+
+- [x] **Step 2: Implement the mini-program UI hierarchy changes**
+
+Keep the existing two-stage lifecycle and specific-session album model. Do not add a top-level album tab, public album feed, backend state, or privacy model change.
+
+- [x] **Step 3: Run focused verification**
+
+Run:
+
+```bash
+node scripts/d20-album-first-lifecycle-check.js
+node --check scripts/check-miniprogram.js
+npm --workspace apps/miniprogram run build:mp-weixin
+```
+
+Expected: focused lifecycle check and mini-program build pass. If the full miniprogram check remains blocked by local `.env.development`, document it instead of changing environment policy.
+
+Result: all three focused commands passed on 2026-07-04. The build still prints existing `uv-waterfall` Sass deprecation warnings.

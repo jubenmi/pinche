@@ -4,8 +4,8 @@
 
     <view class="flow-top">
       <view class="step-label">4 / 4</view>
-      <view class="title">分享票</view>
-      <view class="text">这张局卡已经可以发给朋友或群聊。</view>
+      <view class="title">{{ pageTitle }}</view>
+      <view class="text">{{ pageIntro }}</view>
     </view>
 
     <view class="ticket-card">
@@ -45,7 +45,7 @@
           <view class="edit-title">角色状态</view>
           <view class="section-note">{{ roleSummaryText }}</view>
         </view>
-        <view class="status-pill">可继续分享</view>
+        <view class="status-pill">{{ statusPillText }}</view>
       </view>
       <view v-if="statusText" class="notice">{{ statusText }}</view>
 
@@ -130,8 +130,10 @@ export default {
       roleOptions: [],
       selectedRoles: [],
       pendingRole: null,
+      entry: "",
       sessionId: "",
       session: {},
+      navigatingAlbum: false,
       currentUserId: "",
       currentUserGender: "",
       confirmedCrossCastRoleKey: "",
@@ -141,6 +143,24 @@ export default {
     };
   },
   computed: {
+    isAlbumEntry() {
+      return this.entry === "album";
+    },
+    pageTitle() {
+      return this.isAlbumEntry ? "查看车局相册" : "分享票";
+    },
+    pageIntro() {
+      if (this.isAlbumEntry) {
+        return "同车成员可直接进入相册；未上车先选择角色。";
+      }
+      return "这张局卡已经可以发给朋友或群聊。";
+    },
+    statusPillText() {
+      if (this.isAlbumEntry) {
+        return this.session.join_policy === "direct" ? "可直接上车" : "需车头审核";
+      }
+      return "可继续分享";
+    },
     storeName() {
       if (this.session.id) {
         return this.session.store_name_snapshot || "店家待定";
@@ -247,6 +267,7 @@ export default {
     this.bindAuthChangeListener();
     this.refreshCurrentUserGender(currentAuth);
     const fromQuery = queryToFlow(options);
+    this.entry = options.entry || "";
     this.sessionId = options.id || fromQuery.sessionId || stored.sessionId || "";
     if (this.sessionId) {
       await this.loadPublishedSession(this.sessionId);
@@ -309,9 +330,10 @@ export default {
     const title = this.shareCardTitle();
     if (this.sessionId) {
       const shareCode = `s${this.sessionId}-${Date.now()}`;
+      const entryQuery = this.entry ? `&entry=${encodeURIComponent(this.entry)}` : "";
       return {
         title,
-        path: `/pages/session/share?id=${this.sessionId}&shareCode=${shareCode}&source=wechat_share`
+        path: `/pages/session/share?id=${this.sessionId}${entryQuery}&shareCode=${shareCode}&source=wechat_share`
       };
     }
     return {
@@ -333,6 +355,7 @@ export default {
         role: this.role,
         roleOptions: this.roleOptions,
         selectedRoles: this.selectedRoles,
+        entry: this.entry,
         sessionId: this.sessionId,
         startText: this.startText,
         note: this.note
@@ -446,9 +469,24 @@ export default {
           startText: this.startText,
           note: this.note
         });
+        this.redirectAlbumMemberIfNeeded();
+        if (this.isAlbumEntry && !this.role && !this.statusText) {
+          this.statusText =
+            this.session.join_policy === "direct"
+              ? "选择角色后会直接进入相册。"
+              : "选择角色提交申请，车头确认后可进入相册。";
+        }
       } catch (error) {
         uni.showToast({ title: "车局加载失败", icon: "none" });
       }
+    },
+    redirectAlbumMemberIfNeeded() {
+      if (!this.isAlbumEntry || !this.sessionId || !this.role || this.navigatingAlbum) {
+        return false;
+      }
+      this.navigatingAlbum = true;
+      uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
+      return true;
     },
     roleKey(role) {
       return String(role?.seatId || role?.id || role?.name || "");
@@ -473,6 +511,16 @@ export default {
       });
     },
     async chooseRole(role) {
+      if (this.isAlbumEntry && !this.currentUserId) {
+        const auth = await this.ensureSeatSelectionLogin();
+        if (!auth) {
+          return;
+        }
+        await this.loadPublishedSession(this.sessionId);
+        if (this.redirectAlbumMemberIfNeeded()) {
+          return;
+        }
+      }
       if (role.taken && !role.mine) {
         uni.showToast({ title: "这个角色已被选择", icon: "none" });
         return;
@@ -576,12 +624,37 @@ export default {
     async claimSeat(role) {
       this.statusText = "";
       try {
+        const seatId = role.seatId || role.id;
+        if (this.session.join_policy === "direct") {
+          const claimResponse = await request({
+            url: `/api/session-seats/${seatId}/claim`,
+            method: "POST",
+            data: {
+              note: this.isAlbumEntry ? "相册分享页直接上车" : "分享页选择角色上车"
+            }
+          });
+          const joinResult = dataOf(claimResponse)?.join_result || "joined";
+          this.pendingRole = null;
+          await this.loadPublishedSession(this.sessionId);
+          if (this.isAlbumEntry && joinResult === "joined") {
+            if (!this.navigatingAlbum) {
+              uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
+            }
+            return;
+          }
+          this.statusText = "已上车。";
+          uni.showToast({
+            title: "已上车",
+            icon: "none"
+          });
+          return;
+        }
         await request({
           url: "/api/signups",
           method: "POST",
           data: {
-            seatId: role.seatId || role.id,
-            note: "分享页选择角色申请上车"
+            seatId,
+            note: this.isAlbumEntry ? "相册分享页申请上车" : "分享页选择角色申请上车"
           }
         });
         this.pendingRole = null;

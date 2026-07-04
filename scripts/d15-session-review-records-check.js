@@ -56,28 +56,32 @@ const pagesJson = read("apps/miniprogram/src/pages.json");
 assert(pagesJson.includes("pages/session/review"), "pages.json must register review page");
 
 const mine = read("apps/miniprogram/src/pages/mine/index.vue");
-assert(mine.includes("我发起"), "Mine page must label created sessions");
-assert(mine.includes("我参与"), "Mine page must label joined sessions");
+const calendar = read("apps/miniprogram/src/components/SessionCalendar.vue");
+assert(mine.includes("SessionCalendar"), "Mine page must render the shared calendar component");
 assert(mine.includes("loadMySignups"), "Mine page must load joined sessions");
-assert(mine.includes("goReview"), "Mine page must navigate to review page");
-assert(mine.includes("mergeCalendarItems"), "Mine page must merge created and joined calendar rows");
+assert(calendar.includes('label: "发起"'), "Mine calendar must label created sessions");
+assert(calendar.includes('label: "参与"'), "Mine calendar must keep the joined-session filter");
+assert(calendar.includes("compactSignupRoleText"), "Mine calendar must identify joined sessions by compact role text");
+assert(calendar.includes("goReview"), "Mine calendar must navigate to review page");
+assert(calendar.includes("mergeCalendarItems"), "Mine calendar must merge created and joined calendar rows");
 assert(
-  mine.includes("const itemsBySession = new Map()") &&
-    mine.includes("existing.signup = signup") &&
-    mine.includes("item.key = `calendar-${item.sessionId}`"),
-  "Mine page must dedupe created and joined rows by session id"
+  calendar.includes("const itemsBySession = new Map()") &&
+    calendar.includes("existing.signup = signup") &&
+    calendar.includes("item.key = `calendar-${item.sessionId}`"),
+  "Mine calendar must dedupe created and joined rows by session id"
 );
 assert(
-  mine.includes("identityTags") &&
-    mine.includes("v-for=\"tag in item.identityTags\"") &&
-    mine.includes(":key=\"tag.key\""),
-  "Mine page must render created/joined identity as row tags"
+  calendar.includes("identityTags") &&
+    calendar.includes("v-for=\"tag in item.identityTags\"") &&
+    calendar.includes(":key=\"tag.key\"") &&
+    !calendar.includes('key: "joined", label: "参与"'),
+  "Mine calendar must render organizer identity as a row tag without duplicating joined identity"
 );
 assert(
-  !mine.includes("const organizedItems = sessions.value.map") &&
-    !mine.includes("const joinedItems = signups.value.map") &&
-    !mine.includes("return [...organizedItems, ...joinedItems]"),
-  "Mine page must not concatenate created and joined rows into duplicate calendar entries"
+  !calendar.includes("const organizedItems = sessions.value.map") &&
+    !calendar.includes("const joinedItems = signups.value.map") &&
+    !calendar.includes("return [...organizedItems, ...joinedItems]"),
+  "Mine calendar must not concatenate created and joined rows into duplicate calendar entries"
 );
 
 const detail = read("apps/miniprogram/src/pages/session/detail.vue");

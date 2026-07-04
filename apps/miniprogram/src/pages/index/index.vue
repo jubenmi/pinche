@@ -1,6 +1,6 @@
 <template>
   <view class="page home-page">
-    <AuthIdentityBar passive-guest />
+    <AuthIdentityBar passive-guest @guest-login="loginFromGuestBar" />
 
     <view v-if="backendStatus.maintenance" class="maintenance-state">
       <image class="maintenance-art" src="/static/art/maintenance-landscape.jpg" mode="widthFix" />
@@ -24,40 +24,91 @@
     </view>
 
     <view v-else class="home-normal">
-      <image class="home-landscape" src="/static/art/ink-home-landscape.jpg" mode="widthFix" />
+      <image
+        v-if="homeState !== 'calendar'"
+        class="home-landscape"
+        src="/static/art/ink-home-landscape.jpg"
+        mode="widthFix"
+      />
 
-      <view class="home-main">
+      <view v-if="homeState === 'first-session'" class="home-main first-session">
         <view class="home-copy">
-          <view class="hero-title">剧本迷·拼车</view>
-          <view class="hero-subtitle">一起玩好本 · 轻松出发</view>
+          <view class="hero-title">发起第一辆车</view>
+          <view class="hero-subtitle">先选店家和剧本，几步就能生成分享卡片。</view>
         </view>
 
         <view class="home-panel">
-          <button class="primary-action" @click="goCreate">
+          <button class="primary-action" @click="startFirstSession">
             <image class="action-icon create-icon" src="/static/icons/user-plus-white.png" mode="aspectFit" />
-            <text class="action-title">创建</text>
-          </button>
-          <button class="secondary-action" @click="goMine">
-            <image class="action-icon" src="/static/icons/user.png" mode="aspectFit" />
-            <text class="action-title">我的</text>
+            <text class="action-title">开始发车</text>
           </button>
         </view>
 
-        <view class="quiet-line">简单五步，快速创建并分享你的剧本局</view>
+        <view class="quiet-line">之后你的发车、报名和相册都会自动汇总到首页。</view>
+        <view v-if="homeStatusText" class="home-status">{{ homeStatusText }}</view>
         <view class="build-version">{{ buildVersion }}</view>
       </view>
+
+      <view v-else-if="homeState === 'loading'" class="home-main">
+        <view class="home-copy">
+          <view class="hero-title">我的车局</view>
+          <view class="hero-subtitle">正在整理你的车局...</view>
+        </view>
+        <view class="build-version">{{ buildVersion }}</view>
+      </view>
+
+      <view v-else-if="homeState === 'error'" class="home-main">
+        <view class="home-copy">
+          <view class="hero-title">我的车局</view>
+          <view class="hero-subtitle">{{ homeStatusText || "车局加载失败，请稍后重试。" }}</view>
+        </view>
+        <view class="home-panel">
+          <button class="primary-action" @click="loadHomeCalendar">
+            <text class="action-title">重试</text>
+          </button>
+        </view>
+        <view class="build-version">{{ buildVersion }}</view>
+      </view>
+
+      <SessionCalendar
+        v-else
+        title="我的车局"
+        :sessions="sessions"
+        :signups="signups"
+        :loading="isCalendarLoading"
+        :refreshing="isRefreshingCalendar"
+        :updated-at="lastLoadedAt"
+        :status-text="homeStatusText"
+        show-create-button
+        create-button-label="发车"
+        :show-admin-button="isAdmin"
+        show-logout-button
+        @create="goCreate"
+        @admin="goAdmin"
+        @logout="logout"
+        @refresh="refreshCalendar"
+        @auth-expired="handleAuthExpired"
+      />
     </view>
   </view>
 </template>
 
 <script setup>
 import { onLoad, onShareAppMessage, onShareTimeline, onShow, onUnload } from "@dcloudio/uni-app";
-import { computed, reactive } from "vue";
+import { computed, reactive, ref } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import SessionCalendar from "../../components/SessionCalendar.vue";
 import {
   BACKEND_STATUS_CHANGE_EVENT,
+  clearAuth,
+  dataOf,
+  ensureLoggedIn,
   checkBackendHealth,
-  getBackendStatus
+  goHomeAfterLogout,
+  getBackendStatus,
+  getCurrentUser,
+  getToken,
+  request
 } from "../../utils/api";
 import { clearCreateFlow } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
@@ -68,14 +119,27 @@ const HOME_SHARE_TIMELINE_TITLE = "剧本迷·拼车，一起玩好本";
 const HOME_SHARE_PATH = "/pages/index/index";
 const HOME_SHARE_IMAGE = "/static/art/ink-home-landscape.jpg";
 const backendStatus = reactive(getBackendStatus());
+const homeState = ref("first-session");
+const homeStatusText = ref("");
+const roles = ref([]);
+const sessions = ref([]);
+const signups = ref([]);
+const loadingSessions = ref(false);
+const loadingSignups = ref(false);
+const isRefreshingCalendar = ref(false);
+const lastLoadedAt = ref(null);
 let maintenanceTimer = null;
+let authExpiredToastActive = false;
 
 const retryButtonText = computed(() => (backendStatus.checking ? "检查中..." : "重试"));
+const isAdmin = computed(() => roles.value.includes("system_admin"));
+const isCalendarLoading = computed(() => loadingSessions.value || loadingSignups.value);
 
 function syncBackendStatus(status = getBackendStatus()) {
   Object.assign(backendStatus, status);
   if (backendStatus.maintenance) {
     startMaintenancePolling();
+    homeState.value = "first-session";
     return;
   }
   stopMaintenancePolling();
@@ -84,6 +148,9 @@ function syncBackendStatus(status = getBackendStatus()) {
 async function refreshBackendStatus() {
   const status = await checkBackendHealth();
   syncBackendStatus(status);
+  if (!status.maintenance) {
+    routeHomeEntry();
+  }
 }
 
 function startMaintenancePolling() {
@@ -128,7 +195,9 @@ onShow(() => {
   syncBackendStatus();
   if (backendStatus.available !== true) {
     refreshBackendStatus();
+    return;
   }
+  routeHomeEntry();
 });
 
 onUnload(() => {
@@ -138,13 +207,186 @@ onUnload(() => {
   }
 });
 
+function routeHomeEntry() {
+  if (backendStatus.maintenance) {
+    return;
+  }
+  const auth = getCurrentUser();
+  const token = getToken();
+  if (auth.user && !token) {
+    clearAuth();
+    resetHomeCalendar();
+    homeState.value = "first-session";
+    return;
+  }
+  roles.value = auth.roles || [];
+  if (!auth.user || !token) {
+    resetHomeCalendar();
+    homeState.value = "first-session";
+    return;
+  }
+  loadHomeCalendar();
+}
+
+async function startFirstSession() {
+  const auth = getCurrentUser();
+  const token = getToken();
+  if (!auth.user || !token) {
+    const loggedInAuth = await ensureLoggedIn({
+      devCode: "dev-admin-openid",
+      content: "登录后开始发车，并同步你的车局日历。"
+    });
+    if (!loggedInAuth) {
+      homeStatusText.value = "登录取消后仍可留在这里。";
+      return;
+    }
+    roles.value = loggedInAuth.roles || [];
+    const loaded = await loadHomeCalendar();
+    if (!loaded) {
+      return;
+    }
+    if (hasCalendarItems()) {
+      homeState.value = "calendar";
+      return;
+    }
+  }
+  goCreate();
+}
+
+async function loginFromGuestBar() {
+  if (backendStatus.maintenance) {
+    return;
+  }
+  const auth = getCurrentUser();
+  const token = getToken();
+  if (auth.user && token) {
+    routeHomeEntry();
+    return;
+  }
+
+  const loggedInAuth = await ensureLoggedIn({
+    devCode: "dev-admin-openid",
+    content: "登录后查看你的车局日历。"
+  });
+  if (!loggedInAuth) {
+    homeStatusText.value = "登录取消后仍可留在这里。";
+    return;
+  }
+
+  roles.value = loggedInAuth.roles || [];
+  await loadHomeCalendar();
+}
+
+async function loadHomeCalendar() {
+  if (backendStatus.maintenance) {
+    return false;
+  }
+  homeState.value = "loading";
+  homeStatusText.value = "";
+  try {
+    await Promise.all([loadMySessions(), loadMySignups()]);
+    lastLoadedAt.value = new Date();
+    homeState.value = hasCalendarItems() ? "calendar" : "first-session";
+    return true;
+  } catch (error) {
+    if (handleAuthExpired(error)) {
+      return false;
+    }
+    homeStatusText.value = error?.userMessage || "车局加载失败，请稍后重试。";
+    homeState.value = "error";
+    return false;
+  }
+}
+
+async function loadMySessions() {
+  loadingSessions.value = true;
+  try {
+    const response = await request({ url: "/api/users/me/sessions?limit=50" });
+    sessions.value = dataOf(response) || [];
+  } finally {
+    loadingSessions.value = false;
+  }
+}
+
+async function loadMySignups() {
+  loadingSignups.value = true;
+  try {
+    const response = await request({ url: "/api/users/me/signups" });
+    signups.value = dataOf(response) || [];
+  } finally {
+    loadingSignups.value = false;
+  }
+}
+
+function hasCalendarItems() {
+  const sessionIds = new Set();
+  sessions.value.forEach((session) => {
+    if (session?.id) {
+      sessionIds.add(String(session.id));
+    }
+  });
+  signups.value.forEach((signup) => {
+    if (signup?.session_id) {
+      sessionIds.add(String(signup.session_id));
+    }
+  });
+  return sessionIds.size > 0;
+}
+
+async function refreshCalendar() {
+  if (isRefreshingCalendar.value) {
+    return;
+  }
+  isRefreshingCalendar.value = true;
+  try {
+    await loadHomeCalendar();
+  } finally {
+    isRefreshingCalendar.value = false;
+  }
+}
+
+function resetHomeCalendar() {
+  roles.value = [];
+  sessions.value = [];
+  signups.value = [];
+  homeStatusText.value = "";
+  lastLoadedAt.value = null;
+}
+
+function handleAuthExpired(error = {}) {
+  if (error?.statusCode !== 401) {
+    return false;
+  }
+  clearAuth();
+  resetHomeCalendar();
+  homeState.value = "first-session";
+  if (!authExpiredToastActive) {
+    authExpiredToastActive = true;
+    uni.showToast({
+      title: error?.userMessage || "登录已过期，请重新登录。",
+      icon: "none"
+    });
+    setTimeout(() => {
+      authExpiredToastActive = false;
+    }, 1000);
+  }
+  return true;
+}
+
 function goCreate() {
   clearCreateFlow();
   uni.navigateTo({ url: "/pages/session/create" });
 }
 
-function goMine() {
-  uni.navigateTo({ url: "/pages/mine/index" });
+function goAdmin() {
+  uni.navigateTo({ url: "/pages/admin/catalog" });
+}
+
+function logout() {
+  clearAuth();
+  resetHomeCalendar();
+  homeState.value = "first-session";
+  goHomeAfterLogout();
 }
 
 onShareAppMessage(() => ({
@@ -209,7 +451,7 @@ onShareTimeline(() => ({
   font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
   font-size: 58rpx;
   font-weight: 600;
-  letter-spacing: 10rpx;
+  letter-spacing: 0;
 }
 
 .hero-subtitle {
@@ -232,8 +474,7 @@ onShareTimeline(() => ({
   margin: 0 auto;
 }
 
-.primary-action,
-.secondary-action {
+.primary-action {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -244,19 +485,10 @@ onShareTimeline(() => ({
   padding: 0 34rpx;
   box-sizing: border-box;
   border-radius: 18rpx;
-  text-align: center;
-}
-
-.primary-action {
   background: linear-gradient(145deg, #1a5d4d 0%, #2c775f 100%);
   color: #ffffff;
+  text-align: center;
   box-shadow: 0 18rpx 42rpx rgba(31, 111, 91, 0.24);
-}
-
-.secondary-action {
-  background: rgba(255, 255, 252, 0.94);
-  color: #193d35;
-  border: 1rpx solid #e5dece;
 }
 
 .action-icon {
@@ -278,13 +510,22 @@ onShareTimeline(() => ({
   line-height: 1.2;
 }
 
-.quiet-line {
+.quiet-line,
+.home-status {
   position: relative;
   z-index: 1;
-  margin-top: 56rpx;
+  width: 560rpx;
+  max-width: 100%;
+  margin: 56rpx auto 0;
   color: #8f968f;
   font-size: 24rpx;
+  line-height: 1.55;
   text-align: center;
+}
+
+.home-status {
+  margin-top: 20rpx;
+  color: #7b6d58;
 }
 
 .build-version {
@@ -319,49 +560,43 @@ onShareTimeline(() => ({
 }
 
 .maintenance-title {
-  color: #153f34;
-  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
-  font-size: 42rpx;
-  font-weight: 600;
-  line-height: 1.3;
+  color: #183d34;
+  font-size: 34rpx;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .maintenance-text {
-  width: 540rpx;
-  max-width: 100%;
-  margin-top: 20rpx;
+  width: 560rpx;
+  max-width: 92%;
+  margin-top: 18rpx;
   color: #6f7b73;
-  font-size: 28rpx;
-  line-height: 1.65;
+  font-size: 26rpx;
+  line-height: 1.6;
 }
 
 .maintenance-meta {
-  width: 540rpx;
-  max-width: 100%;
+  width: 560rpx;
+  max-width: 92%;
   margin-top: 14rpx;
-  color: #9aa19b;
+  color: #9aa19a;
   font-size: 22rpx;
-  line-height: 1.5;
+  line-height: 1.45;
+  word-break: break-all;
 }
 
 .maintenance-retry {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 280rpx;
-  height: 82rpx;
-  margin-top: 36rpx;
+  width: 260rpx;
+  height: 72rpx;
+  margin-top: 28rpx;
   border-radius: 14rpx;
-  background: linear-gradient(145deg, #1a5d4d 0%, #2c775f 100%);
+  background: #1d5d4e;
   color: #ffffff;
-  font-size: 28rpx;
-  font-weight: 600;
-  line-height: 1.2;
-  box-shadow: 0 16rpx 34rpx rgba(31, 111, 91, 0.2);
+  font-size: 26rpx;
+  line-height: 72rpx;
 }
 
 .maintenance-retry.disabled {
-  background: #aeb8b1;
-  box-shadow: none;
+  background: #9da9a2;
 }
 </style>
