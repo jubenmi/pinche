@@ -151,6 +151,52 @@ function normalizeJoinPhoneRequired(value) {
   throw badRequest("joinPhoneRequired must be true or false");
 }
 
+function normalizeNpcJoinEnabled(value) {
+  if (value === undefined || value === null || value === "") {
+    return true;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "enabled"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "disabled"].includes(normalized)) {
+    return false;
+  }
+  throw badRequest("npcJoinEnabled must be true or false");
+}
+
+const REMOVAL_REASON_LABELS = {
+  normal_release: "普通释放",
+  harassment: "恶意骚扰",
+  spam: "垃圾信息",
+  scam: "疑似诈骗",
+  safety_other: "其他安全原因"
+};
+const BLOCKING_REMOVAL_REASONS = new Set([
+  "harassment",
+  "spam",
+  "scam",
+  "safety_other"
+]);
+
+function normalizeRemovalReasonType(value, report = false) {
+  if (!report) {
+    return "normal_release";
+  }
+  const reasonType = String(value || "harassment").trim();
+  if (!Object.hasOwn(REMOVAL_REASON_LABELS, reasonType)) {
+    throw badRequest("reasonType must be normal_release, harassment, spam, scam, or safety_other");
+  }
+  return reasonType;
+}
+
+function removalReasonLabel(reasonType) {
+  return REMOVAL_REASON_LABELS[reasonType] || REMOVAL_REASON_LABELS.safety_other;
+}
+
 function nonNegativeIntValue(value, label) {
   const parsed = intValue(value, 0);
   if (parsed < 0) {
@@ -265,6 +311,9 @@ function normalizeNpcRole(role = {}, index = 0, options = {}) {
     description: optionalText(
       sourceRole.description || sourceRole.note || sourceRole.roleDescription || ""
     ),
+    roleGender: normalizeRoleGender(
+      sourceRole.roleGender || sourceRole.role_gender || sourceRole.gender
+    ),
     source: normalizeNpcRoleSource(sourceRole.source, options.source || "session"),
     boundUserId:
       boundUserValue === undefined || boundUserValue === null || boundUserValue === ""
@@ -294,7 +343,7 @@ function requireVerifiedPhone(user) {
   }
 }
 
-function requireJoinPhoneIfNeeded(user, sessionLike) {
+function requireJoinPhoneIfNeeded(user, sessionLike = {}) {
   if (Number(sessionLike.join_phone_required ?? 1) === 1) {
     requireVerifiedPhone(user);
   }
@@ -501,6 +550,7 @@ function scriptNpcRoleResponse(row = {}) {
     script_id: Number(row.script_id),
     name: row.name,
     description: row.description || "",
+    role_gender: row.role_gender || "unlimited",
     sort_order: Number(row.sort_order || 0),
     status: row.status || "active"
   };
@@ -513,9 +563,14 @@ function sessionNpcRoleResponse(row = {}) {
     script_npc_role_id: row.script_npc_role_id ? Number(row.script_npc_role_id) : null,
     name: row.name,
     description: row.description || "",
+    role_gender: row.role_gender || "unlimited",
     source: row.source || "session",
     bound_user_id: row.bound_user_id ? Number(row.bound_user_id) : null,
     bound_user_name: row.bound_user_nickname || row.bound_user_open_id || "",
+    pending_signup_id: row.pending_signup_id ? Number(row.pending_signup_id) : null,
+    pending_signup_user_id: row.pending_signup_user_id
+      ? Number(row.pending_signup_user_id)
+      : null,
     sort_order: Number(row.sort_order || 0),
     status: row.status || "active"
   };
@@ -570,13 +625,14 @@ async function insertScriptNpcRoles(connection, scriptId, roles = []) {
     await connection.query(
       `
         INSERT INTO script_npc_roles
-          (script_id, name, description, sort_order, status)
-        VALUES (?, ?, ?, ?, 'active')
+          (script_id, name, description, role_gender, sort_order, status)
+        VALUES (?, ?, ?, ?, ?, 'active')
       `,
       [
         scriptId,
         role.name,
         role.description || null,
+        role.roleGender,
         role.sortOrder ?? index
       ]
     );
@@ -599,16 +655,17 @@ async function insertSessionNpcRoles(connection, sessionId, roles = [], options 
       `
         INSERT INTO session_npc_roles
           (
-            session_id, script_npc_role_id, name, description,
+            session_id, script_npc_role_id, name, description, role_gender,
             source, bound_user_id, sort_order, status
           )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
       `,
       [
         sessionId,
         role.scriptNpcRoleId || options.scriptNpcRoleId || null,
         role.name,
         role.description || null,
+        role.roleGender,
         normalizeNpcRoleSource(role.source, options.source || "session"),
         role.boundUserId || null,
         role.sortOrder ?? index
@@ -623,6 +680,7 @@ async function cloneScriptNpcRolesForSession(connection, sessionId, scriptId) {
     scriptNpcRoleId: role.id,
     name: role.name,
     description: role.description,
+    roleGender: role.role_gender || "unlimited",
     source: "script",
     boundUserId: null,
     sortOrder: role.sort_order ?? index
@@ -636,7 +694,23 @@ async function sessionNpcRolesForSession(connection, sessionId) {
       SELECT
         role.*,
         user.nickname AS bound_user_nickname,
-        user.open_id AS bound_user_open_id
+        user.open_id AS bound_user_open_id,
+        (
+          SELECT signup.id
+          FROM signups signup
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_id,
+        (
+          SELECT signup.user_id
+          FROM signups signup
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_id
       FROM session_npc_roles role
       LEFT JOIN users user ON user.id = role.bound_user_id
       WHERE role.session_id = ?
@@ -646,6 +720,39 @@ async function sessionNpcRolesForSession(connection, sessionId) {
     [sessionId]
   );
   return rows.map(sessionNpcRoleResponse);
+}
+
+async function sessionNpcRoleById(connection, npcRoleId) {
+  const [rows] = await connection.query(
+    `
+      SELECT
+        role.*,
+        user.nickname AS bound_user_nickname,
+        user.open_id AS bound_user_open_id,
+        (
+          SELECT signup.id
+          FROM signups signup
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_id,
+        (
+          SELECT signup.user_id
+          FROM signups signup
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_id
+      FROM session_npc_roles role
+      LEFT JOIN users user ON user.id = role.bound_user_id
+      WHERE role.id = ?
+      LIMIT 1
+    `,
+    [npcRoleId]
+  );
+  return rows[0] ? sessionNpcRoleResponse(rows[0]) : null;
 }
 
 function publicTextRiskWord(value) {
@@ -761,6 +868,23 @@ async function lockSessionSeats(connection, sessionId) {
     `,
     [sessionId]
   );
+}
+
+async function assertUserCanJoinSession(connection, sessionId, userId) {
+  const [rows] = await connection.query(
+    `
+      SELECT id
+      FROM session_member_removal_reports
+      WHERE session_id = ?
+        AND removed_user_id = ?
+        AND block_rejoin = 1
+      LIMIT 1
+    `,
+    [sessionId, userId]
+  );
+  if (rows.length > 0) {
+    throw forbidden("User has been removed from this session");
+  }
 }
 
 async function releaseUserOtherConfirmedSeats(
@@ -946,6 +1070,44 @@ async function requireSessionAlbumMember(connection, session, user) {
   }
 }
 
+async function sessionAlbumPersonalScope(connection, session, userId) {
+  const currentUserId = Number(userId);
+  if (!currentUserId) {
+    return {
+      userId: 0,
+      seatIds: new Set(),
+      sessionNpcRoleIds: new Set()
+    };
+  }
+
+  const [seatRows] = await connection.query(
+    `
+      SELECT id
+      FROM session_seats
+      WHERE session_id = ?
+        AND confirmed_user_id = ?
+        AND status IN ('confirmed', 'locked')
+    `,
+    [session.id, currentUserId]
+  );
+  const [npcRoleRows] = await connection.query(
+    `
+      SELECT id
+      FROM session_npc_roles
+      WHERE session_id = ?
+        AND bound_user_id = ?
+        AND status = 'active'
+    `,
+    [session.id, currentUserId]
+  );
+
+  return {
+    userId: currentUserId,
+    seatIds: new Set(seatRows.map((row) => Number(row.id))),
+    sessionNpcRoleIds: new Set(npcRoleRows.map((row) => Number(row.id)))
+  };
+}
+
 async function getAlbumPrivacy(connection, sessionId, userId) {
   const [rows] = await connection.query(
     `
@@ -1096,6 +1258,7 @@ async function sessionAlbumPeople(connection, session) {
       session_npc_role_id: Number(role.id),
       user_id: role.bound_user_id ? Number(role.bound_user_id) : null,
       label: role.name,
+      role_gender: role.role_gender || "unlimited",
       note: accountName,
       account_name: accountName
     });
@@ -1170,39 +1333,34 @@ async function albumTagsForPhotos(connection, photoIds) {
   return tagsByPhotoId(rows);
 }
 
-function isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, userId) {
-  const currentUserId = Number(userId);
+function isAlbumTagInPersonalScope(tag, scope) {
+  if (Number(tag.user_id || 0) === scope.userId) {
+    return true;
+  }
+  if (tag.tag_type === "seat" && scope.seatIds.has(Number(tag.seat_id || 0))) {
+    return true;
+  }
+  return (
+    tag.tag_type === "session_npc_role" &&
+    scope.sessionNpcRoleIds.has(Number(tag.session_npc_role_id || 0))
+  );
+}
+
+function isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, userId, personalScope = null) {
+  const scope = personalScope || {
+    userId: Number(userId),
+    seatIds: new Set(),
+    sessionNpcRoleIds: new Set()
+  };
   const uploaderUserId = Number(photo.uploader_user_id);
-  if (uploaderUserId === currentUserId) {
+  if (uploaderUserId === scope.userId) {
     return true;
   }
 
-  const taggedUserIds = tags.map((tag) => Number(tag.user_id || 0)).filter(Boolean);
-  if (taggedUserIds.includes(currentUserId)) {
+  if (tags.some((tag) => isAlbumTagInPersonalScope(tag, scope))) {
     return true;
   }
-  if (tags.length === 0) {
-    return false;
-  }
-  if (
-    tags.some((tag) => tag.tag_type === "other") ||
-    tags.every((tag) => ["npc", "session_npc_role"].includes(tag.tag_type))
-  ) {
-    return true;
-  }
-
-  const uploaderPrivacy = privacyByUser.get(uploaderUserId) || albumPrivacy();
-  if (!uploaderPrivacy.allow_uploaded_visible) {
-    return false;
-  }
-
-  for (const taggedUserId of taggedUserIds) {
-    const taggedPrivacy = privacyByUser.get(taggedUserId) || albumPrivacy();
-    if (!taggedPrivacy.allow_tagged_visible) {
-      return false;
-    }
-  }
-  return true;
+  return false;
 }
 
 function normalizeAlbumShareClaims(claims = {}) {
@@ -1891,9 +2049,9 @@ export async function createSession(user, body) {
             organizer_user_id, script_id, script_name_snapshot, store_id,
             store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
             npc_user_id, npc_name_snapshot, deposit_amount, visibility,
-            join_policy, join_phone_required, note
+            join_policy, join_phone_required, npc_join_enabled, note
           )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         user.user.id,
@@ -1910,6 +2068,7 @@ export async function createSession(user, body) {
         body.visibility || "share_only",
         normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
         normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
+        normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
         optionalText(body.note)
       ]
     );
@@ -1949,6 +2108,7 @@ export async function getSession(id) {
       ...publicSession,
       join_policy: publicSession.join_policy || "review_required",
       join_phone_required: Boolean(Number(publicSession.join_phone_required ?? 1)),
+      npc_join_enabled: Boolean(Number(publicSession.npc_join_enabled ?? 1)),
       active_album_photo_count: activeAlbumPhotoCount,
       photo_count: activeAlbumPhotoCount,
       seats,
@@ -2418,6 +2578,12 @@ export async function updateSession(user, id, body) {
           ? undefined
           : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required)
             ? 1
+            : 0,
+      npcJoinEnabled:
+        body.npcJoinEnabled === undefined && body.npc_join_enabled === undefined
+          ? undefined
+          : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled)
+            ? 1
             : 0
     };
     return updateAllowed(connection, "sessions", id, normalized, [
@@ -2430,6 +2596,7 @@ export async function updateSession(user, id, body) {
       ["visibility", "visibility"],
       ["joinPolicy", "join_policy"],
       ["joinPhoneRequired", "join_phone_required"],
+      ["npcJoinEnabled", "npc_join_enabled"],
       ["note", "note"],
       ["status", "status"]
     ]);
@@ -2521,6 +2688,10 @@ export async function updateSessionNpcRole(user, npcRoleId, body = {}) {
           ? undefined
           : optionalText(body.description ?? body.note),
       source: body.source === undefined ? undefined : normalizeNpcRoleSource(body.source),
+      roleGender:
+        body.roleGender === undefined && body.role_gender === undefined && body.gender === undefined
+          ? undefined
+          : normalizeRoleGender(body.roleGender ?? body.role_gender ?? body.gender),
       boundUserId: nullableBoundUserId(body),
       sortOrder:
         body.sortOrder === undefined && body.sort_order === undefined
@@ -2531,6 +2702,7 @@ export async function updateSessionNpcRole(user, npcRoleId, body = {}) {
     const updated = await updateAllowed(connection, "session_npc_roles", id, normalized, [
       ["name", "name"],
       ["description", "description"],
+      ["roleGender", "role_gender"],
       ["source", "source"],
       ["boundUserId", "bound_user_id"],
       ["sortOrder", "sort_order"],
@@ -2662,12 +2834,15 @@ async function signupNotificationPayload(connection, signupId) {
         session.start_at,
         seat.name AS seat_name,
         seat.role_name,
+        npc_role.name AS npc_role_name,
+        npc_role.role_gender AS npc_role_gender,
         organizer.open_id AS organizer_open_id,
         applicant.open_id AS applicant_open_id,
         applicant.nickname AS applicant_nickname
       FROM signups signup
       JOIN sessions session ON session.id = signup.session_id
-      JOIN session_seats seat ON seat.id = signup.seat_id
+      LEFT JOIN session_seats seat ON seat.id = signup.seat_id
+      LEFT JOIN session_npc_roles npc_role ON npc_role.id = signup.session_npc_role_id
       JOIN users organizer ON organizer.id = session.organizer_user_id
       JOIN users applicant ON applicant.id = signup.user_id
       WHERE signup.id = ?
@@ -2683,7 +2858,7 @@ async function signupNotificationPayload(connection, signupId) {
     sessionId: Number(row.session_id),
     status: row.status,
     scriptName: row.script_name_snapshot,
-    seatName: row.role_name || row.seat_name,
+    seatName: row.role_name || row.seat_name || row.npc_role_name || "NPC角色",
     startAt: row.start_at,
     organizerOpenId: row.organizer_open_id,
     applicantOpenId: row.applicant_open_id,
@@ -2713,8 +2888,8 @@ export async function createSignup(user, body) {
       `
         SELECT
           seat.*,
-          session.join_phone_required,
           session.status AS session_status,
+          COALESCE(session.join_phone_required, 1) AS join_phone_required,
           (session.start_at <= CURRENT_TIMESTAMP) AS session_started
         FROM session_seats seat
         JOIN sessions session ON session.id = seat.session_id
@@ -2739,6 +2914,7 @@ export async function createSignup(user, body) {
     if (["confirmed", "locked", "cancelled"].includes(seat.status)) {
       throw conflict("Seat is not open for signup");
     }
+    await assertUserCanJoinSession(connection, seat.session_id, user.user.id);
     requireJoinPhoneIfNeeded(user, seat);
 
     const contactText = optionalText(body.contactText);
@@ -2775,8 +2951,9 @@ export async function createSignup(user, body) {
     } else {
       const [result] = await connection.query(
         `
-          INSERT INTO signups (session_id, seat_id, user_id, contact_text, note)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO signups
+            (session_id, seat_id, session_npc_role_id, signup_type, user_id, contact_text, note)
+          VALUES (?, ?, NULL, 'seat', ?, ?, ?)
         `,
         [
           seat.session_id,
@@ -2833,7 +3010,7 @@ export async function claimSessionSeat(user, seatId, body = {}) {
           seat.*,
           session.organizer_user_id,
           session.join_policy,
-          session.join_phone_required,
+          COALESCE(session.join_phone_required, 1) AS join_phone_required,
           session.status AS session_status,
           (session.start_at <= CURRENT_TIMESTAMP) AS session_started
         FROM session_seats seat
@@ -2846,6 +3023,7 @@ export async function claimSessionSeat(user, seatId, body = {}) {
     if (!seat) {
       throw notFound("Seat not found");
     }
+    await assertUserCanJoinSession(connection, seat.session_id, user.user.id);
     forbidPlayerDirectClaim(user, seat);
     requireJoinPhoneIfNeeded(user, seat);
     const canClaimStartedOpenSeat =
@@ -2884,9 +3062,13 @@ export async function claimSessionSeat(user, seatId, body = {}) {
     await connection.query(
       `
         INSERT INTO signups
-          (session_id, seat_id, user_id, contact_text, note, status, review_eligible_at)
-        VALUES (?, ?, ?, ?, ?, 'approved', CURRENT_TIMESTAMP)
+          (
+            session_id, seat_id, session_npc_role_id, signup_type,
+            user_id, contact_text, note, status, review_eligible_at
+          )
+        VALUES (?, ?, NULL, 'seat', ?, ?, ?, 'approved', CURRENT_TIMESTAMP)
         ON DUPLICATE KEY UPDATE
+          signup_type = 'seat',
           status = 'approved',
           contact_text = VALUES(contact_text),
           note = VALUES(note),
@@ -2928,6 +3110,197 @@ export async function claimSessionSeat(user, seatId, body = {}) {
   });
 }
 
+export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
+  const id = positiveId(npcRoleId, "npcRoleId");
+
+  return withTransaction(async (connection) => {
+    const [rows] = await connection.query(
+      `
+        SELECT
+          role.*,
+          session.organizer_user_id,
+          session.status AS session_status,
+          session.join_policy,
+          COALESCE(session.join_phone_required, 1) AS join_phone_required,
+          COALESCE(session.npc_join_enabled, 1) AS npc_join_enabled
+        FROM session_npc_roles role
+        JOIN sessions session ON session.id = role.session_id
+        WHERE role.id = ?
+        FOR UPDATE
+      `,
+      [id]
+    );
+    const role = rows[0];
+    if (!role) {
+      throw notFound("Session NPC role not found");
+    }
+    if (role.status !== "active") {
+      throw conflict("NPC role is not available");
+    }
+    if (role.session_status === "cancelled") {
+      throw badRequest("Session is not available");
+    }
+    const currentUserId = Number(user.user.id);
+    const isOwnerOrAdmin = isAdmin(user) || Number(role.organizer_user_id) === currentUserId;
+    if (!Number(role.npc_join_enabled || 0) && !isOwnerOrAdmin) {
+      throw forbidden("NPC self join is disabled");
+    }
+    if (role.bound_user_id && Number(role.bound_user_id) !== currentUserId) {
+      throw conflict("NPC role already has a bound user");
+    }
+    requireJoinPhoneIfNeeded(user, role);
+
+    const [currentSignupRows] = await connection.query(
+      `
+        SELECT *
+        FROM signups
+        WHERE session_npc_role_id = ?
+          AND user_id = ?
+        FOR UPDATE
+      `,
+      [id, currentUserId]
+    );
+    const currentSignup = currentSignupRows[0] || null;
+
+    const [otherPendingRows] = await connection.query(
+      `
+        SELECT id
+        FROM signups
+        WHERE session_npc_role_id = ?
+          AND user_id <> ?
+          AND status = 'pending'
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [id, currentUserId]
+    );
+    if (otherPendingRows.length > 0 && !role.bound_user_id) {
+      throw conflict("NPC role already has a pending signup");
+    }
+
+    const contactText = optionalText(body.contactText);
+    const note = optionalText(body.note);
+    if (role.bound_user_id && Number(role.bound_user_id) === currentUserId) {
+      await connection.query(
+        `
+          INSERT INTO signups
+            (
+              session_id, seat_id, session_npc_role_id, signup_type,
+              user_id, contact_text, note, status, review_eligible_at
+            )
+          VALUES (?, NULL, ?, 'session_npc_role', ?, ?, ?, 'approved', CURRENT_TIMESTAMP)
+          ON DUPLICATE KEY UPDATE
+            signup_type = 'session_npc_role',
+            status = 'approved',
+            contact_text = VALUES(contact_text),
+            note = VALUES(note),
+            review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
+            user_hidden_at = NULL
+        `,
+        [role.session_id, id, currentUserId, contactText, note]
+      );
+      return {
+        join_result: "npc_joined",
+        npc_role: await sessionNpcRoleById(connection, id)
+      };
+    }
+
+    if ((role.join_policy || "review_required") === "direct") {
+      await connection.query(
+        `
+          UPDATE session_npc_roles
+          SET bound_user_id = ?
+          WHERE id = ?
+        `,
+        [currentUserId, id]
+      );
+      await connection.query(
+        `
+          INSERT INTO signups
+            (
+              session_id, seat_id, session_npc_role_id, signup_type,
+              user_id, contact_text, note, status, review_eligible_at
+            )
+          VALUES (?, NULL, ?, 'session_npc_role', ?, ?, ?, 'approved', CURRENT_TIMESTAMP)
+          ON DUPLICATE KEY UPDATE
+            signup_type = 'session_npc_role',
+            status = 'approved',
+            contact_text = VALUES(contact_text),
+            note = VALUES(note),
+            review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
+            user_hidden_at = NULL
+        `,
+        [role.session_id, id, currentUserId, contactText, note]
+      );
+      await connection.query(
+        `
+          UPDATE signups
+          SET status = 'rejected'
+          WHERE session_npc_role_id = ?
+            AND user_id <> ?
+            AND status = 'pending'
+        `,
+        [id, currentUserId]
+      );
+      return {
+        join_result: "npc_joined",
+        npc_role: await sessionNpcRoleById(connection, id)
+      };
+    }
+
+    if (currentSignup && currentSignup.status === "pending") {
+      return {
+        join_result: "pending_review",
+        signup: currentSignup
+      };
+    }
+
+    if (
+      currentSignup &&
+      !["rejected", "cancelled"].includes(currentSignup.status)
+    ) {
+      throw conflict("Signup already exists");
+    }
+
+    let signup;
+    if (currentSignup) {
+      await connection.query(
+        `
+          UPDATE signups
+          SET signup_type = 'session_npc_role',
+              status = 'pending',
+              deposit_status = 'unpaid',
+              contact_text = ?,
+              note = ?,
+              review_eligible_at = NULL,
+              user_hidden_at = NULL
+          WHERE id = ?
+        `,
+        [contactText, note, currentSignup.id]
+      );
+      signup = await findById(connection, "signups", currentSignup.id);
+    } else {
+      const [result] = await connection.query(
+        `
+          INSERT INTO signups
+            (
+              session_id, seat_id, session_npc_role_id, signup_type,
+              user_id, contact_text, note, status
+            )
+          VALUES (?, NULL, ?, 'session_npc_role', ?, ?, ?, 'pending')
+        `,
+        [role.session_id, id, currentUserId, contactText, note]
+      );
+      signup = await findById(connection, "signups", result.insertId);
+    }
+
+    return {
+      join_result: "pending_review",
+      signup
+    };
+  });
+}
+
 export async function listMySignups(user) {
   return withDatabaseConnection(async (connection) => {
     const [rows] = await connection.query(
@@ -2942,6 +3315,10 @@ export async function listMySignups(user) {
           seat.name AS seat_name,
           seat.role_name AS seat_role_name,
           seat.status AS seat_status,
+          npc_role.id AS session_npc_role_id,
+          npc_role.name AS npc_role_name,
+          npc_role.role_gender AS npc_role_gender,
+          npc_role.status AS npc_role_status,
           EXISTS (
             SELECT 1
             FROM session_reviews review
@@ -2956,6 +3333,7 @@ export async function listMySignups(user) {
         FROM signups signup
         JOIN sessions session ON session.id = signup.session_id
         LEFT JOIN session_seats seat ON seat.id = signup.seat_id
+        LEFT JOIN session_npc_roles npc_role ON npc_role.id = signup.session_npc_role_id
         WHERE signup.user_id = ?
           AND signup.user_hidden_at IS NULL
         ORDER BY session.start_at DESC, signup.id DESC
@@ -2998,7 +3376,26 @@ export async function listSessionSignups(user, sessionId) {
   return withDatabaseConnection(async (connection) => {
     await requireSessionOwner(connection, sessionId, user);
     const [rows] = await connection.query(
-      "SELECT * FROM signups WHERE session_id = ? ORDER BY id DESC",
+      `
+        SELECT
+          signup.*,
+          COALESCE(signup.signup_type, 'seat') AS signup_type,
+          seat.name AS seat_name,
+          seat.role_name AS seat_role_name,
+          seat.status AS seat_status,
+          npc_role.name AS npc_role_name,
+          npc_role.role_gender AS npc_role_gender,
+          npc_role.status AS npc_role_status,
+          npc_role.bound_user_id AS npc_role_bound_user_id,
+          applicant.nickname AS applicant_nickname,
+          applicant.open_id AS applicant_open_id
+        FROM signups signup
+        LEFT JOIN session_seats seat ON seat.id = signup.seat_id
+        LEFT JOIN session_npc_roles npc_role ON npc_role.id = signup.session_npc_role_id
+        LEFT JOIN users applicant ON applicant.id = signup.user_id
+        WHERE signup.session_id = ?
+        ORDER BY signup.id DESC
+      `,
       [sessionId]
     );
     return rows;
@@ -3010,6 +3407,61 @@ export async function approveSignup(user, signupId) {
     const signup = await requireSignupOwner(connection, signupId, user);
     if (signup.status !== "pending") {
       throw badRequest("Only pending signup can be approved");
+    }
+
+    if ((signup.signup_type || "seat") === "session_npc_role") {
+      const [roleRows] = await connection.query(
+        `
+          SELECT *
+          FROM session_npc_roles
+          WHERE id = ?
+          FOR UPDATE
+        `,
+        [signup.session_npc_role_id]
+      );
+      const role = roleRows[0];
+      if (!role) {
+        throw notFound("Session NPC role not found");
+      }
+      if (role.status !== "active") {
+        throw conflict("NPC role is not available");
+      }
+      if (
+        role.bound_user_id &&
+        Number(role.bound_user_id) !== Number(signup.user_id)
+      ) {
+        throw conflict("NPC role already has a bound user");
+      }
+      await connection.query(
+        `
+          UPDATE session_npc_roles
+          SET bound_user_id = ?
+          WHERE id = ?
+        `,
+        [signup.user_id, signup.session_npc_role_id]
+      );
+      await connection.query(
+        `
+          UPDATE signups
+          SET status = 'rejected'
+          WHERE session_npc_role_id = ?
+            AND id <> ?
+            AND status = 'pending'
+        `,
+        [signup.session_npc_role_id, signupId]
+      );
+      await connection.query("UPDATE signups SET status = 'approved' WHERE id = ?", [
+        signupId
+      ]);
+      await markSignupReviewEligible(connection, signupId);
+      const approvedSignup = await findById(connection, "signups", signupId);
+      return {
+        signup: approvedSignup,
+        notification: {
+          ...(await signupNotificationPayload(connection, signupId)),
+          resultText: "已通过"
+        }
+      };
     }
 
     await lockSessionSeats(connection, signup.session_id);
@@ -3072,6 +3524,17 @@ export async function rejectSignup(user, signupId) {
     await connection.query("UPDATE signups SET status = 'rejected' WHERE id = ?", [
       signupId
     ]);
+
+    if ((signup.signup_type || "seat") === "session_npc_role") {
+      const rejectedSignup = await findById(connection, "signups", signupId);
+      return {
+        signup: rejectedSignup,
+        notification: {
+          ...(await signupNotificationPayload(connection, signupId)),
+          resultText: "已拒绝"
+        }
+      };
+    }
 
     const [activeRows] = await connection.query(
       `
@@ -3155,6 +3618,21 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       throw forbidden("Only the session organizer can perform this action");
     }
 
+    const report = booleanValue(body.report, false);
+    const reasonType = normalizeRemovalReasonType(
+      body.reasonType ?? body.reason_type,
+      report
+    );
+    const reason = optionalText(body.reason);
+    assertMessageTextSafe("reason", reason);
+    const removedUserId = seat.confirmed_user_id ? Number(seat.confirmed_user_id) : null;
+    if (
+      report &&
+      (!removedUserId || !["confirmed", "locked"].includes(seat.status))
+    ) {
+      throw conflict("Reported removal requires an onboard member");
+    }
+
     await connection.query(
       `
         UPDATE signups
@@ -3163,6 +3641,19 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       `,
       [seatId]
     );
+    if (removedUserId) {
+      await connection.query(
+        `
+          UPDATE signups
+          SET status = 'cancelled'
+          WHERE session_id = ?
+            AND user_id = ?
+            AND COALESCE(signup_type, 'seat') = 'seat'
+            AND status IN ('pending', 'approved')
+        `,
+        [seat.session_id, removedUserId]
+      );
+    }
     await clearPreStartReviewEligibilityForSeat(connection, seatId);
     const nextSeatStatus = seat.session_status === "cancelled" ? "cancelled" : "open";
     await connection.query(
@@ -3175,11 +3666,40 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       [nextSeatStatus, seatId]
     );
 
-    const reason = optionalText(body.reason);
-    const content = reason
-      ? `车头已释放「${seat.name}」：${reason}`
-      : `车头已释放「${seat.name}」`;
-    assertMessageTextSafe("reason", reason);
+    const blockRejoin = BLOCKING_REMOVAL_REASONS.has(reasonType);
+    let removalReport = null;
+    if (report) {
+      const [result] = await connection.query(
+        `
+          INSERT INTO session_member_removal_reports
+            (
+              session_id, seat_id, removed_user_id, removed_by_user_id,
+              reason_type, reason_text, block_rejoin
+            )
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          seat.session_id,
+          seat.id,
+          removedUserId,
+          user.user.id,
+          reasonType,
+          reason,
+          blockRejoin ? 1 : 0
+        ]
+      );
+      removalReport = await findById(
+        connection,
+        "session_member_removal_reports",
+        result.insertId
+      );
+    }
+
+    const content = report
+      ? `车头已将「${seat.name}」移出本车，原因：${removalReasonLabel(reasonType)}`
+      : reason
+        ? `车头已释放「${seat.name}」：${reason}`
+        : `车头已释放「${seat.name}」`;
     await runSessionExtensionHook("afterSessionSeatKicked", {
       connection,
       sessionId: seat.session_id,
@@ -3187,7 +3707,11 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       content
     });
 
-    return findById(connection, "session_seats", seatId);
+    return {
+      ...(await findById(connection, "session_seats", seatId)),
+      removal_reported: Boolean(removalReport),
+      removal_report: removalReport
+    };
   });
 }
 
@@ -3319,9 +3843,9 @@ async function deleteSessionTree(connection, id) {
     ["sessionAlbumPhotos", "DELETE FROM session_album_photos WHERE session_id = ?"],
     ["sessionAlbumPrivacy", "DELETE FROM session_album_privacy WHERE session_id = ?"],
     ["sessionReviews", "DELETE FROM session_reviews WHERE session_id = ?"],
+    ["signups", "DELETE FROM signups WHERE session_id = ?"],
     ["sessionNpcRoles", "DELETE FROM session_npc_roles WHERE session_id = ?"],
     ["shareEvents", "DELETE FROM share_events WHERE session_id = ?"],
-    ["signups", "DELETE FROM signups WHERE session_id = ?"],
     ["sessionSeats", "DELETE FROM session_seats WHERE session_id = ?"],
     ["sessions", "DELETE FROM sessions WHERE id = ?"]
   ];
@@ -3454,6 +3978,7 @@ export async function listSessionAlbum(user, sessionId) {
     const session = await requireSessionAlbumOpen(connection, id);
     await requireSessionAlbumMember(connection, session, user);
     const privacy = await getAlbumPrivacy(connection, id, user.user.id);
+    const personalScope = await sessionAlbumPersonalScope(connection, session, user.user.id);
     const [photoRows] = await connection.query(
       `
         SELECT
@@ -3488,7 +4013,7 @@ export async function listSessionAlbum(user, sessionId) {
       if (tags.length === 0) {
         untaggedCount += 1;
       }
-      if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, user.user.id)) {
+      if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, user.user.id, personalScope)) {
         hiddenCount += 1;
         continue;
       }
@@ -3732,6 +4257,7 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
     if (!(await isSessionAlbumMember(connection, session, currentUserId))) {
       throw forbidden("Only session members can view the session album");
     }
+    const personalScope = await sessionAlbumPersonalScope(connection, session, currentUserId);
     const tagsMap = await albumTagsForPhotos(connection, [id]);
     const tags = tagsMap.get(id) || [];
     const privacyByUser = await albumPrivacyMap(
@@ -3742,7 +4268,7 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
         ...tags.map((tag) => tag.user_id).filter(Boolean)
       ]
     );
-    if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, currentUserId)) {
+    if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, currentUserId, personalScope)) {
       throw forbidden("Album photo is not visible");
     }
     return photo;

@@ -32,6 +32,7 @@ import {
   assertSessionAlbumUploadAllowed,
   approveSignup,
   cancelSession,
+  claimSessionNpcRole,
   claimSessionSeat,
   createSessionAlbumPhoto,
   createCatalogRequest,
@@ -1651,6 +1652,19 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await updateSessionNpcRole(user, sessionNpcRoleId, body)
+    });
+    return;
+  }
+
+  const sessionNpcRoleClaimId = idMatch(
+    url.pathname,
+    /^\/api\/session-npc-roles\/(\d+)\/claim$/
+  );
+  if (request.method === "POST" && sessionNpcRoleClaimId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await claimSessionNpcRole(user, sessionNpcRoleClaimId, body)
     });
     return;
   }

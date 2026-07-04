@@ -88,6 +88,7 @@
                 <tr>
                   <th>NPC角色</th>
                   <th>角色说明</th>
+                  <th>NPC性别</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -95,6 +96,13 @@
                 <tr v-for="(npcRole, index) in model.npcRoles" :key="npcRole.id">
                   <td><input v-model.trim="npcRole.name" :name="`npcRoleName-${index}`" /></td>
                   <td><input v-model.trim="npcRole.description" :name="`npcRoleDescription-${index}`" /></td>
+                  <td>
+                    <select v-model="npcRole.roleGender" :name="`npcRoleGender-${index}`">
+                      <option value="unlimited">不限</option>
+                      <option value="male">男位</option>
+                      <option value="female">女位</option>
+                    </select>
+                  </td>
                   <td class="row-actions">
                     <button class="action-button" type="button" @click="moveNpcRole(index, -1)">上移</button>
                     <button class="action-button" type="button" @click="moveNpcRole(index, 1)">下移</button>
@@ -166,7 +174,8 @@ function toEditorNpcRole(role = {}, index = 0) {
   return {
     id: role.id || `${Date.now()}-npc-${index}`,
     name: role.name || role.roleName || role.role_name || "",
-    description: role.description || role.note || role.roleDescription || ""
+    description: role.description || role.note || role.roleDescription || "",
+    roleGender: role.roleGender || role.role_gender || role.gender || "unlimited"
   };
 }
 
@@ -264,7 +273,8 @@ function submit() {
       .map((role) => ({
         id: role.id,
         name: role.name,
-        description: role.description
+        description: role.description,
+        roleGender: role.roleGender
       }))
       .filter((role) => role.name)
   });

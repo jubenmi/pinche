@@ -8,30 +8,12 @@
       <view class="text">{{ scriptName }} 的角色列表，选你想玩的那一个。</view>
     </view>
 
-    <view class="role-grid">
-      <view
-        v-for="role in roleOptions"
-        :key="role.id"
-        class="role-tile"
-        :class="[roleGenderClass(role.roleGender), { selected: isSelectedRole(role) }]"
-        @tap="selectRole(role)"
-      >
-        <view class="role-name">
-          <text>{{ role.name }}</text>
-          <text v-if="roleGenderSymbol(role.roleGender)" class="role-gender-symbol">
-            {{ roleGenderSymbol(role.roleGender) }}
-          </text>
-          <text v-if="isSelectedCrossCast(role)" class="cross-cast-tag">（反串）</text>
-        </view>
-        <view class="role-note">{{ role.note }}</view>
-        <image
-          v-if="isSelectedRole(role)"
-          class="role-check"
-          src="/static/icons/check.png"
-          mode="aspectFit"
-        />
-      </view>
-    </view>
+    <RoleSeatBoard
+      :surface="false"
+      :items="roleCards"
+      empty-text="暂无角色。"
+      @itemtap="handleRoleTap"
+    />
 
     <view class="bottom-action">
       <button class="button" :class="{ disabled: !selectedRole }" @click="goNext">下一步</button>
@@ -41,18 +23,17 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import { AUTH_CHANGE_EVENT, getCurrentUser } from "../../utils/api";
 import {
   isCrossCast,
-  normalizeRoleGender,
   readCreateFlow,
-  roleGenderSymbol,
   roleOptionsFromScript,
   writeCreateFlow
 } from "../../utils/createFlow";
 
 export default {
-  components: { AuthIdentityBar },
+  components: { AuthIdentityBar, RoleSeatBoard },
   data() {
     return {
       store: null,
@@ -68,6 +49,20 @@ export default {
     },
     scriptName() {
       return this.script?.name || "剧本待定";
+    },
+    roleCards() {
+      return this.roleOptions.map((role) => {
+        const selected = this.isSelectedRole(role);
+        return {
+          ...role,
+          note: role.note || "角色位",
+          checked: selected,
+          selected,
+          crossCast: this.isSelectedCrossCast(role),
+          stateKind: selected ? "mine" : "available",
+          stateLabel: selected ? "我选" : "可选"
+        };
+      });
     }
   },
   onLoad() {
@@ -88,7 +83,6 @@ export default {
     this.unbindAuthChangeListener();
   },
   methods: {
-    roleGenderSymbol,
     bindAuthChangeListener() {
       if (typeof uni.$on === "function") {
         uni.$on(AUTH_CHANGE_EVENT, this.refreshCurrentUserGender);
@@ -102,10 +96,6 @@ export default {
     refreshCurrentUserGender(auth = null) {
       const currentAuth = auth?.user ? auth : getCurrentUser();
       this.currentUserGender = currentAuth.user?.gender || "";
-    },
-    roleGenderClass(roleGender) {
-      const gender = normalizeRoleGender(roleGender);
-      return ["male", "female"].includes(gender) ? gender : "";
     },
     confirmCrossCastRole(role) {
       if (!isCrossCast(this.currentUserGender, role.roleGender)) {
@@ -125,6 +115,9 @@ export default {
           }
         });
       });
+    },
+    async handleRoleTap(payload) {
+      await this.selectRole(payload.item);
     },
     async selectRole(role) {
       if (this.isSelectedRole(role)) {
@@ -178,91 +171,6 @@ export default {
   color: #b89458;
   font-size: 24rpx;
   font-weight: 600;
-}
-
-.role-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20rpx;
-}
-
-.role-tile {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-height: 164rpx;
-  padding: 28rpx 20rpx;
-  border: 1rpx solid rgba(223, 216, 204, 0.92);
-  border-radius: 16rpx;
-  background: rgba(255, 255, 252, 0.94);
-  box-sizing: border-box;
-  box-shadow: 0 12rpx 32rpx rgba(51, 69, 59, 0.04);
-}
-
-.role-tile.male {
-  border-color: rgba(159, 184, 178, 0.9);
-  background: rgba(242, 248, 247, 0.98);
-}
-
-.role-tile.female {
-  border-color: rgba(224, 195, 184, 0.9);
-  background: rgba(255, 248, 245, 0.98);
-}
-
-.role-tile.selected {
-  box-shadow:
-    0 0 0 3rpx rgba(216, 167, 61, 0.86),
-    inset 0 0 0 1rpx rgba(216, 167, 61, 0.26);
-}
-
-.role-name {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8rpx;
-  min-width: 0;
-  color: #153f34;
-  font-size: 30rpx;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.role-gender-symbol {
-  flex-shrink: 0;
-  color: #8d7b55;
-  font-size: 28rpx;
-  font-weight: 700;
-}
-
-.role-tile.male .role-gender-symbol {
-  color: #66877f;
-}
-
-.role-tile.female .role-gender-symbol {
-  color: #aa7b71;
-}
-
-.cross-cast-tag {
-  flex-shrink: 0;
-  color: #b06b35;
-  font-size: 22rpx;
-  font-weight: 600;
-}
-
-.role-note {
-  margin-top: 14rpx;
-  color: #7a857d;
-  font-size: 23rpx;
-  line-height: 1.35;
-}
-
-.role-check {
-  position: absolute;
-  right: 18rpx;
-  bottom: 16rpx;
-  width: 34rpx;
-  height: 34rpx;
 }
 
 </style>

@@ -1,9 +1,9 @@
 <template>
-  <view v-if="session.id" class="section">
-    <view class="section-head">
+  <view v-if="session.id" class="pinned-manager" :class="{ embedded }">
+    <view class="pinned-head">
       <view>
-        <view class="section-title">置顶信息</view>
-        <view class="section-note">只放最重要的一句话，比如集合时间、房间号或临时变更。</view>
+        <view class="pinned-title">置顶信息</view>
+        <view class="pinned-note">只放最重要的一句话，比如集合时间、房间号或临时变更。</view>
       </view>
     </view>
     <textarea
@@ -29,6 +29,7 @@ export default {
     sessionId: { type: [String, Number], default: "" },
     session: { type: Object, default: () => ({}) },
     busy: { type: Boolean, default: false },
+    embedded: { type: Boolean, default: false },
     authTools: { type: Object, required: true }
   },
   emits: ["updated", "status"],
@@ -102,7 +103,7 @@ export default {
 </script>
 
 <style scoped>
-.section {
+.pinned-manager {
   margin: 24rpx;
   padding: 28rpx;
   border-radius: 8rpx;
@@ -110,20 +111,34 @@ export default {
   box-shadow: 0 10rpx 26rpx rgba(29, 54, 45, 0.08);
 }
 
-.section-head {
+.pinned-manager.embedded {
+  margin: 0;
+  padding: 24rpx 0 0;
+  border-top: 1rpx solid rgba(222, 216, 202, 0.72);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.pinned-head {
   display: flex;
   justify-content: space-between;
   gap: 16rpx;
 }
 
-.section-title {
+.pinned-title {
   margin-bottom: 18rpx;
   color: #153f34;
   font-size: 30rpx;
   font-weight: 600;
 }
 
-.section-note {
+.pinned-manager.embedded .pinned-title {
+  margin-bottom: 6rpx;
+  font-size: 26rpx;
+}
+
+.pinned-note {
   color: #7a857d;
   font-size: 24rpx;
   line-height: 1.5;
@@ -150,5 +165,9 @@ export default {
   display: flex;
   gap: 16rpx;
   margin-top: 22rpx;
+}
+
+.pinned-manager.embedded .actions {
+  margin-top: 18rpx;
 }
 </style>

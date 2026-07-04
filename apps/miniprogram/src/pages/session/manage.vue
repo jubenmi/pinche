@@ -2,28 +2,48 @@
   <view class="page manage-page">
     <AuthIdentityBar />
 
-    <view class="section">
-      <view class="title">{{ session.script_name_snapshot || "车头管理" }}</view>
-      <view class="text">{{ summaryText }}</view>
-      <view v-if="operationText" class="notice">{{ operationText }}</view>
-      <view class="actions">
-        <button class="button" :disabled="busyAction" @click="reload">
-          {{ busyAction ? "处理中..." : "刷新" }}
+    <view class="section overview-card">
+      <view class="overview-head">
+        <view class="overview-main">
+          <view class="overview-kicker">车局总览</view>
+          <view class="overview-title-row">
+            <view class="title">{{ session.script_name_snapshot || "车头管理" }}</view>
+            <view v-if="session.id" class="status-pill">{{ sessionStatusLabel(session.status) }}</view>
+          </view>
+          <view class="text">{{ summaryText }}</view>
+        </view>
+        <button class="overview-refresh" :disabled="busyAction" @click="reload">
+          {{ busyAction ? "处理中" : "刷新" }}
         </button>
-        <button class="button secondary" :disabled="busyAction" @click="subscribeSignupReminder">
+      </view>
+      <view v-if="operationText" class="notice">{{ operationText }}</view>
+      <view v-if="session.id" class="overview-stats">
+        <view class="overview-stat">
+          <view class="overview-stat-value">{{ seatStats.total }}</view>
+          <view class="overview-stat-label">座位</view>
+        </view>
+        <view class="overview-stat">
+          <view class="overview-stat-value">{{ seatStats.open }}</view>
+          <view class="overview-stat-label">空位</view>
+        </view>
+        <view class="overview-stat warning">
+          <view class="overview-stat-value">{{ seatStats.applied }}</view>
+          <view class="overview-stat-label">待审</view>
+        </view>
+        <view class="overview-stat">
+          <view class="overview-stat-value">{{ seatStats.onboard }}</view>
+          <view class="overview-stat-label">已上车</view>
+        </view>
+      </view>
+      <view v-if="session.id" class="overview-lines">
+        <view class="overview-line">店家：{{ session.store_name_snapshot }}</view>
+        <view class="overview-line">时间：{{ session.start_at }}</view>
+      </view>
+      <view v-if="session.id" class="overview-actions">
+        <button class="mini-button muted" :disabled="busyAction" @click="subscribeSignupReminder">
           申请提醒
         </button>
-        <button class="button secondary" :disabled="busyAction" @click="goDetail">车局详情</button>
-      </view>
-    </view>
-
-    <view v-if="session.id" class="section">
-      <view class="section-title">车况</view>
-      <view class="info-row">店家：{{ session.store_name_snapshot }}</view>
-      <view class="info-row">时间：{{ session.start_at }}</view>
-      <view class="info-row">状态：{{ sessionStatusLabel(session.status) }}</view>
-      <view class="info-row">座位：{{ seatSummary }}</view>
-      <view class="actions compact">
+        <button class="mini-button muted" :disabled="busyAction" @click="goDetail">车局详情</button>
         <button
           v-if="hasOtherOnboardMembers"
           class="mini-button muted"
@@ -33,13 +53,26 @@
           退出车头
         </button>
       </view>
+      <view v-if="session.id" class="overview-pinned">
+        <ManagePinnedMessage
+          v-for="extension in sessionManageExtensions"
+          :key="extension.id"
+          :session-id="sessionId"
+          :session="session"
+          :busy="busyAction"
+          :embedded="true"
+          :auth-tools="authTools"
+          @status="setStatus"
+          @updated="reload"
+        />
+      </view>
     </view>
 
     <view v-if="session.id" class="section">
       <view class="section-head">
         <view>
           <view class="section-title">车局设置</view>
-          <view class="section-note">车头可以随时调整后续上车规则。</view>
+          <view class="section-note">像群设置一样，车头可以随时调整后续上车规则。</view>
         </view>
         <button
           class="mini-button"
@@ -52,8 +85,27 @@
       </view>
       <view class="setting-switch-row">
         <view class="setting-switch-copy">
+          <view class="setting-title">上车审核</view>
+          <view class="section-note">
+            开启后，玩家和NPC申请需要车头通过；关闭后可直接上车。
+          </view>
+        </view>
+        <view class="setting-switch-meta">
+          <view class="setting-switch-label">
+            {{ joinPolicy === "review_required" ? "需要审核" : "直接上车" }}
+          </view>
+          <switch
+            color="#1f7a68"
+            :checked="joinPolicy === 'review_required'"
+            :disabled="busyAction"
+            @change="setJoinPolicy($event.detail.value ? 'review_required' : 'direct')"
+          />
+        </view>
+      </view>
+      <view class="setting-switch-row">
+        <view class="setting-switch-copy">
           <view class="setting-title">上车必须留电话</view>
-          <view class="section-note">关闭后，玩家可以不授权手机号也能上车或申请。</view>
+          <view class="section-note">关闭后，玩家和NPC仍需登录，但可以不授权手机号也能上车或申请。</view>
         </view>
         <view class="setting-switch-meta">
           <view class="setting-switch-label">{{ joinPhoneRequired ? "已开启" : "已关闭" }}</view>
@@ -65,66 +117,38 @@
           />
         </view>
       </view>
+      <view class="setting-switch-row">
+        <view class="setting-switch-copy">
+          <view class="setting-title">允许NPC工作人员自选角色</view>
+          <view class="section-note">关闭后，由车头在管理页手动安排NPC角色。</view>
+        </view>
+        <view class="setting-switch-meta">
+          <view class="setting-switch-label">{{ npcJoinEnabled ? "已开启" : "已关闭" }}</view>
+          <switch
+            color="#1f7a68"
+            :checked="npcJoinEnabled"
+            :disabled="busyAction"
+            @change="setNpcJoinEnabled($event.detail.value)"
+          />
+        </view>
+      </view>
     </view>
 
-    <ManagePinnedMessage
-      v-for="extension in sessionManageExtensions"
-      :key="extension.id"
-      :session-id="sessionId"
-      :session="session"
-      :busy="busyAction"
-      :auth-tools="authTools"
-      @status="setStatus"
-      @updated="reload"
+    <RoleSeatBoard
+      v-if="manageRoleSeatSections.length"
+      :sections="manageRoleSeatSections"
+      empty-text="暂无座位或NPC角色。"
+      @actiontap="handleManageRoleSeatAction"
     />
 
-    <view v-if="session.seats && session.seats.length" class="section">
-      <view class="section-title">座位状态</view>
-      <view v-for="seat in session.seats" :key="seat.id" class="seat-card">
-        <view class="seat-header">
-          <view class="seat-title">{{ seat.name }}</view>
-          <view class="seat-status">{{ seatStatusLabel(seat.status) }}</view>
-        </view>
-        <view class="info-row">角色：{{ seat.role_name || "未标注" }}</view>
-        <view class="info-row">类型：{{ seatTypeLabel(seat.seat_type) }}</view>
-        <view v-if="canKickSeat(seat)" class="actions compact">
-          <button
-            v-if="canTransferOrganizerToSeat(seat)"
-            class="mini-button"
-            :disabled="busyAction"
-            @click="transferOrganizerToSeat(seat)"
-          >
-            转让车头
-          </button>
-          <button class="mini-button muted" :disabled="busyAction" @click="kickSeat(seat)">
-            踢出/释放
-          </button>
-        </view>
-      </view>
-    </view>
-
-    <view v-if="session.id" class="section">
-      <view class="section-title">上车申请</view>
-      <view v-if="signups.length === 0" class="empty">暂无申请。</view>
-      <view v-for="signup in signups" :key="signup.id" class="signup-card">
-        <view class="seat-header">
-          <view class="seat-title">{{ seatName(signup.seat_id) }}</view>
-          <view class="seat-status">{{ signupStatusLabel(signup.status) }}</view>
-        </view>
-        <view class="info-row">申请信息：{{ signup.contact_text || "车内聊天沟通" }}</view>
-        <view v-if="signup.note" class="info-row">备注：{{ signup.note }}</view>
-        <view class="info-row">座位状态：{{ seatStatusLabel(seatStatus(signup.seat_id)) }}</view>
-
-        <view v-if="signup.status === 'pending'" class="actions compact">
-          <button class="mini-button" :disabled="busyAction" @click="approve(signup)">
-            通过
-          </button>
-          <button class="mini-button muted" :disabled="busyAction" @click="reject(signup)">
-            拒绝
-          </button>
-        </view>
-      </view>
-    </view>
+    <RoleSeatBoard
+      v-if="session.id"
+      title="上车申请"
+      :summary="signupSummary"
+      :items="signupCards"
+      empty-text="暂无申请。"
+      @actiontap="handleSignupAction"
+    />
 
     <view v-if="session.id" class="section danger-section">
       <view v-if="!hasOtherOnboardMembers && !hasActiveAlbumPhotos">
@@ -164,9 +188,11 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinnedMessage.vue";
 import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
+import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
 
 function booleanSetting(value, fallback = true) {
@@ -176,18 +202,20 @@ function booleanSetting(value, fallback = true) {
   if (typeof value === "boolean") {
     return value;
   }
-  return ["1", "true", "enabled", "required"].includes(String(value).trim().toLowerCase());
+  return ["1", "true", "enabled"].includes(String(value).trim().toLowerCase());
 }
 
 export default {
-  components: { AuthIdentityBar, ManagePinnedMessage },
+  components: { AuthIdentityBar, RoleSeatBoard, ManagePinnedMessage },
   data() {
     return {
       sessionId: "",
       session: {},
       signups: [],
       sessionManageExtensions,
+      joinPolicy: "review_required",
       joinPhoneRequired: true,
+      npcJoinEnabled: true,
       statusText: "",
       busyAction: false,
       busyText: "",
@@ -203,7 +231,7 @@ export default {
     },
     summaryText() {
       if (!this.session.id) {
-        return "置顶信息、处理上车、释放座位和取消车。";
+        return "加载车况、提醒、详情和置顶信息。";
       }
       return `${this.session.store_name_snapshot} / ${this.session.start_at}`;
     },
@@ -214,6 +242,19 @@ export default {
       const confirmed = seats.filter((seat) => seat.status === "confirmed").length;
       const locked = seats.filter((seat) => seat.status === "locked").length;
       return `${seats.length}位，${open}空位，${applied}待审，${confirmed + locked}已上车`;
+    },
+    seatStats() {
+      const seats = this.session.seats || [];
+      const open = seats.filter((seat) => seat.status === "open").length;
+      const applied = seats.filter((seat) => seat.status === "applied").length;
+      const confirmed = seats.filter((seat) => seat.status === "confirmed").length;
+      const locked = seats.filter((seat) => seat.status === "locked").length;
+      return {
+        total: seats.length,
+        open,
+        applied,
+        onboard: confirmed + locked
+      };
     },
     authTools() {
       return { dataOf, request };
@@ -237,7 +278,150 @@ export default {
       if (!this.session.id) {
         return false;
       }
-      return this.joinPhoneRequired !== this.sessionJoinPhoneRequired();
+      return (
+        this.joinPolicy !== this.sessionJoinPolicy() ||
+        this.joinPhoneRequired !== this.sessionJoinPhoneRequired() ||
+        this.npcJoinEnabled !== this.sessionNpcJoinEnabled()
+      );
+    },
+    manageSeatCards() {
+      return (this.session.seats || []).map((seat) => {
+        const actions = [];
+        if (this.canTransferOrganizerToSeat(seat)) {
+          actions.push({
+            key: "transfer",
+            label: "转让车头",
+            disabled: this.busyAction
+          });
+        }
+        if (this.canKickSeat(seat)) {
+          actions.push({
+            key: "kick",
+            label: this.kickSeatActionText(seat),
+            variant: "ghost",
+            disabled: this.busyAction
+          });
+        }
+        return {
+          id: seat.id,
+          seatId: seat.id,
+          raw: seat,
+          name: seat.name,
+          note: `${seat.role_name || "未标注"} · ${this.seatTypeLabel(seat.seat_type)}`,
+          roleGender: seat.role_gender || "unlimited",
+          stateKind: this.seatStateKind(seat),
+          stateLabel: this.seatStatusLabel(seat.status),
+          actions
+        };
+      });
+    },
+    npcRoleSummary() {
+      const roles = this.session.session_npc_roles || [];
+      const available = roles.filter((role) => this.npcRoleStateKind(role) === "available").length;
+      const pending = roles.filter((role) => this.npcRoleStateKind(role) === "pendingReview").length;
+      const assigned = roles.filter((role) => this.npcRoleStateKind(role) === "taken").length;
+      return `${roles.length}个NPC，${available}可安排，${pending}待审，${assigned}已安排`;
+    },
+    manageNpcRoleCards() {
+      return (this.session.session_npc_roles || []).map((role) => {
+        const stateKind = this.npcRoleStateKind(role);
+        const actions = [];
+        if (this.npcRoleActionText(role)) {
+          actions.push({
+            key: "manageNpcRole",
+            label: this.npcRoleActionText(role),
+            variant: "ghost",
+            disabled: this.busyAction
+          });
+        }
+        return {
+          id: `npc-${role.id}`,
+          npcRoleId: role.id,
+          raw: role,
+          boardType: "npc",
+          name: role.name || "NPC角色",
+          note: role.bound_user_name || role.description || "NPC工作人员",
+          roleGender: normalizeRoleGender(role.role_gender || "unlimited"),
+          genderSymbol: this.npcRoleGenderText(role.role_gender),
+          showGenderSymbol: true,
+          stateKind,
+          stateLabel: this.npcRoleStatusLabel(role),
+          meta: [
+            role.source ? { key: "source", label: "来源", text: role.source === "script" ? "剧本固定" : "本场额外" } : null,
+            role.pending_signup_id ? { key: "pending", label: "申请", text: "等待车头审核" } : null
+          ].filter(Boolean),
+          actions
+        };
+      });
+    },
+    manageRoleSeatSections() {
+      const sections = [];
+      if (this.session.seats?.length) {
+        sections.push({
+          key: "seat",
+          title: "座位状态",
+          summary: this.seatSummary,
+          items: this.manageSeatCards
+        });
+      }
+      if (this.manageNpcRoleCards.length) {
+        sections.push({
+          key: "npc",
+          title: "NPC角色",
+          summary: this.npcRoleSummary,
+          statusPill: this.npcJoinEnabled ? "允许自选" : "车头安排",
+          items: this.manageNpcRoleCards
+        });
+      }
+      return sections;
+    },
+    visibleSignups() {
+      return (this.signups || []).filter((signup) => signup.status !== "rejected");
+    },
+    signupSummary() {
+      const visibleSignups = this.visibleSignups;
+      const pending = visibleSignups.filter((signup) => signup.status === "pending").length;
+      const approved = visibleSignups.filter((signup) => signup.status === "approved").length;
+      return `${pending} 个待审，${approved} 个已通过`;
+    },
+    signupCards() {
+      return (this.visibleSignups || []).map((signup) => {
+        const pending = signup.status === "pending";
+        return {
+          id: `signup-${signup.id}`,
+          raw: signup,
+          name: this.applicantName(signup),
+          note: signup.contact_text || "车内聊天沟通",
+          roleGender: this.isNpcSignup(signup)
+            ? normalizeRoleGender(signup.npc_role_gender)
+            : "unlimited",
+          genderSymbol: this.isNpcSignup(signup)
+            ? this.npcRoleGenderText(signup.npc_role_gender)
+            : "",
+          showGenderSymbol: this.isNpcSignup(signup),
+          stateKind: pending
+            ? "pendingReview"
+            : signup.status === "approved"
+              ? "taken"
+              : "unavailable",
+          stateLabel: this.signupStatusLabel(signup.status),
+          meta: [
+            { key: "target", label: "申请目标", text: this.signupTargetName(signup) },
+            signup.note ? { key: "note", label: "备注", text: signup.note } : null,
+            {
+              key: "target-status",
+              label: this.isNpcSignup(signup) ? "NPC角色" : "座位状态",
+              text: this.signupTargetStatus(signup)
+            }
+          ].filter(Boolean),
+          actions: pending
+            ? [
+                { key: "approve", label: "通过", disabled: this.busyAction },
+                { key: "reject", label: "拒绝", variant: "ghost", disabled: this.busyAction }
+              ]
+            : []
+        };
+      });
     }
   },
   async onLoad(options) {
@@ -302,21 +486,42 @@ export default {
     setStatus(statusText) {
       this.statusText = statusText;
     },
+    sessionJoinPolicy() {
+      return this.session.join_policy === "direct" ? "direct" : "review_required";
+    },
     sessionJoinPhoneRequired() {
       return booleanSetting(this.session.join_phone_required, true);
     },
+    sessionNpcJoinEnabled() {
+      return booleanSetting(this.session.npc_join_enabled, true);
+    },
     syncSessionSettings() {
+      this.joinPolicy = this.sessionJoinPolicy();
       this.joinPhoneRequired = this.sessionJoinPhoneRequired();
+      this.npcJoinEnabled = this.sessionNpcJoinEnabled();
+    },
+    setJoinPolicy(value) {
+      this.joinPolicy = value === "direct" ? "direct" : "review_required";
     },
     setJoinPhoneRequired(value) {
       this.joinPhoneRequired = Boolean(value);
     },
+    setNpcJoinEnabled(value) {
+      this.npcJoinEnabled = Boolean(value);
+    },
     async updateSessionSettings() {
       const auth = await this.ensureManageActionLogin();
-      if (!auth || !this.settingsDirty || this.busyAction) {
+      if (!auth || !this.settingsDirty) {
         return;
       }
-      const nextJoinPhoneRequired = this.joinPhoneRequired;
+      const nextSettings = {
+        joinPolicy: this.joinPolicy,
+        joinPhoneRequired: this.joinPhoneRequired,
+        npcJoinEnabled: this.npcJoinEnabled
+      };
+      if (this.busyAction) {
+        return;
+      }
       this.busyAction = true;
       this.busyText = "正在处理，请稍候...";
       try {
@@ -324,21 +529,31 @@ export default {
           url: `/api/sessions/${this.sessionId}`,
           method: "PATCH",
           data: {
-            joinPhoneRequired: nextJoinPhoneRequired,
-            join_phone_required: nextJoinPhoneRequired
+            joinPolicy: nextSettings.joinPolicy,
+            join_policy: nextSettings.joinPolicy,
+            joinPhoneRequired: nextSettings.joinPhoneRequired,
+            join_phone_required: nextSettings.joinPhoneRequired,
+            npcJoinEnabled: nextSettings.npcJoinEnabled,
+            npc_join_enabled: nextSettings.npcJoinEnabled
           }
         });
         await this.reload();
-        this.statusText =
-          this.joinPhoneRequired === nextJoinPhoneRequired
-            ? "车局设置已更新。"
-            : "车局设置没有生效，请确认后端已部署最新车局设置接口。";
+        this.statusText = this.settingsUpdatePersisted(nextSettings)
+          ? "车局设置已更新。"
+          : "车局设置没有生效，请确认后端已部署最新车局设置接口。";
       } catch (error) {
         this.statusText = this.actionErrorText(error);
       } finally {
         this.busyAction = false;
         this.busyText = "";
       }
+    },
+    settingsUpdatePersisted(settings) {
+      return (
+        this.joinPolicy === settings.joinPolicy &&
+        this.joinPhoneRequired === settings.joinPhoneRequired &&
+        this.npcJoinEnabled === settings.npcJoinEnabled
+      );
     },
     async approve(signup) {
       const auth = await this.ensureManageActionLogin();
@@ -378,11 +593,79 @@ export default {
       if (!auth) {
         return;
       }
+      if (this.isOnboardSeat(seat)) {
+        this.showRemoveMemberReasons(seat);
+        return;
+      }
       this.confirmAction(`确认释放「${seat.name}」吗？`, async () => {
-        await this.runAction("座位已释放。", {
-          url: `/api/session-seats/${seat.id}/kick`,
-          method: "PATCH"
-        });
+        await this.runKickSeat(seat, {}, "座位已释放。");
+      });
+    },
+    removeReasonOptions() {
+      return [
+        {
+          label: "普通释放",
+          report: false,
+          successText: "座位已释放。"
+        },
+        {
+          label: "恶意骚扰",
+          reasonType: "harassment",
+          report: true,
+          successText: "已移除并举报，该成员不能再次加入本车。"
+        },
+        {
+          label: "垃圾信息",
+          reasonType: "spam",
+          report: true,
+          successText: "已移除并举报，该成员不能再次加入本车。"
+        },
+        {
+          label: "疑似诈骗",
+          reasonType: "scam",
+          report: true,
+          successText: "已移除并举报，该成员不能再次加入本车。"
+        },
+        {
+          label: "其他安全原因",
+          reasonType: "safety_other",
+          report: true,
+          successText: "已移除并举报，该成员不能再次加入本车。"
+        }
+      ];
+    },
+    showRemoveMemberReasons(seat) {
+      const options = this.removeReasonOptions();
+      uni.showActionSheet({
+        itemList: options.map((option) => option.label),
+        success: (result) => {
+          const option = options[result.tapIndex];
+          if (!option) {
+            return;
+          }
+          const confirmText = option.report
+            ? `确认将「${seat.name}」移除并按「${option.label}」举报吗？该成员不能再次加入本车。`
+            : `确认普通释放「${seat.name}」吗？`;
+          this.confirmAction(confirmText, async () => {
+            await this.runKickSeat(
+              seat,
+              option.report
+                ? {
+                    report: true,
+                    reasonType: option.reasonType
+                  }
+                : {},
+              option.successText
+            );
+          });
+        }
+      });
+    },
+    async runKickSeat(seat, data, successText) {
+      await this.runAction(successText, {
+        url: `/api/session-seats/${seat.id}/kick`,
+        method: "PATCH",
+        data
       });
     },
     async transferOrganizerToSeat(seat) {
@@ -396,6 +679,62 @@ export default {
           method: "PATCH",
           data: {
             targetUserId: seat.confirmed_user_id
+          }
+        });
+      });
+    },
+    async handleNpcRoleManagement(role) {
+      if (role.bound_user_id) {
+        await this.releaseNpcRole(role);
+        return;
+      }
+      if (role.status && role.status !== "active") {
+        await this.openNpcRole(role);
+        return;
+      }
+      await this.closeNpcRole(role);
+    },
+    async closeNpcRole(role) {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
+      this.confirmAction(`确认关闭NPC角色「${role.name || "NPC角色"}」吗？`, async () => {
+        await this.runAction("NPC角色已关闭。", {
+          url: `/api/session-npc-roles/${role.id}`,
+          method: "PATCH",
+          data: {
+            status: "inactive"
+          }
+        });
+      });
+    },
+    async openNpcRole(role) {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
+      this.confirmAction(`确认开放NPC角色「${role.name || "NPC角色"}」吗？`, async () => {
+        await this.runAction("NPC角色已开放。", {
+          url: `/api/session-npc-roles/${role.id}`,
+          method: "PATCH",
+          data: {
+            status: "active"
+          }
+        });
+      });
+    },
+    async releaseNpcRole(role) {
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
+      this.confirmAction(`确认移除NPC成员「${role.name || "NPC角色"}」吗？`, async () => {
+        await this.runAction("NPC成员已移除。", {
+          url: `/api/session-npc-roles/${role.id}`,
+          method: "PATCH",
+          data: {
+            boundUserId: null
           }
         });
       });
@@ -548,14 +887,130 @@ export default {
     seatStatus(seatId) {
       return this.seatById(seatId)?.status || "";
     },
+    isNpcSignup(signup) {
+      return signup?.signup_type === "session_npc_role";
+    },
+    applicantName(signup) {
+      const nickname = String(signup?.applicant_nickname || "").trim();
+      if (nickname) {
+        return nickname;
+      }
+      const fallback = String(signup?.applicant_open_id || "").trim();
+      return fallback || "未命名申请人";
+    },
+    signupTargetName(signup) {
+      if (this.isNpcSignup(signup)) {
+        return `NPC角色：${signup.npc_role_name || "待定"}`;
+      }
+      return this.seatName(signup.seat_id);
+    },
+    npcRoleGenderText(roleGender) {
+      return roleGenderSymbol(roleGender) || "不限";
+    },
+    signupTargetStatus(signup) {
+      if (this.isNpcSignup(signup)) {
+        return signup.npc_role_status === "active" ? "可安排" : "不可用";
+      }
+      return this.seatStatusLabel(this.seatStatus(signup.seat_id));
+    },
     canKickSeat(seat) {
       return Boolean(seat?.id);
+    },
+    isOnboardSeat(seat) {
+      return Boolean(
+        seat?.confirmed_user_id && ["confirmed", "locked"].includes(seat.status)
+      );
+    },
+    kickSeatActionText(seat) {
+      return this.isOnboardSeat(seat) ? "移除成员" : "关闭座位";
     },
     canTransferOrganizerToSeat(seat) {
       return (
         seat?.confirmed_user_id &&
         Number(seat.confirmed_user_id) !== Number(this.session.organizer_user_id)
       );
+    },
+    handleManageSeatAction(payload) {
+      const seat = payload.item.raw;
+      if (!seat) {
+        return;
+      }
+      if (payload.action.key === "transfer") {
+        this.transferOrganizerToSeat(seat);
+        return;
+      }
+      if (payload.action.key === "kick") {
+        this.kickSeat(seat);
+      }
+    },
+    handleManageRoleSeatAction(payload) {
+      if (payload.item?.boardType === "npc" || payload.sectionKey === "npc") {
+        const role = payload.item.raw;
+        if (role && payload.action.key === "manageNpcRole") {
+          this.handleNpcRoleManagement(role);
+        }
+        return;
+      }
+      this.handleManageSeatAction(payload);
+    },
+    handleSignupAction(payload) {
+      const signup = payload.item.raw;
+      if (!signup) {
+        return;
+      }
+      if (payload.action.key === "approve") {
+        this.approve(signup);
+        return;
+      }
+      if (payload.action.key === "reject") {
+        this.reject(signup);
+      }
+    },
+    seatStateKind(seat) {
+      if (seat.status === "open") {
+        return "available";
+      }
+      if (seat.status === "applied") {
+        return "pendingReview";
+      }
+      if (["confirmed", "locked"].includes(seat.status)) {
+        return "taken";
+      }
+      return "unavailable";
+    },
+    npcRoleStateKind(role) {
+      if (role.bound_user_id) {
+        return "taken";
+      }
+      if (role.pending_signup_id) {
+        return "pendingReview";
+      }
+      if (role.status && role.status !== "active") {
+        return "unavailable";
+      }
+      return "available";
+    },
+    npcRoleActionText(role) {
+      if (role.bound_user_id) {
+        return "移除成员";
+      }
+      if (role.pending_signup_id) {
+        return "";
+      }
+      return role.status && role.status !== "active" ? "开放角色" : "关闭角色";
+    },
+    npcRoleStatusLabel(role) {
+      const stateKind = this.npcRoleStateKind(role);
+      if (stateKind === "taken") {
+        return "已安排";
+      }
+      if (stateKind === "pendingReview") {
+        return "待审核";
+      }
+      if (stateKind === "unavailable") {
+        return "不可用";
+      }
+      return this.npcJoinEnabled ? "可自选" : "可安排";
     },
     sessionStatusLabel(status) {
       const labels = {
@@ -589,6 +1044,7 @@ export default {
       const labels = {
         love_companion: "情感沉浸位",
         f4: "互动位",
+        cp: "CP位",
         normal: "普通位"
       };
       return labels[type] || type || "普通位";
@@ -600,6 +1056,131 @@ export default {
 <style scoped>
 .manage-page {
   padding-bottom: 64rpx;
+}
+
+.overview-card {
+  padding-bottom: 26rpx;
+}
+
+.overview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.overview-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.overview-kicker {
+  margin-bottom: 8rpx;
+  color: #7a857d;
+  font-size: 22rpx;
+  font-weight: 600;
+}
+
+.overview-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.overview-title-row .title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pill {
+  flex-shrink: 0;
+  padding: 6rpx 14rpx;
+  border-radius: 8rpx;
+  background: #edf7f2;
+  color: #1f6f5b;
+  font-size: 22rpx;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.overview-refresh {
+  flex-shrink: 0;
+  min-width: 112rpx;
+  height: 58rpx;
+  padding: 0 18rpx;
+  border: 1rpx solid #ded8ca;
+  border-radius: 8rpx;
+  background: #fffefb;
+  color: #193d35;
+  font-size: 24rpx;
+  font-weight: 600;
+  line-height: 58rpx;
+}
+
+.overview-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12rpx;
+  margin-top: 22rpx;
+}
+
+.overview-stat {
+  min-width: 0;
+  padding: 16rpx 10rpx;
+  border: 1rpx solid rgba(222, 216, 202, 0.8);
+  border-radius: 8rpx;
+  background: #fffefb;
+  text-align: center;
+}
+
+.overview-stat.warning {
+  border-color: rgba(204, 151, 83, 0.45);
+  background: #fff9ec;
+}
+
+.overview-stat-value {
+  color: #153f34;
+  font-size: 30rpx;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.overview-stat-label {
+  margin-top: 4rpx;
+  color: #738078;
+  font-size: 22rpx;
+  line-height: 1.2;
+}
+
+.overview-lines {
+  margin-top: 18rpx;
+  padding-top: 18rpx;
+  border-top: 1rpx solid rgba(222, 216, 202, 0.72);
+}
+
+.overview-line {
+  margin-top: 8rpx;
+  color: #475569;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.overview-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12rpx;
+  margin-top: 20rpx;
+}
+
+.overview-actions .mini-button {
+  width: 100%;
+  margin: 0;
+}
+
+.overview-pinned {
+  margin-top: 24rpx;
 }
 
 .section-title {
@@ -627,9 +1208,12 @@ export default {
   align-items: center;
   justify-content: space-between;
   gap: 18rpx;
-  margin-top: 18rpx;
-  padding-top: 18rpx;
+  padding: 22rpx 0;
   border-top: 1rpx solid rgba(222, 216, 202, 0.72);
+}
+
+.section-head + .setting-switch-row {
+  margin-top: 12rpx;
 }
 
 .setting-switch-copy {
@@ -698,39 +1282,6 @@ export default {
 
 .placeholder {
   color: #9ba39c;
-}
-
-.seat-card,
-.signup-card {
-  margin-top: 18rpx;
-  padding: 22rpx;
-  border: 1rpx solid #e6e0d2;
-  border-radius: 8rpx;
-  background: #fffefb;
-}
-
-.signup-card {
-  background: #ffffff;
-}
-
-.seat-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12rpx;
-  margin-bottom: 8rpx;
-}
-
-.seat-title {
-  color: #153f34;
-  font-size: 28rpx;
-  font-weight: 600;
-}
-
-.seat-status {
-  flex-shrink: 0;
-  color: #1f6f5b;
-  font-size: 24rpx;
-  font-weight: 600;
 }
 
 .actions.compact {

@@ -192,6 +192,8 @@ async function createPublishedSession(admin, owner, options = {}) {
       storeId: store.data.id,
       scriptId: script.data.id,
       startAt: startAt(options.hoursFromNow ?? -1),
+      joinPolicy: options.joinPolicy || "review_required",
+      npcJoinEnabled: options.npcJoinEnabled === undefined ? true : options.npcJoinEnabled,
       dmNameSnapshot: `D18指定DM-${suffix}`,
       npcNameSnapshot: `D18指定NPC-${suffix}`,
       extraNpcRoles: [
@@ -231,6 +233,20 @@ async function approveSeat(sessionId, seatId, player, owner) {
   await request("PATCH", `/api/signups/${signup.data.id}/approve`, {}, owner.token);
   const detail = await request("GET", `/api/sessions/${sessionId}`);
   return detail.data.seats.find((seat) => Number(seat.id) === Number(seatId));
+}
+
+async function firstSessionNpcRole(sessionId, owner) {
+  const sessionNpcRoles = await request(
+    "GET",
+    `/api/sessions/${sessionId}/npc-roles`,
+    undefined,
+    owner.token
+  );
+  const role = (sessionNpcRoles.data.npc_roles || []).find(
+    (item) => item.source === "session"
+  ) || (sessionNpcRoles.data.npc_roles || [])[0];
+  assert(role, "D24 smoke session should have an NPC role");
+  return role;
 }
 
 function fakeAlbumPhotoUrl(sessionId, userId, serial = 1) {
@@ -279,10 +295,136 @@ async function main() {
   const playerA = await login(`dev-d18-player-a-${suffix}`);
   const playerB = await login(`dev-d18-player-b-${suffix}`);
   const npcStaff = await login(`dev-d18-npc-staff-${suffix}`);
+  const npcStaffB = await login(`dev-d18-npc-staff-b-${suffix}`);
   const intruder = await login(`dev-d18-intruder-${suffix}`);
   await authorizePhone(owner, "d18-owner-phone");
   await authorizePhone(playerA, "d18-player-a-phone");
   await authorizePhone(playerB, "d18-player-b-phone");
+  await authorizePhone(npcStaff, "d18-npc-staff-phone");
+  await authorizePhone(npcStaffB, "d18-npc-staff-b-phone");
+
+  const directNpcSession = await createPublishedSession(admin, owner, {
+    label: "d24-direct-npc",
+    hoursFromNow: -1,
+    joinPolicy: "direct"
+  });
+  const directNpcRole = await firstSessionNpcRole(directNpcSession.session.id, owner);
+  const directNpcJoin = await request(
+    "POST",
+    `/api/session-npc-roles/${directNpcRole.id}/claim`,
+    { note: "D24 direct NPC self join" },
+    npcStaff.token
+  );
+  assert(
+    directNpcJoin.data.join_result === "npc_joined" &&
+      Number(directNpcJoin.data.npc_role.bound_user_id) === Number(npcStaff.user.id),
+    "D24 direct NPC self join should bind the NPC role"
+  );
+  const repeatDirectNpcJoin = await request(
+    "POST",
+    `/api/session-npc-roles/${directNpcRole.id}/claim`,
+    { note: "D24 direct NPC repeat self join" },
+    npcStaff.token
+  );
+  assert(
+    repeatDirectNpcJoin.data.join_result === "npc_joined" &&
+      Number(repeatDirectNpcJoin.data.npc_role.bound_user_id) === Number(npcStaff.user.id),
+    "D24 direct NPC self join should be idempotent for the bound user"
+  );
+  await request(
+    "POST",
+    `/api/session-npc-roles/${directNpcRole.id}/claim`,
+    { note: "D24 conflicting NPC self join" },
+    npcStaffB.token,
+    409
+  );
+  const directNpcStaffAlbums = await request(
+    "GET",
+    "/api/users/me/sessions?scope=album&limit=100",
+    undefined,
+    npcStaff.token
+  );
+  assert(
+    hasSession(directNpcStaffAlbums, directNpcSession.session.id),
+    "D24 bound direct NPC role user should see their album session"
+  );
+
+  const disabledNpcSession = await createPublishedSession(admin, owner, {
+    label: "d24-disabled-npc",
+    hoursFromNow: -1,
+    joinPolicy: "direct",
+    npcJoinEnabled: false
+  });
+  const disabledNpcRole = await firstSessionNpcRole(disabledNpcSession.session.id, owner);
+  await request(
+    "POST",
+    `/api/session-npc-roles/${disabledNpcRole.id}/claim`,
+    { note: "D24 disabled NPC self join" },
+    npcStaffB.token,
+    403
+  );
+
+  const reviewNpcSession = await createPublishedSession(admin, owner, {
+    label: "d24-review-npc",
+    hoursFromNow: -1,
+    joinPolicy: "review_required"
+  });
+  const reviewNpcRole = await firstSessionNpcRole(reviewNpcSession.session.id, owner);
+  const pendingNpcJoin = await request(
+    "POST",
+    `/api/session-npc-roles/${reviewNpcRole.id}/claim`,
+    { note: "D24 review NPC self join" },
+    npcStaffB.token
+  );
+  assert(
+    pendingNpcJoin.data.join_result === "pending_review" &&
+      pendingNpcJoin.data.signup.signup_type === "session_npc_role" &&
+      Number(pendingNpcJoin.data.signup.session_npc_role_id) === Number(reviewNpcRole.id),
+    "D24 review NPC self join should create a pending NPC signup"
+  );
+  await request(
+    "GET",
+    `/api/sessions/${reviewNpcSession.session.id}/album`,
+    undefined,
+    npcStaffB.token,
+    403
+  );
+  const reviewSignups = await request(
+    "GET",
+    `/api/sessions/${reviewNpcSession.session.id}/signups`,
+    undefined,
+    owner.token
+  );
+  const pendingNpcSignup = (reviewSignups.data || []).find(
+    (signup) => Number(signup.id) === Number(pendingNpcJoin.data.signup.id)
+  );
+  assert(
+    pendingNpcSignup?.signup_type === "session_npc_role" &&
+      pendingNpcSignup.npc_role_name,
+    "D24 review NPC signup should appear in organizer review list with NPC role name"
+  );
+  await request("PATCH", `/api/signups/${pendingNpcSignup.id}/approve`, {}, owner.token);
+  const approvedReviewSession = await request(
+    "GET",
+    `/api/sessions/${reviewNpcSession.session.id}`
+  );
+  const approvedReviewNpcRole = (approvedReviewSession.data.session_npc_roles || []).find(
+    (role) => Number(role.id) === Number(reviewNpcRole.id)
+  );
+  assert(
+    Number(approvedReviewNpcRole?.bound_user_id || 0) === Number(npcStaffB.user.id),
+    "D24 approving a review NPC signup should bind the NPC role"
+  );
+  const reviewNpcStaffAlbums = await request(
+    "GET",
+    "/api/users/me/sessions?scope=album&limit=100",
+    undefined,
+    npcStaffB.token
+  );
+  assert(
+    hasSession(reviewNpcStaffAlbums, reviewNpcSession.session.id),
+    "D24 approved review NPC role user should see their album session"
+  );
 
   const future = await createPublishedSession(admin, owner, {
     label: "future",
@@ -480,7 +622,22 @@ async function main() {
     undefined,
     playerB.token
   );
-  assert(hasPhoto(otherMemberAllowedAlbum, photoId), "other member should see when uploader and tagged player allow visibility");
+  assert(
+    !hasPhoto(otherMemberAllowedAlbum, photoId),
+    "other confirmed seat should not see another role's tagged photo"
+  );
+  await rawRequest("GET", playerTaggedPhoto.image_url, undefined, playerB.token, 403);
+
+  const npcStaffTaggedAlbum = await request(
+    "GET",
+    `/api/sessions/${session.id}/album`,
+    undefined,
+    npcStaff.token
+  );
+  assert(
+    hasPhoto(npcStaffTaggedAlbum, photoId),
+    "bound NPC role user should see photos tagged with their NPC role"
+  );
 
   await request(
     "PUT",
@@ -496,9 +653,8 @@ async function main() {
   );
   assert(
     !hasPhoto(otherMemberBlockedAlbum, photoId),
-    "other member should not see when tagged player blocks visibility"
+    "other confirmed seat should stay blocked when tagged player blocks visibility"
   );
-  await rawRequest("GET", playerTaggedPhoto.image_url, undefined, playerB.token, 403);
   await rawRequest("GET", `/api/sessions/${session.id}/album`, undefined, admin.token, 403);
   assert(true, "admin must not bypass tagged player privacy");
   const playerStillVisibleAlbum = await request(
@@ -562,12 +718,23 @@ async function main() {
     playerB.token
   );
   assert(
-    hasPhoto(otherMemberSpecialAlbum, otherTaggedPhotoId),
-    "other-tagged photo should be visible to all same-session members"
+    !hasPhoto(otherMemberSpecialAlbum, otherTaggedPhotoId),
+    "other-tagged photo should not be visible to unrelated same-session members"
   );
   assert(
-    hasPhoto(otherMemberSpecialAlbum, npcOnlyPhotoId),
-    "npc-only photo should be visible to all same-session members"
+    !hasPhoto(otherMemberSpecialAlbum, npcOnlyPhotoId),
+    "npc-only photo should not be visible to unrelated same-session members"
+  );
+
+  const npcStaffSpecialAlbum = await request(
+    "GET",
+    `/api/sessions/${session.id}/album`,
+    undefined,
+    npcStaff.token
+  );
+  assert(
+    hasPhoto(npcStaffSpecialAlbum, npcOnlyPhotoId),
+    "bound NPC role user should see their NPC-only photo"
   );
 
   console.log(

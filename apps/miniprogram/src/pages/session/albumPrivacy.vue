@@ -3,16 +3,16 @@
     <AuthIdentityBar />
 
     <view class="section">
-      <view class="title">相册隐私设置</view>
-      <view class="text">可见照片可保存；不想被看到，就从可见性保护。</view>
+      <view class="title">相册分享隐私设置</view>
+      <view class="text">完整相册只展示与你相关的照片；这里控制分享展示里的可见性。</view>
       <view v-if="statusText" class="notice">{{ statusText }}</view>
     </view>
 
     <view class="section settings-section">
       <view class="setting-row">
         <view class="setting-copy">
-          <view class="setting-title">其他同车成员可以查看我上传的照片</view>
-          <view class="setting-note">关闭后，只有我能看我上传的照片。</view>
+          <view class="setting-title">允许我上传的照片出现在分享展示里</view>
+          <view class="setting-note">关闭后，别人分享相册时不会展示你上传的照片。</view>
         </view>
         <switch
           color="#1f7a68"
@@ -23,8 +23,8 @@
 
       <view class="setting-row">
         <view class="setting-copy">
-          <view class="setting-title">其他同车成员可以查看包含我的照片</view>
-          <view class="setting-note">关闭后，包含我的照片不会对外展示。</view>
+          <view class="setting-title">允许包含我的照片出现在分享展示里</view>
+          <view class="setting-note">关闭后，别人分享相册时不会展示包含你的照片。</view>
         </view>
         <switch
           color="#1f7a68"
@@ -36,8 +36,8 @@
 
     <view class="section rule-section">
       <view class="section-title">这套规则怎么生效</view>
-      <view class="rule-row">我上传的照片，我永远可见</view>
-      <view class="rule-row">照片里的人都有保护权</view>
+      <view class="rule-row">完整相册只展示你上传或标注了你的照片</view>
+      <view class="rule-row">分享展示会继续尊重这两项设置</view>
       <view class="rule-row">车头也不能越权查看原图</view>
       <view class="rule-note">能看到的照片可以保存；看不到的照片不会出现。</view>
     </view>
