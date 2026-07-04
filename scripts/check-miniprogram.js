@@ -365,9 +365,25 @@ if (!fs.existsSync(pagesJsonPath)) {
   const indexSource = fs.existsSync(firstFlowFiles["entry page"])
     ? fs.readFileSync(firstFlowFiles["entry page"], "utf8")
     : "";
-  for (const requiredText of ["创建", "我的"]) {
-    if (!indexSource.includes(requiredText)) {
-      fail(`Entry page must expose the simple first choice: ${requiredText}`);
+  for (const requiredHomeEntryText of ["发起第一辆车", "开始发车", "我的车局", "发车"]) {
+    if (!indexSource.includes(requiredHomeEntryText)) {
+      fail(`Entry page must support D22 home entry routing UI: ${requiredHomeEntryText}`);
+    }
+  }
+  for (const requiredHomeRoutingText of [
+    "SessionCalendar",
+    "ensureLoggedIn",
+    "getCurrentUser",
+    "getToken",
+    "loadHomeCalendar",
+    "/api/users/me/sessions?limit=50",
+    "/api/users/me/signups",
+    "homeState",
+    "first-session",
+    "calendar"
+  ]) {
+    if (!indexSource.includes(requiredHomeRoutingText)) {
+      fail(`Entry page must support D22 home entry routing behavior: ${requiredHomeRoutingText}`);
     }
   }
   for (const requiredMaintenanceText of [
@@ -438,26 +454,60 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!indexSource.includes("<AuthIdentityBar passive-guest")) {
     fail("Entry page identity bar must stay in passive guest mode before users choose login");
   }
-  if (!/\.home-panel\s*\{[\s\S]*width:\s*420rpx;[\s\S]*margin:\s*0 auto;/.test(indexSource)) {
-    fail("Entry page must keep the Create/Mine action stack aligned to one fixed width");
+  if (!indexSource.includes('@guest-login="loginFromGuestBar"')) {
+    fail("Entry page passive guest identity bar must allow users to login from the bar");
   }
-  if (!/\.primary-action,\s*\n\.secondary-action\s*\{[\s\S]*width:\s*100%;[\s\S]*margin:\s*0;[\s\S]*box-sizing:\s*border-box;/.test(indexSource)) {
-    fail("Entry page action buttons must share one full-width button box model");
+  if (!/\.home-panel\s*\{[\s\S]*width:\s*420rpx;[\s\S]*margin:\s*0 auto;/.test(indexSource)) {
+    fail("Entry page must keep the first-session action stack aligned to one fixed width");
+  }
+  if (!/\.primary-action\s*\{[\s\S]*width:\s*100%;[\s\S]*margin:\s*0;[\s\S]*box-sizing:\s*border-box;/.test(indexSource)) {
+    fail("Entry page first-session action button must keep one full-width button box model");
+  }
+  const startFirstSessionSource = methodBody(indexSource, "startFirstSession");
+  if (!startFirstSessionSource.includes("ensureLoggedIn")) {
+    fail("Entry page first-session button must request login before starting the first car");
+  }
+  if (!startFirstSessionSource.includes("loadHomeCalendar")) {
+    fail("Entry page first-session button must reload my sessions after login before deciding where to go");
+  }
+  assertBefore(
+    startFirstSessionSource,
+    "loadHomeCalendar",
+    "goCreate",
+    "Entry page first-session button must reload my sessions before entering creation"
+  );
+  const loginFromGuestBarSource = methodBody(indexSource, "loginFromGuestBar");
+  if (!loginFromGuestBarSource.includes("ensureLoggedIn")) {
+    fail("Entry page passive guest identity bar must request login when tapped");
+  }
+  if (!loginFromGuestBarSource.includes("loadHomeCalendar")) {
+    fail("Entry page passive guest identity bar must reload my sessions after login");
+  }
+  if (loginFromGuestBarSource.includes("goCreate")) {
+    fail("Entry page passive guest identity bar must login without entering creation directly");
   }
   const goCreateSource = methodBody(indexSource, "goCreate");
-  if (goCreateSource.includes("ensureLoggedIn")) {
-    fail("Entry page Create button must let users browse the creation flow before login");
-  }
   assertBefore(
     goCreateSource,
     "clearCreateFlow",
     "uni.navigateTo",
-    "Entry page Create button must start a fresh browse flow before navigating"
+    "Entry page calendar 发车 button must start a fresh create flow before navigating"
   );
+  const indexLogoutSource = methodBody(indexSource, "logout");
+  if (!indexLogoutSource.includes("goHomeAfterLogout")) {
+    fail("Entry page logout must relaunch the home entry after clearing auth");
+  }
 
   const mineSource = fs.existsSync(path.join(srcRoot, "pages/mine/index.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/mine/index.vue"), "utf8")
     : "";
+  const sessionCalendarPath = path.join(srcRoot, "components/SessionCalendar.vue");
+  if (!fs.existsSync(sessionCalendarPath)) {
+    fail("D22 must extract the shared session calendar component: components/SessionCalendar.vue");
+  }
+  if (!mineSource.includes("SessionCalendar")) {
+    fail("Mine page must reuse the shared SessionCalendar component");
+  }
   if (/onLoad\s*\(\s*async\s*\(\)\s*=>\s*\{[\s\S]*ensureLoggedIn\s*\(/.test(mineSource)) {
     fail("Mine page must wait for an explicit login tap before requesting login");
   }
@@ -470,6 +520,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   const mineLoginSource = methodBody(mineSource, "login");
   if (mineLoginSource.includes("promptPhoneAfterLogin: true")) {
     fail("Mine page login must not request phone authorization before a protected action");
+  }
+  const mineLogoutSource = methodBody(mineSource, "logout");
+  if (!mineLogoutSource.includes("goHomeAfterLogout")) {
+    fail("Mine page logout must relaunch the home entry after clearing auth");
   }
 
   const createSource = fs.existsSync(firstFlowFiles["store step"])
@@ -588,6 +642,30 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`Share page must be the final role-selection page: ${requiredFinalShareText}`);
     }
   }
+  for (const requiredAlbumEntryText of [
+    "entry",
+    "isAlbumEntry",
+    "redirectAlbumMemberIfNeeded",
+    "/pages/session/album?id=",
+    "join_policy",
+    "/api/session-seats/${seatId}/claim",
+    "join_result",
+    "已提交申请，等待车头审核"
+  ]) {
+    if (!shareSource.includes(requiredAlbumEntryText)) {
+      fail(`Share page must support D23 album-entry join flow: ${requiredAlbumEntryText}`);
+    }
+  }
+  const claimSeatSource = methodBody(shareSource, "claimSeat");
+  if (!claimSeatSource.includes('this.session.join_policy === "direct"')) {
+    fail("Share page album entry must branch direct join by session.join_policy");
+  }
+  assertBefore(
+    claimSeatSource,
+    'this.session.join_policy === "direct"',
+    'url: "/api/signups"',
+    "Share page must try direct claim before falling back to review signup"
+  );
   if (/onLoad\s*\(\s*options\s*\)\s*\{\s*const auth = await ensureLoggedIn\s*\(/.test(shareSource)) {
     fail("Share page must let invited users browse before login");
   }
@@ -715,6 +793,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   for (const requiredSetupText of [
     'mode="date"',
     'mode="time"',
+    "extraNpcRolesPlaceholder",
     "pinnedMessageText",
     "defaultPinnedMessage",
     "createPublishedSession",
@@ -725,6 +804,21 @@ if (!fs.existsSync(pagesJsonPath)) {
     if (!setupSource.includes(requiredSetupText)) {
       fail(`Setup step must collect and persist start time plus pinned chat info: ${requiredSetupText}`);
     }
+  }
+  for (const requiredJoinPolicyText of [
+    "joinPolicy",
+    "review_required",
+    "direct",
+    "setJoinPolicy",
+    "需要车头审核",
+    "可直接上车"
+  ]) {
+    if (!setupSource.includes(requiredJoinPolicyText)) {
+      fail(`Setup step must expose D23 join policy control: ${requiredJoinPolicyText}`);
+    }
+  }
+  if (/placeholder="[^"]*(?:&#10;|\n)[^"]*"/.test(setupSource)) {
+    fail("Setup step must bind multiline textarea placeholders so WeChat upload compilation does not receive literal newlines in WXML attributes");
   }
   const createPublishedSessionSource = methodBody(setupSource, "createPublishedSession");
   if (!createPublishedSessionSource.includes("ensureLoggedIn")) {
@@ -863,6 +957,20 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!deletePhotoSource.includes("this.albumBusy")) {
     fail("Album delete action must refuse duplicate deletes while another album action is busy");
   }
+  const changeWaterfallListSource = methodBody(albumSource, "changeWaterfallList");
+  if (changeWaterfallListSource.includes("this[event.name].push")) {
+    fail("Album waterfall callback must not push into uv-waterfall internal list names directly");
+  }
+  for (const requiredWaterfallCallbackText of [
+    "targetListName",
+    "waterfallList",
+    "Array.isArray(this[targetListName])",
+    "this[targetListName].push(event.value)"
+  ]) {
+    if (!changeWaterfallListSource.includes(requiredWaterfallCallbackText)) {
+      fail(`Album waterfall callback must map uv-waterfall names to page lists: ${requiredWaterfallCallbackText}`);
+    }
+  }
   for (const requiredAlbumBulkTagText of [
     "selectionMode",
     "selectedPhotoIds",
@@ -886,6 +994,51 @@ if (!fs.existsSync(pagesJsonPath)) {
   ]) {
     if (!albumSource.includes(requiredAlbumBulkTagText)) {
       fail(`Album page must support bulk tagging: ${requiredAlbumBulkTagText}`);
+    }
+  }
+  for (const requiredAlbumShareText of [
+    "timelineMode",
+    "albumShareToken",
+    "loadPublicAlbum",
+    "/album/public-share",
+    "/album/share-token",
+    "entry=album",
+    "source: \"wechat_timeline\"",
+    "albumTimelineQuery",
+    "showWechatShareMenus",
+    "(!this.timelineMode && !token)"
+  ]) {
+    if (!albumSource.includes(requiredAlbumShareText)) {
+      fail(`Album page must support D23 group/Moments album sharing: ${requiredAlbumShareText}`);
+    }
+  }
+  const albumOnLoadSource = methodBody(albumSource, "onLoad");
+  assertBefore(
+    albumOnLoadSource,
+    "if (this.timelineMode)",
+    "ensureLoggedIn",
+    "Album timeline mode must load public album before any login prompt"
+  );
+  const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
+  if (
+    !albumShareAppMessageSource.includes("/pages/session/share") ||
+    !albumShareAppMessageSource.includes("entry=album") ||
+    !albumShareAppMessageSource.includes("source=wechat_share")
+  ) {
+    fail("Album friend/group sharing must route to the album-entry share page");
+  }
+  const albumShareTimelineSource = methodBody(albumSource, "onShareTimeline");
+  if (!albumShareTimelineSource.includes("query:") || albumShareTimelineSource.includes("path:")) {
+    fail("Album Moments sharing must return query only");
+  }
+  for (const requiredAlbumReadOnlyText of [
+    'v-if="!timelineMode" class="actions"',
+    'v-if="!timelineMode" class="filter-row"',
+    'v-if="!timelineMode && selectionMode"',
+    'v-if="!timelineMode && tagSheetPhoto"'
+  ]) {
+    if (!albumSource.includes(requiredAlbumReadOnlyText)) {
+      fail(`Album timeline mode must hide member-only controls: ${requiredAlbumReadOnlyText}`);
     }
   }
 
@@ -936,6 +1089,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!ensureLoggedInSource.includes("options.requireGender === true")) {
     fail("Shared login must only request profile gender when a protected action explicitly requires it");
   }
+  const logoutRedirectSource = methodBody(apiSource, "goHomeAfterLogout");
+  if (!logoutRedirectSource.includes('uni.reLaunch({ url: "/pages/index/index" })')) {
+    fail("Shared logout helper must relaunch the home entry page");
+  }
 
   const identityBarPath = path.join(srcRoot, "components/AuthIdentityBar.vue");
   if (!fs.existsSync(identityBarPath)) {
@@ -962,6 +1119,14 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
     if (identityBarSource.includes("loginFromIdentityBar") || identityBarSource.includes("ensureLoggedIn")) {
       fail("Logged-out identity bar must link to the login page instead of opening authorization directly");
+    }
+    const identityTapSource = methodBody(identityBarSource, "handleIdentityTap");
+    if (!identityTapSource.includes('this.$emit("guest-login")')) {
+      fail("Passive guest identity bar must emit a login request when tapped");
+    }
+    const identityLogoutSource = methodBody(identityBarSource, "logoutProfile");
+    if (!identityLogoutSource.includes("goHomeAfterLogout")) {
+      fail("Auth identity bar logout must relaunch the home entry after clearing auth");
     }
     for (const requiredPhoneModalText of [
       "phoneVisible",

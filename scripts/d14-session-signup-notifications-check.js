@@ -88,10 +88,15 @@ for (const requiredText of [
 }
 
 const claimSeatBody = methodBody(shareSource, "claimSeat");
-assertNotIncludes(
+assertIncludes(
   claimSeatBody,
-  "/api/session-seats/",
-  "share.vue claimSeat must not call direct seat claim"
+  'this.session.join_policy === "direct"',
+  "share.vue claimSeat must only call direct seat claim inside the D23 direct join branch"
+);
+assertIncludes(
+  claimSeatBody,
+  "/api/session-seats/${seatId}/claim",
+  "share.vue claimSeat must support D23 direct join for direct-policy sessions"
 );
 assertIncludes(
   claimSeatBody,

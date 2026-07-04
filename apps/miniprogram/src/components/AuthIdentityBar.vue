@@ -167,6 +167,7 @@ import {
   assetUrl,
   clearAuth,
   clearCurrentUserAvatarUrl,
+  goHomeAfterLogout,
   getCurrentUser,
   getToken,
   refreshCurrentAuth,
@@ -222,6 +223,7 @@ function currentPageRoute() {
 }
 
 export default {
+  emits: ["guest-login"],
   props: {
     passiveGuest: {
       type: Boolean,
@@ -384,6 +386,7 @@ export default {
     },
     handleIdentityTap() {
       if (!this.user && this.passiveGuest) {
+        this.$emit("guest-login");
         return;
       }
       this.openProfileModal(false);
@@ -684,6 +687,7 @@ export default {
         uni.$emit(AUTH_PROFILE_RESPONSE_EVENT, { requestId, auth: null });
       }
       uni.showToast({ title: "已退出登录", icon: "none" });
+      goHomeAfterLogout();
     }
   }
 };

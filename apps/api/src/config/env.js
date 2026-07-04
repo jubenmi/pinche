@@ -122,17 +122,57 @@ export function buildRedisUrl(env = process.env) {
   return `redis://${redisAuthForUrl(env)}${host}:${port}${databasePath}`;
 }
 
+function normalizedHost(host) {
+  return String(host || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+}
+
+function isLocalMysqlHost(host) {
+  const value = normalizedHost(host);
+  return value === "localhost" || value === "127.0.0.1" || value === "0.0.0.0" || value === "::1";
+}
+
+export function assertDatabaseTargetLock(mysqlConfig, env = process.env) {
+  const lock = stringValue(env, "DATABASE_TARGET_LOCK").toLowerCase();
+  if (!lock) {
+    return;
+  }
+
+  if (lock !== "cloud" && lock !== "online") {
+    throw new Error("DATABASE_TARGET_LOCK must be cloud or online when set");
+  }
+
+  if (isLocalMysqlHost(mysqlConfig.host)) {
+    throw new Error(
+      `Database target is locked to ${lock}; refuse to start with local MYSQL_HOST=${mysqlConfig.host}`
+    );
+  }
+
+  const expectedHost = stringValue(env, "DATABASE_TARGET_LOCK_HOST");
+  if (expectedHost && normalizedHost(mysqlConfig.host) !== normalizedHost(expectedHost)) {
+    throw new Error(
+      `Database target is locked to ${lock}; expected MYSQL_HOST=${expectedHost}, got ${mysqlConfig.host}`
+    );
+  }
+}
+
+const mysqlConfig = {
+  host: process.env.MYSQL_HOST || "127.0.0.1",
+  port: integerEnv("MYSQL_PORT", 3307),
+  database: process.env.MYSQL_DATABASE || "pinche",
+  user: process.env.MYSQL_USER || "pinche",
+  password: process.env.MYSQL_PASSWORD || "pinche_dev_password"
+};
+
+assertDatabaseTargetLock(mysqlConfig);
+
 export const config = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: integerEnv("PORT", 3018),
   appBaseUrl: process.env.APP_BASE_URL || "http://localhost:3018",
-  mysql: {
-    host: process.env.MYSQL_HOST || "127.0.0.1",
-    port: integerEnv("MYSQL_PORT", 3307),
-    database: process.env.MYSQL_DATABASE || "pinche",
-    user: process.env.MYSQL_USER || "pinche",
-    password: process.env.MYSQL_PASSWORD || "pinche_dev_password"
-  },
+  mysql: mysqlConfig,
   redis: {
     enabled: booleanEnv("REDIS_ENABLED", false),
     url: buildRedisUrl()
