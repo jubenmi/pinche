@@ -48,7 +48,9 @@ import {
   deleteSessionAlbumPhoto,
   deleteScript,
   deleteStore,
+  getPublicSessionAlbumPhotoForMedia,
   getSession,
+  getSessionAlbumShareSubject,
   getSessionShareStats,
   getMySessionAlbumPrivacy,
   getMySessionReview,
@@ -62,6 +64,7 @@ import {
   listActiveScripts,
   listActiveStores,
   listCatalogRequests,
+  listPublicSessionAlbumShare,
   listSessionAlbum,
   listSessionAlbumPeople,
   listSessionNpcRoles,
@@ -102,6 +105,8 @@ const SESSION_REVIEW_MULTIPART_MAX_BYTES = SESSION_REVIEW_UPLOAD_MAX_BYTES + 64 
 const SESSION_ALBUM_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_ALBUM_MULTIPART_MAX_BYTES = SESSION_ALBUM_UPLOAD_MAX_BYTES + 64 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
+const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
+const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
 const AVATAR_WEBP_RULE = "imageMogr2/auto-orient/thumbnail/512x512>/format/webp/quality/80";
 const SESSION_ALBUM_DISPLAY_JPG_RULE =
   "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip";
@@ -736,6 +741,154 @@ function attachSessionAlbumMediaUrls(album) {
   };
 }
 
+function signedPayloadSignature(purpose, payloadText) {
+  return crypto
+    .createHmac("sha256", config.sessionSecret)
+    .update(`${purpose}:${payloadText}`)
+    .digest("hex");
+}
+
+function tokenPositiveInteger(value, label) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw forbidden(`${label} is invalid`);
+  }
+  return parsed;
+}
+
+function signSignedPayload(purpose, payload) {
+  const payloadText = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = signedPayloadSignature(purpose, payloadText);
+  return `${payloadText}.${signature}`;
+}
+
+function verifySignedPayload(purpose, token, label) {
+  const [payloadText, signature, extra] = String(token || "").split(".");
+  if (!payloadText || !signature || extra !== undefined) {
+    throw forbidden(`${label} is required`);
+  }
+
+  const expected = signedPayloadSignature(purpose, payloadText);
+  const signatureBuffer = Buffer.from(signature, "hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  if (
+    signatureBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+  ) {
+    throw forbidden(`${label} is invalid`);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(payloadText, "base64url").toString("utf8"));
+  } catch (error) {
+    throw forbidden(`${label} is invalid`);
+  }
+  if (tokenPositiveInteger(payload.exp, "exp") < Math.floor(Date.now() / 1000)) {
+    throw forbidden(`${label} expired`);
+  }
+  return payload;
+}
+
+function normalizeSessionAlbumShareClaims(payload) {
+  return {
+    sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
+    sharerUserId: tokenPositiveInteger(payload.sharerUserId, "sharerUserId"),
+    seatId: tokenPositiveInteger(payload.seatId, "seatId"),
+    exp: tokenPositiveInteger(payload.exp, "exp")
+  };
+}
+
+function signSessionAlbumShareToken(payload) {
+  const exp = payload.exp ||
+    Math.floor(Date.now() / 1000) + SESSION_ALBUM_SHARE_TOKEN_SECONDS;
+  return signSignedPayload(
+    "session-album-share",
+    normalizeSessionAlbumShareClaims({ ...payload, exp })
+  );
+}
+
+function verifySessionAlbumShareToken(token) {
+  return normalizeSessionAlbumShareClaims(
+    verifySignedPayload("session-album-share", token, "album share token")
+  );
+}
+
+function sessionAlbumTokenDigest(token) {
+  return crypto
+    .createHash("sha256")
+    .update(String(token || ""))
+    .digest("hex");
+}
+
+function signSessionAlbumPublicMediaToken(payload) {
+  const exp = payload.exp ||
+    Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS;
+  return signSignedPayload("session-album-public-media", {
+    sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
+    sharerUserId: tokenPositiveInteger(payload.sharerUserId, "sharerUserId"),
+    seatId: tokenPositiveInteger(payload.seatId, "seatId"),
+    photoId: tokenPositiveInteger(payload.photoId, "photoId"),
+    shareTokenDigest: String(payload.shareTokenDigest || ""),
+    exp: tokenPositiveInteger(exp, "exp")
+  });
+}
+
+function sessionAlbumPublicMediaPath(
+  photoId,
+  claims,
+  albumShareToken,
+  variant = "preview"
+) {
+  const token = signSessionAlbumPublicMediaToken({
+    ...claims,
+    photoId,
+    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
+  });
+  const path = `/api/session-album/public-share/photos/${photoId}/image?token=${encodeURIComponent(
+    token
+  )}`;
+  return variant === "thumbnail" ? `${path}&variant=thumbnail` : path;
+}
+
+function verifySessionAlbumPublicMediaQuery(photoId, query) {
+  const payload = verifySignedPayload(
+    "session-album-public-media",
+    query.get("token") || "",
+    "album public media token"
+  );
+  const tokenPhotoId = tokenPositiveInteger(payload.photoId, "photoId");
+  if (tokenPhotoId !== Number(photoId)) {
+    throw forbidden("album public media token is invalid");
+  }
+  if (!payload.shareTokenDigest) {
+    throw forbidden("album public media token is invalid");
+  }
+  return normalizeSessionAlbumShareClaims(payload);
+}
+
+function attachPublicSessionAlbumMediaUrls(album, claims, albumShareToken) {
+  return {
+    ...album,
+    photos: album.photos.map((photo) => ({
+      ...photo,
+      image_url: sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken),
+      preview_url: sessionAlbumPublicMediaPath(
+        photo.id,
+        claims,
+        albumShareToken,
+        "preview"
+      ),
+      thumbnail_url: sessionAlbumPublicMediaPath(
+        photo.id,
+        claims,
+        albumShareToken,
+        "thumbnail"
+      )
+    }))
+  };
+}
+
 async function sessionAlbumThumbnailBuffer(file) {
   return sharp(file, { failOn: "none" })
     .rotate()
@@ -1042,6 +1195,24 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname.startsWith("/uploads/session-reviews/")) {
     await serveUploadedSessionReviewPhoto(url, response);
+    return;
+  }
+
+  const publicSessionAlbumMediaPhotoId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/public-share\/photos\/(\d+)\/image$/
+  );
+  if (request.method === "GET" && publicSessionAlbumMediaPhotoId) {
+    const claims = verifySessionAlbumPublicMediaQuery(
+      publicSessionAlbumMediaPhotoId,
+      url.searchParams
+    );
+    const variant = mediaVariant(url.searchParams);
+    const photo = await getPublicSessionAlbumPhotoForMedia(
+      claims,
+      publicSessionAlbumMediaPhotoId
+    );
+    await serveUploadedSessionAlbumPhoto(photo, response, { variant });
     return;
   }
 
@@ -1516,6 +1687,50 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await leaveSessionOrganizer(user, leaveOrganizerSessionId)
+    });
+    return;
+  }
+
+  const sessionAlbumShareTokenId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/album\/share-token$/
+  );
+  if (request.method === "POST" && sessionAlbumShareTokenId) {
+    const user = await getAuthUser(request);
+    const subject = await getSessionAlbumShareSubject(user, sessionAlbumShareTokenId);
+    const exp = Math.floor(Date.now() / 1000) + SESSION_ALBUM_SHARE_TOKEN_SECONDS;
+    const claims = {
+      sessionId: Number(sessionAlbumShareTokenId),
+      sharerUserId: Number(user.user.id),
+      seatId: Number(subject.share_subject.seat_id),
+      exp
+    };
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        ...subject,
+        token: signSessionAlbumShareToken(claims),
+        expires_at: new Date(exp * 1000).toISOString()
+      }
+    });
+    return;
+  }
+
+  const publicSessionAlbumShareId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/album\/public-share$/
+  );
+  if (request.method === "GET" && publicSessionAlbumShareId) {
+    const albumShareToken =
+      url.searchParams.get("token") || url.searchParams.get("albumShareToken") || "";
+    const claims = verifySessionAlbumShareToken(albumShareToken);
+    if (claims.sessionId !== Number(publicSessionAlbumShareId)) {
+      throw forbidden("album share token is invalid");
+    }
+    const album = await listPublicSessionAlbumShare(claims);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: attachPublicSessionAlbumMediaUrls(album, claims, albumShareToken)
     });
     return;
   }

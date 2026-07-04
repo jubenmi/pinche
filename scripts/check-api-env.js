@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
-import { buildRedisUrl } from "../apps/api/src/config/env.js";
+import { assertDatabaseTargetLock, buildRedisUrl } from "../apps/api/src/config/env.js";
+
+const productionEnvExample = readFileSync(
+  new URL("../.env.production.example", import.meta.url),
+  "utf8"
+);
 
 assert.equal(
   buildRedisUrl({
@@ -66,6 +72,60 @@ assert.equal(
   child.stdout.trim(),
   "redis://10.206.16.15:6379/3",
   "empty REDIS_URL should not be replaced by local .env values"
+);
+
+assert.doesNotThrow(
+  () =>
+    assertDatabaseTargetLock(
+      { host: "cloud-db.example.com" },
+      {
+        DATABASE_TARGET_LOCK: "cloud",
+        DATABASE_TARGET_LOCK_HOST: "cloud-db.example.com"
+      }
+    ),
+  "cloud database lock should allow the expected cloud host"
+);
+
+assert.throws(
+  () =>
+    assertDatabaseTargetLock(
+      { host: "127.0.0.1" },
+      {
+        DATABASE_TARGET_LOCK: "cloud",
+        DATABASE_TARGET_LOCK_HOST: "cloud-db.example.com"
+      }
+    ),
+  /refuse to start with local MYSQL_HOST/,
+  "cloud database lock should reject local MySQL hosts"
+);
+
+assert.throws(
+  () =>
+    assertDatabaseTargetLock(
+      { host: "other-cloud.example.com" },
+      {
+        DATABASE_TARGET_LOCK: "cloud",
+        DATABASE_TARGET_LOCK_HOST: "cloud-db.example.com"
+      }
+    ),
+  /expected MYSQL_HOST=cloud-db\.example\.com/,
+  "cloud database lock should reject unexpected cloud hosts"
+);
+
+assert(
+  productionEnvExample.includes("DATABASE_TARGET_LOCK=cloud"),
+  "production env example should lock database target to cloud"
+);
+assert(
+  productionEnvExample.includes(
+    "DATABASE_TARGET_LOCK_HOST=nj-cynosdbmysql-grp-9cgedjkh.sql.tencentcdb.com"
+  ),
+  "production env example should lock the expected cloud database host"
+);
+assert(
+  productionEnvExample.includes("MYSQL_HOST=nj-cynosdbmysql-grp-9cgedjkh.sql.tencentcdb.com") &&
+    productionEnvExample.includes("MYSQL_PORT=25909"),
+  "production env example should point MySQL at the locked cloud database"
 );
 
 console.log("API env check passed");

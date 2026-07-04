@@ -8,6 +8,16 @@
       <view v-if="isPostStart" class="post-start-album-card">
         <view class="post-start-title">相册已开放</view>
         <view class="post-start-text">{{ postStartAlbumText }}</view>
+        <view class="post-start-album-stats">
+          <view class="post-start-stat">
+            <view class="post-start-stat-value">{{ albumVisiblePhotoCount }}</view>
+            <view class="post-start-stat-label">可见照片</view>
+          </view>
+          <view class="post-start-stat">
+            <view class="post-start-stat-value">{{ reviewCount }}</view>
+            <view class="post-start-stat-label">车友记录</view>
+          </view>
+        </view>
       </view>
       <view v-if="loadStatusText" class="notice">{{ loadStatusText }}</view>
       <view v-if="copyStatusText" class="notice">{{ copyStatusText }}</view>
@@ -178,14 +188,30 @@ export default {
     isPostStart() {
       return this.isAlbumOpen() && this.session.status !== "cancelled";
     },
+    albumVisiblePhotoCount() {
+      return Number(this.session.visible_photo_count || this.session.photo_count || 0);
+    },
+    reviewCount() {
+      return Number(this.session.review_count || this.reviews.length || 0);
+    },
+    albumContentCount() {
+      return this.albumVisiblePhotoCount + this.reviewCount;
+    },
     albumPrimaryText() {
-      return this.reviews.length > 0 ? "回看相册" : "打开相册";
+      return this.albumContentCount > 0 ? "回看相册" : "上传照片";
     },
     postStartAlbumText() {
-      if (this.reviews.length > 0) {
-        return `已有 ${this.reviews.length} 条车友记录，一起回看这场车。`;
+      if (this.albumContentCount > 0) {
+        const parts = [];
+        if (this.albumVisiblePhotoCount > 0) {
+          parts.push(`${this.albumVisiblePhotoCount} 张照片`);
+        }
+        if (this.reviewCount > 0) {
+          parts.push(`${this.reviewCount} 条记录`);
+        }
+        return `已有 ${parts.join("、")}，一起回看这场车。`;
       }
-      return "上传那天的照片，标注同车成员，之后就能一起回看。";
+      return "相册已开放，上传那天的第一张照片。";
     }
   },
   async onLoad(options) {
@@ -256,7 +282,7 @@ export default {
     },
     async ensureProtectedActionLogin() {
       const auth = await ensureLoggedIn({
-        content: "登录后继续选择角色或管理车局。"
+        content: "登录后继续查看相册、选择角色或管理车局。"
       });
       if (!auth?.user) {
         this.loadStatusText = "登录后可继续操作。";
@@ -519,6 +545,36 @@ export default {
   color: #5d7068;
   font-size: 25rpx;
   line-height: 1.55;
+}
+
+.post-start-album-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14rpx;
+  margin-top: 18rpx;
+}
+
+.post-start-stat {
+  min-height: 92rpx;
+  padding: 16rpx 18rpx;
+  border: 1rpx solid rgba(36, 116, 95, 0.16);
+  border-radius: 10rpx;
+  background: rgba(255, 255, 255, 0.72);
+  box-sizing: border-box;
+}
+
+.post-start-stat-value {
+  color: #153f34;
+  font-size: 34rpx;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.post-start-stat-label {
+  margin-top: 8rpx;
+  color: #64766f;
+  font-size: 22rpx;
+  line-height: 1.25;
 }
 
 .info-row {

@@ -1,18 +1,18 @@
 <template>
   <view class="page album-page">
-    <AuthIdentityBar />
+    <AuthIdentityBar v-if="!timelineMode" />
 
     <view class="section album-head">
-      <view class="title">车局相册</view>
-      <view class="text">同车成员可保存可见照片；隐私照片不会展示。</view>
+      <view class="title">{{ albumTitle }}</view>
+      <view class="text">{{ albumIntro }}</view>
       <view v-if="operationText" class="notice">{{ operationText }}</view>
       <view class="album-stats">
-        <view class="stat-pill">你可见 {{ photos.length }} 张</view>
-        <view v-if="hiddenCount > 0" class="stat-pill muted">
+        <view class="stat-pill">{{ timelineMode ? "展示" : "你可见" }} {{ photos.length }} 张</view>
+        <view v-if="!timelineMode && hiddenCount > 0" class="stat-pill muted">
           另有 {{ hiddenCount }} 张因成员隐私未展示
         </view>
       </view>
-      <view class="actions">
+      <view v-if="!timelineMode" class="actions">
         <button
           v-if="canUpload"
           v-show="!selectionMode"
@@ -42,7 +42,7 @@
       </view>
     </view>
 
-    <view class="filter-row">
+    <view v-if="!timelineMode" class="filter-row">
       <button
         v-for="filter in filters"
         :key="filter.value"
@@ -58,8 +58,17 @@
     <view v-if="filteredPhotos.length === 0" class="section empty-section">
       <view class="empty-title">还没有可见照片</view>
       <view class="empty-text">
-        {{ canUpload ? "上传后先由你自己可见，标注照片里的人后会按隐私设置展示。" : "当前没有满足隐私条件的照片。" }}
+        {{ emptyText }}
       </view>
+      <button
+        v-if="canUpload && !timelineMode"
+        class="button empty-upload-button"
+        :class="{ disabled: albumBusy }"
+        :disabled="albumBusy"
+        @tap="choosePhotos"
+      >
+        {{ uploading ? "上传中..." : "上传第一张照片" }}
+      </button>
     </view>
 
     <uv-waterfall
@@ -81,9 +90,9 @@
             :key="photo.id"
             class="photo-card waterfall-photo-card"
             :class="{
-              selectable: selectionMode && photo.can_tag,
-              selected: selectionMode && isPhotoSelected(photo),
-              disabled: selectionMode && !photo.can_tag
+              selectable: !timelineMode && selectionMode && photo.can_tag,
+              selected: !timelineMode && selectionMode && isPhotoSelected(photo),
+              disabled: !timelineMode && selectionMode && !photo.can_tag
             }"
             @tap="togglePhotoSelection(photo)"
           >
@@ -102,7 +111,7 @@
                 <view class="photo-loading-dot"></view>
               </view>
               <view
-                v-if="selectionMode"
+                v-if="!timelineMode && selectionMode"
                 class="selection-checkbox"
                 :class="{ selected: isPhotoSelected(photo), disabled: !photo.can_tag }"
               >
@@ -111,7 +120,10 @@
                 </view>
               </view>
             </view>
-            <view class="photo-meta">
+            <view v-if="timelineMode" class="photo-meta public-photo-meta">
+              <view class="tag-line">{{ publicPhotoCaption }}</view>
+            </view>
+            <view v-else class="photo-meta">
               <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
                 {{ tagSummary(photo) }}
               </view>
@@ -146,9 +158,9 @@
             :key="photo.id"
             class="photo-card waterfall-photo-card"
             :class="{
-              selectable: selectionMode && photo.can_tag,
-              selected: selectionMode && isPhotoSelected(photo),
-              disabled: selectionMode && !photo.can_tag
+              selectable: !timelineMode && selectionMode && photo.can_tag,
+              selected: !timelineMode && selectionMode && isPhotoSelected(photo),
+              disabled: !timelineMode && selectionMode && !photo.can_tag
             }"
             @tap="togglePhotoSelection(photo)"
           >
@@ -167,7 +179,7 @@
                 <view class="photo-loading-dot"></view>
               </view>
               <view
-                v-if="selectionMode"
+                v-if="!timelineMode && selectionMode"
                 class="selection-checkbox"
                 :class="{ selected: isPhotoSelected(photo), disabled: !photo.can_tag }"
               >
@@ -176,7 +188,10 @@
                 </view>
               </view>
             </view>
-            <view class="photo-meta">
+            <view v-if="timelineMode" class="photo-meta public-photo-meta">
+              <view class="tag-line">{{ publicPhotoCaption }}</view>
+            </view>
+            <view v-else class="photo-meta">
               <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
                 {{ tagSummary(photo) }}
               </view>
@@ -205,7 +220,7 @@
       </template>
     </uv-waterfall>
 
-    <view v-if="selectionMode" class="bulk-action-bar">
+    <view v-if="!timelineMode && selectionMode" class="bulk-action-bar">
       <button class="button secondary" :disabled="albumBusy" @tap="toggleSelectionMode">取消</button>
       <view class="bulk-count">已选 {{ selectedPhotoCount }} 张</view>
       <button
@@ -218,7 +233,7 @@
       </button>
     </view>
 
-    <view v-if="tagSheetPhoto" class="tag-mask" @tap="closeTagSheet">
+    <view v-if="!timelineMode && tagSheetPhoto" class="tag-mask" @tap="closeTagSheet">
       <view class="tag-sheet" @tap.stop>
         <view class="sheet-bar"></view>
         <view class="sheet-title">
@@ -339,9 +354,11 @@ import {
   ensureLoggedIn,
   getCurrentUser,
   getToken,
+  queryString,
   request,
   uploadSessionAlbumPhoto
 } from "../../utils/api";
+import { showWechatShareMenus } from "../../utils/share";
 
 function albumMediaCachePath(photoId, variant = "preview") {
   const root =
@@ -356,6 +373,9 @@ export default {
   data() {
     return {
       sessionId: "",
+      timelineMode: false,
+      albumShareToken: "",
+      shareSubject: null,
       photos: [],
       people: [],
       hiddenCount: 0,
@@ -387,7 +407,41 @@ export default {
     };
   },
   computed: {
+    albumTitle() {
+      if (!this.timelineMode) {
+        return "车局相册";
+      }
+      return this.shareSubjectLabel ? `${this.shareSubjectLabel}的相册` : "分享相册";
+    },
+    albumIntro() {
+      if (this.timelineMode) {
+        return "朋友圈只读展示，不包含车内完整相册和上车入口。";
+      }
+      return "同车成员可保存可见照片；隐私照片不会展示。";
+    },
+    shareSubjectLabel() {
+      return (
+        this.shareSubject?.role_name ||
+        this.shareSubject?.seat_name ||
+        this.shareSubject?.label ||
+        ""
+      );
+    },
+    publicPhotoCaption() {
+      return this.shareSubjectLabel ? `包含 ${this.shareSubjectLabel}` : "分享照片";
+    },
+    emptyText() {
+      if (this.timelineMode) {
+        return "当前没有可展示的分享照片。";
+      }
+      return this.canUpload
+        ? "这场车还没人上传，来放第一张。标注照片里的人后会按隐私设置展示。"
+        : "当前没有满足隐私条件的照片。";
+    },
     filteredPhotos() {
+      if (this.timelineMode) {
+        return this.photos;
+      }
       if (this.activeFilter === "mine") {
         return this.photos.filter((photo) => photo.is_mine);
       }
@@ -457,6 +511,15 @@ export default {
   },
   async onLoad(options) {
     this.sessionId = options.id || "";
+    this.timelineMode =
+      options.source === "wechat_timeline" ||
+      Boolean(options.albumShareToken || options.token);
+    this.albumShareToken = options.albumShareToken || options.token || "";
+    this.showShareMenus();
+    if (this.timelineMode) {
+      await this.loadPublicAlbum();
+      return;
+    }
     const auth = await ensureLoggedIn({
       content: "登录后可以查看车局相册。"
     });
@@ -466,16 +529,37 @@ export default {
     }
     this.currentUserId = auth.user.id || "";
     await this.loadAlbum();
+    await this.ensureAlbumShareToken();
   },
   async onShow() {
+    if (this.timelineMode) {
+      if (this.sessionId && this.albumShareToken) {
+        await this.loadPublicAlbum();
+      }
+      return;
+    }
     const auth = getCurrentUser();
     this.currentUserId = auth.user?.id || this.currentUserId;
     if (this.sessionId && this.currentUserId) {
       await this.loadAlbum();
+      await this.ensureAlbumShareToken();
     }
   },
   onUnload() {
     this.disconnectPhotoObservers();
+  },
+  onShareAppMessage() {
+    const shareCode = `s${this.sessionId}-${Date.now()}`;
+    return {
+      title: this.albumShareTitle(),
+      path: `/pages/session/share?id=${this.sessionId}&entry=album&shareCode=${shareCode}&source=wechat_share`
+    };
+  },
+  onShareTimeline() {
+    return {
+      title: this.albumTimelineTitle(),
+      query: this.albumTimelineQuery()
+    };
   },
   watch: {
     activeFilter() {
@@ -486,6 +570,45 @@ export default {
   },
   methods: {
     apiUrl,
+    showShareMenus() {
+      showWechatShareMenus({
+        withShareTicket: true,
+        menus: ["shareAppMessage", "shareTimeline"]
+      });
+    },
+    albumShareTitle() {
+      return this.timelineMode && this.shareSubjectLabel
+        ? `${this.shareSubjectLabel}的车局相册`
+        : "车局相册";
+    },
+    albumTimelineTitle() {
+      return this.shareSubjectLabel
+        ? `${this.shareSubjectLabel}的车局照片`
+        : "车局相册";
+    },
+    albumTimelineQuery() {
+      return queryString({
+        id: this.sessionId,
+        source: "wechat_timeline",
+        albumShareToken: this.albumShareToken
+      }).replace(/^\?/, "");
+    },
+    async ensureAlbumShareToken() {
+      if (this.timelineMode || this.albumShareToken || !this.sessionId) {
+        return;
+      }
+      try {
+        const response = await request({
+          url: `/api/sessions/${this.sessionId}/album/share-token`,
+          method: "POST"
+        });
+        const data = dataOf(response) || {};
+        this.albumShareToken = data.token || "";
+        this.shareSubject = data.share_subject || null;
+      } catch (error) {
+        this.albumShareToken = "";
+      }
+    },
     inferredSeatRoleName(person) {
       return String(person?.note || "")
         .split(" · ")
@@ -564,6 +687,43 @@ export default {
         this.loadingAlbum = false;
       }
     },
+    async loadPublicAlbum() {
+      if (this.loadingAlbum) {
+        return;
+      }
+      if (!this.sessionId || !this.albumShareToken) {
+        this.statusText = "分享相册链接缺少访问凭证。";
+        return;
+      }
+      this.loadingAlbum = true;
+      try {
+        const response = await request({
+          url: `/api/sessions/${this.sessionId}/album/public-share${queryString({
+            token: this.albumShareToken
+          })}`
+        });
+        const data = dataOf(response) || {};
+        this.disconnectPhotoObservers();
+        this.visiblePhotoMedia = {};
+        this.people = [];
+        this.canUpload = false;
+        this.hiddenCount = 0;
+        this.shareSubject = data.share_subject || this.shareSubject;
+        this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+        this.statusText = "";
+        this.refreshWaterfall();
+      } catch (error) {
+        this.photos = [];
+        this.canUpload = false;
+        this.statusText =
+          error?.statusCode === 403
+            ? "分享相册已过期或不可访问。"
+            : "分享相册加载失败，请稍后重试。";
+        this.refreshWaterfall();
+      } finally {
+        this.loadingAlbum = false;
+      }
+    },
     normalizePhotoMedia(photo) {
       const previewUrl = photo.preview_url || photo.image_url || "";
       return {
@@ -585,17 +745,16 @@ export default {
       const token = getToken();
       const filePath = albumMediaCachePath(photo.id, variant);
       const imageUrl = apiUrl(this.mediaUrlForPhoto(photo, variant));
-      if (!token || !filePath || !imageUrl) {
+      if ((!this.timelineMode && !token) || !filePath || !imageUrl) {
         return Promise.reject(new Error("album image auth unavailable"));
       }
       return new Promise((resolve, reject) => {
+        const header = token ? { Authorization: `Bearer ${token}` } : {};
         uni.request({
           url: imageUrl,
           method: "GET",
           responseType: "arraybuffer",
-          header: {
-            Authorization: `Bearer ${token}`
-          },
+          header,
           success(response) {
             if (response.statusCode < 200 || response.statusCode >= 300) {
               reject(new Error(`album image request failed: ${response.statusCode}`));
@@ -741,7 +900,11 @@ export default {
     },
     changeWaterfallList(event) {
       if (event?.name === "list1" || event?.name === "list2") {
-        this[event.name].push(event.value);
+        const targetListName = `waterfallList${event.name.slice(4)}`;
+        if (!Array.isArray(this[targetListName])) {
+          return;
+        }
+        this[targetListName].push(event.value);
         this.$nextTick(() => this.observeVisiblePhotos());
       }
     },
@@ -853,13 +1016,16 @@ export default {
       return [...peopleByKey.values()];
     },
     tagSummary(photo) {
+      if (this.timelineMode) {
+        return this.publicPhotoCaption;
+      }
       if (!photo.tags || photo.tags.length === 0) {
         return "待标注";
       }
       return `照片里：${photo.tags.map((tag) => tag.label).join("、")}`;
     },
     choosePhotos() {
-      if (!this.canUpload || this.albumBusy) {
+      if (this.timelineMode || !this.canUpload || this.albumBusy) {
         uni.showToast({ title: "发车后同车成员可上传", icon: "none" });
         return;
       }
@@ -896,7 +1062,7 @@ export default {
       }
     },
     deletePhoto(photo) {
-      if (this.albumBusy || !photo.is_mine) {
+      if (this.timelineMode || this.albumBusy || !photo.is_mine) {
         return;
       }
       uni.showModal({
@@ -955,20 +1121,20 @@ export default {
       });
     },
     goPrivacy() {
-      if (this.albumBusy) {
+      if (this.timelineMode || this.albumBusy) {
         return;
       }
       uni.navigateTo({ url: `/pages/session/albumPrivacy?id=${this.sessionId}` });
     },
     openTagSheet(photo) {
-      if (this.albumBusy || !photo.can_tag) {
+      if (this.timelineMode || this.albumBusy || !photo.can_tag) {
         return;
       }
       this.tagSheetPhoto = photo;
       this.selectedTagKeys = (photo.tags || []).map((tag) => tag.key);
     },
     toggleSelectionMode() {
-      if (this.albumBusy) {
+      if (this.timelineMode || this.albumBusy) {
         return;
       }
       this.selectionMode = !this.selectionMode;
@@ -978,7 +1144,7 @@ export default {
       return this.selectedPhotoIds.includes(Number(photo.id));
     },
     togglePhotoSelection(photo) {
-      if (!this.selectionMode || this.albumBusy || !photo.can_tag) {
+      if (this.timelineMode || !this.selectionMode || this.albumBusy || !photo.can_tag) {
         return;
       }
       const photoId = Number(photo.id);
@@ -989,7 +1155,7 @@ export default {
       this.selectedPhotoIds = [...this.selectedPhotoIds, photoId];
     },
     openBulkTagSheet() {
-      if (this.albumBusy || this.selectedPhotoIds.length === 0) {
+      if (this.timelineMode || this.albumBusy || this.selectedPhotoIds.length === 0) {
         return;
       }
       this.bulkTagging = true;
@@ -1012,7 +1178,7 @@ export default {
       this.selectedTagKeys = [...this.selectedTagKeys, key];
     },
     async saveTags() {
-      if (!this.tagSheetPhoto || this.albumBusy) {
+      if (this.timelineMode || !this.tagSheetPhoto || this.albumBusy) {
         return;
       }
       const targetPhotoIds = this.bulkTagging
@@ -1287,6 +1453,11 @@ export default {
   color: #7a857d;
   font-size: 25rpx;
   line-height: 1.5;
+}
+
+.empty-upload-button {
+  width: 260rpx;
+  margin: 22rpx auto 0;
 }
 
 .bulk-action-bar {

@@ -126,6 +126,14 @@ function normalizeRoleGender(value) {
   return roleGender;
 }
 
+function normalizeJoinPolicy(value) {
+  const policy = String(value || "review_required").trim();
+  if (!["direct", "review_required"].includes(policy)) {
+    throw badRequest("joinPolicy must be direct or review_required");
+  }
+  return policy;
+}
+
 function nonNegativeIntValue(value, label) {
   const parsed = intValue(value, 0);
   if (parsed < 0) {
@@ -1174,6 +1182,84 @@ function isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, userId) {
   return true;
 }
 
+function normalizeAlbumShareClaims(claims = {}) {
+  return {
+    sessionId: positiveId(claims.sessionId ?? claims.session_id, "sessionId"),
+    sharerUserId: positiveId(
+      claims.sharerUserId ?? claims.sharer_user_id,
+      "sharerUserId"
+    ),
+    seatId: positiveId(claims.seatId ?? claims.seat_id, "seatId")
+  };
+}
+
+function albumShareSubjectForSeat(seat) {
+  return {
+    type: "seat",
+    seat_id: Number(seat.id),
+    role_name: seat.role_name || "",
+    seat_name: seat.name || "",
+    label: seat.role_name || seat.name || "车友"
+  };
+}
+
+async function requirePublicAlbumShareSeat(connection, claims) {
+  const normalized = normalizeAlbumShareClaims(claims);
+  const [rows] = await connection.query(
+    `
+      SELECT id, name, role_name, confirmed_user_id, status
+      FROM session_seats
+      WHERE id = ?
+        AND session_id = ?
+        AND confirmed_user_id = ?
+        AND status IN ('confirmed', 'locked')
+      LIMIT 1
+    `,
+    [normalized.seatId, normalized.sessionId, normalized.sharerUserId]
+  );
+  const seat = rows[0];
+  if (!seat) {
+    throw forbidden("Album share is no longer available");
+  }
+  return { ...normalized, seat };
+}
+
+function isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, claims) {
+  const { sessionId, sharerUserId, seatId } = normalizeAlbumShareClaims(claims);
+  if (Number(photo.session_id) !== sessionId || tags.length === 0) {
+    return false;
+  }
+
+  const hasSharerSeatTag = tags.some(
+    (tag) => tag.tag_type === "seat" && Number(tag.seat_id) === seatId
+  );
+  if (!hasSharerSeatTag) {
+    return false;
+  }
+
+  const uploaderUserId = Number(photo.uploader_user_id);
+  if (uploaderUserId && uploaderUserId !== sharerUserId) {
+    const uploaderPrivacy = privacyByUser.get(uploaderUserId) || albumPrivacy();
+    if (!uploaderPrivacy.allow_uploaded_visible) {
+      return false;
+    }
+  }
+
+  const taggedUserIds = [
+    ...new Set(tags.map((tag) => Number(tag.user_id || 0)).filter(Boolean))
+  ];
+  for (const taggedUserId of taggedUserIds) {
+    if (taggedUserId === sharerUserId) {
+      continue;
+    }
+    const taggedPrivacy = privacyByUser.get(taggedUserId) || albumPrivacy();
+    if (!taggedPrivacy.allow_tagged_visible) {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function markSignupReviewEligible(connection, signupId) {
   await connection.query(
     `
@@ -1781,9 +1867,9 @@ export async function createSession(user, body) {
           (
             organizer_user_id, script_id, script_name_snapshot, store_id,
             store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
-            npc_user_id, npc_name_snapshot, deposit_amount, visibility, note
+            npc_user_id, npc_name_snapshot, deposit_amount, visibility, join_policy, note
           )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         user.user.id,
@@ -1798,6 +1884,7 @@ export async function createSession(user, body) {
         optionalText(body.npcNameSnapshot),
         intValue(body.depositAmount, 0),
         body.visibility || "share_only",
+        normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
         optionalText(body.note)
       ]
     );
@@ -1835,6 +1922,7 @@ export async function getSession(id) {
     const { note, cancelled_by_user_id: _cancelledByUserId, ...publicSession } = session;
     return {
       ...publicSession,
+      join_policy: publicSession.join_policy || "review_required",
       active_album_photo_count: activeAlbumPhotoCount,
       photo_count: activeAlbumPhotoCount,
       seats,
@@ -2293,7 +2381,14 @@ export async function updateSession(user, id, body) {
     await requireSessionOwner(connection, id, user);
     assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
     assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
-    return updateAllowed(connection, "sessions", id, body, [
+    const normalized = {
+      ...body,
+      joinPolicy:
+        body.joinPolicy === undefined && body.join_policy === undefined
+          ? undefined
+          : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy)
+    };
+    return updateAllowed(connection, "sessions", id, normalized, [
       ["startAt", "start_at"],
       ["dmUserId", "dm_user_id"],
       ["dmNameSnapshot", "dm_name_snapshot"],
@@ -2301,6 +2396,7 @@ export async function updateSession(user, id, body) {
       ["npcNameSnapshot", "npc_name_snapshot"],
       ["depositAmount", "deposit_amount"],
       ["visibility", "visibility"],
+      ["joinPolicy", "join_policy"],
       ["note", "note"],
       ["status", "status"]
     ]);
@@ -2677,6 +2773,9 @@ function forbidPlayerDirectClaim(user, seat) {
   if (isAdmin(user) || Number(seat.organizer_user_id) === Number(user.user.id)) {
     return;
   }
+  if ((seat.join_policy || "review_required") === "direct") {
+    return;
+  }
   throw forbidden("Seat claim requires organizer review");
 }
 
@@ -2700,6 +2799,7 @@ export async function claimSessionSeat(user, seatId, body = {}) {
         SELECT
           seat.*,
           session.organizer_user_id,
+          session.join_policy,
           session.status AS session_status,
           (session.start_at <= CURRENT_TIMESTAMP) AS session_started
         FROM session_seats seat
@@ -2785,7 +2885,11 @@ export async function claimSessionSeat(user, seatId, body = {}) {
       [user.user.id, seat.id]
     );
 
-    return findById(connection, "session_seats", seat.id);
+    const claimedSeat = await findById(connection, "session_seats", seat.id);
+    return {
+      join_result: "joined",
+      ...claimedSeat
+    };
   });
 }
 
@@ -3281,6 +3385,34 @@ export async function listSessionAlbumPeople(user, sessionId) {
   });
 }
 
+export async function getSessionAlbumShareSubject(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    await requireSessionAlbumMember(connection, session, user);
+    const [rows] = await connection.query(
+      `
+        SELECT id, name, role_name, confirmed_user_id, status
+        FROM session_seats
+        WHERE session_id = ?
+          AND confirmed_user_id = ?
+          AND status IN ('confirmed', 'locked')
+        ORDER BY id
+        LIMIT 1
+      `,
+      [id, user.user.id]
+    );
+    const seat = rows[0];
+    if (!seat) {
+      throw forbidden("Confirmed seat is required for album sharing");
+    }
+    return {
+      session_id: id,
+      share_subject: albumShareSubjectForSeat(seat)
+    };
+  });
+}
+
 export async function listSessionAlbum(user, sessionId) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
@@ -3347,6 +3479,72 @@ export async function listSessionAlbum(user, sessionId) {
       visible_count: photos.length,
       hidden_count: hiddenCount,
       untagged_count: untaggedCount,
+      photos
+    };
+  });
+}
+
+export async function listPublicSessionAlbumShare(claims) {
+  const normalizedClaims = normalizeAlbumShareClaims(claims);
+  return withDatabaseConnection(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
+    const { seat } = await requirePublicAlbumShareSeat(connection, normalizedClaims);
+    const [photoRows] = await connection.query(
+      `
+        SELECT photo.*
+        FROM session_album_photos photo
+        WHERE photo.session_id = ?
+          AND photo.status = 'active'
+        ORDER BY photo.created_at DESC, photo.id DESC
+      `,
+      [normalizedClaims.sessionId]
+    );
+    const photoIds = photoRows.map((photo) => Number(photo.id));
+    const tagsMap = await albumTagsForPhotos(connection, photoIds);
+    const privacyUserIds = [];
+    for (const photo of photoRows) {
+      privacyUserIds.push(photo.uploader_user_id);
+      for (const tag of tagsMap.get(Number(photo.id)) || []) {
+        if (tag.user_id) {
+          privacyUserIds.push(tag.user_id);
+        }
+      }
+    }
+    const privacyByUser = await albumPrivacyMap(
+      connection,
+      normalizedClaims.sessionId,
+      privacyUserIds
+    );
+    const photos = [];
+    for (const photo of photoRows) {
+      const tags = tagsMap.get(Number(photo.id)) || [];
+      if (
+        !isAlbumPhotoVisibleInPublicShare(
+          photo,
+          tags,
+          privacyByUser,
+          normalizedClaims
+        )
+      ) {
+        continue;
+      }
+      photos.push({
+        id: Number(photo.id),
+        session_id: Number(photo.session_id),
+        image_width: photo.image_width ? Number(photo.image_width) : null,
+        image_height: photo.image_height ? Number(photo.image_height) : null,
+        image_byte_size: photo.image_byte_size ? Number(photo.image_byte_size) : null,
+        image_content_type: photo.image_content_type || "image/jpeg",
+        created_at: photo.created_at
+      });
+    }
+    return {
+      session_id: normalizedClaims.sessionId,
+      script_name_snapshot: session.script_name_snapshot,
+      store_name_snapshot: session.store_name_snapshot,
+      start_at: session.start_at,
+      share_subject: albumShareSubjectForSeat(seat),
+      visible_count: photos.length,
       photos
     };
   });
@@ -3511,6 +3709,36 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
     );
     if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, currentUserId)) {
       throw forbidden("Album photo is not visible");
+    }
+    return photo;
+  });
+}
+
+export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
+  const id = positiveId(photoId, "photoId");
+  const normalizedClaims = normalizeAlbumShareClaims(claims);
+  return withDatabaseConnection(async (connection) => {
+    const photo = await findById(connection, "session_album_photos", id);
+    if (!photo || photo.status !== "active") {
+      throw notFound("Album photo not found");
+    }
+    if (Number(photo.session_id) !== normalizedClaims.sessionId) {
+      throw forbidden("Album photo is outside this public share");
+    }
+    await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
+    await requirePublicAlbumShareSeat(connection, normalizedClaims);
+    const tagsMap = await albumTagsForPhotos(connection, [id]);
+    const tags = tagsMap.get(id) || [];
+    const privacyByUser = await albumPrivacyMap(
+      connection,
+      normalizedClaims.sessionId,
+      [
+        photo.uploader_user_id,
+        ...tags.map((tag) => tag.user_id).filter(Boolean)
+      ]
+    );
+    if (!isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, normalizedClaims)) {
+      throw forbidden("Album photo is not visible in this public share");
     }
     return photo;
   });

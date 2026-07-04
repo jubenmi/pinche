@@ -54,6 +54,13 @@ function redirectToMaintenanceHome() {
   uni.reLaunch({ url: "/pages/index/index?maintenance=1" });
 }
 
+export function goHomeAfterLogout() {
+  if (typeof uni === "undefined" || typeof uni.reLaunch !== "function") {
+    return;
+  }
+  uni.reLaunch({ url: "/pages/index/index" });
+}
+
 function currentPageRoute() {
   if (typeof getCurrentPages !== "function") {
     return "";
