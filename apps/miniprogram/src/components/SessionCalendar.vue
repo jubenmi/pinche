@@ -107,7 +107,7 @@
                   :class="[item.type, { 'album-first-row': item.albumFirst }]"
                   @tap="handleCalendarCardTap(item)"
                 >
-                  <view class="session-stripe"></view>
+                  <view class="session-stripe" :class="item.stripeTone"></view>
 
                   <view class="session-main">
                     <view class="session-title-line">
@@ -134,14 +134,12 @@
                       <text class="status-pill" :class="item.statusTone">{{ item.statusText }}</text>
                     </view>
                     <view v-if="item.albumFirst" class="album-cta-row">
-                      <button class="album-cta-button" @tap.stop="goAlbum(item.sessionId)">
-                        {{ item.albumCtaText }}
-                      </button>
                       <text class="album-cta-note">{{ item.albumCtaNote }}</text>
                     </view>
                   </view>
 
                   <view class="session-actions">
+                    <button v-if="item.canManage" class="session-manage" @tap.stop="goManage(item.sessionId)">管理</button>
                     <button class="session-delete" @tap.stop="hideCalendarItem(item)">
                       {{ item.isOrganized ? organizedRemovalActionText(item.session) : "删除" }}
                     </button>
@@ -646,6 +644,7 @@ function refreshCalendarItem(item) {
   item.sessionId = item.session?.id || item.signup?.session_id || "";
   item.key = `calendar-${item.sessionId}`;
   item.isOrganized = Boolean(item.session);
+  item.canManage = item.isOrganized;
   item.isJoined = Boolean(item.signup);
   item.type = item.isOrganized ? "organized" : "joined";
   item.raw = item.session || item.signup || {};
@@ -668,13 +667,31 @@ function refreshCalendarItem(item) {
   item.identityTags = calendarIdentityTags(item);
   item.isPending = calendarItemIsPending(item);
   item.albumFirst = isCalendarItemPostStart(item);
-  item.albumCtaText = item.albumFirst ? calendarAlbumCtaText(item.raw) : "";
   item.albumCtaNote = item.albumFirst ? calendarAlbumCtaNote(item.raw) : "";
+  item.stripeTone = calendarStripeTone(item);
   item.statusText = calendarItemStatusText(item);
   if (item.albumFirst) {
     item.statusTone = "green";
   }
   return item;
+}
+
+function calendarStripeTone(item) {
+  if (calendarItemFailed(item)) {
+    return "red";
+  }
+  if (isCalendarItemPostStart(item)) {
+    return "green";
+  }
+  return "amber";
+}
+
+function calendarItemFailed(item) {
+  return (
+    item.sessionStatus === "cancelled" ||
+    item.signupStatus === "rejected" ||
+    item.signupStatus === "cancelled"
+  );
 }
 
 function calendarIdentityTags(item) {
@@ -738,10 +755,6 @@ function hasAlbumContent(source = {}) {
     Number(source.visible_photo_count || source.photo_count || source.review_count || 0) > 0 ||
     Boolean(source.has_review)
   );
-}
-
-function calendarAlbumCtaText(source = {}) {
-  return hasAlbumContent(source) ? "回看相册" : "上传照片";
 }
 
 function calendarAlbumCtaNote(source = {}) {
@@ -1423,20 +1436,26 @@ function signupStatusLabel(status) {
   left: 12rpx;
   width: 7rpx;
   border-radius: 999rpx;
-  background: #24745f;
+  background: #d6a33a;
 }
 
-.session-row.joined .session-stripe {
-  background: #4c789d;
+.session-stripe.amber {
+  background: #d6a33a;
+  box-shadow: 0 0 0 4rpx rgba(214, 163, 58, 0.14);
+}
+
+.session-stripe.green {
+  background: #24745f;
+  box-shadow: 0 0 0 4rpx rgba(36, 116, 95, 0.12);
+}
+
+.session-stripe.red {
+  background: #c25b4a;
+  box-shadow: 0 0 0 4rpx rgba(194, 91, 74, 0.12);
 }
 
 .session-row.album-first-row {
   background: linear-gradient(180deg, rgba(241, 248, 245, 0.96), rgba(255, 255, 252, 0.94));
-}
-
-.session-row.album-first-row .session-stripe {
-  background: #24745f;
-  box-shadow: 0 0 0 4rpx rgba(36, 116, 95, 0.12);
 }
 
 .session-main {
@@ -1581,20 +1600,6 @@ function signupStatusLabel(status) {
   min-width: 0;
 }
 
-.album-cta-button {
-  flex: 0 0 148rpx;
-  height: 48rpx;
-  margin: 0;
-  padding: 0 18rpx;
-  border-radius: 10rpx;
-  background: #24745f;
-  color: #ffffff;
-  font-size: 23rpx;
-  font-weight: 600;
-  line-height: 48rpx;
-  box-shadow: 0 12rpx 24rpx rgba(36, 116, 95, 0.16);
-}
-
 .album-cta-note {
   overflow: hidden;
   min-width: 0;
@@ -1610,18 +1615,30 @@ function signupStatusLabel(status) {
   align-items: center;
   justify-content: center;
   flex-direction: column;
+  gap: 10rpx;
 }
 
+.session-manage,
 .session-delete {
   width: 88rpx;
   height: 44rpx;
   margin: 0;
   padding: 0;
   border-radius: 8rpx;
-  background: rgba(255, 247, 237, 0.86);
-  color: #9f3f33;
   font-size: 21rpx;
   line-height: 44rpx;
+}
+
+.session-manage {
+  border: 1rpx solid rgba(36, 116, 95, 0.18);
+  background: #edf8f3;
+  color: #24745f;
+  font-weight: 600;
+}
+
+.session-delete {
+  background: rgba(255, 247, 237, 0.86);
+  color: #9f3f33;
 }
 
 .load-more {

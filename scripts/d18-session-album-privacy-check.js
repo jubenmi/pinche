@@ -213,8 +213,8 @@ for (const token of [
   "preview_url",
   "visiblePhotoMedia",
   "onPhotoVisible",
-  "同车成员可保存",
-  "隐私照片不会展示",
+  "我的照片",
+  "其他车友照片不会展示",
   "getToken",
   "downloadAlbumImage",
   "display_url",
@@ -242,8 +242,10 @@ for (const token of [
 
 const privacyPage = read("apps/miniprogram/src/pages/session/albumPrivacy.vue");
 for (const token of [
-  "其他同车成员可以查看我上传的照片",
-  "其他同车成员可以查看包含我的照片",
+  "相册分享隐私设置",
+  "允许我上传的照片出现在分享展示里",
+  "允许包含我的照片出现在分享展示里",
+  "完整相册只展示你上传或标注了你的照片",
   "车头也不能越权查看原图",
   "allowUploadedVisible",
   "allowTaggedVisible"
@@ -263,9 +265,11 @@ for (const token of [
   "visible same-session member should open media",
   "untagged photo should be hidden from non-uploader",
   "tagged player should see photo containing them",
-  "other member should not see when tagged player blocks visibility",
-  "other-tagged photo should be visible to all same-session members",
-  "npc-only photo should be visible to all same-session members",
+  "other confirmed seat should not see another role's tagged photo",
+  "other confirmed seat should stay blocked when tagged player blocks visibility",
+  "other-tagged photo should not be visible to unrelated same-session members",
+  "npc-only photo should not be visible to unrelated same-session members",
+  "bound NPC role user should see their NPC-only photo",
   "admin must not bypass tagged player privacy",
   "future.session.id"
 ]) {

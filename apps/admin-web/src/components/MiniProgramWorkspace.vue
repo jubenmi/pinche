@@ -133,9 +133,14 @@
               <span>本场额外NPC</span>
               <textarea
                 v-model="extraNpcRolesText"
-                placeholder="每行一个NPC角色，适合店家本场额外设计"
+                placeholder="每行一个NPC角色，可在末尾写男 / 女 / 不限"
                 :disabled="busy"
               ></textarea>
+            </label>
+            <label class="full checkbox-row">
+              <input v-model="npcJoinEnabled" type="checkbox" :disabled="busy" />
+              <span>允许NPC工作人员自选角色</span>
+              <small>关闭后由车头手动安排NPC角色</small>
             </label>
             <label class="full">
               <span>聊天置顶信息</span>
@@ -530,7 +535,16 @@
         </div>
         <div class="mini-list">
           <div v-for="signup in signups" :key="signup.id" class="mini-item">
-            <strong>{{ seatName(signup.seat_id) }}</strong>
+            <strong>
+              {{ signupTargetName(signup) }}
+              <span
+                v-if="isNpcSignup(signup)"
+                class="npc-gender-mark"
+                :class="npcRoleGenderClass(signup.npc_role_gender)"
+              >
+                {{ npcRoleGenderText(signup.npc_role_gender) }}
+              </span>
+            </strong>
             <span>{{ signup.contact_text || "车内聊天沟通" }}</span>
             <small>{{ signupStatusLabel(signup.status) }} · 定金 {{ signup.deposit_status || "unpaid" }}</small>
             <div class="mini-row-actions">
@@ -701,6 +715,7 @@ const selectedRole = ref(null);
 const createDate = ref(defaultDate());
 const createTime = ref("14:00");
 const extraNpcRolesText = ref("");
+const npcJoinEnabled = ref(true);
 const pinnedMessageText = ref("");
 const mySessions = ref([]);
 const mySignups = ref([]);
@@ -938,6 +953,37 @@ function roleGenderSymbol(value) {
   return "";
 }
 
+function npcRoleGenderText(value) {
+  const gender = normalizeRoleGender(value);
+  if (gender === "male") {
+    return "♂";
+  }
+  if (gender === "female") {
+    return "♀";
+  }
+  return "不限";
+}
+
+function npcRoleGenderClass(value) {
+  return `gender-${normalizeRoleGender(value)}`;
+}
+
+function parseExtraNpcRoleLine(line) {
+  const text = String(line || "").trim();
+  if (!text) {
+    return null;
+  }
+  const genderMatch = text.match(/\s+(男位?|女位?|不限|male|female|unlimited)$/i);
+  const name = genderMatch ? text.slice(0, genderMatch.index).trim() : text;
+  if (!name) {
+    return null;
+  }
+  return {
+    name,
+    roleGender: normalizeRoleGender(genderMatch ? genderMatch[1] : "unlimited")
+  };
+}
+
 function rolesFromScript(script) {
   const template = parseJsonArray(script?.default_seat_template_json);
   if (template.length > 0) {
@@ -1147,6 +1193,7 @@ function selectStore(store) {
   roleOptions.value = [];
   selectedRole.value = null;
   extraNpcRolesText.value = "";
+  npcJoinEnabled.value = true;
   loadScripts();
 }
 
@@ -1158,14 +1205,14 @@ function selectScript(script) {
   roleOptions.value = rolesFromScript(script);
   selectedRole.value = null;
   extraNpcRolesText.value = "";
+  npcJoinEnabled.value = true;
 }
 
 function extraNpcRoles() {
   return extraNpcRolesText.value
     .split(/\r?\n|[，,]/)
-    .map((name) => name.trim())
-    .filter(Boolean)
-    .map((name) => ({ name }));
+    .map(parseExtraNpcRoleLine)
+    .filter(Boolean);
 }
 
 async function createPublishedSession() {
@@ -1183,6 +1230,7 @@ async function createPublishedSession() {
       startAt: startAt.value,
       depositAmount: 0,
       extraNpcRoles: extraNpcRoles(),
+      npcJoinEnabled: npcJoinEnabled.value,
       note: "剧本迷·拼车，一起沉浸好本。",
       pinnedMessageText: pinnedMessageText.value.trim() || defaultPinnedMessage.value
     });
@@ -2141,6 +2189,17 @@ function canTransferToSeat(seat) {
 
 function seatName(seatId) {
   return (detailSession.value.seats || []).find((seat) => Number(seat.id) === Number(seatId))?.name || `座位 ${seatId}`;
+}
+
+function isNpcSignup(signup) {
+  return signup?.signup_type === "session_npc_role";
+}
+
+function signupTargetName(signup) {
+  if (isNpcSignup(signup)) {
+    return `NPC角色：${signup.npc_role_name || "待定"}`;
+  }
+  return seatName(signup.seat_id);
 }
 
 function storeMeta(store) {

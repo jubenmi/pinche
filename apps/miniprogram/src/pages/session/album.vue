@@ -3,60 +3,122 @@
     <AuthIdentityBar v-if="!timelineMode" />
 
     <view class="section album-head">
-      <view class="title">{{ albumTitle }}</view>
-      <view class="text">{{ albumIntro }}</view>
-      <view v-if="operationText" class="notice">{{ operationText }}</view>
-      <view class="album-stats">
-        <view class="stat-pill">{{ timelineMode ? "展示" : "你可见" }} {{ photos.length }} 张</view>
-        <view v-if="!timelineMode && hiddenCount > 0" class="stat-pill muted">
-          另有 {{ hiddenCount }} 张因成员隐私未展示
+      <view class="album-head-copy">
+        <view class="album-kicker">{{ timelineMode ? "分享相册" : "车局影像" }}</view>
+        <view class="album-title-row">
+          <view class="title album-title">{{ albumTitle }}</view>
+          <view v-if="!timelineMode" class="album-progress-badge">标注 {{ filteredTagProgressPercent }}%</view>
+        </view>
+        <view class="album-intro">{{ albumIntro }}</view>
+      </view>
+
+      <view v-if="operationText" class="notice album-notice">{{ operationText }}</view>
+
+      <view class="album-metrics" :class="{ public: timelineMode }">
+        <view class="album-metric primary">
+          <text class="metric-value">{{ photos.length }}</text>
+          <text class="metric-label">{{ timelineMode ? "展示照片" : "我的照片" }}</text>
+        </view>
+        <view v-if="!timelineMode" class="album-metric">
+          <text class="metric-value">{{ filteredPhotos.length }}</text>
+          <text class="metric-label">当前筛选</text>
+        </view>
+        <view v-if="!timelineMode" class="album-metric">
+          <text class="metric-value">{{ filteredTaggedPhotoCount }}</text>
+          <text class="metric-label">已标注</text>
+        </view>
+        <view v-if="!timelineMode" class="album-metric">
+          <text class="metric-value">{{ filteredUntaggedPhotoCount }}</text>
+          <text class="metric-label">待标注</text>
         </view>
       </view>
-      <view v-if="!timelineMode" class="actions">
+
+      <view v-if="!timelineMode && hiddenCount > 0" class="album-privacy-note">
+        另有 {{ hiddenCount }} 张非本人照片或受隐私保护未展示
+      </view>
+
+      <view v-if="!timelineMode" class="actions album-actions">
         <button
           v-if="canUpload"
           v-show="!selectionMode"
-          class="button"
+          class="button album-action-primary"
           :class="{ disabled: albumBusy }"
           :disabled="albumBusy"
           @tap="choosePhotos"
         >
           {{ uploading ? "上传中..." : "上传照片" }}
         </button>
-        <button
-          v-if="canUpload && !selectionMode"
-          class="button secondary"
-          :disabled="albumBusy"
-          @tap="goPrivacy"
-        >
-          隐私设置
-        </button>
-        <button
-          v-if="taggablePhotos.length"
-          class="button secondary"
-          :disabled="albumBusy"
-          @tap="toggleSelectionMode"
-        >
-          {{ selectionMode ? "退出多选" : "多选" }}
-        </button>
+        <view v-if="!selectionMode" class="album-command-rail">
+          <button
+            v-if="canUpload"
+            class="album-command"
+            :disabled="albumBusy"
+            @tap="goPrivacy"
+          >
+            隐私
+          </button>
+          <button
+            v-if="photos.length"
+            class="album-command"
+            :disabled="albumBusy"
+            @tap="downloadAllPhotos"
+          >
+            全部下载
+          </button>
+          <button
+            v-if="filteredPhotos.length"
+            class="album-command"
+            :disabled="albumBusy"
+            @tap="openDownloadSelectionMode"
+          >
+            多选下载
+          </button>
+          <button
+            v-if="taggablePhotos.length"
+            class="album-command"
+            :disabled="albumBusy"
+            @tap="openTagSelectionMode"
+          >
+            标注
+          </button>
+        </view>
       </view>
+    </view>
+
+    <view v-if="!timelineMode" class="role-filter-row">
+      <view class="role-filter-label">按标注角色筛选</view>
+      <picker
+        mode="selector"
+        :range="albumRoleFilterLabels"
+        :value="selectedRoleFilterIndex"
+        :disabled="albumBusy || albumRoleFilterOptions.length <= 1"
+        @change="handleRoleFilterChange"
+      >
+        <view
+          class="role-filter-picker"
+          :class="{ disabled: albumBusy || albumRoleFilterOptions.length <= 1 }"
+        >
+          {{ selectedRoleFilterLabel }}
+        </view>
+      </picker>
     </view>
 
     <view v-if="!timelineMode" class="filter-row">
       <button
-        v-for="filter in filters"
+        v-for="filter in albumFilterOptions"
         :key="filter.value"
         class="filter-chip"
         :class="{ active: activeFilter === filter.value }"
         :disabled="albumBusy"
         @tap="activeFilter = filter.value"
       >
-        {{ filter.label }}
+        <text>{{ filter.label }}</text>
+        <text class="filter-count">{{ filter.count }}</text>
       </button>
     </view>
 
     <view v-if="filteredPhotos.length === 0" class="section empty-section">
-      <view class="empty-title">还没有可见照片</view>
+      <view class="empty-title">还没有你的照片</view>
       <view class="empty-text">
         {{ emptyText }}
       </view>
@@ -90,9 +152,9 @@
             :key="photo.id"
             class="photo-card waterfall-photo-card"
             :class="{
-              selectable: !timelineMode && selectionMode && photo.can_tag,
+              selectable: !timelineMode && selectionMode && canSelectPhoto(photo),
               selected: !timelineMode && selectionMode && isPhotoSelected(photo),
-              disabled: !timelineMode && selectionMode && !photo.can_tag
+              disabled: !timelineMode && selectionMode && !canSelectPhoto(photo)
             }"
             @tap="togglePhotoSelection(photo)"
           >
@@ -100,6 +162,7 @@
               class="photo-image-shell"
               :style="photoImageStyle(photo)"
               @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
+              @longpress.stop="showPhotoInfo(photo)"
             >
               <image
                 v-if="visiblePhotoMedia[photo.id]?.thumbnail"
@@ -113,7 +176,7 @@
               <view
                 v-if="!timelineMode && selectionMode"
                 class="selection-checkbox"
-                :class="{ selected: isPhotoSelected(photo), disabled: !photo.can_tag }"
+                :class="{ selected: isPhotoSelected(photo), disabled: !canSelectPhoto(photo) }"
               >
                 <view class="selection-checkbox-box">
                   {{ isPhotoSelected(photo) ? "✓" : "" }}
@@ -121,25 +184,44 @@
               </view>
             </view>
             <view v-if="timelineMode" class="photo-meta public-photo-meta">
-              <view class="tag-line">{{ publicPhotoCaption }}</view>
+              <view class="photo-caption-body">
+                <view class="photo-caption-title">{{ publicPhotoCaption }}</view>
+              </view>
             </view>
             <view v-else class="photo-meta">
-              <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
-                {{ tagSummary(photo) }}
+              <view class="photo-caption-body">
+                <view class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
+                  {{ tagSummary(photo) }}
+                </view>
               </view>
-              <view v-if="!selectionMode" class="photo-actions">
-                <view v-if="photo.is_mine" class="mine-badge">我上传</view>
-                <button
-                  v-if="photo.can_tag"
-                  class="tag-button"
-                  :disabled="albumBusy"
-                  @tap.stop="openTagSheet(photo)"
-                >
-                  标注
-                </button>
+              <view
+                v-if="!selectionMode"
+                class="photo-actions-row"
+                :class="{ 'has-danger': photo.is_mine }"
+              >
+                <view class="photo-status-slot">
+                  <text class="photo-upload-source">{{ photo.is_mine ? "我上传" : "车友上传" }}</text>
+                </view>
+                <view class="photo-safe-actions">
+                  <button
+                    v-if="photo.can_tag"
+                    class="photo-action-text primary"
+                    :disabled="albumBusy"
+                    @tap.stop="openTagSheet(photo)"
+                  >
+                    标注
+                  </button>
+                  <button
+                    class="photo-action-text"
+                    :disabled="albumBusy"
+                    @tap.stop="downloadSinglePhoto(photo)"
+                  >
+                    下载
+                  </button>
+                </view>
                 <button
                   v-if="photo.is_mine"
-                  class="tag-button danger"
+                  class="photo-action-text danger photo-danger-action"
                   :disabled="albumBusy"
                   @tap.stop="deletePhoto(photo)"
                 >
@@ -158,9 +240,9 @@
             :key="photo.id"
             class="photo-card waterfall-photo-card"
             :class="{
-              selectable: !timelineMode && selectionMode && photo.can_tag,
+              selectable: !timelineMode && selectionMode && canSelectPhoto(photo),
               selected: !timelineMode && selectionMode && isPhotoSelected(photo),
-              disabled: !timelineMode && selectionMode && !photo.can_tag
+              disabled: !timelineMode && selectionMode && !canSelectPhoto(photo)
             }"
             @tap="togglePhotoSelection(photo)"
           >
@@ -168,6 +250,7 @@
               class="photo-image-shell"
               :style="photoImageStyle(photo)"
               @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
+              @longpress.stop="showPhotoInfo(photo)"
             >
               <image
                 v-if="visiblePhotoMedia[photo.id]?.thumbnail"
@@ -181,7 +264,7 @@
               <view
                 v-if="!timelineMode && selectionMode"
                 class="selection-checkbox"
-                :class="{ selected: isPhotoSelected(photo), disabled: !photo.can_tag }"
+                :class="{ selected: isPhotoSelected(photo), disabled: !canSelectPhoto(photo) }"
               >
                 <view class="selection-checkbox-box">
                   {{ isPhotoSelected(photo) ? "✓" : "" }}
@@ -189,25 +272,44 @@
               </view>
             </view>
             <view v-if="timelineMode" class="photo-meta public-photo-meta">
-              <view class="tag-line">{{ publicPhotoCaption }}</view>
+              <view class="photo-caption-body">
+                <view class="photo-caption-title">{{ publicPhotoCaption }}</view>
+              </view>
             </view>
             <view v-else class="photo-meta">
-              <view class="tag-line" :class="{ pending: photo.tags.length === 0 }">
-                {{ tagSummary(photo) }}
+              <view class="photo-caption-body">
+                <view class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
+                  {{ tagSummary(photo) }}
+                </view>
               </view>
-              <view v-if="!selectionMode" class="photo-actions">
-                <view v-if="photo.is_mine" class="mine-badge">我上传</view>
-                <button
-                  v-if="photo.can_tag"
-                  class="tag-button"
-                  :disabled="albumBusy"
-                  @tap.stop="openTagSheet(photo)"
-                >
-                  标注
-                </button>
+              <view
+                v-if="!selectionMode"
+                class="photo-actions-row"
+                :class="{ 'has-danger': photo.is_mine }"
+              >
+                <view class="photo-status-slot">
+                  <text class="photo-upload-source">{{ photo.is_mine ? "我上传" : "车友上传" }}</text>
+                </view>
+                <view class="photo-safe-actions">
+                  <button
+                    v-if="photo.can_tag"
+                    class="photo-action-text primary"
+                    :disabled="albumBusy"
+                    @tap.stop="openTagSheet(photo)"
+                  >
+                    标注
+                  </button>
+                  <button
+                    class="photo-action-text"
+                    :disabled="albumBusy"
+                    @tap.stop="downloadSinglePhoto(photo)"
+                  >
+                    下载
+                  </button>
+                </view>
                 <button
                   v-if="photo.is_mine"
-                  class="tag-button danger"
+                  class="photo-action-text danger photo-danger-action"
                   :disabled="albumBusy"
                   @tap.stop="deletePhoto(photo)"
                 >
@@ -224,9 +326,19 @@
       <button class="button secondary" :disabled="albumBusy" @tap="toggleSelectionMode">取消</button>
       <view class="bulk-count">已选 {{ selectedPhotoCount }} 张</view>
       <button
+        v-if="selectionModePurpose === 'download'"
         class="button"
         :class="{ disabled: albumBusy || selectedPhotoCount === 0 }"
         :disabled="albumBusy || selectedPhotoCount === 0"
+        @tap="downloadSelectedPhotos"
+      >
+        下载所选
+      </button>
+      <button
+        v-else
+        class="button"
+        :class="{ disabled: albumBusy || selectedTagTargetCount === 0 }"
+        :disabled="albumBusy || selectedTagTargetCount === 0"
         @tap="openBulkTagSheet"
       >
         批量标注
@@ -244,7 +356,7 @@
           {{
             bulkTagging
               ? "保存后，这些照片会替换成同一组标签。"
-              : "标注后会按成员隐私自动决定谁可见。"
+              : "标注后只会展示给上传者和对应被标注成员。"
           }}
         </view>
 
@@ -255,79 +367,30 @@
             class="selected-chip"
             @tap="togglePerson(person.key)"
           >
-            {{ tagPersonTitle(person) }} ×
+            <text>{{ tagPersonTitle(person) }}</text>
+            <text
+              v-if="person.tag_type === 'session_npc_role'"
+              class="npc-gender-mark"
+              :class="npcRoleGenderClass(person.role_gender)"
+            >
+              {{ npcRoleGenderText(person.role_gender) }}
+            </text>
+            <text>×</text>
           </view>
           <view v-if="selectedPeople.length === 0" class="selected-empty">
             暂未标注，只有上传者可见
           </view>
         </view>
 
-        <view class="people-group">
-          <view class="group-title">车友</view>
-          <view class="people-grid">
-            <button
-              v-for="person in seatPeople"
-              :key="person.key"
-              class="person-choice"
-              :class="{ selected: selectedTagKeys.includes(person.key) }"
-              @tap="togglePerson(person.key)"
-            >
-              <text>{{ tagPersonTitle(person) }}</text>
-              <text v-if="tagPersonSubtitle(person)" class="person-note">{{ tagPersonSubtitle(person) }}</text>
-            </button>
-          </view>
-        </view>
-
-        <view v-if="npcPeople.length" class="people-group">
-          <view class="group-title">DM / NPC工作人员</view>
-          <view class="people-grid">
-            <button
-              v-for="person in npcPeople"
-              :key="person.key"
-              class="person-choice npc"
-              :class="{ selected: selectedTagKeys.includes(person.key) }"
-              @tap="togglePerson(person.key)"
-            >
-              <text>{{ tagPersonTitle(person) }}</text>
-              <text v-if="tagPersonSubtitle(person)" class="person-note">{{ tagPersonSubtitle(person) }}</text>
-            </button>
-          </view>
-        </view>
-
-        <view v-if="npcRolePeople.length" class="people-group">
-          <view class="group-title">NPC角色</view>
-          <view class="people-grid">
-            <button
-              v-for="person in npcRolePeople"
-              :key="person.key"
-              class="person-choice npc"
-              :class="{ selected: selectedTagKeys.includes(person.key) }"
-              @tap="togglePerson(person.key)"
-            >
-              <text>{{ tagPersonTitle(person) }}</text>
-              <text v-if="tagPersonSubtitle(person)" class="person-note">{{ tagPersonSubtitle(person) }}</text>
-            </button>
-          </view>
-        </view>
-
-        <view v-if="otherPeople.length" class="people-group">
-          <view class="group-title">其他</view>
-          <view class="people-grid">
-            <button
-              v-for="person in otherPeople"
-              :key="person.key"
-              class="person-choice"
-              :class="{ selected: selectedTagKeys.includes(person.key) }"
-              @tap="togglePerson(person.key)"
-            >
-              <text>{{ tagPersonTitle(person) }}</text>
-              <text v-if="tagPersonSubtitle(person)" class="person-note">{{ tagPersonSubtitle(person) }}</text>
-            </button>
-          </view>
-        </view>
+        <RoleSeatBoard
+          :surface="false"
+          :sections="albumTagSections"
+          empty-text="暂无可标注角色。"
+          @itemtap="handleAlbumTagTap"
+        />
 
         <view class="privacy-impact">
-          标注“其他”或仅标 NPC 时，同车成员都可见；标注车友后会按成员隐私设置展示。
+          未标注只有上传者可见；标注角色后只展示给上传者和对应被标注成员。
         </view>
 
         <view class="sheet-actions">
@@ -348,6 +411,7 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import {
   apiUrl,
   dataOf,
@@ -358,6 +422,7 @@ import {
   request,
   uploadSessionAlbumPhoto
 } from "../../utils/api";
+import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 
 function albumMediaCachePath(photoId, variant = "preview") {
@@ -369,7 +434,7 @@ function albumMediaCachePath(photoId, variant = "preview") {
 }
 
 export default {
-  components: { AuthIdentityBar },
+  components: { AuthIdentityBar, RoleSeatBoard },
   data() {
     return {
       sessionId: "",
@@ -381,9 +446,12 @@ export default {
       hiddenCount: 0,
       canUpload: false,
       activeFilter: "all",
+      selectedRoleFilter: "",
       statusText: "",
       loadingAlbum: false,
       uploading: false,
+      downloading: false,
+      downloadProgressText: "",
       savingTags: false,
       deletingPhotoId: null,
       currentUserId: "",
@@ -396,10 +464,11 @@ export default {
       tagSheetPhoto: null,
       selectedTagKeys: [],
       selectionMode: false,
+      selectionModePurpose: "tag",
       selectedPhotoIds: [],
       bulkTagging: false,
       filters: [
-        { value: "all", label: "全部" },
+        { value: "all", label: "我的照片" },
         { value: "mine", label: "我上传的" },
         { value: "withMe", label: "有我" },
         { value: "untagged", label: "待标注" }
@@ -417,7 +486,7 @@ export default {
       if (this.timelineMode) {
         return "朋友圈只读展示，不包含车内完整相册和上车入口。";
       }
-      return "同车成员可保存可见照片；隐私照片不会展示。";
+      return "仅展示你上传或标注了你角色的照片；其他车友照片不会展示。";
     },
     shareSubjectLabel() {
       return (
@@ -435,28 +504,65 @@ export default {
         return "当前没有可展示的分享照片。";
       }
       return this.canUpload
-        ? "这场车还没人上传，来放第一张。标注照片里的人后会按隐私设置展示。"
-        : "当前没有满足隐私条件的照片。";
+        ? "这场车还没有与你相关的照片。你可以上传照片，标注后只展示给对应的人。"
+        : "当前没有与你相关或满足隐私条件的照片。";
     },
     filteredPhotos() {
       if (this.timelineMode) {
         return this.photos;
       }
-      if (this.activeFilter === "mine") {
-        return this.photos.filter((photo) => photo.is_mine);
+      return this.photosForAlbumFilter(this.activeFilter);
+    },
+    filteredUntaggedPhotoCount() {
+      return this.filteredPhotos.filter((photo) => photo.tags.length === 0).length;
+    },
+    filteredTaggedPhotoCount() {
+      return this.filteredPhotos.length - this.filteredUntaggedPhotoCount;
+    },
+    filteredTagProgressPercent() {
+      if (this.filteredPhotos.length === 0) {
+        return 0;
       }
-      if (this.activeFilter === "withMe") {
-        return this.photos.filter((photo) =>
-          photo.tags.some((tag) => Number(tag.user_id) === Number(this.currentUserId))
-        );
+      return Math.round((this.filteredTaggedPhotoCount / this.filteredPhotos.length) * 100);
+    },
+    albumFilterOptions() {
+      return this.filters.map((filter) => ({
+        ...filter,
+        count: this.countAlbumPhotosForFilter(filter.value)
+      }));
+    },
+    albumRoleFilterOptions() {
+      if (this.timelineMode) {
+        return [];
       }
-      if (this.activeFilter === "untagged") {
-        return this.photos.filter((photo) => photo.tags.length === 0);
-      }
-      return this.photos;
+      const activeFilterCount = this.photosForAlbumFilter(this.activeFilter, { includeRole: false }).length;
+      return [
+        { value: "", label: `全部角色 ${activeFilterCount}` },
+        ...this.people.map((person) => ({
+          value: person.key,
+          label: `${this.roleFilterOptionLabel(person)} ${this.countPhotosForRole(person.key)}`
+        }))
+      ];
+    },
+    albumRoleFilterLabels() {
+      return this.albumRoleFilterOptions.map((option) => option.label);
+    },
+    selectedRoleFilterIndex() {
+      const index = this.albumRoleFilterOptions.findIndex(
+        (option) => option.value === this.selectedRoleFilter
+      );
+      return index >= 0 ? index : 0;
+    },
+    selectedRoleFilterLabel() {
+      return this.albumRoleFilterOptions[this.selectedRoleFilterIndex]?.label || "全部角色 0";
     },
     taggablePhotos() {
       return this.filteredPhotos.filter((photo) => photo.can_tag);
+    },
+    selectedTaggablePhotoIds() {
+      return this.selectedPhotoIds.filter((photoId) =>
+        this.taggablePhotos.some((photo) => Number(photo.id) === Number(photoId))
+      );
     },
     seatPeople() {
       return this.people.filter((person) => person.tag_type === "seat");
@@ -470,6 +576,14 @@ export default {
     otherPeople() {
       return this.people.filter((person) => person.tag_type === "other");
     },
+    albumTagSections() {
+      return [
+        this.albumTagSection("seat", "车友", this.seatPeople),
+        this.albumTagSection("staff", "DM / NPC工作人员", this.npcPeople),
+        this.albumTagSection("npcRole", "NPC角色", this.npcRolePeople),
+        this.albumTagSection("other", "其他", this.otherPeople)
+      ].filter((section) => section.items.length);
+    },
     selectedPeople() {
       return this.people.filter((person) => this.selectedTagKeys.includes(person.key));
     },
@@ -478,7 +592,7 @@ export default {
     },
     selectedTagTargetCount() {
       if (this.bulkTagging) {
-        return this.selectedPhotoCount;
+        return this.selectedTaggablePhotoIds.length;
       }
       return this.tagSheetPhoto ? 1 : 0;
     },
@@ -486,6 +600,7 @@ export default {
       return (
         this.loadingAlbum ||
         this.uploading ||
+        this.downloading ||
         this.savingTags ||
         Boolean(this.deletingPhotoId)
       );
@@ -496,6 +611,9 @@ export default {
       }
       if (this.uploading) {
         return this.statusText || "正在上传照片...";
+      }
+      if (this.downloading) {
+        return this.downloadProgressText || "正在保存照片...";
       }
       if (this.savingTags) {
         return "正在保存标注...";
@@ -564,6 +682,13 @@ export default {
   watch: {
     activeFilter() {
       this.selectionMode = false;
+      this.selectionModePurpose = "tag";
+      this.selectedPhotoIds = [];
+      this.refreshWaterfall();
+    },
+    selectedRoleFilter() {
+      this.selectionMode = false;
+      this.selectionModePurpose = "tag";
       this.selectedPhotoIds = [];
       this.refreshWaterfall();
     }
@@ -571,9 +696,13 @@ export default {
   methods: {
     apiUrl,
     showShareMenus() {
+      const menus = ["shareAppMessage"];
+      if (this.timelineMode || this.albumShareToken) {
+        menus.push("shareTimeline");
+      }
       showWechatShareMenus({
         withShareTicket: true,
-        menus: ["shareAppMessage", "shareTimeline"]
+        menus
       });
     },
     albumShareTitle() {
@@ -593,8 +722,38 @@ export default {
         albumShareToken: this.albumShareToken
       }).replace(/^\?/, "");
     },
+    localAlbumShareSubject() {
+      const userId = Number(this.currentUserId || 0);
+      if (!userId) {
+        return null;
+      }
+      const seat = this.people.find(
+        (person) =>
+          person.tag_type === "seat" &&
+          Number(person.user_id || 0) === userId &&
+          Number(person.seat_id || 0) > 0
+      );
+      if (!seat) {
+        return null;
+      }
+      return {
+        type: "seat",
+        seat_id: Number(seat.seat_id),
+        role_name: seat.role_name || "",
+        seat_name: seat.seat_name || "",
+        label: seat.role_name || seat.seat_name || seat.label || "车友"
+      };
+    },
+    canRequestAlbumShareToken() {
+      return Boolean(this.localAlbumShareSubject());
+    },
     async ensureAlbumShareToken() {
       if (this.timelineMode || this.albumShareToken || !this.sessionId) {
+        return;
+      }
+      if (!this.canRequestAlbumShareToken()) {
+        this.shareSubject = null;
+        this.showShareMenus();
         return;
       }
       try {
@@ -604,10 +763,12 @@ export default {
         });
         const data = dataOf(response) || {};
         this.albumShareToken = data.token || "";
-        this.shareSubject = data.share_subject || null;
+        this.shareSubject = data.share_subject || this.localAlbumShareSubject();
       } catch (error) {
         this.albumShareToken = "";
+        this.shareSubject = null;
       }
+      this.showShareMenus();
     },
     inferredSeatRoleName(person) {
       return String(person?.note || "")
@@ -656,6 +817,102 @@ export default {
       const subtitle = String(person.account_name || person.note || "").trim();
       return subtitle && subtitle !== person.label ? subtitle : "";
     },
+    roleFilterOptionLabel(person) {
+      const title = this.tagPersonTitle(person);
+      const subtitle = this.tagPersonSubtitle(person);
+      const genderText =
+        person?.tag_type === "session_npc_role"
+          ? ` ${this.npcRoleGenderText(person.role_gender)}`
+          : "";
+      return subtitle ? `${title}${genderText} / ${subtitle}` : `${title}${genderText}`;
+    },
+    npcRoleGenderText(roleGender) {
+      return roleGenderSymbol(roleGender) || "不限";
+    },
+    npcRoleGenderClass(roleGender) {
+      return normalizeRoleGender(roleGender);
+    },
+    albumTagSection(key, title, people) {
+      return {
+        key,
+        title,
+        items: people.map((person) => this.albumTagCard(person))
+      };
+    },
+    albumTagCard(person) {
+      const selected = this.selectedTagKeys.includes(person.key);
+      return {
+        key: person.key,
+        id: person.key,
+        raw: person,
+        name: this.tagPersonTitle(person),
+        note: this.tagPersonSubtitle(person),
+        roleGender: person.role_gender || person.roleGender || person.gender || "unlimited",
+        genderSymbol:
+          person.tag_type === "session_npc_role"
+            ? this.npcRoleGenderText(person.role_gender)
+            : "",
+        showGenderSymbol: person.tag_type === "session_npc_role",
+        selected,
+        checked: selected,
+        stateKind: selected ? "mine" : "available",
+        stateLabel: selected ? "已选" : "可选"
+      };
+    },
+    handleAlbumTagTap(payload) {
+      this.togglePerson(payload.item.key);
+    },
+    photosForAlbumFilter(filterValue, options = {}) {
+      const includeRole = options.includeRole !== false;
+      let scopedPhotos = this.photos;
+      if (filterValue === "mine") {
+        scopedPhotos = scopedPhotos.filter((photo) => photo.is_mine);
+      }
+      if (filterValue === "withMe") {
+        scopedPhotos = scopedPhotos.filter((photo) =>
+          photo.tags.some((tag) => Number(tag.user_id) === Number(this.currentUserId))
+        );
+      }
+      if (filterValue === "untagged") {
+        scopedPhotos = scopedPhotos.filter((photo) => photo.tags.length === 0);
+      }
+      return includeRole
+        ? scopedPhotos.filter((photo) => this.photoMatchesSelectedRole(photo))
+        : scopedPhotos;
+    },
+    countAlbumPhotosForFilter(filterValue) {
+      return this.photosForAlbumFilter(filterValue).length;
+    },
+    countPhotosForRole(roleKey) {
+      if (!roleKey) {
+        return this.photosForAlbumFilter(this.activeFilter, { includeRole: false }).length;
+      }
+      return this.photosForAlbumFilter(this.activeFilter, { includeRole: false }).filter((photo) =>
+        this.photoMatchesRole(photo, roleKey)
+      ).length;
+    },
+    photoMatchesSelectedRole(photo) {
+      if (!this.selectedRoleFilter) {
+        return true;
+      }
+      return this.photoMatchesRole(photo, this.selectedRoleFilter);
+    },
+    photoMatchesRole(photo, roleKey) {
+      return (photo.tags || []).some((tag) => tag.key === roleKey);
+    },
+    handleRoleFilterChange(event) {
+      const index = Number(event?.detail?.value || 0);
+      this.selectedRoleFilter = this.albumRoleFilterOptions[index]?.value || "";
+    },
+    ensureSelectedRoleFilter() {
+      if (!this.selectedRoleFilter) {
+        return;
+      }
+      const availableRoleKeys = new Set(this.people.map((person) => person.key));
+      if (!availableRoleKeys.has(this.selectedRoleFilter)) {
+        this.selectedRoleFilter = "";
+      }
+    },
     async loadAlbum() {
       if (this.loadingAlbum) {
         return;
@@ -673,6 +930,10 @@ export default {
         this.refreshWaterfall();
         if (this.canUpload) {
           await this.loadPeople();
+          this.ensureSelectedRoleFilter();
+        } else {
+          this.people = [];
+          this.selectedRoleFilter = "";
         }
       } catch (error) {
         if (error?.statusCode === 403) {
@@ -769,6 +1030,81 @@ export default {
               fail: reject
             });
           },
+          fail: reject
+        });
+      });
+    },
+    ensurePhotosAlbumPermission() {
+      return new Promise((resolve) => {
+        if (
+          typeof uni === "undefined" ||
+          typeof uni.saveImageToPhotosAlbum !== "function"
+        ) {
+          resolve(false);
+          return;
+        }
+        if (
+          typeof uni.getSetting !== "function" ||
+          typeof uni.authorize !== "function"
+        ) {
+          resolve(true);
+          return;
+        }
+        uni.getSetting({
+          success: (settings) => {
+            const authSetting = settings.authSetting || {};
+            if (authSetting["scope.writePhotosAlbum"]) {
+              resolve(true);
+              return;
+            }
+            uni.authorize({
+              scope: "scope.writePhotosAlbum",
+              success: () => resolve(true),
+              fail: () => {
+                if (
+                  typeof uni.showModal !== "function" ||
+                  typeof uni.openSetting !== "function"
+                ) {
+                  resolve(false);
+                  return;
+                }
+                uni.showModal({
+                  title: "需要相册权限",
+                  content: "请允许保存图片到系统相册。",
+                  confirmText: "去设置",
+                  cancelText: "取消",
+                  success: (result) => {
+                    if (!result.confirm) {
+                      resolve(false);
+                      return;
+                    }
+                    uni.openSetting({
+                      success: (openResult) =>
+                        resolve(Boolean(openResult.authSetting?.["scope.writePhotosAlbum"])),
+                      fail: () => resolve(false)
+                    });
+                  },
+                  fail: () => resolve(false)
+                });
+              }
+            });
+          },
+          fail: () => resolve(true)
+        });
+      });
+    },
+    saveAlbumImageToPhotosAlbum(filePath) {
+      return new Promise((resolve, reject) => {
+        if (
+          typeof uni === "undefined" ||
+          typeof uni.saveImageToPhotosAlbum !== "function"
+        ) {
+          reject(new Error("saveImageToPhotosAlbum unavailable"));
+          return;
+        }
+        uni.saveImageToPhotosAlbum({
+          filePath,
+          success: resolve,
           fail: reject
         });
       });
@@ -954,6 +1290,7 @@ export default {
           user_id: seat.confirmed_user_id || null,
           label: seat.role_name || seat.name || "车友",
           note: accountName,
+          role_gender: seat.role_gender || "unlimited",
           role_name: seat.role_name || "",
           seat_name: seat.name || "",
           account_name: accountName
@@ -999,6 +1336,7 @@ export default {
           session_npc_role_id: role.id,
           user_id: role.bound_user_id || null,
           label: role.name || "NPC角色",
+          role_gender: role.role_gender || "unlimited",
           note: accountName,
           account_name: accountName
         });
@@ -1023,6 +1361,58 @@ export default {
         return "待标注";
       }
       return `照片里：${photo.tags.map((tag) => tag.label).join("、")}`;
+    },
+    photoDetailText(photo) {
+      return `${photo.uploader_name || "车友"} · ${this.formatDate(photo.created_at)}`;
+    },
+    photoActionDateText(photo) {
+      const formatted = this.formatDate(photo.created_at);
+      if (!formatted || formatted === "-") {
+        return "-";
+      }
+      return formatted.length > 10 ? formatted.slice(5) : formatted;
+    },
+    showPhotoInfo(photo) {
+      if (!photo) {
+        return;
+      }
+      const uploader = photo.uploader_name || "车友";
+      const createdAt = this.formatDate(photo.created_at);
+      const dimensions = this.imageMetaText(photo);
+      uni.showModal({
+        title: "图片信息",
+        content: `${this.tagSummary(photo)}\n上传者：${uploader}\n时间：${createdAt}\n尺寸：${dimensions}`,
+        showCancel: false,
+        confirmText: "知道了"
+      });
+    },
+    imageMetaText(photo) {
+      const width = Number(photo.image_width || 0);
+      const height = Number(photo.image_height || 0);
+      const byteSize = Number(photo.image_byte_size || 0);
+      const sizeText = byteSize > 0 ? `${Math.max(1, Math.round(byteSize / 1024))}KB` : "大小未知";
+      if (width > 0 && height > 0) {
+        return `${width}x${height} · ${sizeText}`;
+      }
+      return sizeText;
+    },
+    formatDate(value) {
+      if (!value) {
+        return "-";
+      }
+      const text = String(value);
+      const hasTimeZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+      if (!hasTimeZone) {
+        return text.replace("T", " ").slice(0, 16);
+      }
+      const date = new Date(text);
+      if (!Number.isFinite(date.getTime())) {
+        return text;
+      }
+      const pad = (number) => String(number).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+        date.getHours()
+      )}:${pad(date.getMinutes())}`;
     },
     choosePhotos() {
       if (this.timelineMode || !this.canUpload || this.albumBusy) {
@@ -1120,6 +1510,99 @@ export default {
         current: previewUrl
       });
     },
+    async downloadSinglePhoto(photo) {
+      await this.downloadPhotos([photo], {
+        confirmContent: "将保存这张照片到系统相册，是否继续？"
+      });
+    },
+    async downloadSelectedPhotos() {
+      const selectedIdSet = new Set(this.selectedPhotoIds.map((photoId) => Number(photoId)));
+      const photos = this.filteredPhotos.filter((photo) => selectedIdSet.has(Number(photo.id)));
+      await this.downloadPhotos(photos, {
+        exitSelection: true,
+        confirmContent: `将保存所选 ${photos.length} 张照片到系统相册，是否继续？`
+      });
+    },
+    async downloadAllPhotos() {
+      await this.downloadPhotos(this.photos, {
+        confirmContent: `将保存我的相册中 ${this.photos.length} 张照片到系统相册，是否继续？`
+      });
+    },
+    confirmDownloadPhotos(content) {
+      return new Promise((resolve) => {
+        uni.showModal({
+          title: "确认下载",
+          content,
+          confirmText: "下载",
+          cancelText: "取消",
+          success(result) {
+            resolve(Boolean(result.confirm));
+          },
+          fail() {
+            resolve(false);
+          }
+        });
+      });
+    },
+    async downloadPhotos(photos, options = {}) {
+      if (this.timelineMode || this.albumBusy) {
+        return;
+      }
+      const targets = (photos || []).filter((photo) => this.mediaUrlForPhoto(photo));
+      if (targets.length === 0) {
+        uni.showToast({ title: "暂无可下载照片", icon: "none" });
+        return;
+      }
+      const confirmed = await this.confirmDownloadPhotos(
+        options.confirmContent || `将保存 ${targets.length} 张照片到系统相册，是否继续？`
+      );
+      if (!confirmed || this.albumBusy) {
+        return;
+      }
+      this.downloading = true;
+      let savedCount = 0;
+      let failedCount = 0;
+      try {
+        const allowed = await this.ensurePhotosAlbumPermission();
+        if (!allowed) {
+          this.statusText = "未获得相册保存权限。";
+          uni.showToast({ title: "未获得保存权限", icon: "none" });
+          return;
+        }
+        for (const [index, photo] of targets.entries()) {
+          this.downloadProgressText = `正在保存 ${index + 1}/${photos.length} 张照片...`;
+          try {
+            const cachedPreview = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
+            const filePath = cachedPreview || (await this.loadVisiblePhotoMedia(photo, "preview"));
+            if (!filePath) {
+              throw new Error("album photo unavailable");
+            }
+            await this.saveAlbumImageToPhotosAlbum(filePath);
+            savedCount += 1;
+          } catch (error) {
+            failedCount += 1;
+          }
+        }
+        this.statusText = "";
+        if (options.exitSelection) {
+          this.selectionMode = false;
+          this.selectionModePurpose = "tag";
+          this.selectedPhotoIds = [];
+        }
+        if (savedCount > 0 && failedCount === 0) {
+          uni.showToast({ title: `已保存 ${savedCount} 张`, icon: "none" });
+          return;
+        }
+        if (savedCount > 0) {
+          uni.showToast({ title: "部分照片保存失败", icon: "none" });
+          return;
+        }
+        uni.showToast({ title: "下载照片失败", icon: "none" });
+      } finally {
+        this.downloading = false;
+        this.downloadProgressText = "";
+      }
+    },
     goPrivacy() {
       if (this.timelineMode || this.albumBusy) {
         return;
@@ -1133,18 +1616,48 @@ export default {
       this.tagSheetPhoto = photo;
       this.selectedTagKeys = (photo.tags || []).map((tag) => tag.key);
     },
+    openDownloadSelectionMode() {
+      if (this.timelineMode || this.albumBusy || this.filteredPhotos.length === 0) {
+        return;
+      }
+      this.selectionMode = true;
+      this.selectionModePurpose = "download";
+      this.selectedPhotoIds = [];
+    },
+    openTagSelectionMode() {
+      if (this.timelineMode || this.albumBusy || this.taggablePhotos.length === 0) {
+        return;
+      }
+      this.selectionMode = true;
+      this.selectionModePurpose = "tag";
+      this.selectedPhotoIds = [];
+    },
     toggleSelectionMode() {
       if (this.timelineMode || this.albumBusy) {
         return;
       }
-      this.selectionMode = !this.selectionMode;
+      if (!this.selectionMode) {
+        this.openTagSelectionMode();
+        return;
+      }
+      this.selectionMode = false;
+      this.selectionModePurpose = "tag";
       this.selectedPhotoIds = [];
+    },
+    canSelectPhoto(photo) {
+      if (!this.selectionMode) {
+        return false;
+      }
+      if (this.selectionModePurpose === "download") {
+        return Boolean(this.mediaUrlForPhoto(photo));
+      }
+      return Boolean(photo.can_tag);
     },
     isPhotoSelected(photo) {
       return this.selectedPhotoIds.includes(Number(photo.id));
     },
     togglePhotoSelection(photo) {
-      if (this.timelineMode || !this.selectionMode || this.albumBusy || !photo.can_tag) {
+      if (this.timelineMode || !this.selectionMode || this.albumBusy || !this.canSelectPhoto(photo)) {
         return;
       }
       const photoId = Number(photo.id);
@@ -1155,7 +1668,12 @@ export default {
       this.selectedPhotoIds = [...this.selectedPhotoIds, photoId];
     },
     openBulkTagSheet() {
-      if (this.timelineMode || this.albumBusy || this.selectedPhotoIds.length === 0) {
+      if (
+        this.timelineMode ||
+        this.albumBusy ||
+        this.selectionModePurpose !== "tag" ||
+        this.selectedTaggablePhotoIds.length === 0
+      ) {
         return;
       }
       this.bulkTagging = true;
@@ -1182,7 +1700,7 @@ export default {
         return;
       }
       const targetPhotoIds = this.bulkTagging
-        ? [...this.selectedPhotoIds]
+        ? [...this.selectedTaggablePhotoIds]
         : [Number(this.tagSheetPhoto.id)];
       if (targetPhotoIds.length === 0) {
         return;
@@ -1223,11 +1741,58 @@ export default {
 
 <style scoped>
 .album-page {
+  overflow-x: hidden;
   padding-bottom: 150rpx;
+  box-sizing: border-box;
 }
 
-.album-head .text {
-  margin-bottom: 16rpx;
+.album-head {
+  padding: 30rpx 32rpx 28rpx;
+  border-color: rgba(222, 215, 202, 0.74);
+  border-radius: 20rpx;
+  background: rgba(255, 255, 252, 0.96);
+  box-shadow: 0 14rpx 36rpx rgba(42, 58, 49, 0.05);
+}
+
+.album-head-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+}
+
+.album-kicker {
+  color: #8a7c63;
+  font-size: 22rpx;
+  line-height: 1.2;
+}
+
+.album-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.album-title {
+  margin-bottom: 0;
+  font-size: 40rpx;
+  line-height: 1.12;
+}
+
+.album-progress-badge {
+  flex-shrink: 0;
+  padding: 8rpx 14rpx;
+  border-radius: 999rpx;
+  background: rgba(31, 111, 91, 0.08);
+  color: #1f6f5b;
+  font-size: 22rpx;
+  line-height: 1.2;
+}
+
+.album-intro {
+  color: #738078;
+  font-size: 25rpx;
+  line-height: 1.5;
 }
 
 .notice {
@@ -1240,14 +1805,135 @@ export default {
   line-height: 1.5;
 }
 
-.album-stats,
+.album-notice {
+  margin-top: 18rpx;
+  padding: 14rpx 16rpx;
+  border-radius: 10rpx;
+  font-size: 23rpx;
+}
+
+.album-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 24rpx;
+  padding: 18rpx 0;
+  border-top: 1rpx solid rgba(222, 215, 202, 0.62);
+  border-bottom: 1rpx solid rgba(222, 215, 202, 0.62);
+}
+
+.album-metrics.public {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.album-metric {
+  min-width: 0;
+  padding: 0 16rpx;
+  border-left: 1rpx solid rgba(222, 215, 202, 0.62);
+}
+
+.album-metric:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.album-metric:last-child {
+  padding-right: 0;
+}
+
+.metric-value,
+.metric-label {
+  display: block;
+}
+
+.metric-value {
+  color: #153f34;
+  font-size: 30rpx;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.album-metric.primary .metric-value {
+  color: #1f6f5b;
+}
+
+.metric-label {
+  margin-top: 6rpx;
+  color: #839087;
+  font-size: 20rpx;
+  line-height: 1.2;
+}
+
+.album-privacy-note {
+  margin-top: 14rpx;
+  color: #9b8d70;
+  font-size: 22rpx;
+  line-height: 1.4;
+}
+
+.album-actions {
+  align-items: stretch;
+  gap: 12rpx;
+  margin-top: 24rpx;
+}
+
+.album-action-primary {
+  flex: 0 0 150rpx;
+  height: 72rpx;
+  padding: 0 20rpx;
+  border-radius: 12rpx;
+  font-size: 26rpx;
+  box-shadow: 0 12rpx 24rpx rgba(31, 111, 91, 0.18);
+}
+
+.album-command-rail {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  padding: 4rpx;
+  border: 1rpx solid rgba(222, 215, 202, 0.82);
+  border-radius: 14rpx;
+  background: rgba(250, 248, 241, 0.72);
+}
+
+.album-command {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  height: 72rpx;
+  margin: 0;
+  padding: 0 8rpx;
+  border: 0;
+  border-radius: 10rpx;
+  background: transparent;
+  color: #23483f;
+  font-size: 22rpx;
+  font-weight: 500;
+  line-height: 1.16;
+  box-shadow: none;
+}
+
+.album-command::after {
+  border: 0;
+}
+
+.album-command + .album-command {
+  border-left: 1rpx solid rgba(222, 215, 202, 0.76);
+  border-radius: 0;
+}
+
+.album-command[disabled] {
+  color: #9aa39c;
+}
+
 .filter-row {
   display: flex;
   flex-wrap: wrap;
   gap: 12rpx;
 }
 
-.stat-pill,
 .filter-chip {
   margin: 0;
   padding: 10rpx 18rpx;
@@ -1258,11 +1944,6 @@ export default {
   line-height: 1.2;
 }
 
-.stat-pill.muted {
-  background: #f7f4ee;
-  color: #9b8d70;
-}
-
 .filter-row {
   margin-bottom: 20rpx;
 }
@@ -1271,6 +1952,9 @@ export default {
   border: 1rpx solid rgba(223, 216, 204, 0.92);
   background: rgba(255, 255, 252, 0.96);
   color: #607068;
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
 }
 
 .filter-chip.active {
@@ -1280,12 +1964,69 @@ export default {
   font-weight: 600;
 }
 
+.filter-count {
+  color: inherit;
+  font-size: 20rpx;
+  opacity: 0.74;
+}
+
+.role-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin: 0 0 20rpx;
+}
+
+.role-filter-label {
+  flex-shrink: 0;
+  color: #607068;
+  font-size: 23rpx;
+}
+
+.role-filter-row picker {
+  flex: 1;
+  min-width: 0;
+}
+
+.role-filter-picker {
+  overflow: hidden;
+  padding: 14rpx 18rpx;
+  border: 1rpx solid rgba(223, 216, 204, 0.92);
+  border-radius: 8rpx;
+  background: rgba(255, 255, 252, 0.96);
+  color: #153f34;
+  font-size: 24rpx;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-filter-picker.disabled {
+  color: #9aa39c;
+  background: #f7f4ee;
+}
+
 .photo-waterfall {
-  display: block;
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  align-items: flex-start;
 }
 
 .waterfall-column {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
   min-width: 0;
+  box-sizing: border-box;
+}
+
+.waterfall-photo-card {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .photo-card {
@@ -1387,8 +2128,8 @@ export default {
 }
 
 .photo-meta {
-  min-height: 104rpx;
-  padding: 12rpx 12rpx 14rpx;
+  min-height: 116rpx;
+  padding: 16rpx 16rpx 14rpx;
 }
 
 @keyframes album-spin {
@@ -1397,45 +2138,95 @@ export default {
   }
 }
 
-.tag-line {
-  color: #334155;
-  font-size: 21rpx;
-  line-height: 1.35;
+.photo-caption-body {
+  min-width: 0;
 }
 
-.tag-line.pending {
-  color: #b89458;
+.photo-caption-title {
+  overflow: hidden;
+  color: #163f35;
+  font-size: 23rpx;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.photo-caption-title.pending {
+  color: #9c7440;
+}
+
+.photo-actions-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 22rpx;
+  margin-top: 12rpx;
+}
+
+.photo-actions-row.has-danger {
+  grid-template-columns: minmax(0, 1fr) auto 78rpx;
+  column-gap: 26rpx;
+}
+
+.photo-status-slot {
+  min-width: 0;
+}
+
+.photo-upload-source {
+  display: block;
+  overflow: hidden;
+  color: #1f7a68;
+  font-size: 21rpx;
+  font-weight: 600;
+  line-height: 52rpx;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.photo-safe-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16rpx;
+  min-width: 0;
+}
+
+.photo-action-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56rpx;
+  height: 52rpx;
+  margin: 0;
+  padding: 0 6rpx;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #2c7f6e;
+  font-size: 20rpx;
+  font-weight: 600;
+  line-height: 1.2;
+  box-shadow: none;
+}
+
+.photo-action-text::after {
+  border: 0;
+}
+
+.photo-action-text.primary {
+  color: #0f5f50;
+}
+
+.photo-action-text.danger {
+  width: 78rpx;
+  padding: 0;
+  color: #c44a42;
   font-weight: 600;
 }
 
-.photo-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8rpx;
-  margin-top: 8rpx;
-}
-
-.mine-badge {
-  color: #1f7a68;
-  font-size: 20rpx;
-}
-
-.tag-button {
-  width: 72rpx;
-  height: 40rpx;
-  margin: 0;
-  padding: 0;
-  border-radius: 6rpx;
-  background: #1f7a68;
-  color: #ffffff;
-  font-size: 20rpx;
-  line-height: 40rpx;
-}
-
-.tag-button.danger {
-  background: #fff2f0;
-  color: #c23b32;
+.photo-action-text[disabled] {
+  color: #9aa39c;
 }
 
 .empty-section {
@@ -1534,6 +2325,9 @@ export default {
 }
 
 .selected-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
   padding: 9rpx 14rpx;
   border-radius: 8rpx;
   background: #eef5ef;
@@ -1541,53 +2335,24 @@ export default {
   font-size: 23rpx;
 }
 
-.people-group {
-  margin-top: 24rpx;
+.npc-gender-mark {
+  padding: 1rpx 8rpx;
+  border-radius: 999rpx;
+  background: #ecefec;
+  color: #747b74;
+  font-size: 20rpx;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
-.group-title {
-  margin-bottom: 12rpx;
-  color: #153f34;
-  font-size: 26rpx;
-  font-weight: 600;
+.npc-gender-mark.male {
+  background: #e5f1ee;
+  color: #316f62;
 }
 
-.people-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12rpx;
-}
-
-.person-choice {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  min-height: 92rpx;
-  margin: 0;
-  padding: 16rpx;
-  border: 1rpx solid rgba(223, 216, 204, 0.92);
-  border-radius: 12rpx;
-  background: rgba(255, 255, 252, 0.96);
-  color: #153f34;
-  font-size: 25rpx;
-  line-height: 1.3;
-  text-align: left;
-}
-
-.person-choice.npc {
-  background: #fff8ef;
-}
-
-.person-choice.selected {
-  box-shadow:
-    0 0 0 3rpx rgba(216, 167, 61, 0.86),
-    inset 0 0 0 1rpx rgba(216, 167, 61, 0.26);
-}
-
-.person-note {
-  margin-top: 6rpx;
-  color: #7a857d;
-  font-size: 21rpx;
+.npc-gender-mark.female {
+  background: #fae7ef;
+  color: #b34c75;
 }
 
 .privacy-impact {

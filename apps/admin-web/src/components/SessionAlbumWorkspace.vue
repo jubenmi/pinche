@@ -54,7 +54,7 @@
                   v-model="selectedAlbumRoleFilter"
                   class="album-role-select"
                   :disabled="albumActionBusy || albumRoleFilterOptions.length <= 1"
-                  aria-label="按角色筛选照片"
+                  aria-label="按标注角色筛选"
                 >
                   <option
                     v-for="option in albumRoleFilterOptions"
@@ -166,11 +166,11 @@
             <div class="album-metrics">
               <div class="album-summary">
                 <span>
-                  当前筛选 {{ filteredPhotos.length }} 张 / 全部可见 {{ visiblePhotoCount }} 张 /
+                  当前筛选 {{ filteredPhotos.length }} 张 / 我的照片 {{ visiblePhotoCount }} 张 /
                   筛选已标注 {{ filteredTaggedPhotoCount }} 张 / 筛选待标注 {{ filteredUntaggedPhotoCount }} 张
                 </span>
                 <span v-if="Number(album?.hidden_count || 0) > 0">
-                  {{ album.hidden_count }} 张因隐私未展示
+                  {{ album.hidden_count }} 张非本人照片或受隐私保护未展示
                 </span>
               </div>
 
@@ -185,7 +185,7 @@
 
           <div v-if="albumLoading" class="empty-block">正在加载相册...</div>
           <div v-else-if="!albumError && filteredPhotos.length === 0" class="empty-block">
-            {{ album?.photos?.length ? "没有符合当前筛选的照片。" : "还没有可见照片，上传后会出现在这里。" }}
+            {{ album?.photos?.length ? "没有符合当前筛选的照片。" : "还没有你的照片，上传后会出现在这里。" }}
           </div>
           <Waterfall
             v-else-if="!albumError"
@@ -285,7 +285,7 @@
           {{
             bulkTagging
               ? "批量标注会逐张保存，沿用单张照片权限校验。"
-              : "未标注照片只有上传者可见。标注“其他”或仅标 NPC 时，同车成员都可见；标注车友后按成员隐私设置展示。"
+              : "未标注照片只有上传者可见；标注角色后只展示给上传者和对应被标注成员。"
           }}
         </p>
         <div class="selected-tag-row">
@@ -296,7 +296,15 @@
             class="selected-tag"
             @click="toggleTag(person.key)"
           >
-            {{ tagPersonTitle(person) }} ×
+            <span>{{ tagPersonTitle(person) }}</span>
+            <span
+              v-if="person.tag_type === 'session_npc_role'"
+              class="npc-gender-mark"
+              :class="npcRoleGenderClass(person.role_gender)"
+            >
+              {{ npcRoleGenderText(person.role_gender) }}
+            </span>
+            <span>×</span>
           </button>
           <span v-if="selectedPeople.length === 0">暂未标注，只有上传者可见</span>
         </div>
@@ -308,7 +316,15 @@
               @change="toggleTag(person.key)"
             />
             <span>
-              <strong>{{ tagPersonTitle(person) }}</strong>
+              <strong>
+                {{ tagPersonTitle(person) }}
+                <span
+                  class="npc-gender-mark"
+                  :class="npcRoleGenderClass(person.role_gender)"
+                >
+                  {{ npcRoleGenderText(person.role_gender) }}
+                </span>
+              </strong>
               <small v-if="tagPersonSubtitle(person)">{{ tagPersonSubtitle(person) }}</small>
             </span>
           </label>
@@ -363,7 +379,7 @@
 
     <aside v-if="privacyDrawerOpen" class="drawer album-privacy-drawer">
       <div class="drawer-head">
-        <h2>相册隐私设置</h2>
+        <h2>相册分享隐私设置</h2>
         <button
           class="close-button"
           type="button"
@@ -374,24 +390,24 @@
         </button>
       </div>
       <div class="drawer-body">
-        <p class="status">规则和小程序一致：可见照片可以保存，不可见照片不会出现。</p>
+        <p class="status">规则和小程序一致：完整相册只展示本人相关照片，分享展示继续尊重隐私设置。</p>
         <label class="privacy-toggle">
           <span>
-            <strong>其他同车成员可以查看我上传的照片</strong>
-            <small>关闭后，只有我能看我上传的照片。</small>
+            <strong>允许我上传的照片出现在分享展示里</strong>
+            <small>关闭后，别人分享相册时不会展示你上传的照片。</small>
           </span>
           <input v-model="privacyForm.allowUploadedVisible" type="checkbox" :disabled="savingPrivacy" />
         </label>
         <label class="privacy-toggle">
           <span>
-            <strong>其他同车成员可以查看包含我的照片</strong>
-            <small>关闭后，包含我的照片不会对外展示。</small>
+            <strong>允许包含我的照片出现在分享展示里</strong>
+            <small>关闭后，别人分享相册时不会展示包含你的照片。</small>
           </span>
           <input v-model="privacyForm.allowTaggedVisible" type="checkbox" :disabled="savingPrivacy" />
         </label>
         <div class="privacy-rule-list">
-          <div>我上传的照片，我永远可见</div>
-          <div>照片里的人都有保护权</div>
+          <div>完整相册只展示你上传或标注了你的照片</div>
+          <div>分享展示会继续尊重这两项设置</div>
           <div>车头也不能越权查看原图</div>
         </div>
       </div>
@@ -630,10 +646,38 @@ function tagPersonSubtitle(person) {
   return subtitle && subtitle !== person.label ? subtitle : "";
 }
 
+function normalizeNpcRoleGender(value) {
+  const gender = String(value || "unlimited").trim();
+  if (["male", "男", "男位"].includes(gender)) {
+    return "male";
+  }
+  if (["female", "女", "女位"].includes(gender)) {
+    return "female";
+  }
+  return "unlimited";
+}
+
+function npcRoleGenderText(value) {
+  const gender = normalizeNpcRoleGender(value);
+  if (gender === "male") {
+    return "♂";
+  }
+  if (gender === "female") {
+    return "♀";
+  }
+  return "不限";
+}
+
+function npcRoleGenderClass(value) {
+  return `gender-${normalizeNpcRoleGender(value)}`;
+}
+
 function roleFilterOptionLabel(person) {
   const title = tagPersonTitle(person);
   const subtitle = tagPersonSubtitle(person);
-  return subtitle ? `${title} / ${subtitle}` : title;
+  const genderText =
+    person?.tag_type === "session_npc_role" ? ` ${npcRoleGenderText(person.role_gender)}` : "";
+  return subtitle ? `${title}${genderText} / ${subtitle}` : `${title}${genderText}`;
 }
 
 function photosForAlbumFilter(filterValue, { includeRole = true } = {}) {
@@ -903,7 +947,7 @@ function revokeAlbumMedia() {
 }
 
 const albumFilters = [
-  { value: "all", label: "全部" },
+  { value: "all", label: "我的照片" },
   { value: "mine", label: "我上传的" },
   { value: "withMe", label: "有我" },
   { value: "untagged", label: "待标注" }

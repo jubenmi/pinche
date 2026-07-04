@@ -11,6 +11,7 @@ SET @pinche_d25_add_session_join_phone_required = (
     'SELECT 1'
   )
 );
+
 PREPARE pinche_d25_session_join_phone_required_stmt FROM @pinche_d25_add_session_join_phone_required;
 EXECUTE pinche_d25_session_join_phone_required_stmt;
 DEALLOCATE PREPARE pinche_d25_session_join_phone_required_stmt;

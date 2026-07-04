@@ -49,31 +49,13 @@
       </view>
     </view>
 
-    <view v-if="session.seats && session.seats.length" class="section">
-      <view class="section-title">角色与座位</view>
-      <view
-        v-for="seat in session.seats"
-        :key="seat.id"
-        class="seat-card"
-        :class="{ focused: isFocusedSeat(seat), unavailable: !canApplySeat(seat) }"
-      >
-        <view class="seat-header">
-          <view class="seat-title">{{ seat.name }}</view>
-          <view class="seat-status">{{ seatStatusLabel(seat.status) }}</view>
-        </view>
-        <view class="info-row">角色：{{ seat.role_name || "未标注" }}</view>
-        <view class="info-row">类型：{{ seatTypeLabel(seat.seat_type) }}</view>
-        <view class="seat-actions">
-          <button v-if="canApplySeat(seat)" class="mini-button" @click="goShare(seat)">
-            选择此位
-          </button>
-          <view v-else class="item-sub">当前座位不可选择</view>
-          <button class="mini-button ghost" open-type="share" :data-seat-id="seat.id">
-            分享此位
-          </button>
-        </view>
-      </view>
-    </view>
+    <RoleSeatBoard
+      v-if="detailRoleSeatSections.length"
+      :sections="detailRoleSeatSections"
+      empty-text="暂无座位或NPC角色。"
+      @itemtap="handleDetailSeatTap"
+      @actiontap="handleDetailSeatAction"
+    />
 
     <view v-if="session.id" class="section">
       <view class="section-head">
@@ -132,6 +114,7 @@
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import ChatEntry from "../../extensions/session-pseudo-chat/ChatEntry.vue";
 import { sessionDetailExtensions } from "../../extensions/sessionExtensions.js";
 import {
@@ -144,7 +127,7 @@ import {
 } from "../../utils/api";
 
 export default {
-  components: { AuthIdentityBar, ChatEntry },
+  components: { AuthIdentityBar, RoleSeatBoard, ChatEntry },
   data() {
     return {
       sessionId: "",
@@ -212,6 +195,96 @@ export default {
         return `已有 ${parts.join("、")}，一起回看这场车。`;
       }
       return "相册已开放，上传那天的第一张照片。";
+    },
+    seatBoardSummary() {
+      const seats = this.session.seats || [];
+      const open = seats.filter((seat) => this.canApplySeat(seat)).length;
+      const applied = seats.filter((seat) => seat.status === "applied").length;
+      const onboard = seats.filter((seat) => ["confirmed", "locked"].includes(seat.status)).length;
+      return `${open} 个可选，${applied} 个待审，${onboard} 个已上车`;
+    },
+    detailSeatCards() {
+      return (this.session.seats || []).map((seat) => {
+        const canApply = this.canApplySeat(seat);
+        const actions = [];
+        if (canApply) {
+          actions.push({ key: "select", label: "选择此位" });
+        }
+        actions.push({
+          key: "share",
+          label: "分享此位",
+          variant: "ghost",
+          openType: "share",
+          seatId: seat.id
+        });
+        return {
+          id: seat.id,
+          seatId: seat.id,
+          raw: seat,
+          name: seat.name,
+          note: seat.role_name || this.seatTypeLabel(seat.seat_type),
+          roleGender: seat.role_gender || "unlimited",
+          stateKind: canApply ? "available" : this.seatStateKind(seat),
+          stateLabel: canApply ? "可选" : this.seatStatusLabel(seat.status),
+          focused: this.isFocusedSeat(seat),
+          actions
+        };
+      });
+    },
+    npcSelfJoinEnabled() {
+      return this.session.npc_join_enabled === undefined
+        ? true
+        : Boolean(this.session.npc_join_enabled);
+    },
+    detailNpcRoleSummary() {
+      const roles = this.session.session_npc_roles || [];
+      const available = roles.filter((role) => this.canApplyNpcRole(role)).length;
+      const pending = roles.filter((role) => role.pending_signup_id).length;
+      const assigned = roles.filter((role) => role.bound_user_id).length;
+      return `${available} 个可选，${pending} 个待审，${assigned} 个已安排`;
+    },
+    detailNpcRoleCards() {
+      return (this.session.session_npc_roles || []).map((role) => {
+        const canApply = this.canApplyNpcRole(role);
+        const stateKind = canApply ? "available" : this.npcRoleStateKind(role);
+        const actions = canApply
+          ? [{ key: "selectNpc", label: "选择NPC" }]
+          : [];
+        return {
+          id: `npc-${role.id}`,
+          npcRoleId: role.id,
+          raw: role,
+          boardType: "npc",
+          name: role.name || "NPC角色",
+          note: role.bound_user_name || role.description || "NPC工作人员",
+          roleGender: role.role_gender || "unlimited",
+          showGenderSymbol: true,
+          stateKind,
+          stateLabel: canApply ? "可选" : this.npcRoleStatusLabel(role),
+          actions
+        };
+      });
+    },
+    detailRoleSeatSections() {
+      const sections = [];
+      if (this.session.seats?.length) {
+        sections.push({
+          key: "seat",
+          title: "角色与座位",
+          summary: this.seatBoardSummary,
+          items: this.detailSeatCards
+        });
+      }
+      if (this.detailNpcRoleCards.length) {
+        sections.push({
+          key: "npc",
+          title: "NPC角色",
+          summary: this.detailNpcRoleSummary,
+          statusPill: this.npcSelfJoinEnabled ? "可自选" : "车头安排",
+          items: this.detailNpcRoleCards
+        });
+      }
+      return sections;
     }
   },
   async onLoad(options) {
@@ -446,6 +519,83 @@ export default {
         seat.status === "open"
       );
     },
+    canApplyNpcRole(role) {
+      if (!this.npcSelfJoinEnabled) {
+        return false;
+      }
+      if (role.status && role.status !== "active") {
+        return false;
+      }
+      if (role.bound_user_id || role.pending_signup_id) {
+        return false;
+      }
+      return this.session.status === "recruiting";
+    },
+    handleDetailSeatTap(payload) {
+      if (payload.item?.boardType === "npc" || payload.sectionKey === "npc") {
+        if (this.canApplyNpcRole(payload.item.raw)) {
+          this.goShare();
+        }
+        return;
+      }
+      const seat = payload.item.raw;
+      if (seat && this.canApplySeat(seat)) {
+        this.goShare(seat);
+      }
+    },
+    handleDetailSeatAction(payload) {
+      if (payload.item?.boardType === "npc" || payload.sectionKey === "npc") {
+        if (payload.action.key === "selectNpc") {
+          this.goShare();
+        }
+        return;
+      }
+      const seat = payload.item.raw;
+      if (!seat || payload.action.key !== "select") {
+        return;
+      }
+      this.goShare(seat);
+    },
+    seatStateKind(seat) {
+      if (seat.status === "applied") {
+        return "pendingReview";
+      }
+      if (["confirmed", "locked"].includes(seat.status)) {
+        return "taken";
+      }
+      return "unavailable";
+    },
+    npcRoleStateKind(role) {
+      if (this.currentUserId && Number(role.bound_user_id || 0) === Number(this.currentUserId)) {
+        return "mine";
+      }
+      if (role.bound_user_id) {
+        return "taken";
+      }
+      if (role.pending_signup_id) {
+        return "pendingReview";
+      }
+      if (role.status && role.status !== "active") {
+        return "unavailable";
+      }
+      return this.npcSelfJoinEnabled ? "available" : "unavailable";
+    },
+    npcRoleStatusLabel(role) {
+      const stateKind = this.npcRoleStateKind(role);
+      if (stateKind === "mine") {
+        return "我选";
+      }
+      if (stateKind === "taken") {
+        return "已安排";
+      }
+      if (stateKind === "pendingReview") {
+        return "待审核";
+      }
+      if (stateKind === "unavailable") {
+        return this.npcSelfJoinEnabled ? "不可用" : "车头安排";
+      }
+      return "可选";
+    },
     statusLabel(status) {
       const labels = {
         draft: "草稿",
@@ -469,6 +619,7 @@ export default {
       const labels = {
         love_companion: "情感沉浸位",
         f4: "互动位",
+        cp: "CP位",
         normal: "普通位"
       };
       return labels[type] || type || "普通位";
@@ -588,65 +739,6 @@ export default {
   color: #8a948d;
 }
 
-.seat-card {
-  margin-top: 18rpx;
-  padding: 22rpx;
-  border: 1rpx solid #e6e0d2;
-  border-radius: 8rpx;
-  background: #fffefb;
-}
-
-.seat-card.focused {
-  border-color: #1f6f5b;
-  background: #eef5ef;
-}
-
-.seat-card.unavailable {
-  background: #f7f4ee;
-}
-
-.seat-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12rpx;
-  margin-bottom: 8rpx;
-}
-
-.seat-title {
-  color: #153f34;
-  font-size: 28rpx;
-  font-weight: 600;
-}
-
-.seat-status {
-  flex-shrink: 0;
-  color: #1f6f5b;
-  font-size: 24rpx;
-  font-weight: 600;
-}
-
-.seat-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12rpx;
-  margin-top: 18rpx;
-}
-
-.mini-button {
-  height: 64rpx;
-  border-radius: 8rpx;
-  background: #1f6f5b;
-  color: #ffffff;
-  font-size: 24rpx;
-  line-height: 64rpx;
-}
-
-.mini-button.ghost {
-  background: #ffffff;
-  color: #193d35;
-  border: 1rpx solid #ded8ca;
-}
-
 .review-edit {
   width: 132rpx;
   height: 56rpx;
@@ -717,13 +809,6 @@ export default {
   aspect-ratio: 1;
   border-radius: 8rpx;
   background: #f1f5f9;
-}
-
-.item-sub {
-  display: flex;
-  align-items: center;
-  color: #94a3b8;
-  font-size: 24rpx;
 }
 
 </style>

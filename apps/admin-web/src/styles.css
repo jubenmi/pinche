@@ -1939,6 +1939,30 @@ td {
   opacity: 0.76;
 }
 
+.npc-gender-mark {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #ecefec;
+  color: #747b74;
+  font-size: 11px;
+  font-weight: 800;
+  vertical-align: middle;
+}
+
+.npc-gender-mark.gender-male {
+  background: #e5f1ee;
+  color: #316f62;
+}
+
+.npc-gender-mark.gender-female {
+  background: #fae7ef;
+  color: #b34c75;
+}
+
 .mini-ticket {
   display: grid;
   gap: 8px;
