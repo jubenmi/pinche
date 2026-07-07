@@ -1,6 +1,7 @@
 <template>
   <view class="page session-detail-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="section">
       <view class="title">{{ session.script_name_snapshot || "车局" }}</view>
@@ -19,21 +20,33 @@
           </view>
         </view>
       </view>
-      <view v-if="loadStatusText" class="notice">{{ loadStatusText }}</view>
-      <view v-if="copyStatusText" class="notice">{{ copyStatusText }}</view>
+      <t-notice-bar
+        v-if="loadStatusText"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        :content="loadStatusText"
+      />
+      <t-notice-bar
+        v-if="copyStatusText"
+        class="notice"
+        theme="info"
+        :visible="true"
+        :content="copyStatusText"
+      />
       <view class="actions">
-        <button v-if="isPostStart" class="button" @click="goAlbum">{{ albumPrimaryText }}</button>
-        <button v-else class="button" @click="goShare">选择角色</button>
-        <button class="button secondary" open-type="share">分享</button>
-        <button class="button secondary" @click="goManage">车头管理</button>
-        <button v-if="!isPostStart" class="button secondary" @click="goAlbum">{{ albumButtonText }}</button>
-        <button
+        <t-button v-if="isPostStart" class="button" @tap="goAlbum">{{ albumPrimaryText }}</t-button>
+        <t-button v-else class="button" @tap="goShare">选择角色</t-button>
+        <t-button class="button secondary" open-type="share">分享</t-button>
+        <t-button class="button secondary" @tap="goManage">车头管理</t-button>
+        <t-button v-if="!isPostStart" class="button secondary" @tap="goAlbum">{{ albumButtonText }}</t-button>
+        <t-button
           v-if="isPostStart && myReviewState.can_review"
           class="button secondary"
-          @click="goReview"
+          @tap="goReview"
         >
           {{ myReviewState.review ? "编辑记录" : "写记录" }}
-        </button>
+        </t-button>
       </view>
     </view>
 
@@ -60,16 +73,26 @@
     <view v-if="session.id" class="section">
       <view class="section-head">
         <view class="section-title">车友记录</view>
-        <button
+        <t-button
           v-if="myReviewState.can_review"
           class="review-edit"
-          @click="goReview"
+          @tap="goReview"
         >
           {{ myReviewState.review ? "编辑记录" : "写记录" }}
-        </button>
+        </t-button>
       </view>
-      <view v-if="reviewStatusText" class="notice">{{ reviewStatusText }}</view>
-      <view v-if="reviews.length === 0 && !reviewStatusText" class="empty">还没有车友记录。</view>
+      <t-notice-bar
+        v-if="reviewStatusText"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        :content="reviewStatusText"
+      />
+      <t-empty
+        v-if="reviews.length === 0 && !reviewStatusText"
+        class="empty"
+        description="还没有车友记录。"
+      />
       <view v-for="review in reviews" :key="review.id" class="review-card">
         <view class="review-head">
           <image
@@ -88,7 +111,7 @@
         </view>
         <view v-if="review.content" class="review-content">{{ review.content }}</view>
         <view v-if="review.photos && review.photos.length" class="review-photos">
-          <image
+          <t-image
             v-for="photo in review.photos"
             :key="photo"
             class="review-photo"
@@ -115,6 +138,7 @@
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import ChatEntry from "../../extensions/session-pseudo-chat/ChatEntry.vue";
 import { sessionDetailExtensions } from "../../extensions/sessionExtensions.js";
 import {
@@ -125,9 +149,10 @@ import {
   queryString,
   request
 } from "../../utils/api";
+import { showToast } from "../../utils/tdesignFeedback";
 
 export default {
-  components: { AuthIdentityBar, RoleSeatBoard, ChatEntry },
+  components: { AuthIdentityBar, RoleSeatBoard, ChatEntry, FeedbackHost },
   data() {
     return {
       sessionId: "",
@@ -483,7 +508,7 @@ export default {
         return;
       }
       if (!this.isAlbumOpen()) {
-        uni.showToast({ title: "相册会在发车后开放", icon: "none" });
+        showToast({ title: "相册会在发车后开放", icon: "none" });
         return;
       }
       const id = this.sessionId || "d1-demo";

@@ -6,17 +6,18 @@
         <view class="pinned-note">只放最重要的一句话，比如集合时间、房间号或临时变更。</view>
       </view>
     </view>
-    <textarea
-      v-model="pinnedMessageText"
+    <t-textarea
+      :value="pinnedMessageText"
       class="textarea"
       maxlength="300"
       placeholder="输入要置顶给车内成员看的信息"
       placeholder-class="placeholder"
+      @change="pinnedMessageText = $event.detail.value"
     />
     <view class="actions">
-      <button class="button" :disabled="isBusy" @click="savePinnedMessage">
+      <t-button class="button" :disabled="isBusy" @tap="savePinnedMessage">
         保存置顶
-      </button>
+      </t-button>
     </view>
   </view>
 </template>

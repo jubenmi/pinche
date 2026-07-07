@@ -1,0 +1,13 @@
+@import '../common/style/index.wxss';
+.t-icon--image{width:100%;height:100%;}
+.t-icon__image{vertical-align:top;width:100%;height:100%;}
+.t-icon-base{font-style:normal;font-weight:600;font-variant:normal;text-transform:none;line-height:1;text-align:center;display:block;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}
+.t-icon{font-family:Arial,Helvetica,sans-serif!important;}
+.t-icon-caret-down-small:before,.t-icon-caret-down:before{content:'\25be';}
+.t-icon-caret-left-small:before,.t-icon-caret-left:before{content:'\2039';}
+.t-icon-caret-right-small:before,.t-icon-caret-right:before{content:'\203a';}
+.t-icon-caret-up-small:before,.t-icon-caret-up:before{content:'\25b4';}
+.t-icon-check:before{content:'\2713';}
+.t-icon-close-circle-filled:before,.t-icon-close:before{content:'\00d7';}
+.t-icon-delete:before{content:'\232b';}
+.t-icon-search:before{content:'\2315';}

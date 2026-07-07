@@ -1,6 +1,7 @@
 <template>
   <view class="page flow-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="flow-top">
       <view class="step-label">4 / 5</view>
@@ -17,18 +18,35 @@
     <view class="section">
       <view class="section-title">开本时间</view>
       <view class="picker-row">
-        <picker mode="date" :value="dateValue" :start="today" @change="onDateChange">
-          <view class="picker-field">
-            <image class="inline-icon" src="/static/icons/clock.png" mode="aspectFit" />
-            <text>{{ dateValue }}</text>
-          </view>
-        </picker>
-        <picker mode="time" :value="timeValue" @change="onTimeChange">
-          <view class="picker-field">
-            <image class="inline-icon" src="/static/icons/clock.png" mode="aspectFit" />
-            <text>{{ timeValue }}</text>
-          </view>
-        </picker>
+        <view class="picker-field" @tap="openDatePicker">
+          <t-image class="inline-icon" src="/static/icons/clock.png" mode="aspectFit" />
+          <text>{{ dateValue }}</text>
+        </view>
+        <view class="picker-field" @tap="openTimePicker">
+          <t-image class="inline-icon" src="/static/icons/clock.png" mode="aspectFit" />
+          <text>{{ timeValue }}</text>
+        </view>
+        <t-date-time-picker
+          title="选择日期"
+          mode="date"
+          format="YYYY-MM-DD"
+          :visible="datePickerVisible"
+          :value="dateValue"
+          :start="today"
+          @confirm="onDateChange"
+          @cancel="closeDatePicker"
+          @close="closeDatePicker"
+        />
+        <t-date-time-picker
+          title="选择时间"
+          :mode="['hour', 'minute']"
+          format="HH:mm"
+          :visible="timePickerVisible"
+          :value="timeValue"
+          @confirm="onTimeChange"
+          @cancel="closeTimePicker"
+          @close="closeTimePicker"
+        />
       </view>
     </view>
 
@@ -44,9 +62,9 @@
           <view class="setting-switch-label">
             {{ joinPolicy === "review_required" ? "需要审核" : "直接上车" }}
           </view>
-          <switch
+          <t-switch
             color="#1f7a68"
-            :checked="joinPolicy === 'review_required'"
+            :value="joinPolicy === 'review_required'"
             @change="setJoinPolicy($event.detail.value ? 'review_required' : 'direct')"
           />
         </view>
@@ -58,9 +76,9 @@
         </view>
         <view class="setting-switch-meta">
           <view class="setting-switch-label">{{ joinPhoneRequired ? "已开启" : "已关闭" }}</view>
-          <switch
+          <t-switch
             color="#1f7a68"
-            :checked="joinPhoneRequired"
+            :value="joinPhoneRequired"
             @change="setJoinPhoneRequired($event.detail.value)"
           />
         </view>
@@ -72,9 +90,9 @@
         </view>
         <view class="setting-switch-meta">
           <view class="setting-switch-label">{{ npcJoinEnabled ? "已开启" : "已关闭" }}</view>
-          <switch
+          <t-switch
             color="#1f7a68"
-            :checked="npcJoinEnabled"
+            :value="npcJoinEnabled"
             @change="setNpcJoinEnabled($event.detail.value)"
           />
         </view>
@@ -84,12 +102,13 @@
     <view class="section">
       <view class="section-title">聊天置顶信息</view>
       <view class="section-note">留空会使用默认信息，创建后会作为车内聊天的置顶消息保存。</view>
-      <textarea
-        v-model="pinnedMessageText"
+      <t-textarea
+        :value="pinnedMessageText"
         class="textarea"
         maxlength="300"
         :placeholder="defaultPinnedMessage"
         placeholder-class="placeholder"
+        @change="pinnedMessageText = $event.detail.value"
       />
       <view class="preview-block">
         <view class="preview-label">将置顶为</view>
@@ -97,23 +116,30 @@
       </view>
     </view>
 
-    <view v-if="statusText" class="notice">{{ statusText }}</view>
+    <t-notice-bar
+      v-if="statusText"
+      class="notice"
+      theme="warning"
+      :visible="true"
+      :content="statusText"
+    />
 
     <view class="bottom-action">
-      <button
+      <t-button
         class="button"
         :class="{ disabled: busyAction || !canSubmit }"
         :disabled="busyAction || !canSubmit"
-        @click="createPublishedSession"
+        @tap="createPublishedSession"
       >
         {{ busyAction ? "创建中..." : "创建车局并分享" }}
-      </button>
+      </t-button>
     </view>
   </view>
 </template>
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
 import {
   readCreateFlow,
@@ -144,7 +170,7 @@ function isNumericId(value) {
 }
 
 export default {
-  components: { AuthIdentityBar },
+  components: { AuthIdentityBar, FeedbackHost },
   data() {
     const defaults = tomorrowAtDefaultTime();
     return {
@@ -155,6 +181,8 @@ export default {
       selectedRoles: [],
       dateValue: defaults.date,
       timeValue: defaults.time,
+      datePickerVisible: false,
+      timePickerVisible: false,
       today: dateText(new Date()),
       pinnedMessageText: "",
       joinPolicy: "review_required",
@@ -214,12 +242,26 @@ export default {
     }
   },
   methods: {
+    openDatePicker() {
+      this.datePickerVisible = true;
+    },
+    closeDatePicker() {
+      this.datePickerVisible = false;
+    },
+    openTimePicker() {
+      this.timePickerVisible = true;
+    },
+    closeTimePicker() {
+      this.timePickerVisible = false;
+    },
     onDateChange(event) {
       this.dateValue = event.detail.value;
+      this.datePickerVisible = false;
       this.persistDraft();
     },
     onTimeChange(event) {
       this.timeValue = event.detail.value;
+      this.timePickerVisible = false;
       this.persistDraft();
     },
     setJoinPolicy(value) {

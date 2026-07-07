@@ -14,10 +14,18 @@
           <view v-if="section.title" class="edit-title">{{ section.title }}</view>
           <view v-if="section.summary" class="section-note">{{ section.summary }}</view>
         </view>
-        <view v-if="section.statusPill" class="status-pill">{{ section.statusPill }}</view>
+        <t-tag v-if="section.statusPill" class="status-pill" theme="primary" variant="light" size="small">
+          {{ section.statusPill }}
+        </t-tag>
       </view>
 
-      <view v-if="section.notice" class="notice">{{ section.notice }}</view>
+      <t-notice-bar
+        v-if="section.notice"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        :content="section.notice"
+      />
 
       <view v-if="section.items.length" class="role-board">
         <view
@@ -44,9 +52,13 @@
               <text v-if="roleSymbol(item)" class="role-gender-symbol">
                 {{ roleSymbol(item) }}
               </text>
-              <text v-if="item.crossCast" class="cross-cast-tag">（反串）</text>
+              <t-tag v-if="item.crossCast" class="cross-cast-tag" theme="warning" variant="light" size="small">
+                （反串）
+              </t-tag>
             </view>
-            <view v-if="item.stateLabel" class="role-state">{{ item.stateLabel }}</view>
+            <t-tag v-if="item.stateLabel" class="role-state" theme="primary" variant="light" size="small">
+              {{ item.stateLabel }}
+            </t-tag>
           </view>
 
           <view v-if="item.note" class="role-choice-note">{{ item.note }}</view>
@@ -61,7 +73,7 @@
             </view>
           </view>
 
-          <image
+          <t-image
             v-if="item.checked"
             class="role-check"
             src="/static/icons/check.png"
@@ -74,7 +86,7 @@
             :class="{ single: itemActions(item).length === 1 }"
             @tap.stop
           >
-            <button
+            <t-button
               v-for="action in itemActions(item)"
               :key="action.key || action.label"
               class="role-action"
@@ -82,15 +94,15 @@
               :disabled="action.disabled"
               :open-type="action.openType || ''"
               :data-seat-id="action.seatId || item.seatId || item.id || ''"
-              @click.stop="handleActionTap(action, item, section)"
+              @tap.stop="handleActionTap(action, item, section)"
             >
               {{ action.label }}
-            </button>
+            </t-button>
           </view>
         </view>
       </view>
 
-      <view v-else class="role-seat-empty">{{ emptyText }}</view>
+      <t-empty v-else class="role-seat-empty" :description="emptyText" />
     </view>
   </view>
 </template>

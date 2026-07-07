@@ -2,7 +2,7 @@
   <view class="session-calendar">
     <view class="calendar-shell">
       <view class="calendar-hero">
-        <image class="hero-art" src="/static/art/bamboo-corner.png" mode="aspectFit" />
+        <t-image class="hero-art" src="/static/art/bamboo-corner.png" mode="aspectFit" />
         <view class="hero-main">
           <view>
             <view class="title">{{ title }}</view>
@@ -10,36 +10,50 @@
           </view>
         </view>
         <view class="hero-actions">
-          <button v-if="showCreateButton" class="primary-quiet-button" @tap="$emit('create')">
+          <t-button v-if="showCreateButton" class="primary-quiet-button" @tap="$emit('create')">
             {{ createButtonLabel }}
-          </button>
-          <button v-if="showAdminButton" class="quiet-button" @tap="$emit('admin')">管理员</button>
-          <button v-if="showLogoutButton" class="quiet-button" @tap="$emit('logout')">退出</button>
+          </t-button>
+          <t-button v-if="showAdminButton" class="quiet-button" @tap="$emit('admin')">管理员</t-button>
+          <t-button v-if="showLogoutButton" class="quiet-button" @tap="$emit('logout')">退出</t-button>
         </view>
       </view>
 
       <view class="calendar-controls">
-        <view class="filter-tabs">
-          <button
-            v-for="filter in visibleFilterTabs"
-            :key="filter.value"
-            class="filter-tab"
-            :class="{ active: activeCalendarFilter === filter.value }"
-            @tap="setFilter(filter.value)"
-          >
-            <text>{{ filter.label }}</text>
-            <text class="filter-count">{{ filter.count }}</text>
-          </button>
-        </view>
+        <t-segmented
+          class="filter-tabs"
+          t-class-item="calendar-segmented-item"
+          t-class-thumb="calendar-segmented-thumb"
+          block
+          custom-style="width: 100%; --td-segmented-bg-color: rgba(239, 234, 224, 0.66); --td-segmented-item-active-bg: #ffffff; --td-segmented-item-color: #34443e; --td-segmented-item-active-color: #1f6f5b; --td-segmented-item-label-font: 500 20rpx / 38rpx sans-serif; --td-spacer-1: 16rpx;"
+          :value="activeCalendarFilter"
+          :options="visibleFilterSegmentOptions"
+          @change="setFilter($event.detail.value)"
+        />
         <view class="calendar-tools">
-          <button class="today-reset-button" @tap="scrollToToday">归位</button>
-          <picker mode="date" :value="selectedDatePickerValue" @change="selectCalendarDate">
-            <view class="date-picker-button">{{ selectedDateText }}</view>
-          </picker>
+          <t-button class="today-reset-button" @tap="scrollToToday">归位</t-button>
+          <view class="date-picker-button" @tap="openCalendarDatePicker">
+            {{ selectedDateText }}
+          </view>
+          <t-date-time-picker
+            title="选择日期"
+            mode="date"
+            format="YYYY-MM-DD"
+            :visible="calendarDatePickerVisible"
+            :value="selectedDatePickerValue"
+            @confirm="selectCalendarDate"
+            @cancel="closeCalendarDatePicker"
+            @close="closeCalendarDatePicker"
+          />
         </view>
       </view>
 
-      <view v-if="calendarStatusText" class="notice calendar-notice">{{ calendarStatusText }}</view>
+      <t-notice-bar
+        v-if="calendarStatusText"
+        class="notice calendar-notice"
+        theme="warning"
+        :visible="true"
+        :content="calendarStatusText"
+      />
 
       <scroll-view
         class="calendar-scroll"
@@ -54,10 +68,11 @@
         @refresherrefresh="refreshCalendar"
         @scrolltolower="loadMoreDates"
       >
-        <view v-if="filteredCalendarItems.length === 0 && !isCalendarLoading" class="calendar-empty">
-          <view class="calendar-empty-title">暂无符合条件的车局</view>
-          <view class="calendar-empty-text">发起和参与的拼车会按日期汇总在这里。</view>
-        </view>
+        <t-empty
+          v-if="filteredCalendarItems.length === 0 && !isCalendarLoading"
+          class="calendar-empty"
+          description="暂无符合条件的车局。发起和参与的拼车会按日期汇总在这里。"
+        />
 
         <view class="day-list">
           <view
@@ -88,7 +103,7 @@
                 </view>
                 <view class="day-head-right">
                   <text class="day-count">{{ band.items.length }}</text>
-                  <image
+                  <t-image
                     class="day-chevron"
                     :class="{ collapsed: isDayCollapsed(band.dateKey) }"
                     src="/static/icons/chevron.png"
@@ -98,7 +113,7 @@
               </view>
 
               <view v-if="!isDayCollapsed(band.dateKey)" class="day-content">
-                <view v-if="band.items.length === 0" class="empty-day-row">暂无车局</view>
+                <t-empty v-if="band.items.length === 0" class="empty-day-row" description="暂无车局" />
 
                 <view
                   v-for="item in band.items"
@@ -112,26 +127,39 @@
                   <view class="session-main">
                     <view class="session-title-line">
                       <text class="session-title">{{ item.title }}</text>
-                      <text
+                      <t-tag
                         v-for="tag in item.identityTags"
                         :key="tag.key"
                         class="type-badge"
                         :class="tag.tone"
+                        theme="primary"
+                        variant="light"
+                        size="small"
                       >
                         {{ tag.label }}
-                      </text>
+                      </t-tag>
                     </view>
                     <view class="session-store-line">
-                      <image class="row-icon" src="/static/icons/pin.png" mode="aspectFit" />
+                      <t-image class="row-icon" src="/static/icons/pin.png" mode="aspectFit" />
                       <text class="session-store">{{ item.storeName }}</text>
                     </view>
                     <view class="session-detail-line">
                       <text class="session-time">{{ item.timeText }}</text>
-                      <text class="role-pill">{{ item.roleText }}</text>
+                      <t-tag class="role-pill" theme="primary" variant="light" size="small">
+                        {{ item.roleText }}
+                      </t-tag>
                     </view>
                     <view class="session-state-line">
                       <text class="session-meta">{{ item.metaText }}</text>
-                      <text class="status-pill" :class="item.statusTone">{{ item.statusText }}</text>
+                      <t-tag
+                        class="status-pill"
+                        :class="item.statusTone"
+                        theme="primary"
+                        variant="light"
+                        size="small"
+                      >
+                        {{ item.statusText }}
+                      </t-tag>
                     </view>
                     <view v-if="item.albumFirst" class="album-cta-row">
                       <text class="album-cta-note">{{ item.albumCtaNote }}</text>
@@ -139,10 +167,10 @@
                   </view>
 
                   <view class="session-actions">
-                    <button v-if="item.canManage" class="session-manage" @tap.stop="goManage(item.sessionId)">管理</button>
-                    <button class="session-delete" @tap.stop="hideCalendarItem(item)">
+                    <t-button v-if="item.canManage" class="session-manage" @tap.stop="goManage(item.sessionId)">管理</t-button>
+                    <t-button class="session-delete" @tap.stop="hideCalendarItem(item)">
                       {{ item.isOrganized ? organizedRemovalActionText(item.session) : "删除" }}
-                    </button>
+                    </t-button>
                   </view>
                 </view>
               </view>
@@ -155,7 +183,7 @@
           :class="{ disabled: !hasOlderCalendarItems }"
           @tap="loadMoreDates"
         >
-          <image class="load-more-art" src="/static/art/ink-home-landscape.jpg" mode="aspectFill" />
+          <t-image class="load-more-art" src="/static/art/ink-home-landscape.jpg" mode="aspectFill" />
           <text>{{ calendarMoreHintText }}</text>
         </view>
       </scroll-view>
@@ -166,6 +194,7 @@
 <script setup>
 import { computed, nextTick, ref } from "vue";
 import { request } from "../utils/api";
+import { showModal, showToast } from "../utils/tdesignFeedback";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -227,6 +256,7 @@ const loadedCalendarCount = ref(CALENDAR_PAGE_SIZE);
 const collapsedDayKeys = ref([]);
 const scrollIntoViewId = ref("");
 const selectedDateKey = ref("");
+const calendarDatePickerVisible = ref(false);
 
 const organizedCount = computed(
   () => calendarItems.value.filter((item) => item.isOrganized).length
@@ -262,6 +292,12 @@ const filterTabs = computed(() => [
 ]);
 const visibleFilterTabs = computed(() =>
   filterTabs.value.filter((tab) => tab.value === "all" || tab.count > 0)
+);
+const visibleFilterSegmentOptions = computed(() =>
+  visibleFilterTabs.value.map((tab) => ({
+    value: tab.value,
+    label: `${tab.label} ${tab.count}`
+  }))
 );
 const activeCalendarFilter = computed(() =>
   visibleFilterTabs.value.some((tab) => tab.value === activeFilter.value) ? activeFilter.value : "all"
@@ -381,8 +417,17 @@ function scrollToToday() {
   });
 }
 
+function openCalendarDatePicker() {
+  calendarDatePickerVisible.value = true;
+}
+
+function closeCalendarDatePicker() {
+  calendarDatePickerVisible.value = false;
+}
+
 function selectCalendarDate(event) {
   const value = event?.detail?.value || "";
+  calendarDatePickerVisible.value = false;
   if (!value) {
     return;
   }
@@ -488,7 +533,7 @@ function goAlbum(id) {
 }
 
 function confirmPersonalRemoval(content, confirmText, onConfirm) {
-  uni.showModal({
+  showModal({
     title: "确认操作",
     content,
     confirmText,
@@ -513,7 +558,7 @@ function cancelOrganizedSession(session) {
           method: "PATCH"
         });
         emit("refresh");
-        uni.showToast({ title: "已删除", icon: "none" });
+        showToast({ title: "已删除", icon: "none" });
       } catch (error) {
         if (handleAuthExpired(error)) {
           return;
@@ -528,7 +573,7 @@ function cancelOrganizedSession(session) {
 }
 
 function requireAlbumCleanupBeforeCancel() {
-  uni.showModal({
+  showModal({
     title: "无法删除",
     content: "相册照片没有清空之前无法删除。",
     confirmText: "知道了",
@@ -548,7 +593,7 @@ function leaveOrganizedSession(session) {
           method: "PATCH"
         });
         emit("refresh");
-        uni.showToast({ title: "已退出车头", icon: "none" });
+        showToast({ title: "已退出车头", icon: "none" });
       } catch (error) {
         if (handleAuthExpired(error)) {
           return;
@@ -587,7 +632,7 @@ function hideJoinedSession(signup) {
           method: "PATCH"
         });
         emit("refresh");
-        uni.showToast({ title: "已从列表下架", icon: "none" });
+        showToast({ title: "已从列表下架", icon: "none" });
       } catch (error) {
         if (handleAuthExpired(error)) {
           return;
@@ -1107,9 +1152,9 @@ function signupStatusLabel(status) {
 }
 
 .filter-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14rpx;
+  display: block;
+  width: 100%;
+  min-width: 0;
 }
 
 .filter-tab {

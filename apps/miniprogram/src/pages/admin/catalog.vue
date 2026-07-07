@@ -1,12 +1,13 @@
 <template>
   <view class="page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view v-if="!isAdmin" class="section">
       <view class="title">资料管理</view>
       <view class="text">当前微信账号没有系统管理员权限。</view>
       <view class="actions">
-        <button class="button" @tap="goMine">去登录</button>
+        <t-button class="button" @tap="goMine">去登录</t-button>
       </view>
     </view>
 
@@ -15,60 +16,91 @@
         <view class="title">资料管理</view>
         <view class="text">维护店家、剧本和缺资料申请。</view>
         <view class="actions">
-          <button class="button secondary" @tap="scanAdminWebLogin">扫码登录 Web 后台</button>
+          <t-button class="button secondary" @tap="scanAdminWebLogin">扫码登录 Web 后台</t-button>
         </view>
-        <view class="tabs">
-          <button
+        <t-tabs
+          class="tabs"
+          theme="tag"
+          :value="activeTab"
+          custom-style="width: 100%; --td-tab-item-height: 64rpx; --td-tab-item-tag-height: 56rpx; --td-tab-item-active-color: #1f7a68; --td-tab-item-tag-active-bg: #eef7f4; --td-tab-item-tag-bg: #eef2f7; --td-tab-nav-bg-color: transparent; --td-tab-font: 600 24rpx / 44rpx PingFang SC, Microsoft YaHei, sans-serif;"
+          @change="activeTab = $event.detail.value"
+        >
+          <t-tab-panel
             v-for="tab in tabs"
             :key="tab.key"
-            class="tab"
-            :class="{ active: activeTab === tab.key }"
-            @tap="activeTab = tab.key"
-          >
-            {{ tab.label }}
-          </button>
-        </view>
+            :label="tab.label"
+            :value="tab.key"
+          />
+        </t-tabs>
       </view>
 
       <view v-if="activeTab === 'stores'" class="panel">
         <view class="section">
           <view class="section-title">{{ editingStoreId ? "编辑店家" : "新增店家" }}</view>
-          <input v-model="storeForm.name" class="field" placeholder="店家名称" />
+          <t-input
+            :value="storeForm.name"
+            class="field"
+            placeholder="店家名称"
+            @change="storeForm.name = $event.detail.value"
+          />
           <view class="field-row">
-            <input v-model="storeForm.city" class="field half" placeholder="城市" />
-            <input v-model="storeForm.district" class="field half" placeholder="区域" />
+            <t-input
+              :value="storeForm.city"
+              class="field half"
+              placeholder="城市"
+              @change="storeForm.city = $event.detail.value"
+            />
+            <t-input
+              :value="storeForm.district"
+              class="field half"
+              placeholder="区域"
+              @change="storeForm.district = $event.detail.value"
+            />
           </view>
-          <input v-model="storeForm.address" class="field" placeholder="地址" />
+          <t-input
+            :value="storeForm.address"
+            class="field"
+            placeholder="地址"
+            @change="storeForm.address = $event.detail.value"
+          />
           <view class="toggle-row">
-            <button
+            <t-button
               class="toggle"
               :class="{ active: storeForm.status === 'active' }"
               @tap="storeForm.status = 'active'"
             >
               上架
-            </button>
-            <button
+            </t-button>
+            <t-button
               class="toggle"
               :class="{ active: storeForm.status === 'inactive' }"
               @tap="storeForm.status = 'inactive'"
             >
               下架
-            </button>
+            </t-button>
           </view>
           <view class="actions">
-            <button class="button" @tap="saveStore">{{ editingStoreId ? "保存" : "新增" }}</button>
-            <button class="button secondary" @tap="resetStoreForm">清空</button>
+            <t-button class="button" @tap="saveStore">{{ editingStoreId ? "保存" : "新增" }}</t-button>
+            <t-button class="button secondary" @tap="resetStoreForm">清空</t-button>
           </view>
         </view>
 
         <view class="section">
           <view class="section-title">店家列表</view>
           <view class="search-row">
-            <input v-model="storeKeyword" class="field search" placeholder="搜索名称/城市/区域" />
-            <button class="mini-button" @tap="loadStores">搜索</button>
+            <t-search
+              :value="storeKeyword"
+              class="field search"
+              placeholder="搜索名称/城市/区域"
+              action="搜索"
+              shape="round"
+              @change="storeKeyword = $event.detail.value"
+              @submit="loadStores"
+              @action-click="loadStores"
+            />
           </view>
           <view class="toggle-row">
-            <button
+            <t-button
               v-for="item in statusFilters"
               :key="item.value"
               class="toggle"
@@ -76,7 +108,7 @@
               @tap="setStoreStatus(item.value)"
             >
               {{ item.label }}
-            </button>
+            </t-button>
           </view>
           <view v-for="store in stores" :key="store.id" class="item">
             <view class="item-main">
@@ -85,10 +117,10 @@
               <view class="item-sub">{{ store.address || "暂无地址" }}</view>
             </view>
             <view class="item-actions">
-              <button class="mini-button" @tap="editStore(store)">编辑</button>
-              <button class="mini-button muted" @tap="toggleStore(store)">
+              <t-button class="mini-button" @tap="editStore(store)">编辑</t-button>
+              <t-button class="mini-button muted" @tap="toggleStore(store)">
                 {{ store.status === "active" ? "下架" : "上架" }}
-              </button>
+              </t-button>
             </view>
           </view>
         </view>
@@ -97,51 +129,77 @@
       <view v-if="activeTab === 'scripts'" class="panel">
         <view class="section">
           <view class="section-title">{{ editingScriptId ? "编辑剧本" : "新增剧本" }}</view>
-          <input v-model="scriptForm.name" class="field" placeholder="剧本名称" />
+          <t-input
+            :value="scriptForm.name"
+            class="field"
+            placeholder="剧本名称"
+            @change="scriptForm.name = $event.detail.value"
+          />
           <view class="field-row">
-            <input v-model="scriptForm.typeTagsText" class="field half" placeholder="标签，逗号分隔" />
-            <input v-model="scriptForm.playerCount" class="field half" type="number" placeholder="人数" />
+            <t-input
+              :value="scriptForm.typeTagsText"
+              class="field half"
+              placeholder="标签，逗号分隔"
+              @change="scriptForm.typeTagsText = $event.detail.value"
+            />
+            <t-input
+              :value="scriptForm.playerCount"
+              class="field half"
+              type="number"
+              placeholder="人数"
+              @change="scriptForm.playerCount = $event.detail.value"
+            />
           </view>
-          <textarea
-            v-model="scriptForm.summaryNoSpoiler"
+          <t-textarea
+            :value="scriptForm.summaryNoSpoiler"
             class="textarea"
             placeholder="无剧透简介"
+            @change="scriptForm.summaryNoSpoiler = $event.detail.value"
           />
-          <textarea
-            v-model="scriptForm.defaultSeatTemplateText"
+          <t-textarea
+            :value="scriptForm.defaultSeatTemplateText"
             class="textarea template"
             placeholder="默认座位模板 JSON"
+            @change="scriptForm.defaultSeatTemplateText = $event.detail.value"
           />
           <view class="toggle-row">
-            <button
+            <t-button
               class="toggle"
               :class="{ active: scriptForm.status === 'active' }"
               @tap="scriptForm.status = 'active'"
             >
               上架
-            </button>
-            <button
+            </t-button>
+            <t-button
               class="toggle"
               :class="{ active: scriptForm.status === 'inactive' }"
               @tap="scriptForm.status = 'inactive'"
             >
               下架
-            </button>
+            </t-button>
           </view>
           <view class="actions">
-            <button class="button" @tap="saveScript">{{ editingScriptId ? "保存" : "新增" }}</button>
-            <button class="button secondary" @tap="resetScriptForm">清空</button>
+            <t-button class="button" @tap="saveScript">{{ editingScriptId ? "保存" : "新增" }}</t-button>
+            <t-button class="button secondary" @tap="resetScriptForm">清空</t-button>
           </view>
         </view>
 
         <view class="section">
           <view class="section-title">剧本列表</view>
           <view class="search-row">
-            <input v-model="scriptKeyword" class="field search" placeholder="搜索名称/标签" />
-            <button class="mini-button" @tap="loadScripts">搜索</button>
+            <t-search
+              :value="scriptKeyword"
+              class="field search"
+              placeholder="搜索名称/标签"
+              action="搜索"
+              shape="round"
+              @change="scriptKeyword = $event.detail.value"
+              @submit="loadScripts"
+              @action-click="loadScripts"
+            />
           </view>
           <view class="toggle-row">
-            <button
+            <t-button
               v-for="item in statusFilters"
               :key="item.value"
               class="toggle"
@@ -149,7 +207,7 @@
               @tap="setScriptStatus(item.value)"
             >
               {{ item.label }}
-            </button>
+            </t-button>
           </view>
           <view v-for="script in scripts" :key="script.id" class="item">
             <view class="item-main">
@@ -158,10 +216,10 @@
               <view class="item-sub">{{ script.summary_no_spoiler || "暂无简介" }}</view>
             </view>
             <view class="item-actions">
-              <button class="mini-button" @tap="editScript(script)">编辑</button>
-              <button class="mini-button muted" @tap="toggleScript(script)">
+              <t-button class="mini-button" @tap="editScript(script)">编辑</t-button>
+              <t-button class="mini-button muted" @tap="toggleScript(script)">
                 {{ script.status === "active" ? "下架" : "上架" }}
-              </button>
+              </t-button>
             </view>
           </view>
         </view>
@@ -171,11 +229,19 @@
         <view class="section">
           <view class="section-title">新增资料申请</view>
           <view class="search-row">
-            <input v-model="requestKeyword" class="field search" placeholder="搜索申请名称" />
-            <button class="mini-button" @tap="loadRequests">搜索</button>
+            <t-search
+              :value="requestKeyword"
+              class="field search"
+              placeholder="搜索申请名称"
+              action="搜索"
+              shape="round"
+              @change="requestKeyword = $event.detail.value"
+              @submit="loadRequests"
+              @action-click="loadRequests"
+            />
           </view>
           <view class="toggle-row">
-            <button
+            <t-button
               v-for="item in requestStatusFilters"
               :key="item.value"
               class="toggle"
@@ -183,9 +249,14 @@
               @tap="setRequestStatus(item.value)"
             >
               {{ item.label }}
-            </button>
+            </t-button>
           </view>
-          <input v-model="reviewNote" class="field" placeholder="拒绝原因/审核备注" />
+          <t-input
+            :value="reviewNote"
+            class="field"
+            placeholder="拒绝原因/审核备注"
+            @change="reviewNote = $event.detail.value"
+          />
           <view v-for="item in requests" :key="item.id" class="item">
             <view class="item-main">
               <view class="item-title">{{ item.request_type === "store" ? "店家" : "剧本" }}：{{ item.name }}</view>
@@ -194,8 +265,8 @@
               <view v-if="item.review_note" class="item-sub">备注：{{ item.review_note }}</view>
             </view>
             <view v-if="item.status === 'pending'" class="item-actions">
-              <button class="mini-button" @tap="approveRequest(item)">通过</button>
-              <button class="mini-button muted" @tap="rejectRequest(item)">拒绝</button>
+              <t-button class="mini-button" @tap="approveRequest(item)">通过</t-button>
+              <t-button class="mini-button muted" @tap="rejectRequest(item)">拒绝</t-button>
             </view>
           </view>
         </view>
@@ -208,7 +279,9 @@
 import { onLoad } from "@dcloudio/uni-app";
 import { computed, ref } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, getCurrentUser, queryString, request } from "../../utils/api";
+import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 const tabs = [
   { key: "stores", label: "店家" },
@@ -326,7 +399,7 @@ function defaultScriptForm() {
 }
 
 function showMessage(title) {
-  uni.showToast({ title, icon: "none" });
+  showToast({ title, icon: "none" });
 }
 
 function goMine() {
@@ -356,7 +429,7 @@ function parseAdminWebLoginQr(rawValue) {
 
 function confirmAdminWebLogin() {
   return new Promise((resolve) => {
-    uni.showModal({
+    showModal({
       title: "Web 后台登录",
       content: "确认登录 Web 管理后台？",
       confirmText: "确认登录",
@@ -637,7 +710,6 @@ async function rejectRequest(item) {
   font-weight: 600;
 }
 
-.tabs,
 .toggle-row,
 .field-row,
 .search-row,
@@ -647,6 +719,9 @@ async function rejectRequest(item) {
 }
 
 .tabs {
+  display: block;
+  width: 100%;
+  min-width: 0;
   margin-top: 24rpx;
 }
 

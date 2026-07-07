@@ -1,17 +1,24 @@
 <template>
   <view class="page review-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="section">
       <view class="title">写记录</view>
       <view class="text">到发车时间后，你可以留下自己的星级、文字和照片。</view>
-      <view v-if="statusText" class="notice">{{ statusText }}</view>
+      <t-notice-bar
+        v-if="statusText"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        :content="statusText"
+      />
     </view>
 
     <view class="section">
       <view class="section-title">星级</view>
       <view class="rating-row">
-        <button
+        <t-button
           v-for="value in [1, 2, 3, 4, 5]"
           :key="value"
           class="rating-button"
@@ -19,18 +26,19 @@
           @tap="rating = value"
         >
           ★
-        </button>
+        </t-button>
       </view>
     </view>
 
     <view class="section">
       <view class="section-title">文字记录</view>
-      <textarea
-        v-model="content"
+      <t-textarea
+        :value="content"
         class="textarea"
         maxlength="500"
         placeholder="写一点这车的体验"
         placeholder-class="placeholder"
+        @change="content = $event.detail.value"
       />
       <view class="counter">{{ content.length }}/500</view>
     </view>
@@ -38,28 +46,29 @@
     <view class="section">
       <view class="section-head">
         <view class="section-title">照片</view>
-        <button class="photo-add" :disabled="photos.length >= 9 || saving" @tap="choosePhotos">
+        <t-button class="photo-add" :disabled="photos.length >= 9 || saving" @tap="choosePhotos">
           添加
-        </button>
+        </t-button>
       </view>
       <view class="photo-grid">
         <view v-for="(photo, index) in photos" :key="photo" class="photo-cell">
-          <image class="photo-image" :src="assetUrl(photo)" mode="aspectFill" />
-          <button class="photo-remove" :disabled="saving" @tap="removePhoto(index)">移除</button>
+          <t-image class="photo-image" :src="assetUrl(photo)" mode="aspectFill" />
+          <t-button class="photo-remove" :disabled="saving" @tap="removePhoto(index)">移除</t-button>
         </view>
       </view>
     </view>
 
     <view class="bottom-action">
-      <button class="button" :disabled="saving || !canSave" @tap="saveReview">
+      <t-button class="button" :disabled="saving || !canSave" @tap="saveReview">
         {{ saving ? "保存中..." : "保存记录" }}
-      </button>
+      </t-button>
     </view>
   </view>
 </template>
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import {
   assetUrl,
   dataOf,
@@ -67,9 +76,10 @@ import {
   request,
   uploadSessionReviewPhoto
 } from "../../utils/api";
+import { showToast } from "../../utils/tdesignFeedback";
 
 export default {
-  components: { AuthIdentityBar },
+  components: { AuthIdentityBar, FeedbackHost },
   data() {
     return {
       sessionId: "",
@@ -124,7 +134,7 @@ export default {
     },
     choosePhotos() {
       if (this.photos.length >= 9) {
-        uni.showToast({ title: "最多上传9张照片", icon: "none" });
+        showToast({ title: "最多上传9张照片", icon: "none" });
         return;
       }
       uni.chooseImage({
@@ -173,7 +183,7 @@ export default {
             photoUrls: this.photos
           }
         });
-        uni.showToast({ title: "记录已保存", icon: "none" });
+        showToast({ title: "记录已保存", icon: "none" });
         setTimeout(() => {
           uni.navigateBack();
         }, 350);

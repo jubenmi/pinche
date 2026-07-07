@@ -1,19 +1,31 @@
 <template>
   <view>
-    <button v-if="showChatEntry" class="chat-float-button" @click="openChatModal">
-      <text class="chat-float-icon">聊</text>
-      <text class="chat-float-text">车友</text>
-      <text v-if="unreadCount > 0" class="chat-unread-badge">{{ unreadBadgeText }}</text>
-    </button>
+    <t-button v-if="showChatEntry" class="chat-float-button" @tap="openChatModal">
+      <view class="chat-float-content">
+        <text class="chat-float-icon">聊</text>
+        <text class="chat-float-text">车友</text>
+        <t-badge
+          v-if="unreadCount > 0"
+          class="chat-unread-badge"
+          :count="unreadCount"
+          :max-count="99"
+        />
+      </view>
+    </t-button>
 
-    <view v-if="chatModalOpen" class="chat-modal-mask" @click="closeChatModal">
-      <view class="chat-modal" @click.stop>
+    <t-popup
+      :visible="chatModalOpen"
+      placement="bottom"
+      :close-on-overlay-click="true"
+      @visible-change="handleChatPopupVisibleChange"
+    >
+      <view class="chat-modal" @tap.stop>
         <view class="chat-modal-head">
           <view>
             <view class="chat-modal-title">车内聊天</view>
             <view class="chat-modal-subtitle">上车玩家可见，每 3 秒刷新。</view>
           </view>
-          <button class="chat-modal-close" @click="closeChatModal">关闭</button>
+          <t-button class="chat-modal-close" @tap="closeChatModal">关闭</t-button>
         </view>
 
         <scroll-view scroll-y class="chat-modal-body">
@@ -22,12 +34,20 @@
             <view class="pinned-text">{{ pinnedMessage.content }}</view>
           </view>
 
-          <view v-if="messageStatusText" class="notice">{{ messageStatusText }}</view>
+          <t-notice-bar
+            v-if="messageStatusText"
+            class="notice"
+            theme="warning"
+            :visible="true"
+            :content="messageStatusText"
+          />
 
           <view class="message-list">
-            <view v-if="messages.length === 0 && canChat" class="empty">
-              还没有留言，先发一句确认信息。
-            </view>
+            <t-empty
+              v-if="messages.length === 0 && canChat"
+              class="empty"
+              description="还没有留言，先发一句确认信息。"
+            />
             <view
               v-for="message in messages"
               :key="message.id"
@@ -44,26 +64,27 @@
         </scroll-view>
 
         <view class="message-compose">
-          <input
-            v-model="draftMessage"
+          <t-input
+            :value="draftMessage"
             class="message-input"
             placeholder="输入留言"
             placeholder-class="placeholder"
             confirm-type="send"
             :disabled="!canChat || session.status === 'cancelled'"
-            @confirm="sendMessage"
+            @change="draftMessage = $event.detail.value"
+            @enter="sendMessage"
           />
-          <button
+          <t-button
             class="button compact"
             :class="{ disabled: !canSendMessage }"
             :disabled="!canSendMessage"
-            @click="sendMessage"
+            @tap="sendMessage"
           >
             发送
-          </button>
+          </t-button>
         </view>
       </view>
-    </view>
+    </t-popup>
   </view>
 </template>
 
@@ -207,6 +228,11 @@ export default {
       this.markChatRead();
       this.startMessagePolling();
     },
+    handleChatPopupVisibleChange(event = {}) {
+      if (event.detail?.visible === false) {
+        this.closeChatModal();
+      }
+    },
     closeChatModal() {
       this.chatModalOpen = false;
     },
@@ -339,6 +365,17 @@ export default {
   color: #ffffff;
   box-shadow: 0 18rpx 42rpx rgba(31, 111, 91, 0.34);
   line-height: 1;
+}
+
+.chat-float-content {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
 }
 
 .chat-float-icon {

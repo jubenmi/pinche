@@ -21,7 +21,11 @@
     {
       "path": "pages/admin/catalog",
       "style": {
-        "navigationBarTitleText": "资料管理"
+        "navigationBarTitleText": "资料管理",
+        "usingComponents": {
+          "t-tabs": "/wxcomponents/tdesign-miniprogram/tabs/tabs",
+          "t-tab-panel": "/wxcomponents/tdesign-miniprogram/tab-panel/tab-panel"
+        }
       }
     },
     {
@@ -86,6 +90,27 @@
     }
   ],
   "globalStyle": {
+    "usingComponents": {
+      "t-action-sheet": "/wxcomponents/tdesign-miniprogram/action-sheet/action-sheet",
+      "t-button": "/wxcomponents/tdesign-miniprogram/button/button",
+      "t-date-time-picker": "/wxcomponents/tdesign-miniprogram/date-time-picker/date-time-picker",
+      "t-badge": "/wxcomponents/tdesign-miniprogram/badge/badge",
+      "t-dialog": "/wxcomponents/tdesign-miniprogram/dialog/dialog",
+      "t-empty": "/wxcomponents/tdesign-miniprogram/empty/empty",
+      "t-icon": "/wxcomponents/tdesign-miniprogram/icon/icon",
+      "t-image": "/wxcomponents/tdesign-miniprogram/image/image",
+      "t-input": "/wxcomponents/tdesign-miniprogram/input/input",
+      "t-notice-bar": "/wxcomponents/tdesign-miniprogram/notice-bar/notice-bar",
+      "t-picker": "/wxcomponents/tdesign-miniprogram/picker/picker",
+      "t-picker-item": "/wxcomponents/tdesign-miniprogram/picker-item/picker-item",
+      "t-popup": "/wxcomponents/tdesign-miniprogram/popup/popup",
+      "t-search": "/wxcomponents/tdesign-miniprogram/search/search",
+      "t-segmented": "/wxcomponents/tdesign-miniprogram/segmented/segmented",
+      "t-switch": "/wxcomponents/tdesign-miniprogram/switch/switch",
+      "t-tag": "/wxcomponents/tdesign-miniprogram/tag/tag",
+      "t-textarea": "/wxcomponents/tdesign-miniprogram/textarea/textarea",
+      "t-toast": "/wxcomponents/tdesign-miniprogram/toast/toast"
+    },
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "剧本迷·拼车",
     "navigationBarBackgroundColor": "#ffffff",
