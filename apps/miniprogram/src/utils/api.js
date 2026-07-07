@@ -1,3 +1,5 @@
+import { showActionSheet, showModal, showToast } from "./tdesignFeedback.js";
+
 const TOKEN_KEY = "pinche_token";
 const USER_KEY = "pinche_user";
 const ROLES_KEY = "pinche_roles";
@@ -291,12 +293,12 @@ function rejectUnauthorizedResponse(response) {
 }
 
 function confirmLogin(options = {}) {
-  if (options.prompt === false || typeof uni.showModal !== "function") {
+  if (options.prompt === false || typeof showModal !== "function") {
     return Promise.resolve(true);
   }
 
   return new Promise((resolve) => {
-    uni.showModal({
+    showModal({
       title: options.title || "微信登录",
       content: options.content || "登录后继续使用剧本迷·拼车。",
       confirmText: options.confirmText || "登录",
@@ -313,8 +315,8 @@ function confirmLogin(options = {}) {
 
 function chooseUserGender() {
   return new Promise((resolve) => {
-    if (typeof uni.showActionSheet !== "function") {
-      uni.showModal({
+    if (typeof showActionSheet !== "function") {
+      showModal({
         title: "请选择你的性别",
         content: "该信息会长期保存到账号资料，可在“我的”页修改。",
         confirmText: "男",
@@ -329,7 +331,7 @@ function chooseUserGender() {
       return;
     }
 
-    uni.showActionSheet({
+    showActionSheet({
       itemList: ["男", "女"],
       success(result) {
         resolve(result.tapIndex === 0 ? "male" : "female");
@@ -345,7 +347,7 @@ async function requestUserGenderWithFallback(options = {}) {
   const gender = await chooseUserGender();
   if (!gender) {
     if (options.showToast !== false) {
-      uni.showToast({ title: "请选择性别后继续", icon: "none" });
+      showToast({ title: "请选择性别后继续", icon: "none" });
     }
     return null;
   }
@@ -354,7 +356,7 @@ async function requestUserGenderWithFallback(options = {}) {
     return await updateUserGender(gender);
   } catch (error) {
     if (options.showToast !== false) {
-      uni.showToast({ title: "性别保存失败", icon: "none" });
+      showToast({ title: "性别保存失败", icon: "none" });
     }
     return null;
   }
@@ -868,7 +870,7 @@ export function requestUserPhoneFromPhoneModal(auth, options = {}) {
 
   if (!canUsePhoneModal) {
     if (required && options.showToast !== false) {
-      uni.showToast({ title: "授权手机号后继续", icon: "none" });
+      showToast({ title: "授权手机号后继续", icon: "none" });
     }
     return Promise.resolve(required ? null : auth);
   }
@@ -926,7 +928,7 @@ export function requestUserPhoneFromPhoneModal(auth, options = {}) {
       settled = true;
       cleanup();
       if (required && options.showToast !== false) {
-        uni.showToast({ title: "授权手机号后继续", icon: "none" });
+        showToast({ title: "授权手机号后继续", icon: "none" });
       }
       resolve(required ? null : auth);
     }, 300);
@@ -1033,7 +1035,7 @@ export async function ensureLoggedIn(options = {}) {
     return options.requireGender === true ? ensureUserGender(phoneAuth, options) : phoneAuth;
   } catch (error) {
     if (options.showToast !== false) {
-      uni.showToast({
+      showToast({
         title: error?.userMessage || options.failTitle || "登录失败",
         icon: "none"
       });

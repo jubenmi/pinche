@@ -1,6 +1,7 @@
 <template>
   <view class="page flow-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="flow-top">
       <view class="step-label">3 / 5</view>
@@ -16,7 +17,7 @@
     />
 
     <view class="bottom-action">
-      <button class="button" :class="{ disabled: !selectedRole }" @click="goNext">下一步</button>
+      <t-button class="button" :class="{ disabled: !selectedRole }" @tap="goNext">下一步</t-button>
     </view>
   </view>
 </template>
@@ -24,6 +25,7 @@
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { AUTH_CHANGE_EVENT, getCurrentUser } from "../../utils/api";
 import {
   isCrossCast,
@@ -31,9 +33,10 @@ import {
   roleOptionsFromScript,
   writeCreateFlow
 } from "../../utils/createFlow";
+import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 export default {
-  components: { AuthIdentityBar, RoleSeatBoard },
+  components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost },
   data() {
     return {
       store: null,
@@ -102,7 +105,7 @@ export default {
         return Promise.resolve(true);
       }
       return new Promise((resolve) => {
-        uni.showModal({
+        showModal({
           title: "确认反串",
           content: "反串可能会影响游戏体验，是否确认",
           confirmText: "确认",
@@ -142,7 +145,7 @@ export default {
     },
     async goNext() {
       if (!this.selectedRole) {
-        uni.showToast({ title: "先选择一个角色", icon: "none" });
+        showToast({ title: "先选择一个角色", icon: "none" });
         return;
       }
       writeCreateFlow({

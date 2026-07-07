@@ -1,6 +1,7 @@
 <template>
   <view class="page share-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="flow-top">
       <view class="step-label">4 / 4</view>
@@ -9,23 +10,25 @@
     </view>
 
     <view class="ticket-card">
-      <image class="ticket-bamboo" src="/static/art/bamboo-corner.png" mode="widthFix" />
-      <image class="ticket-mountains" src="/static/art/ticket-landscape.jpg" mode="widthFix" />
+      <t-image class="ticket-bamboo" src="/static/art/bamboo-corner.png" mode="widthFix" />
+      <t-image class="ticket-mountains" src="/static/art/ticket-landscape.jpg" mode="widthFix" />
       <view class="ticket-title">{{ scriptName }}</view>
-      <view class="ticket-tags">{{ scriptTags }} · {{ playerCountText }}</view>
+      <t-tag class="ticket-tags" theme="primary" variant="light" size="small">
+        {{ scriptTags }} · {{ playerCountText }}
+      </t-tag>
 
       <view class="ticket-row">
-        <image class="ticket-icon" src="/static/icons/home.png" mode="aspectFit" />
+        <t-image class="ticket-icon" src="/static/icons/home.png" mode="aspectFit" />
         <view class="ticket-label">店家</view>
         <view class="ticket-value">{{ storeName }}</view>
       </view>
       <view class="ticket-row">
-        <image class="ticket-icon" src="/static/icons/role.png" mode="aspectFit" />
+        <t-image class="ticket-icon" src="/static/icons/role.png" mode="aspectFit" />
         <view class="ticket-label">角色</view>
         <view class="ticket-value">{{ roleName }}</view>
       </view>
       <view class="ticket-row">
-        <image class="ticket-icon" src="/static/icons/clock.png" mode="aspectFit" />
+        <t-image class="ticket-icon" src="/static/icons/clock.png" mode="aspectFit" />
         <view class="ticket-label">时间</view>
         <view class="ticket-value">{{ startText }}</view>
       </view>
@@ -33,7 +36,7 @@
       <view class="ticket-divider"></view>
 
       <view class="ticket-row">
-        <image class="ticket-icon" src="/static/icons/note.png" mode="aspectFit" />
+        <t-image class="ticket-icon" src="/static/icons/note.png" mode="aspectFit" />
         <view class="ticket-label">备注</view>
         <view class="ticket-value">{{ note }}</view>
       </view>
@@ -47,10 +50,12 @@
     />
 
     <view class="share-actions">
-      <button class="button wechat-action" open-type="share" @click="persistFlow">
-        <image class="button-icon" src="/static/icons/wechat.png" mode="aspectFit" />
-        <text>分享给好友或群聊</text>
-      </button>
+      <t-button class="button wechat-action" open-type="share" @tap="persistFlow">
+        <view class="wechat-action-content">
+          <t-image class="button-icon" src="/static/icons/wechat.png" mode="aspectFit" />
+          <text>分享给好友或群聊</text>
+        </view>
+      </t-button>
     </view>
   </view>
 </template>
@@ -58,6 +63,7 @@
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import {
   AUTH_CHANGE_EVENT,
   dataOf,
@@ -81,9 +87,10 @@ import {
 } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import { requestSignupReviewedSubscription } from "../../utils/subscribeMessages";
+import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 export default {
-  components: { AuthIdentityBar, RoleSeatBoard },
+  components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost },
   data() {
     return {
       store: null,
@@ -538,7 +545,7 @@ export default {
               : "选择角色提交申请，车头确认后可进入相册。";
         }
       } catch (error) {
-        uni.showToast({ title: "车局加载失败", icon: "none" });
+        showToast({ title: "车局加载失败", icon: "none" });
       }
     },
     redirectAlbumMemberIfNeeded() {
@@ -562,7 +569,7 @@ export default {
         return Promise.resolve(true);
       }
       return new Promise((resolve) => {
-        uni.showModal({
+        showModal({
           title: "确认反串",
           content: "反串可能会影响游戏体验，是否确认",
           confirmText: "确认",
@@ -583,7 +590,7 @@ export default {
       const currentRoleName = this.role.name || "当前角色";
       const nextRoleName = role.name || "新角色";
       return new Promise((resolve) => {
-        uni.showModal({
+        showModal({
           title: "确认换选",
           content: `将从 ${currentRoleName} 换到 ${nextRoleName}，原角色会释放，是否继续？`,
           confirmText: "换选",
@@ -616,15 +623,15 @@ export default {
         }
       }
       if (targetRole.taken && !targetRole.mine) {
-        uni.showToast({ title: "这个角色已被选择", icon: "none" });
+        showToast({ title: "这个角色已被选择", icon: "none" });
         return;
       }
       if (!targetRole.claimable && !targetRole.mine) {
-        uni.showToast({ title: "这个角色暂不可选择", icon: "none" });
+        showToast({ title: "这个角色暂不可选择", icon: "none" });
         return;
       }
       if (targetRole.taken && targetRole.mine) {
-        uni.showToast({ title: "这是你当前选择的角色", icon: "none" });
+        showToast({ title: "这是你当前选择的角色", icon: "none" });
         return;
       }
       const switchConfirmed = await this.confirmSwitchRole(targetRole);
@@ -678,7 +685,7 @@ export default {
     },
     async confirmRole() {
       if (!this.pendingRole) {
-        uni.showToast({ title: "先选择一个可选角色", icon: "none" });
+        showToast({ title: "先选择一个可选角色", icon: "none" });
         return;
       }
       const auth = await this.ensureSeatSelectionLogin({
@@ -713,7 +720,7 @@ export default {
       this.selectedRoles = mergeSelectedRoles(rest, [this.pendingRole]);
       this.pendingRole = null;
       this.persistFlow();
-      uni.showToast({ title: "角色已选择", icon: "none" });
+      showToast({ title: "角色已选择", icon: "none" });
     },
     async claimSeat(role) {
       this.statusText = "";
@@ -737,7 +744,7 @@ export default {
             return;
           }
           this.statusText = "已上车。";
-          uni.showToast({
+          showToast({
             title: "已上车",
             icon: "none"
           });
@@ -754,7 +761,7 @@ export default {
         this.pendingRole = null;
         await this.loadPublishedSession(this.sessionId);
         this.statusText = "已提交申请，等待车头审核。";
-        uni.showToast({
+        showToast({
           title: "已提交申请",
           icon: "none"
         });
@@ -780,7 +787,7 @@ export default {
           return;
         }
         if (!npcRole.claimable) {
-          uni.showToast({ title: "这个NPC角色已被选择", icon: "none" });
+          showToast({ title: "这个NPC角色已被选择", icon: "none" });
           return;
         }
       }
@@ -796,7 +803,7 @@ export default {
         if (this.isAlbumEntry) {
           uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
         } else {
-          uni.showToast({ title: "这是你的NPC角色", icon: "none" });
+          showToast({ title: "这是你的NPC角色", icon: "none" });
         }
         return;
       }
@@ -827,12 +834,12 @@ export default {
             uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
             return;
           }
-          uni.showToast({ title: "已选择NPC角色", icon: "none" });
+          showToast({ title: "已选择NPC角色", icon: "none" });
           return;
         }
         if (result.join_result === "pending_review") {
           this.statusText = "已提交NPC角色申请，等待车头审核。";
-          uni.showToast({ title: "已提交申请", icon: "none" });
+          showToast({ title: "已提交申请", icon: "none" });
           requestSignupReviewedSubscription();
         }
       } catch (error) {
@@ -979,5 +986,13 @@ export default {
 
 .wechat-action {
   width: 100%;
+}
+
+.wechat-action-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14rpx;
+  min-width: 0;
 }
 </style>

@@ -1,6 +1,7 @@
 <template>
   <view class="page flow-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="flow-top">
       <view class="step-label">2 / 4</view>
@@ -9,7 +10,13 @@
     </view>
 
     <view class="list-surface">
-      <view v-if="statusText" class="notice">{{ statusText }}</view>
+      <t-notice-bar
+        v-if="statusText"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        :content="statusText"
+      />
       <view
         v-for="script in scripts"
         :key="script.id"
@@ -21,11 +28,13 @@
           <view class="script-head">
             <view class="script-title">{{ script.name }}</view>
             <view class="script-count">{{ script.player_count || 0 }}人</view>
-            <view class="script-tag">{{ scriptMood(script) }}</view>
+            <t-tag class="script-tag" theme="primary" variant="light" size="small">
+              {{ scriptMood(script) }}
+            </t-tag>
           </view>
           <view class="script-summary">{{ script.summary_no_spoiler || "暂无简介" }}</view>
         </view>
-        <image
+        <t-image
           class="script-status-icon"
           :src="isSelectedScript(script) ? '/static/icons/check.png' : '/static/icons/chevron.png'"
           mode="aspectFit"
@@ -34,15 +43,17 @@
     </view>
 
     <view class="bottom-action">
-      <button class="button" :class="{ disabled: !selectedScript }" @click="goNext">下一步</button>
+      <t-button class="button" :class="{ disabled: !selectedScript }" @tap="goNext">下一步</t-button>
     </view>
   </view>
 </template>
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, queryString, request } from "../../utils/api";
 import { displayTags, firstTag, readCreateFlow, writeCreateFlow } from "../../utils/createFlow";
+import { showToast } from "../../utils/tdesignFeedback";
 
 const FALLBACK_SCRIPTS = [
   {
@@ -84,7 +95,7 @@ const FALLBACK_SCRIPTS = [
 ];
 
 export default {
-  components: { AuthIdentityBar },
+  components: { AuthIdentityBar, FeedbackHost },
   data() {
     return {
       keyword: "",
@@ -170,7 +181,7 @@ export default {
     },
     async goNext() {
       if (!this.selectedScript) {
-        uni.showToast({ title: "先选择一个剧本", icon: "none" });
+        showToast({ title: "先选择一个剧本", icon: "none" });
         return;
       }
       const query = queryString({ scriptId: this.selectedScript.id });

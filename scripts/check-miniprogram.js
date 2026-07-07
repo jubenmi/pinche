@@ -2,10 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
+const apiServerPath = path.join(root, "apps/api/src/server.js");
 const miniprogramRoot = path.join(root, "apps/miniprogram");
 const srcRoot = path.join(miniprogramRoot, "src");
 const pagesJsonPath = path.join(srcRoot, "pages.json");
 const manifestJsonPath = path.join(srcRoot, "manifest.json");
+const miniprogramPackageJsonPath = path.join(miniprogramRoot, "package.json");
 const miniprogramProjectConfigPath = path.join(miniprogramRoot, "project.config.json");
 const miniprogramPrivateProjectConfigPath = path.join(
   miniprogramRoot,
@@ -27,6 +29,79 @@ const localFontLimitBytes = 200 * 1024;
 const localMediaPattern = /\.(?:png|jpe?g|gif|webp|mp3|m4a|aac|wav|mp4|mov)$/i;
 const localFontPattern = /\.(?:ttf|otf|woff2?|eot)$/i;
 const brandFontPath = "static/fonts/pinche-brand.ttf";
+const tdesignPackageName = "tdesign-miniprogram";
+const tdesignDistPath = path.join(root, "node_modules", tdesignPackageName, "miniprogram_dist");
+const tdesignWxcomponentsPath = path.join(srcRoot, "wxcomponents", tdesignPackageName);
+const tdesignDirectComponentNames = [
+  "action-sheet",
+  "back-top",
+  "badge",
+  "button",
+  "cell",
+  "collapse",
+  "date-time-picker",
+  "dialog",
+  "empty",
+  "form",
+  "icon",
+  "image",
+  "input",
+  "loading",
+  "notice-bar",
+  "picker",
+  "popup",
+  "search",
+  "segmented",
+  "skeleton",
+  "steps",
+  "sticky",
+  "switch",
+  "tabs",
+  "tag",
+  "textarea",
+  "toast"
+];
+const tdesignSupportComponentNames = [
+  "cell-group",
+  "collapse-panel",
+  "form-item",
+  "grid",
+  "grid-item",
+  "overlay",
+  "picker-item",
+  "step-item",
+  "tab-panel",
+  "transition"
+];
+const tdesignRequiredBaseFolders = ["common"];
+const tdesignRequiredRuntimePaths = [
+  ".wechatide.ib.json",
+  "index.js",
+  "mixins/transition.js",
+  "mixins/using-config.js",
+  "mixins/using-custom-navbar.js",
+  "config-provider/config-store.js",
+  "config-provider/reactive-state.js",
+  "config-provider/use-config.js",
+  "locale/zh_CN.js",
+  "miniprogram_npm/dayjs"
+];
+const tdesignNativePrimitiveTags = ["button", "image", "input", "picker", "switch", "textarea"];
+const tdesignRequiredHighPriorityTags = ["t-badge", "t-empty", "t-notice-bar", "t-search", "t-tag"];
+const tdesignRequiredMediumPriorityTags = [
+  "t-action-sheet",
+  "t-dialog",
+  "t-popup",
+  "t-segmented",
+  "t-tab-panel",
+  "t-tabs",
+  "t-toast"
+];
+const tdesignDisallowedSourceTags = ["t-avatar"];
+const tdesignSourceScanSubdirs = ["pages", "components", "extensions"];
+const allowedFeedbackApiFiles = new Set([
+  "apps/miniprogram/src/utils/tdesignFeedback.js"
+]);
 
 function fail(message) {
   console.error(message);
@@ -51,6 +126,331 @@ function relativePath(file) {
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function collectVueFiles(dir) {
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+  return walkFiles(dir).filter((file) => /\.vue$/i.test(file));
+}
+
+function sourceScanVueFiles() {
+  return tdesignSourceScanSubdirs.flatMap((subdir) => collectVueFiles(path.join(srcRoot, subdir)));
+}
+
+function sourceAppCodeFiles() {
+  return walkFiles(srcRoot).filter((file) => {
+    const relative = path.relative(srcRoot, file).replaceAll(path.sep, "/");
+    return (
+      /\.(?:vue|js)$/i.test(file) &&
+      !relative.startsWith("uni_modules/")
+    );
+  });
+}
+
+function tagComponentName(tagName) {
+  return tagName.replace(/^t-/, "");
+}
+
+function componentTagName(componentName) {
+  return `t-${componentName}`;
+}
+
+function tdesignComponentPath(componentName) {
+  return `/wxcomponents/${tdesignPackageName}/${componentName}/${componentName}`;
+}
+
+function builtTdesignComponentPath(componentName) {
+  return `/wxcomponents/${tdesignPackageName}/${componentName}/${componentName}`;
+}
+
+function resolveBuiltComponentBasePath(buildRoot, ownerJsonPath, componentPath) {
+  const normalized = componentPath.replace(/^\/+/, "").replace(/\\/g, "/");
+  if (componentPath.startsWith("/")) {
+    return path.join(buildRoot, normalized);
+  }
+  return path.resolve(path.dirname(ownerJsonPath), normalized);
+}
+
+function expectedBuiltTdesignComponentBasePath(buildRoot, componentName) {
+  return path.join(
+    buildRoot,
+    "wxcomponents",
+    tdesignPackageName,
+    componentName,
+    componentName
+  );
+}
+
+function assertBuiltComponentFilesExist(buildRoot, ownerJsonPath, componentPath, owner) {
+  const componentBasePath = resolveBuiltComponentBasePath(buildRoot, ownerJsonPath, componentPath);
+  for (const extension of [".json", ".wxml", ".js"]) {
+    const file = `${componentBasePath}${extension}`;
+    if (!fs.existsSync(file)) {
+      fail(`${owner} points to missing built component file: ${relativePath(file)}`);
+    }
+  }
+}
+
+function builtTdesignTagsForJson(jsonPath) {
+  const wxmlPath = jsonPath.replace(/\.json$/i, ".wxml");
+  if (!fs.existsSync(wxmlPath)) {
+    return [];
+  }
+  return extractTdesignTags(fs.readFileSync(wxmlPath, "utf8"));
+}
+
+function extractTdesignTags(source) {
+  const tags = new Set();
+  const tagPattern = /<\s*(t-[a-z0-9-]+)(?=[\s>/])/g;
+  for (const match of source.matchAll(tagPattern)) {
+    tags.add(match[1]);
+  }
+  return tags;
+}
+
+function sourceTdesignTags(files) {
+  const tags = new Set();
+  for (const file of files) {
+    const source = fs.readFileSync(file, "utf8");
+    for (const tag of extractTdesignTags(source)) {
+      tags.add(tag);
+    }
+  }
+  return [...tags].sort();
+}
+
+function assertNoTdesignAvatarImageTags(files) {
+  const failures = [];
+  const pattern = /<\s*t-image(?=[\s>/])[^>]*\bclass\s*=\s*["'][^"']*avatar[^"']*["'][^>]*>/g;
+  for (const file of files) {
+    const source = fs.readFileSync(file, "utf8");
+    if (pattern.test(source)) {
+      failures.push(`${relativePath(file)} must use native <image> for avatar rendering`);
+    }
+  }
+  for (const failure of failures) {
+    fail(failure);
+  }
+}
+
+function isAllowedNativeAvatarPrimitiveTag(tag, tagSource) {
+  const classMatch = tagSource.match(/\bclass\s*=\s*["']([^"']+)["']/);
+  if (!classMatch) {
+    return false;
+  }
+  const className = classMatch[1];
+  if (tag === "image") {
+    return /\bavatar\b/.test(className) || /avatar/.test(className) || /photo-preview-image/.test(className);
+  }
+  if (tag === "button") {
+    return /profile-avatar-button/.test(className) || /auth-profile-trigger/.test(className);
+  }
+  if (tag === "input") {
+    return /\bprofile-nickname-input\b/.test(className) && /\btype\s*=\s*["']nickname["']/.test(tagSource);
+  }
+  return false;
+}
+
+function assertNoNativeTdesignPrimitiveTags(files) {
+  const failures = [];
+  for (const file of files) {
+    const source = fs.readFileSync(file, "utf8");
+    for (const tag of tdesignNativePrimitiveTags) {
+      const pattern = new RegExp(`<\\s*${tag}(?=[\\s>/])[^>]*>`, "g");
+      for (const match of source.matchAll(pattern)) {
+        if (isAllowedNativeAvatarPrimitiveTag(tag, match[0])) {
+          continue;
+        }
+        failures.push(`${relativePath(file)} still uses native <${tag}>`);
+        break;
+      }
+    }
+  }
+  for (const failure of failures) {
+    fail(failure);
+  }
+}
+
+function assertNoDirectFeedbackApis(files) {
+  const pattern = /\buni\.(showToast|showModal|showActionSheet)\s*\(/g;
+  for (const file of files) {
+    const relative = relativePath(file).replaceAll(path.sep, "/");
+    if (allowedFeedbackApiFiles.has(relative)) {
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    for (const match of source.matchAll(pattern)) {
+      fail(`${relative} must use utils/tdesignFeedback.js instead of uni.${match[1]}`);
+    }
+  }
+}
+
+function tdesignComponentJsonPath(componentName) {
+  return path.join(tdesignDistPath, componentName, `${componentName}.json`);
+}
+
+function componentNameFromTdesignPath(value) {
+  const normalized = value.replace(/\\/g, "/");
+  const match = normalized.match(/(?:^|\/)([a-z0-9-]+)\/[a-z0-9-]+$/);
+  return match?.[1] || "";
+}
+
+function tdesignComponentDependencies(componentName, seen = new Set()) {
+  if (seen.has(componentName)) {
+    return seen;
+  }
+  seen.add(componentName);
+  const componentJsonPath = tdesignComponentJsonPath(componentName);
+  if (!fs.existsSync(componentJsonPath)) {
+    return seen;
+  }
+  const componentJson = readJson(componentJsonPath);
+  for (const dependencyPath of Object.values(componentJson.usingComponents || {})) {
+    const dependencyName = componentNameFromTdesignPath(dependencyPath);
+    if (dependencyName) {
+      tdesignComponentDependencies(dependencyName, seen);
+    }
+  }
+  return seen;
+}
+
+function requiredTdesignFoldersForTags(tags) {
+  const folders = new Set(tdesignRequiredBaseFolders);
+  for (const tag of tags) {
+    const componentName = tagComponentName(tag);
+    for (const folder of tdesignComponentDependencies(componentName)) {
+      folders.add(folder);
+    }
+  }
+  return [...folders].sort();
+}
+
+function extractStringArrayConst(source, constName) {
+  const pattern = new RegExp(`const\\s+${constName}\\s*=\\s*\\[([\\s\\S]*?)\\]`);
+  const body = source.match(pattern)?.[1] || "";
+  return [...body.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+}
+
+function assertTdesignMigrationConfig(pagesJson) {
+  if (!fs.existsSync(miniprogramPackageJsonPath)) {
+    fail("Mini-program package.json is missing");
+    return;
+  }
+  const miniprogramPackageJson = readJson(miniprogramPackageJsonPath);
+  if (!miniprogramPackageJson.dependencies?.[tdesignPackageName]) {
+    fail(`Mini-program package.json must depend on ${tdesignPackageName}`);
+  }
+  if (!fs.existsSync(tdesignDistPath)) {
+    fail(`Installed ${tdesignPackageName} package is missing miniprogram_dist`);
+    return;
+  }
+
+  const appVueFiles = sourceScanVueFiles();
+  const usedTags = sourceTdesignTags(appVueFiles);
+  assertNoTdesignAvatarImageTags(appVueFiles);
+  for (const tag of tdesignDisallowedSourceTags) {
+    if (usedTags.includes(tag)) {
+      fail(`${tag} is disabled for avatar rendering; use native image containers instead`);
+    }
+  }
+  for (const tag of tdesignRequiredHighPriorityTags) {
+    if (!usedTags.includes(tag)) {
+      fail(`High-priority TDesign migration must use ${tag}`);
+    }
+  }
+  for (const tag of tdesignRequiredMediumPriorityTags) {
+    if (!usedTags.includes(tag)) {
+      fail(`Medium-priority TDesign migration must use ${tag}`);
+    }
+  }
+  const registeredTdesignComponents = {
+    ...(pagesJson.globalStyle?.usingComponents || {}),
+    ...Object.assign(
+      {},
+      ...(pagesJson.pages || []).map((page) => page.style?.usingComponents || {})
+    )
+  };
+  const globalTdesignComponents = pagesJson.globalStyle?.usingComponents || {};
+  const adminCatalogPage = pagesJson.pages?.find((page) => page.path === "pages/admin/catalog") || {};
+  const adminCatalogComponents = adminCatalogPage.style?.usingComponents || {};
+  for (const tabTag of ["t-tabs", "t-tab-panel"]) {
+    if (globalTdesignComponents[tabTag]) {
+      fail(`${tabTag} must be registered only on pages/admin/catalog to avoid global DevTools component resolution noise`);
+    }
+    if (adminCatalogComponents[tabTag] !== tdesignComponentPath(tagComponentName(tabTag))) {
+      fail(`pages/admin/catalog must register ${tabTag}: ${tdesignComponentPath(tagComponentName(tabTag))}`);
+    }
+  }
+  for (const tag of usedTags) {
+    const componentName = tagComponentName(tag);
+    const expectedPath = tdesignComponentPath(componentName);
+    if (registeredTdesignComponents[tag] !== expectedPath) {
+      fail(`pages.json usingComponents must register ${tag}: ${expectedPath}`);
+    }
+  }
+
+  const allowedComponentNames = new Set([
+    ...tdesignDirectComponentNames,
+    ...tdesignSupportComponentNames
+  ]);
+  for (const [tag, componentPath] of Object.entries(registeredTdesignComponents)) {
+    if (!tag.startsWith("t-")) {
+      continue;
+    }
+    const componentName = tagComponentName(tag);
+    if (!allowedComponentNames.has(componentName)) {
+      fail(`pages.json registers unapproved TDesign component ${tag}`);
+    }
+    if (componentPath !== tdesignComponentPath(componentName)) {
+      fail(`pages.json has an unexpected TDesign path for ${tag}: ${componentPath}`);
+    }
+  }
+
+  const viteConfigSource = fs.existsSync(viteConfigPath)
+    ? fs.readFileSync(viteConfigPath, "utf8")
+    : "";
+  if (
+    !viteConfigSource.includes("tdesignPackageDistCandidates") ||
+    !viteConfigSource.includes("workspaceRoot")
+  ) {
+    fail("Mini-program Vite build must resolve TDesign from hoisted workspace node_modules as well as package-local node_modules");
+  }
+  const copiedFolders = new Set(extractStringArrayConst(viteConfigSource, "tdesignComponentFoldersToCopy"));
+  for (const tag of tdesignDisallowedSourceTags) {
+    const folder = tagComponentName(tag);
+    if (copiedFolders.has(folder)) {
+      fail(`Vite TDesign copy list must not include disabled component ${folder}`);
+    }
+  }
+  for (const folder of requiredTdesignFoldersForTags(usedTags)) {
+    if (!copiedFolders.has(folder)) {
+      fail(`Vite TDesign copy list must include ${folder}`);
+    }
+  }
+  if (copiedFolders.has("miniprogram_npm")) {
+    fail("Vite TDesign copy list must not copy the whole miniprogram_npm folder");
+  }
+  const copiedRuntimePaths = new Set(
+    extractStringArrayConst(viteConfigSource, "tdesignRuntimePathsToCopy")
+  );
+  for (const runtimePath of tdesignRequiredRuntimePaths) {
+    if (!copiedRuntimePaths.has(runtimePath)) {
+      fail(`Vite TDesign runtime copy list must include ${runtimePath}`);
+    }
+  }
+
+  assertNoNativeTdesignPrimitiveTags(appVueFiles);
+  assertNoDirectFeedbackApis(sourceAppCodeFiles());
+
+  const segmentedPropsPath = path.join(tdesignWxcomponentsPath, "segmented/props.js");
+  const segmentedPropsSource = fs.existsSync(segmentedPropsPath)
+    ? fs.readFileSync(segmentedPropsPath, "utf8")
+    : "";
+  if (!segmentedPropsSource.includes("options:{type:Array,value:[]}")) {
+    fail("TDesign segmented local props must declare options as Array so native array bindings are accepted");
+  }
 }
 
 function readEnv(file) {
@@ -134,6 +534,11 @@ function builtMainPackageSize(buildRoot) {
 function assertMinifiedEnabled(file, setting) {
   if (setting?.minified !== true) {
     fail(`${relativePath(file)} must enable setting.minified for WeChat JS compression`);
+  }
+  if (setting?.minifyWXML === true) {
+    fail(
+      `${relativePath(file)} must not enable setting.minifyWXML because WeChat DevTools Nightly crashes during WXML precompile`
+    );
   }
 }
 
@@ -235,6 +640,88 @@ function assertNoDcloudPreloadImageCode(rootDir, label) {
   }
 }
 
+function assertBuiltTdesignUsingComponentPaths(buildRoot) {
+  if (!fs.existsSync(buildRoot)) {
+    return;
+  }
+  const builtAppJsonPath = path.join(buildRoot, "app.json");
+  const globalUsingComponents = fs.existsSync(builtAppJsonPath)
+    ? readJson(builtAppJsonPath).usingComponents || {}
+    : {};
+  for (const file of walkFiles(buildRoot)) {
+    const relative = path.relative(buildRoot, file).replaceAll(path.sep, "/");
+    if (
+      !/\.json$/i.test(file) ||
+      relative.startsWith("miniprogram_npm/") ||
+      relative.startsWith("node_modules/")
+    ) {
+      continue;
+    }
+    const json = readJson(file);
+    if (relative === "app.json") {
+      for (const [tag, componentPath] of Object.entries(json.usingComponents || {})) {
+        if (!tag.startsWith("t-") || !componentPath.includes(tdesignPackageName)) {
+          continue;
+        }
+        const componentName = tagComponentName(tag);
+        const componentBasePath = resolveBuiltComponentBasePath(buildRoot, file, componentPath);
+        if (componentBasePath !== expectedBuiltTdesignComponentBasePath(buildRoot, componentName)) {
+          fail(`Built app.json must register ${tag} from wxcomponents/tdesign-miniprogram`);
+        }
+        assertBuiltComponentFilesExist(buildRoot, file, componentPath, `Built app.json ${tag}`);
+      }
+      continue;
+    }
+    for (const tag of builtTdesignTagsForJson(file)) {
+      const expectedPath = builtTdesignComponentPath(tagComponentName(tag));
+      const componentPath = json.usingComponents?.[tag] || globalUsingComponents[tag];
+      if (!componentPath) {
+        fail(
+          `Built ${relative} must register ${tag} locally or globally: ${expectedPath}`
+        );
+        continue;
+      }
+      const componentBasePath = resolveBuiltComponentBasePath(buildRoot, file, componentPath);
+      if (componentBasePath !== expectedBuiltTdesignComponentBasePath(buildRoot, tagComponentName(tag))) {
+        fail(`Built ${relative} must resolve ${tag} to ${expectedPath}`);
+      }
+      assertBuiltComponentFilesExist(buildRoot, file, componentPath, `Built ${relative} ${tag}`);
+    }
+    for (const [tag, componentPath] of Object.entries(json.usingComponents || {})) {
+      if (!tag.startsWith("t-") || !componentPath.includes(tdesignPackageName)) {
+        continue;
+      }
+      const expectedPath = builtTdesignComponentPath(tagComponentName(tag));
+      const componentBasePath = resolveBuiltComponentBasePath(buildRoot, file, componentPath);
+      if (componentBasePath !== expectedBuiltTdesignComponentBasePath(buildRoot, tagComponentName(tag))) {
+        fail(
+          `Built ${relative} must resolve ${tag} to ${expectedPath}`
+        );
+      }
+      assertBuiltComponentFilesExist(buildRoot, file, componentPath, `Built ${relative} ${tag}`);
+    }
+  }
+}
+
+function assertTdesignTslibCompatShims(tdesignBuildRoot, label) {
+  if (!fs.existsSync(tdesignBuildRoot)) {
+    return;
+  }
+  for (const file of walkFiles(tdesignBuildRoot)) {
+    if (!/\.js$/i.test(file) || /(?:^|\/)tslib\.js$/i.test(file.replaceAll(path.sep, "/"))) {
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    if (!/\bfrom\s*["']tslib["']/.test(source)) {
+      continue;
+    }
+    const shimPath = path.join(path.dirname(file), "tslib.js");
+    if (!fs.existsSync(shimPath)) {
+      fail(`${label} must include a tslib.js shim next to ${relativePath(file)}`);
+    }
+  }
+}
+
 if (!fs.existsSync(pagesJsonPath)) {
   fail("apps/miniprogram/src/pages.json is missing");
 } else {
@@ -258,6 +745,9 @@ if (!fs.existsSync(pagesJsonPath)) {
     if (srcProjectConfig.appid !== productionWechatAppId) {
       fail(`Miniprogram src/project.config.json must use appid ${productionWechatAppId}`);
     }
+    if (srcProjectConfig.miniprogramRoot) {
+      fail("Miniprogram src/project.config.json must not set miniprogramRoot because DevTools opens the generated dist/dev/mp-weixin project directly");
+    }
   }
   if (fs.existsSync(manifestJsonPath)) {
     manifestJson = readJson(manifestJsonPath);
@@ -269,6 +759,7 @@ if (!fs.existsSync(pagesJsonPath)) {
 
   const pagesJson = readJson(pagesJsonPath);
   const pages = pagesJson.pages || [];
+  assertTdesignMigrationConfig(pagesJson);
 
   if (manifestJson?.["mp-weixin"]?.lazyCodeLoading !== "requiredComponents") {
     fail('Miniprogram manifest must enable lazyCodeLoading: "requiredComponents" for component lazy injection');
@@ -292,15 +783,36 @@ if (!fs.existsSync(pagesJsonPath)) {
   assertNoDcloudPreloadImageCode(miniprogramDevRoot, "Dev package");
   assertNoDcloudPreloadImageCode(miniprogramBuildRoot, "Build package");
 
-  if (fs.existsSync(miniprogramBuildRoot)) {
-    const builtAppJsonPath = path.join(miniprogramBuildRoot, "app.json");
+  for (const [packageRoot, packageLabel] of [
+    [miniprogramDevRoot, "Dev package"],
+    [miniprogramBuildRoot, "Build package"]
+  ]) {
+    if (!fs.existsSync(packageRoot)) {
+      continue;
+    }
+    const builtAppJsonPath = path.join(packageRoot, "app.json");
     if (fs.existsSync(builtAppJsonPath)) {
       const builtAppJson = readJson(builtAppJsonPath);
       if (builtAppJson.lazyCodeLoading !== "requiredComponents") {
-        fail('Built app.json must include lazyCodeLoading: "requiredComponents"');
+        fail(`${packageLabel} app.json must include lazyCodeLoading: "requiredComponents"`);
       }
     }
+    assertBuiltTdesignUsingComponentPaths(packageRoot);
+    assertTdesignTslibCompatShims(
+      path.join(packageRoot, "node_modules/tdesign-miniprogram/miniprogram_dist"),
+      `${packageLabel} TDesign node_modules package`
+    );
+    assertTdesignTslibCompatShims(
+      path.join(packageRoot, "miniprogram_npm/tdesign-miniprogram"),
+      `${packageLabel} TDesign miniprogram_npm package`
+    );
+    assertTdesignTslibCompatShims(
+      path.join(packageRoot, "wxcomponents/tdesign-miniprogram"),
+      `${packageLabel} TDesign wxcomponents package`
+    );
+  }
 
+  if (fs.existsSync(miniprogramBuildRoot)) {
     const mainPackageSize = builtMainPackageSize(miniprogramBuildRoot);
     if (mainPackageSize > mainPackageLimitBytes) {
       fail(
@@ -511,7 +1023,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (
     !sessionCalendarSource.includes('v-if="item.canManage"') ||
     !sessionCalendarSource.includes('@tap.stop="goManage(item.sessionId)"') ||
-    !sessionCalendarSource.includes(">管理</button>")
+    !(
+      sessionCalendarSource.includes(">管理</button>") ||
+      sessionCalendarSource.includes(">管理</t-button>")
+    )
   ) {
     fail("Session calendar cards must expose a direct management button when the user can manage the session");
   }
@@ -839,7 +1354,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     : "";
   for (const requiredSetupText of [
     'mode="date"',
-    'mode="time"',
+    ':mode="[\'hour\', \'minute\']"',
     "pinnedMessageText",
     "defaultPinnedMessage",
     "createPublishedSession",
@@ -877,18 +1392,20 @@ if (!fs.existsSync(pagesJsonPath)) {
   for (const requiredSetupSettingsSwitchText of [
     "setting-switch-row",
     "setting-switch-meta",
-    "<switch",
     'color="#1f7a68"',
-    ':checked="joinPolicy === \'review_required\'"',
+    ':value="joinPolicy === \'review_required\'"',
     '@change="setJoinPolicy($event.detail.value ? \'review_required\' : \'direct\')"',
-    ':checked="joinPhoneRequired"',
+    ':value="joinPhoneRequired"',
     "@change=\"setJoinPhoneRequired($event.detail.value)\"",
-    ':checked="npcJoinEnabled"',
+    ':value="npcJoinEnabled"',
     "@change=\"setNpcJoinEnabled($event.detail.value)\""
   ]) {
     if (!setupSource.includes(requiredSetupSettingsSwitchText)) {
-      fail(`Setup step settings must use unified native switches: ${requiredSetupSettingsSwitchText}`);
+      fail(`Setup step settings must use unified switch controls: ${requiredSetupSettingsSwitchText}`);
     }
+  }
+  if (!setupSource.includes("<switch") && !setupSource.includes("<t-switch")) {
+    fail("Setup step settings must use switch controls");
   }
   for (const forbiddenSetupSettingsToggleText of [
     "policy-toggle",
@@ -1098,18 +1615,20 @@ if (!fs.existsSync(pagesJsonPath)) {
   for (const requiredManageSettingsSwitchText of [
     "setting-switch-row",
     "setting-switch-meta",
-    "<switch",
     'color="#1f7a68"',
-    ':checked="joinPolicy === \'review_required\'"',
+    ':value="joinPolicy === \'review_required\'"',
     '@change="setJoinPolicy($event.detail.value ? \'review_required\' : \'direct\')"',
-    ':checked="joinPhoneRequired"',
+    ':value="joinPhoneRequired"',
     "@change=\"setJoinPhoneRequired($event.detail.value)\"",
-    ':checked="npcJoinEnabled"',
+    ':value="npcJoinEnabled"',
     "@change=\"setNpcJoinEnabled($event.detail.value)\""
   ]) {
     if (!manageSource.includes(requiredManageSettingsSwitchText)) {
-      fail(`Manage page settings must use unified native switches: ${requiredManageSettingsSwitchText}`);
+      fail(`Manage page settings must use unified switch controls: ${requiredManageSettingsSwitchText}`);
     }
+  }
+  if (!manageSource.includes("<switch") && !manageSource.includes("<t-switch")) {
+    fail("Manage page settings must use switch controls");
   }
   for (const forbiddenManageSettingsToggleText of [
     "settings-toggle",
@@ -1161,6 +1680,9 @@ if (!fs.existsSync(pagesJsonPath)) {
 
   const albumSource = fs.existsSync(path.join(srcRoot, "pages/session/album.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/session/album.vue"), "utf8")
+    : "";
+  const apiServerSource = fs.existsSync(apiServerPath)
+    ? fs.readFileSync(apiServerPath, "utf8")
     : "";
   for (const requiredAlbumRoleSeatBoardText of [
     "albumTagSections",
@@ -1304,7 +1826,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     !/(^|[;{\n\r])\s*bottom:\s*0/.test(albumFloatingToolbarStyle) ||
     !/(^|[;{\n\r])\s*left:\s*0/.test(albumFloatingToolbarStyle) ||
     !/(^|[;{\n\r])\s*right:\s*0/.test(albumFloatingToolbarStyle) ||
-    !/(^|[;{\n\r])\s*z-index:\s*1000/.test(albumFloatingToolbarStyle) ||
+    !/(^|[;{\n\r])\s*z-index:\s*12000/.test(albumFloatingToolbarStyle) ||
     !/(^|[;{\n\r])\s*display:\s*flex/.test(albumFloatingToolbarStyle) ||
     !/(^|[;{\n\r])\s*gap:/.test(albumFloatingToolbarStyle) ||
     !albumFloatingToolbarStyle.includes("box-shadow:")
@@ -1327,6 +1849,23 @@ if (!fs.existsSync(pagesJsonPath)) {
     !selectedTagTargetCountSource.includes("return this.selectedTaggablePhotoIds.length")
   ) {
     fail("Album bulk tag button must become active after selecting taggable photos");
+  }
+  const openDownloadSelectionModeSource = methodBody(albumSource, "openDownloadSelectionMode");
+  const openTagSelectionModeSource = methodBody(albumSource, "openTagSelectionMode");
+  for (const [modeName, modeSource] of [
+    ["download", openDownloadSelectionModeSource],
+    ["tag", openTagSelectionModeSource]
+  ]) {
+    for (const requiredSelectionEntryText of [
+      "this.closePhotoPreview()",
+      "this.tagSheetPhoto = null",
+      "this.bulkTagging = false",
+      "this.selectedTagKeys = []"
+    ]) {
+      if (!modeSource.includes(requiredSelectionEntryText)) {
+        fail(`Album ${modeName} selection mode must clear overlay state before showing the bottom toolbar: ${requiredSelectionEntryText}`);
+      }
+    }
   }
   for (const requiredAlbumAdminParityText of [
     "albumFilterOptions",
@@ -1353,6 +1892,25 @@ if (!fs.existsSync(pagesJsonPath)) {
   ]) {
     if (!albumSource.includes(requiredAlbumAdminParityText)) {
       fail(`Album page must match admin album filter and info affordances: ${requiredAlbumAdminParityText}`);
+    }
+  }
+  for (const requiredAlbumFilterLabel of [
+    '{ value: "all", label: "全部" }',
+    '{ value: "mine", label: "上传" }',
+    '{ value: "withMe", label: "我的" }',
+    '{ value: "untagged", label: "待标" }'
+  ]) {
+    if (!albumSource.includes(requiredAlbumFilterLabel)) {
+      fail(`Album segmented filter labels must stay compact: ${requiredAlbumFilterLabel}`);
+    }
+  }
+  for (const outdatedAlbumFilterLabel of [
+    '{ value: "all", label: "我的照片" }',
+    '{ value: "mine", label: "我上传的" }',
+    '{ value: "untagged", label: "待标注" }'
+  ]) {
+    if (albumSource.includes(outdatedAlbumFilterLabel)) {
+      fail(`Album segmented filter label is too long: ${outdatedAlbumFilterLabel}`);
     }
   }
   for (const outdatedAlbumCardText of [
@@ -1495,7 +2053,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "Album download confirmation must happen before entering downloading state"
   );
   for (const requiredDownloadConfirmText of [
-    "uni.showModal",
+    "showModal",
     "确认下载",
     "confirmText: \"下载\"",
     "resolve(Boolean(result.confirm))",
@@ -1555,33 +2113,207 @@ if (!fs.existsSync(pagesJsonPath)) {
     "loadPublicAlbum",
     "Album onShow must consume photo-preview return before refreshing the public album"
   );
-  for (const requiredWindowedPreviewText of [
+  const albumPageConfig = pages.find((page) => page.path === "pages/session/album") || {};
+  const albumUsingComponents = albumPageConfig.style?.usingComponents || {};
+  if (albumUsingComponents["t-image-viewer"]) {
+    fail("Album page must not register TDesign ImageViewer for the native non-sliding preview");
+  }
+  if (!apiServerSource) {
+    fail("API server source must be readable for album direct media URL checks");
+  }
+  for (const requiredAlbumDirectMediaText of [
+    "const SESSION_ALBUM_DISPLAY_JPG_RULE =",
+    "thumbnail/2048x2048>",
+    "format/jpg/quality/85",
+    "rule: SESSION_ALBUM_DISPLAY_JPG_RULE",
+    "const SESSION_ALBUM_THUMBNAIL_RULE =",
+    "thumbnail/640x640>",
+    "format/jpg/quality/75",
+    'throw forbidden(`${label} is invalid`)',
+    'throw forbidden(`${label} expired`)',
+    "function signSessionAlbumDirectMediaToken(payload)",
+    'signSignedPayload("session-album-media"',
+    "function verifySessionAlbumDirectMediaQuery(photoId, query)",
+    "if (tokenPhotoId !== Number(photoId))",
+    'sessionId: tokenPositiveInteger(payload.sessionId, "sessionId")',
+    'userId: tokenPositiveInteger(payload.userId, "userId")',
+    'photoId: tokenPositiveInteger(payload.photoId, "photoId")',
+    'variant: mediaVariantName(payload.variant || "preview")',
+    'exp: tokenPositiveInteger(payload.exp, "exp")',
+    "function sessionAlbumDirectMediaPath(photoId, album, userId, variant = \"preview\")",
+    'preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview")',
+    'thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")',
+    "data: attachSessionAlbumMediaUrls(album, user.user.id)",
+    'const directMediaToken = url.searchParams.get("token") || ""',
+    "if (directMediaToken)",
+    "if (claims.variant !== variant)",
+    "if (Number(photo.session_id) !== claims.sessionId)",
+    'options.variant === "thumbnail" ? SESSION_ALBUM_THUMBNAIL_RULE : undefined'
+  ]) {
+    if (!apiServerSource.includes(requiredAlbumDirectMediaText)) {
+      fail(`API session album media must expose stable direct-load preview URLs: ${requiredAlbumDirectMediaText}`);
+    }
+  }
+  const sessionAlbumMediaRouteStart = apiServerSource.indexOf("const sessionAlbumMediaPhotoId = idMatch");
+  const sessionAlbumMediaRouteEnd = apiServerSource.indexOf(
+    'if (request.method === "POST" && url.pathname === "/api/users/me/avatar")'
+  );
+  const sessionAlbumMediaRouteSource =
+    sessionAlbumMediaRouteStart >= 0 && sessionAlbumMediaRouteEnd > sessionAlbumMediaRouteStart
+      ? apiServerSource.slice(sessionAlbumMediaRouteStart, sessionAlbumMediaRouteEnd)
+      : "";
+  if (!sessionAlbumMediaRouteSource) {
+    fail("API session album media route must be readable for direct token checks");
+  }
+  assertBefore(
+    sessionAlbumMediaRouteSource,
+    "if (directMediaToken)",
+    "const user = await getAuthUser(request)",
+    "Album direct media token must allow image loading before Authorization is required"
+  );
+  assertBefore(
+    sessionAlbumMediaRouteSource,
+    "verifySessionAlbumDirectMediaQuery",
+    "getVisibleSessionAlbumPhotoForMedia",
+    "Album direct media token must be validated before visible media is served"
+  );
+  for (const requiredPreTdesignPreviewText of [
     'class="photo-preview-mask"',
+    'class="photo-preview-swiper"',
     "<swiper",
+    "<swiper-item",
+    ':current="previewSwiperIndex"',
     '@change="handlePreviewSwiperChange"',
+    '@touchstart="handlePreviewTouchStart"',
+    '@touchmove="handlePreviewTouchMove"',
     '@touchend="handlePreviewTouchEnd"',
-    "previewOverlayVisible",
+    'class="photo-preview-content"',
+    'class="photo-preview-image"',
+    ':src="photoPreviewImageUrl(photo)"',
+    'class="photo-preview-loading"',
+    'class="photo-preview-counter"',
+    "{{ previewCounterText }}",
+    "previewPhotos: []",
+    "previewCurrentIndex: 0",
+    "previewSwiperIndex: 0",
     "previewPreloadRadius: 2",
-    "photoPreviewImageUrl(photo)",
-    "openPhotoPreview",
-    "hydratePreviewWindow",
+    "previewTouchStartX: 0",
+    "previewTouchStartY: 0",
+    "previewCounterText()",
+    "openPhotoPreview(photo)",
     "const previewPhotos = [...this.filteredPhotos].reverse()",
     "this.previewPhotos = previewPhotos",
-    "this.hydratePreviewWindow(currentIndex)",
-    "const start = Math.max(0, centerIndex - this.previewPreloadRadius)",
-    "const end = Math.min(this.previewPhotos.length, centerIndex + this.previewPreloadRadius + 1)"
+    "this.previewCurrentIndex = currentIndex",
+    "this.previewSwiperIndex = currentIndex",
+    "photoPreviewImageUrl(photo)",
+    "hydratePreviewWindow(centerIndex)",
+    "handlePreviewSwiperChange(event)",
+    "handlePreviewTouchStart(event)",
+    "handlePreviewTouchMove()",
+    "handlePreviewTouchEnd(event)",
+    "albumMediaUrlExpiresSoon(path",
+    "refreshAlbumMediaUrlsForPreview()",
+    "shouldRefreshAlbumMediaBeforeDownload(photo, variant)",
+    "this.loadVisiblePhotoMedia(photo, \"preview\")",
+    "preview_load_url",
+    "thumbnail_load_url"
   ]) {
-    if (!albumSource.includes(requiredWindowedPreviewText)) {
-      fail(`Album preview must use a dynamic ±2 filtered-photo preview window: ${requiredWindowedPreviewText}`);
+    if (!albumSource.includes(requiredPreTdesignPreviewText)) {
+      fail(`Album photo preview must match the pre-TDesign overlay logic: ${requiredPreTdesignPreviewText}`);
+    }
+  }
+  const openPhotoPreviewSource = methodBody(albumSource, "openPhotoPreview");
+  if (!openPhotoPreviewSource.includes("const previewPhotos = [...this.filteredPhotos].reverse()")) {
+    fail("Album pre-TDesign preview must build its preview list from the current filtered photos");
+  }
+  if (!openPhotoPreviewSource.includes("this.previewPhotos = previewPhotos")) {
+    fail("Album pre-TDesign preview must assign the filtered preview list");
+  }
+  for (const forbiddenAlbumPreviewText of [
+    "<t-image-viewer",
+    "previewInitialIndex",
+    "previewViewerCustomStyle",
+    "previewImageProps",
+    ":show-index",
+    'close-btn="close"',
+    '@change="handlePreviewImageViewerChange"',
+    "handlePreviewImageViewerChange",
+    "previewContextPhotosForPhoto",
+    "uniquePreviewPhotos",
+    "prewarmPreviewUrls",
+    "hydratePreviewPhoto",
+    "replacePreviewImageUrlAtIndex",
+    "previewImageUrlForIndex(index)",
+    "syncPreviewImageUrlsForWindow(centerIndex)",
+    "this.syncPreviewImageUrlsForWindow",
+    "syncPreviewImageUrlAtIndex(index",
+    "this.syncPreviewImageUrlAtIndex",
+    "preparePhotoPreviewUrls"
+  ]) {
+    if (albumSource.includes(forbiddenAlbumPreviewText)) {
+      fail(`Album pre-TDesign preview must not keep TDesign ImageViewer dynamic-image logic: ${forbiddenAlbumPreviewText}`);
+    }
+  }
+  const mediaUrlForPhotoSource = methodBody(albumSource, "mediaUrlForPhoto");
+  for (const requiredMediaUrlSourceText of [
+    "photo.thumbnail_load_url",
+    "photo.preview_load_url",
+    "photo.thumbnail_url",
+    "photo.preview_url"
+  ]) {
+    if (!mediaUrlForPhotoSource.includes(requiredMediaUrlSourceText)) {
+      fail(`Album media download URL selection must prefer direct-load URLs before expiring legacy URLs: ${requiredMediaUrlSourceText}`);
     }
   }
   if (
-    previewPhotoSource.includes("uni.showLoading") ||
-    previewPhotoSource.includes("uni.previewImage") ||
-    albumSource.includes("preparePhotoPreviewUrls") ||
-    albumSource.includes("this.skipNextAlbumRefreshOnShow = true")
+    albumSource.includes(
+      "this.photoCachedPreviewUrl(photo) || this.visiblePhotoMedia[photo.id]?.thumbnail || \"\""
+    )
   ) {
-    fail("Album preview must open immediately and dynamically hydrate nearby photos instead of blocking on native preview URLs");
+    fail("Album preview image URLs must use a stable placeholder instead of empty strings");
+  }
+  if (
+    albumSource.includes("const previewLoadUrl = photo.preview_load_url || previewUrl || imageUrl")
+  ) {
+    fail("Album direct media URL normalization must not collapse direct-load URLs back to legacy preview URLs");
+  }
+  if (previewPhotoSource.includes("uni.showLoading") || previewPhotoSource.includes("uni.previewImage")) {
+    fail("Album pre-TDesign overlay preview must not use blocking native previewImage");
+  }
+  if (albumSource.includes("createIntersectionObserver(this)")) {
+    fail("Album visible photo observer must not pass the Vue component proxy to createIntersectionObserver");
+  }
+  for (const [packageRoot, packageLabel] of [
+    [miniprogramDevRoot, "Dev package"],
+    [miniprogramBuildRoot, "Build package"]
+  ]) {
+    const builtAlbumWxmlPath = path.join(packageRoot, "pages/session/album.wxml");
+    if (!fs.existsSync(builtAlbumWxmlPath)) {
+      continue;
+    }
+    const builtAlbumWxml = fs.readFileSync(builtAlbumWxmlPath, "utf8");
+    if (builtAlbumWxml.includes("<t-image-viewer")) {
+      fail(`${packageLabel} album preview must not render TDesign ImageViewer`);
+    }
+    if (!builtAlbumWxml.includes("photo-preview-mask") || !builtAlbumWxml.includes("photo-preview-swiper")) {
+      fail(`${packageLabel} album preview must render the pre-TDesign preview mask and swiper`);
+    }
+  }
+  for (const [packageRoot, packageLabel] of [
+    [miniprogramDevRoot, "Dev package"],
+    [miniprogramBuildRoot, "Build package"]
+  ]) {
+    const builtTdesignIconWxssPath = path.join(
+      packageRoot,
+      "wxcomponents/tdesign-miniprogram/icon/icon.wxss"
+    );
+    if (!fs.existsSync(builtTdesignIconWxssPath)) {
+      continue;
+    }
+    const builtTdesignIconWxss = fs.readFileSync(builtTdesignIconWxssPath, "utf8");
+    if (builtTdesignIconWxss.includes("tdesign.gtimg.com")) {
+      fail(`${packageLabel} TDesign icon styles must not load remote icon fonts in the mini-program`);
+    }
   }
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
   if (
@@ -1631,18 +2363,24 @@ if (!fs.existsSync(pagesJsonPath)) {
   for (const requiredAlbumReadOnlyText of [
     'v-if="!timelineMode && (canUpload || photos.length || taggablePhotos.length)"',
     'class="album-filter-panel album-toolbar-filter-panel"',
-    'v-if="!timelineMode && selectionMode"',
-    'v-if="!timelineMode && tagSheetPhoto"'
+    'v-if="!timelineMode && selectionMode"'
   ]) {
     if (!albumSource.includes(requiredAlbumReadOnlyText)) {
       fail(`Album timeline mode must hide member-only controls: ${requiredAlbumReadOnlyText}`);
     }
   }
+  if (
+    !albumSource.includes(':visible="tagSheetVisible"') ||
+    !albumSource.includes("tagSheetVisible()") ||
+    !albumSource.includes("return !this.timelineMode && Boolean(this.tagSheetPhoto)")
+  ) {
+    fail("Album timeline mode must hide member-only controls: tagSheetVisible");
+  }
 
   const apiSource = fs.readFileSync(path.join(srcRoot, "utils/api.js"), "utf8");
   for (const requiredAuthGuardText of [
     "export async function ensureLoggedIn",
-    "uni.showModal",
+    "showModal",
     "uni.login",
     "setAuth(data)",
     "pinche-auth-change"
@@ -1720,6 +2458,25 @@ if (!fs.existsSync(pagesJsonPath)) {
     const identityTapSource = methodBody(identityBarSource, "handleIdentityTap");
     if (!identityTapSource.includes('this.$emit("guest-login")')) {
       fail("Passive guest identity bar must emit a login request when tapped");
+    }
+    if (
+      !identityBarSource.includes("<button") ||
+      !identityBarSource.includes('class="auth-profile-trigger"') ||
+      !identityBarSource.includes("plain") ||
+      !identityBarSource.includes('@tap.stop="handleIdentityTap"')
+    ) {
+      fail("Auth identity bar profile summary must use a native button tap target for opening profile settings");
+    }
+    if (identityBarSource.includes("<t-popup")) {
+      fail("Auth identity bar profile and phone modals must use native profile-mask views instead of TDesign popup");
+    }
+    for (const requiredIdentityModalText of [
+      '<view v-if="profileVisible" class="profile-mask" @tap="handleProfileBackdropTap">',
+      '<view v-if="phoneVisible" class="profile-mask" @tap="handlePhoneBackdropTap">'
+    ]) {
+      if (!identityBarSource.includes(requiredIdentityModalText)) {
+        fail(`Auth identity bar modal must render from native mask: ${requiredIdentityModalText}`);
+      }
     }
     const identityLogoutSource = methodBody(identityBarSource, "logoutProfile");
     if (!identityLogoutSource.includes("goHomeAfterLogout")) {
@@ -1851,6 +2608,33 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!/formatBuildTime/.test(viteConfigSource) || !/padStart\(2,\s*"0"\)/.test(viteConfigSource)) {
     fail("Vite config must format the build time as a stable YYYY-MM-DD HH:mm label");
   }
+  for (const requiredTdesignBuildText of [
+    "buildStart",
+    "generateBundle",
+    "preseedTdesignMiniprogramNpmPackage",
+    "copyTdesignMiniprogramNpmPlugin",
+    "tdesign-miniprogram",
+    "copyTdesignComponentNpmPackage",
+    "preserveExisting: true",
+    "tslib",
+    "isCustomElement"
+  ]) {
+    if (!viteConfigSource.includes(requiredTdesignBuildText)) {
+      fail(`Mini-program Vite build must copy TDesign ImageViewer npm assets: ${requiredTdesignBuildText}`);
+    }
+  }
+  if (viteConfigSource.includes("fs.rmSync(tdesignTarget")) {
+    fail("Mini-program Vite build must not remove the live TDesign miniprogram_npm directory while DevTools may be hot-reloading");
+  }
+  for (const forbiddenTdesignPatchText of [
+    "patchTdesignImageViewerStableImages",
+    "tdesignImageViewerResetObserver",
+    "tdesignImageViewerStableObserver"
+  ]) {
+    if (viteConfigSource.includes(forbiddenTdesignPatchText)) {
+      fail(`Mini-program Vite build must not patch TDesign ImageViewer internals: ${forbiddenTdesignPatchText}`);
+    }
+  }
 
   for (const [label, file] of Object.entries(firstFlowFiles)) {
     const source = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
@@ -1883,6 +2667,10 @@ if (!fs.existsSync(devtoolsHookPath)) {
     "wechatwebdevtools.app/Contents/MacOS/cli",
     "apps/miniprogram",
     "dist/dev/mp-weixin",
+    "waitForDevOutput",
+    "miniprogram_npm/tdesign-miniprogram/image/image.json",
+    "[\"open\", \"--project\", devDist]",
+    "projectPath: devDist",
     "open",
     "pinche-devtools-refresh-state.json"
   ]) {

@@ -1,10 +1,97 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import uniPlugin from "@dcloudio/vite-plugin-uni";
 
 const uni = typeof uniPlugin === "function" ? uniPlugin : uniPlugin.default;
+const miniprogramRoot = fileURLToPath(new URL(".", import.meta.url));
+const workspaceRoot = path.resolve(miniprogramRoot, "../..");
 const buildTime = formatBuildTime();
+const tdesignPackageName = "tdesign-miniprogram";
+const tdesignSourceRoot = path.join(miniprogramRoot, "src/wxcomponents", tdesignPackageName);
+const tdesignPackageDistCandidates = [
+  path.join(miniprogramRoot, "node_modules", tdesignPackageName, "miniprogram_dist"),
+  path.join(workspaceRoot, "node_modules", tdesignPackageName, "miniprogram_dist")
+];
+const tdesignPackageDistRoot = firstExistingPath(tdesignPackageDistCandidates) || tdesignPackageDistCandidates[0];
+const tdesignComponentFoldersToCopy = [
+  "action-sheet",
+  "badge",
+  "button",
+  "cell",
+  "common",
+  "date-time-picker",
+  "dialog",
+  "empty",
+  "grid",
+  "grid-item",
+  "icon",
+  "image",
+  "input",
+  "loading",
+  "notice-bar",
+  "overlay",
+  "picker",
+  "picker-item",
+  "popup",
+  "search",
+  "segmented",
+  "sticky",
+  "switch",
+  "tab-panel",
+  "tabs",
+  "tag",
+  "textarea",
+  "toast"
+];
+const tdesignRuntimePathsToCopy = [
+  ".wechatide.ib.json",
+  "index.js",
+  "mixins/transition.js",
+  "mixins/using-config.js",
+  "mixins/using-custom-navbar.js",
+  "config-provider/config-store.js",
+  "config-provider/reactive-state.js",
+  "config-provider/use-config.js",
+  "locale/zh_CN.js",
+  "miniprogram_npm/dayjs"
+];
+const nativeTdesignTags = new Set([
+  "t-action-sheet",
+  "t-back-top",
+  "t-badge",
+  "t-button",
+  "t-cell",
+  "t-cell-group",
+  "t-collapse",
+  "t-collapse-panel",
+  "t-date-time-picker",
+  "t-dialog",
+  "t-empty",
+  "t-form",
+  "t-form-item",
+  "t-icon",
+  "t-image",
+  "t-input",
+  "t-loading",
+  "t-notice-bar",
+  "t-picker",
+  "t-picker-item",
+  "t-popup",
+  "t-search",
+  "t-segmented",
+  "t-skeleton",
+  "t-step-item",
+  "t-steps",
+  "t-sticky",
+  "t-switch",
+  "t-tabs",
+  "t-tab-panel",
+  "t-tag",
+  "t-textarea",
+  "t-toast"
+]);
 
 function formatBuildTime(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
@@ -15,12 +102,119 @@ function formatBuildTime(date = new Date()) {
   ].join(" ");
 }
 
+function firstExistingPath(paths) {
+  return paths.find((candidatePath) => fs.existsSync(candidatePath));
+}
+
 export default defineConfig({
   define: {
     __PINCHE_BUILD_TIME__: JSON.stringify(buildTime)
   },
-  plugins: [uni(), stripDcloudPreloadAssetPlugin()]
+  plugins: [
+    uni({
+      vueOptions: {
+        template: {
+          compilerOptions: {
+            isCustomElement: isNativeTdesignComponent
+          }
+        }
+      }
+    }),
+    copyTdesignMiniprogramNpmPlugin(),
+    stripDcloudPreloadAssetPlugin()
+  ]
 });
+
+function isNativeTdesignComponent(tag) {
+  return nativeTdesignTags.has(tag);
+}
+
+function copyTdesignMiniprogramNpmPlugin() {
+  return {
+    name: "pinche:copy-tdesign-miniprogram-npm",
+    buildStart() {
+      preseedTdesignMiniprogramNpmPackage();
+    },
+    generateBundle() {
+      preseedTdesignMiniprogramNpmPackage();
+    },
+    writeBundle(outputOptions) {
+      if (!outputOptions.dir) {
+        return;
+      }
+      copyTdesignComponentNpmPackage(
+        path.join(outputOptions.dir, "wxcomponents", tdesignPackageName)
+      );
+    }
+  };
+}
+
+function preseedTdesignMiniprogramNpmPackage() {
+  copyTdesignComponentNpmPackage(tdesignSourceRoot, { preserveExisting: true });
+}
+
+function copyTdesignComponentNpmPackage(tdesignTarget, options = {}) {
+  const sourceRoot =
+    path.resolve(tdesignTarget) === path.resolve(tdesignSourceRoot)
+      ? tdesignPackageDistRoot
+      : tdesignSourceRoot;
+  if (!fs.existsSync(sourceRoot)) {
+    return;
+  }
+
+  for (const folder of tdesignComponentFoldersToCopy) {
+    copyPath(path.join(sourceRoot, folder), path.join(tdesignTarget, folder), options);
+  }
+  for (const runtimePath of tdesignRuntimePathsToCopy) {
+    copyPath(path.join(sourceRoot, runtimePath), path.join(tdesignTarget, runtimePath), options);
+  }
+  rewriteTdesignIconFontCss(tdesignTarget, options);
+  addTdesignTslibCompatShims(tdesignTarget);
+}
+
+function copyPath(source, target, options = {}) {
+  if (!fs.existsSync(source)) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.cpSync(source, target, {
+    recursive: true,
+    force: options.preserveExisting !== true,
+    errorOnExist: false
+  });
+}
+
+function rewriteTdesignIconFontCss(tdesignPackageRoot, options = {}) {
+  const iconWxssPath = path.join(tdesignPackageRoot, "icon/icon.wxss");
+  const localIconWxssPath = path.join(tdesignSourceRoot, "icon/icon.wxss");
+  if (!fs.existsSync(iconWxssPath) || options.preserveExisting === true) {
+    return;
+  }
+  if (fs.existsSync(localIconWxssPath)) {
+    fs.copyFileSync(localIconWxssPath, iconWxssPath);
+  }
+}
+
+function addTdesignTslibCompatShims(tdesignPackageRoot) {
+  const fallbackShimPath = path.join(tdesignSourceRoot, "button/tslib.js");
+  if (!fs.existsSync(tdesignPackageRoot) || !fs.existsSync(fallbackShimPath)) {
+    return;
+  }
+  const shimSource = fs.readFileSync(fallbackShimPath, "utf8");
+  for (const file of walkOutputFiles(tdesignPackageRoot)) {
+    if (!/\.js$/i.test(file) || /(?:^|\/)tslib\.js$/i.test(file.replaceAll(path.sep, "/"))) {
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    if (!/\bfrom\s*["']tslib["']/.test(source)) {
+      continue;
+    }
+    const shimPath = path.join(path.dirname(file), "tslib.js");
+    if (!fs.existsSync(shimPath)) {
+      fs.writeFileSync(shimPath, shimSource);
+    }
+  }
+}
 
 function stripDcloudPreloadAssetPlugin() {
   return {

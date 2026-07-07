@@ -115,7 +115,8 @@ const miniManage = read("apps/miniprogram/src/pages/session/manage.vue");
 assert(
   miniManage.includes("joinPhoneRequired") &&
     miniManage.includes("join_phone_required") &&
-    miniManage.includes(":checked=\"joinPhoneRequired\""),
+    (miniManage.includes(":checked=\"joinPhoneRequired\"") ||
+      (miniManage.includes("<t-switch") && miniManage.includes(":value=\"joinPhoneRequired\""))),
   "Manage page must expose and save the join phone required switch"
 );
 

@@ -1,6 +1,7 @@
 <template>
   <view class="page flow-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="flow-top">
       <view class="step-label">1 / 4</view>
@@ -8,20 +9,23 @@
       <view class="text">先确定这局在哪家店玩。这里只做一件事：选店。</view>
     </view>
 
-    <view class="search-surface">
-      <icon type="search" size="16" color="#8d968f" />
-      <input
-        v-model="keyword"
-        class="search-input"
-        placeholder="搜索店名或商圈"
-        placeholder-class="placeholder"
-        confirm-type="search"
-        @confirm="loadStores"
-      />
-    </view>
+    <t-search
+      :value="keyword"
+      class="search-surface"
+      placeholder="搜索店名或商圈"
+      shape="round"
+      @change="keyword = $event.detail.value"
+      @submit="loadStores"
+    />
 
     <view class="list-surface">
-      <view v-if="statusText" class="notice">{{ statusText }}</view>
+      <t-notice-bar
+        v-if="statusText"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        :content="statusText"
+      />
       <view
         v-for="store in stores"
         :key="store.id"
@@ -29,12 +33,12 @@
         :class="{ selected: isSelectedStore(store) }"
         @tap="selectStore(store)"
       >
-        <image class="store-icon" src="/static/icons/store.png" mode="aspectFit" />
+        <t-image class="store-icon" src="/static/icons/store.png" mode="aspectFit" />
         <view class="row-main">
           <view class="row-title">{{ store.name }}</view>
           <view class="row-meta">{{ storeMeta(store) }}</view>
         </view>
-        <image
+        <t-image
           class="row-status-icon"
           :src="isSelectedStore(store) ? '/static/icons/check.png' : '/static/icons/pin.png'"
           mode="aspectFit"
@@ -43,15 +47,17 @@
     </view>
 
     <view class="bottom-action">
-      <button class="button" :class="{ disabled: !selectedStore }" @click="goNext">下一步</button>
+      <t-button class="button" :class="{ disabled: !selectedStore }" @tap="goNext">下一步</t-button>
     </view>
   </view>
 </template>
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, queryString, request } from "../../utils/api";
 import { writeCreateFlow } from "../../utils/createFlow";
+import { showToast } from "../../utils/tdesignFeedback";
 
 const FALLBACK_STORES = [
   { id: "demo-store-1", name: "谜雾剧场（国贸店）", city: "北京", district: "朝阳", area: "国贸商圈", distance: "1.2km" },
@@ -62,7 +68,7 @@ const FALLBACK_STORES = [
 ];
 
 export default {
-  components: { AuthIdentityBar },
+  components: { AuthIdentityBar, FeedbackHost },
   data() {
     return {
       keyword: "",
@@ -110,7 +116,7 @@ export default {
     },
     async goNext() {
       if (!this.selectedStore) {
-        uni.showToast({ title: "先选择一家店", icon: "none" });
+        showToast({ title: "先选择一家店", icon: "none" });
         return;
       }
       const query = queryString({
@@ -140,13 +146,10 @@ export default {
 }
 
 .search-surface {
-  display: flex;
-  align-items: center;
-  gap: 14rpx;
+  display: block;
   margin-bottom: 24rpx;
-  padding: 0 22rpx;
   border-radius: 12rpx;
-  background: rgba(244, 243, 240, 0.92);
+  overflow: hidden;
 }
 
 .search-input {
@@ -169,11 +172,9 @@ export default {
 }
 
 .notice {
-  padding: 22rpx 26rpx;
   color: #8d7b55;
   font-size: 24rpx;
   line-height: 1.5;
-  background: #fbf6e9;
 }
 
 .list-row {

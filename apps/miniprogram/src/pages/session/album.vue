@@ -1,18 +1,27 @@
 <template>
   <view class="page album-page" :class="{ 'selection-active': !timelineMode && selectionMode }">
     <AuthIdentityBar v-if="!timelineMode" />
+    <FeedbackHost />
 
     <view class="section album-head">
       <view class="album-head-copy">
         <view class="album-kicker">{{ timelineMode ? "分享相册" : "车局影像" }}</view>
         <view class="album-title-row">
           <view class="title album-title">{{ albumTitle }}</view>
-          <view v-if="!timelineMode" class="album-progress-badge">标注 {{ filteredTagProgressPercent }}%</view>
+          <t-tag v-if="!timelineMode" class="album-progress-badge" theme="primary" variant="light" size="small">
+            标注 {{ filteredTagProgressPercent }}%
+          </t-tag>
         </view>
         <view class="album-intro">{{ albumIntro }}</view>
       </view>
 
-      <view v-if="operationText" class="notice album-notice">{{ operationText }}</view>
+      <t-notice-bar
+        v-if="operationText"
+        class="notice album-notice"
+        theme="warning"
+        :visible="true"
+        :content="operationText"
+      />
 
       <view class="album-metrics" :class="{ public: timelineMode }">
         <view class="album-metric primary">
@@ -46,21 +55,21 @@
     >
       <view class="album-actions album-sticky-actions" :class="{ floating: topActionsFloating }">
         <view v-if="canUpload" class="album-primary-actions">
-          <button
+          <t-button
             class="button album-action-primary"
             :class="{ disabled: albumBusy }"
             :disabled="albumBusy"
             @tap="choosePhotos"
           >
             {{ uploading ? "上传中..." : "上传照片" }}
-          </button>
-          <button
+          </t-button>
+          <t-button
             class="button secondary album-privacy-action"
             :disabled="albumBusy"
             @tap="goPrivacy"
           >
             隐私设置
-          </button>
+          </t-button>
         </view>
 
         <view
@@ -70,26 +79,40 @@
           <view v-if="photos.length" class="album-action-group">
             <view class="album-action-group-title">保存到手机</view>
             <view class="album-command-rail">
-              <button class="album-command" :disabled="albumBusy" @tap="downloadAllPhotos">
+              <t-button
+                class="album-command"
+                size="extra-small"
+                custom-style="height: 44rpx; min-height: 44rpx; padding: 0 10rpx; font-size: 24rpx; font-weight: 600; line-height: 44rpx;"
+                :disabled="albumBusy"
+                @tap="downloadAllPhotos"
+              >
                 全部下载
-              </button>
-              <button
+              </t-button>
+              <t-button
                 v-if="filteredPhotos.length"
                 class="album-command"
+                size="extra-small"
+                custom-style="height: 44rpx; min-height: 44rpx; padding: 0 10rpx; font-size: 24rpx; font-weight: 600; line-height: 44rpx;"
                 :disabled="albumBusy"
                 @tap="openDownloadSelectionMode"
               >
                 多选下载
-              </button>
+              </t-button>
             </view>
           </view>
 
           <view v-if="taggablePhotos.length" class="album-action-group">
             <view class="album-action-group-title">整理标注</view>
             <view class="album-command-rail">
-              <button class="album-command" :disabled="albumBusy" @tap="openTagSelectionMode">
+              <t-button
+                class="album-command"
+                size="extra-small"
+                custom-style="height: 44rpx; min-height: 44rpx; padding: 0 10rpx; font-size: 24rpx; font-weight: 600; line-height: 44rpx;"
+                :disabled="albumBusy"
+                @tap="openTagSelectionMode"
+              >
                 批量标注
-              </button>
+              </t-button>
               <view class="album-action-hint">待标注 {{ filteredUntaggedPhotoCount }}</view>
             </view>
           </view>
@@ -101,47 +124,43 @@
             <view class="filter-panel-count">当前 {{ filteredPhotos.length }} 张</view>
           </view>
 
-          <view class="filter-row">
-            <button
-              v-for="filter in albumFilterOptions"
-              :key="filter.value"
-              class="filter-chip"
-              :class="{ active: activeFilter === filter.value }"
-              :disabled="albumBusy"
-              @tap="activeFilter = filter.value"
-            >
-              <text>{{ filter.label }}</text>
-              <text class="filter-count">{{ filter.count }}</text>
-            </button>
-          </view>
+          <t-segmented
+            class="filter-row"
+            block
+            custom-style="width: 100%; --td-segmented-bg-color: rgba(239, 234, 224, 0.78); --td-segmented-item-active-bg: #ffffff; --td-segmented-item-color: #202124; --td-segmented-item-active-color: #0f57d0; --td-segmented-item-label-font: 700 22rpx / 42rpx PingFang SC, Microsoft YaHei, sans-serif;"
+            :disabled="albumBusy"
+            :value="activeFilter"
+            :options="albumFilterSegmentOptions"
+            @change="activeFilter = $event.detail.value"
+          />
 
           <view class="role-filter-row">
             <view class="role-filter-label">角色</view>
-            <picker
-              mode="selector"
-              :range="albumRoleFilterLabels"
-              :value="selectedRoleFilterIndex"
-              :disabled="albumBusy || albumRoleFilterOptions.length <= 1"
-              @change="handleRoleFilterChange"
+            <view
+              class="role-filter-picker"
+              :class="{ disabled: albumBusy || albumRoleFilterOptions.length <= 1 }"
+              @tap="openRoleFilterPicker"
             >
-              <view
-                class="role-filter-picker"
-                :class="{ disabled: albumBusy || albumRoleFilterOptions.length <= 1 }"
-              >
-                {{ selectedRoleFilterLabel }}
-              </view>
-            </picker>
+              {{ selectedRoleFilterLabel }}
+            </view>
+            <t-picker
+              title="选择角色"
+              :visible="roleFilterPickerVisible"
+              :value="[selectedRoleFilter]"
+              @confirm="handleRoleFilterChange"
+              @cancel="closeRoleFilterPicker"
+              @close="closeRoleFilterPicker"
+            >
+              <t-picker-item :options="albumRolePickerOptions" />
+            </t-picker>
           </view>
         </view>
       </view>
     </view>
 
     <view v-if="filteredPhotos.length === 0" class="section empty-section">
-      <view class="empty-title">还没有你的照片</view>
-      <view class="empty-text">
-        {{ emptyText }}
-      </view>
-      <button
+      <t-empty class="empty-state" :description="`还没有你的照片。${emptyText}`" />
+      <t-button
         v-if="canUpload && !timelineMode"
         class="button empty-upload-button"
         :class="{ disabled: albumBusy }"
@@ -149,7 +168,7 @@
         @tap="choosePhotos"
       >
         {{ uploading ? "上传中..." : "上传第一张照片" }}
-      </button>
+      </t-button>
     </view>
 
     <uv-waterfall
@@ -183,7 +202,7 @@
               @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
               @longpress.stop="showPhotoInfo(photo)"
             >
-              <image
+              <t-image
                 v-if="visiblePhotoMedia[photo.id]?.thumbnail"
                 class="photo-image"
                 :src="visiblePhotoMedia[photo.id].thumbnail"
@@ -219,40 +238,40 @@
                 :class="{ 'has-danger': photo.is_mine }"
               >
                 <view class="photo-status-slot">
-                  <view class="photo-source-badge">
-                    <image
+                  <t-tag class="photo-source-badge" theme="primary" variant="light" size="small">
+                    <t-image
                       class="photo-source-icon"
                       :src="photoSourceIcon(photo)"
                       mode="aspectFit"
                     />
                     <text class="photo-source-label">{{ photoSourceLabel(photo) }}</text>
-                  </view>
+                  </t-tag>
                 </view>
                 <view class="photo-safe-actions">
-                  <button
+                  <t-button
                     v-if="photo.can_tag"
                     class="photo-action-text primary"
                     :disabled="albumBusy"
                     @tap.stop="openTagSheet(photo)"
                   >
                     标注
-                  </button>
-                  <button
+                  </t-button>
+                  <t-button
                     class="photo-action-text"
                     :disabled="albumBusy"
                     @tap.stop="downloadSinglePhoto(photo)"
                   >
                     下载
-                  </button>
+                  </t-button>
                 </view>
-                <button
+                <t-button
                   v-if="photo.is_mine"
                   class="photo-action-text danger photo-danger-action"
                   :disabled="albumBusy"
                   @tap.stop="deletePhoto(photo)"
                 >
                   {{ deletingPhotoId === photo.id ? "删除中" : "删除" }}
-                </button>
+                </t-button>
               </view>
             </view>
           </view>
@@ -278,7 +297,7 @@
               @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
               @longpress.stop="showPhotoInfo(photo)"
             >
-              <image
+              <t-image
                 v-if="visiblePhotoMedia[photo.id]?.thumbnail"
                 class="photo-image"
                 :src="visiblePhotoMedia[photo.id].thumbnail"
@@ -314,40 +333,40 @@
                 :class="{ 'has-danger': photo.is_mine }"
               >
                 <view class="photo-status-slot">
-                  <view class="photo-source-badge">
-                    <image
+                  <t-tag class="photo-source-badge" theme="primary" variant="light" size="small">
+                    <t-image
                       class="photo-source-icon"
                       :src="photoSourceIcon(photo)"
                       mode="aspectFit"
                     />
                     <text class="photo-source-label">{{ photoSourceLabel(photo) }}</text>
-                  </view>
+                  </t-tag>
                 </view>
                 <view class="photo-safe-actions">
-                  <button
+                  <t-button
                     v-if="photo.can_tag"
                     class="photo-action-text primary"
                     :disabled="albumBusy"
                     @tap.stop="openTagSheet(photo)"
                   >
                     标注
-                  </button>
-                  <button
+                  </t-button>
+                  <t-button
                     class="photo-action-text"
                     :disabled="albumBusy"
                     @tap.stop="downloadSinglePhoto(photo)"
                   >
                     下载
-                  </button>
+                  </t-button>
                 </view>
-                <button
+                <t-button
                   v-if="photo.is_mine"
                   class="photo-action-text danger photo-danger-action"
                   :disabled="albumBusy"
                   @tap.stop="deletePhoto(photo)"
                 >
                   {{ deletingPhotoId === photo.id ? "删除中" : "删除" }}
-                </button>
+                </t-button>
               </view>
             </view>
           </view>
@@ -416,7 +435,12 @@
       </view>
     </view>
 
-    <view v-if="!timelineMode && tagSheetPhoto" class="tag-mask" @tap="closeTagSheet">
+    <t-popup
+      :visible="tagSheetVisible"
+      placement="bottom"
+      :close-on-overlay-click="true"
+      @visible-change="handleTagSheetPopupVisibleChange"
+    >
       <view class="tag-sheet" @tap.stop>
         <view class="sheet-bar"></view>
         <view class="sheet-title">
@@ -432,10 +456,13 @@
         </view>
 
         <view class="selected-row">
-          <view
+          <t-tag
             v-for="person in selectedPeople"
             :key="person.key"
             class="selected-chip"
+            theme="primary"
+            variant="light"
+            size="small"
             @tap="togglePerson(person.key)"
           >
             <text>{{ tagPersonTitle(person) }}</text>
@@ -447,10 +474,12 @@
               {{ npcRoleGenderText(person.role_gender) }}
             </text>
             <text>×</text>
-          </view>
-          <view v-if="selectedPeople.length === 0" class="selected-empty">
-            暂未标注，只有上传者可见
-          </view>
+          </t-tag>
+          <t-empty
+            v-if="selectedPeople.length === 0"
+            class="selected-empty"
+            description="暂未标注，只有上传者可见"
+          />
         </view>
 
         <RoleSeatBoard
@@ -465,24 +494,25 @@
         </view>
 
         <view class="sheet-actions">
-          <button class="button secondary" :disabled="savingTags" @tap="closeTagSheet">取消</button>
-          <button
+          <t-button class="button secondary" :disabled="savingTags" @tap="closeTagSheet">取消</t-button>
+          <t-button
             class="button"
             :class="{ disabled: savingTags }"
             :disabled="savingTags"
             @tap="saveTags"
           >
             {{ savingTags ? "保存中..." : "保存标注" }}
-          </button>
+          </t-button>
         </view>
       </view>
-    </view>
+    </t-popup>
   </view>
 </template>
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import {
   apiUrl,
   dataOf,
@@ -495,6 +525,7 @@ import {
 } from "../../utils/api";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
+import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 function albumMediaCachePath(photoId, variant = "preview") {
   const root =
@@ -505,7 +536,7 @@ function albumMediaCachePath(photoId, variant = "preview") {
 }
 
 export default {
-  components: { AuthIdentityBar, RoleSeatBoard },
+  components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost },
   data() {
     return {
       sessionId: "",
@@ -519,6 +550,7 @@ export default {
       canUpload: false,
       activeFilter: "all",
       selectedRoleFilter: "",
+      roleFilterPickerVisible: false,
       statusText: "",
       loadingAlbum: false,
       skipNextAlbumRefreshOnShow: false,
@@ -549,15 +581,28 @@ export default {
       previewPreloadRadius: 2,
       previewTouchStartX: 0,
       previewTouchStartY: 0,
+      previewMediaUrlRefreshRequest: null,
       filters: [
-        { value: "all", label: "我的照片" },
-        { value: "mine", label: "我上传的" },
-        { value: "withMe", label: "有我" },
-        { value: "untagged", label: "待标注" }
+        { value: "all", label: "全部" },
+        { value: "mine", label: "上传" },
+        { value: "withMe", label: "我的" },
+        { value: "untagged", label: "待标" }
       ]
     };
   },
   computed: {
+    tagSheetVisible() {
+      return !this.timelineMode && Boolean(this.tagSheetPhoto);
+    },
+    previewCurrentPhoto() {
+      return this.previewPhotos[this.previewCurrentIndex] || null;
+    },
+    previewCounterText() {
+      if (!this.previewPhotos.length) {
+        return "";
+      }
+      return `${this.previewPhotos.length - this.previewCurrentIndex}/${this.previewPhotos.length}`;
+    },
     albumTitle() {
       if (this.timelineMode) {
         return this.shareSubjectLabel ? `${this.shareSubjectLabel}的相册` : "分享相册";
@@ -642,6 +687,12 @@ export default {
         count: this.countAlbumPhotosForFilter(filter.value)
       }));
     },
+    albumFilterSegmentOptions() {
+      return this.albumFilterOptions.map((filter) => ({
+        value: filter.value,
+        label: `${filter.label} ${filter.count}`
+      }));
+    },
     albumRoleFilterOptions() {
       if (this.timelineMode) {
         return [];
@@ -657,6 +708,12 @@ export default {
     },
     albumRoleFilterLabels() {
       return this.albumRoleFilterOptions.map((option) => option.label);
+    },
+    albumRolePickerOptions() {
+      return this.albumRoleFilterOptions.map((option) => ({
+        value: option.value,
+        label: option.label
+      }));
     },
     selectedRoleFilterIndex() {
       const index = this.albumRoleFilterOptions.findIndex(
@@ -707,15 +764,6 @@ export default {
       }
       return this.tagSheetPhoto ? 1 : 0;
     },
-    previewCurrentPhoto() {
-      return this.previewPhotos[this.previewCurrentIndex] || null;
-    },
-    previewCounterText() {
-      if (!this.previewPhotos.length) {
-        return "";
-      }
-      return `${this.previewPhotos.length - this.previewCurrentIndex}/${this.previewPhotos.length}`;
-    },
     albumBusy() {
       return (
         this.loadingAlbum ||
@@ -748,6 +796,7 @@ export default {
     }
   },
   async onLoad(options) {
+    this.visiblePhotoMediaRequests = {};
     this.sessionId = options.id || "";
     this.timelineMode =
       options.source === "wechat_timeline" ||
@@ -1101,9 +1150,21 @@ export default {
     photoMatchesRole(photo, roleKey) {
       return (photo.tags || []).some((tag) => tag.key === roleKey);
     },
+    openRoleFilterPicker() {
+      if (this.albumBusy || this.albumRoleFilterOptions.length <= 1) {
+        return;
+      }
+      this.roleFilterPickerVisible = true;
+    },
+    closeRoleFilterPicker() {
+      this.roleFilterPickerVisible = false;
+    },
     handleRoleFilterChange(event) {
-      const index = Number(event?.detail?.value || 0);
-      this.selectedRoleFilter = this.albumRoleFilterOptions[index]?.value || "";
+      const value = event?.detail?.value?.[0] || "";
+      this.selectedRoleFilter = this.albumRoleFilterOptions.some((option) => option.value === value)
+        ? value
+        : "";
+      this.roleFilterPickerVisible = false;
     },
     ensureSelectedRoleFilter() {
       if (!this.selectedRoleFilter) {
@@ -1124,6 +1185,7 @@ export default {
         const data = dataOf(response) || {};
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
+        this.visiblePhotoMediaRequests = {};
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.albumSession = this.albumSessionSummary(data);
         this.hiddenCount = Number(data.hidden_count || 0);
@@ -1171,6 +1233,7 @@ export default {
         const data = dataOf(response) || {};
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
+        this.visiblePhotoMediaRequests = {};
         this.people = [];
         this.canUpload = false;
         this.hiddenCount = 0;
@@ -1195,26 +1258,162 @@ export default {
       }
     },
     normalizePhotoMedia(photo) {
-      const previewUrl = photo.preview_url || photo.image_url || "";
+      const imageUrl = photo.image_url || photo.preview_url || "";
+      const previewUrl = photo.preview_url || imageUrl;
+      const thumbnailUrl = photo.thumbnail_url || previewUrl || imageUrl;
+      const previewLoadUrl = photo.preview_load_url || "";
+      const thumbnailLoadUrl = photo.thumbnail_load_url || "";
       return {
         ...photo,
         tags: photo.tags || [],
-        image_url: previewUrl,
-        preview_url: previewUrl,
-        thumbnail_url: photo.thumbnail_url || previewUrl,
-        display_url: ""
+        image_url: imageUrl || previewLoadUrl,
+        preview_url: previewUrl || previewLoadUrl,
+        thumbnail_url: thumbnailUrl || thumbnailLoadUrl || previewLoadUrl,
+        preview_load_url: previewLoadUrl,
+        thumbnail_load_url: thumbnailLoadUrl,
+        display_url: photo.display_url || ""
       };
     },
     mediaUrlForPhoto(photo, variant = "preview") {
       if (variant === "thumbnail") {
-        return photo.thumbnail_url || photo.preview_url || photo.image_url || "";
+        return (
+          photo.thumbnail_load_url ||
+          photo.thumbnail_url ||
+          photo.preview_load_url ||
+          photo.preview_url ||
+          photo.image_url ||
+          ""
+        );
       }
-      return photo.preview_url || photo.image_url || "";
+      return photo.preview_load_url || photo.preview_url || photo.image_url || "";
     },
-    downloadAlbumImage(photo, variant = "preview") {
+    albumMediaUrlExpiresSoon(path, skewSeconds = 60) {
+      if (!path) {
+        return false;
+      }
+      try {
+        const url = new URL(apiUrl(path));
+        const expires = Number.parseInt(url.searchParams.get("expires") || "", 10);
+        return Boolean(expires) && expires <= Math.floor(Date.now() / 1000) + skewSeconds;
+      } catch (error) {
+        return false;
+      }
+    },
+    albumMediaRequestError(statusCode, imageUrl) {
+      const error = new Error(`album image request failed: ${statusCode}`);
+      error.statusCode = statusCode;
+      error.imageUrl = imageUrl;
+      return error;
+    },
+    isAlbumMediaAuthError(error) {
+      return error?.statusCode === 401 || error?.statusCode === 403;
+    },
+    shouldRefreshAlbumMediaBeforeDownload(photo, variant) {
+      if (this.timelineMode) {
+        return false;
+      }
+      return this.albumMediaUrlExpiresSoon(this.mediaUrlForPhoto(photo, variant));
+    },
+    latestPreviewPhoto(photo) {
+      if (!photo || photo.id === undefined || photo.id === null) {
+        return photo;
+      }
+      const photoId = String(photo.id);
+      return (
+        this.previewPhotos.find((item) => String(item.id) === photoId) ||
+        this.photos.find((item) => String(item.id) === photoId) ||
+        photo
+      );
+    },
+    mediaFieldsFromPhoto(photo) {
+      const normalized = this.normalizePhotoMedia(photo || {});
+      return {
+        image_url: normalized.image_url,
+        preview_url: normalized.preview_url,
+        thumbnail_url: normalized.thumbnail_url,
+        preview_load_url: normalized.preview_load_url,
+        thumbnail_load_url: normalized.thumbnail_load_url
+      };
+    },
+    mergeFreshPhotoMedia(photo, freshMediaById) {
+      if (!photo || photo.id === undefined || photo.id === null) {
+        return photo;
+      }
+      const freshPhoto = freshMediaById.get(String(photo.id));
+      if (!freshPhoto) {
+        return photo;
+      }
+      return {
+        ...photo,
+        ...this.mediaFieldsFromPhoto(freshPhoto)
+      };
+    },
+    applyFreshAlbumMediaUrls(freshPhotos = []) {
+      const freshMediaById = new Map(
+        (freshPhotos || [])
+          .filter((photo) => photo && photo.id !== undefined && photo.id !== null)
+          .map((photo) => [String(photo.id), photo])
+      );
+      if (!freshMediaById.size) {
+        return;
+      }
+      this.photos = this.photos.map((photo) => this.mergeFreshPhotoMedia(photo, freshMediaById));
+      this.previewPhotos = this.previewPhotos.map((photo) =>
+        this.mergeFreshPhotoMedia(photo, freshMediaById)
+      );
+      this.waterfallList1 = this.waterfallList1.map((photo) =>
+        this.mergeFreshPhotoMedia(photo, freshMediaById)
+      );
+      this.waterfallList2 = this.waterfallList2.map((photo) =>
+        this.mergeFreshPhotoMedia(photo, freshMediaById)
+      );
+    },
+    refreshAlbumMediaUrlsForPreview() {
+      if (this.timelineMode || !this.sessionId) {
+        return Promise.resolve(false);
+      }
+      if (this.previewMediaUrlRefreshRequest) {
+        return this.previewMediaUrlRefreshRequest;
+      }
+      this.previewMediaUrlRefreshRequest = request({
+        url: `/api/sessions/${this.sessionId}/album`
+      })
+        .then((response) => {
+          const data = dataOf(response) || {};
+          this.applyFreshAlbumMediaUrls(data.photos || []);
+          return true;
+        })
+        .catch(() => false)
+        .finally(() => {
+          this.previewMediaUrlRefreshRequest = null;
+        });
+      return this.previewMediaUrlRefreshRequest;
+    },
+    async downloadAlbumImage(photo, variant = "preview", options = {}) {
+      let targetPhoto = this.latestPreviewPhoto(photo);
+      if (!options.skipRefresh && this.shouldRefreshAlbumMediaBeforeDownload(targetPhoto, variant)) {
+        const refreshed = await this.refreshAlbumMediaUrlsForPreview();
+        if (refreshed) {
+          targetPhoto = this.latestPreviewPhoto(targetPhoto);
+        }
+      }
+      try {
+        return await this.downloadAlbumImageOnce(targetPhoto, variant);
+      } catch (error) {
+        if (!options.skipRefresh && this.isAlbumMediaAuthError(error)) {
+          const refreshed = await this.refreshAlbumMediaUrlsForPreview();
+          if (refreshed) {
+            return this.downloadAlbumImage(targetPhoto, variant, { skipRefresh: true });
+          }
+        }
+        throw error;
+      }
+    },
+    downloadAlbumImageOnce(photo, variant = "preview") {
       const token = getToken();
       const filePath = albumMediaCachePath(photo.id, variant);
       const imageUrl = apiUrl(this.mediaUrlForPhoto(photo, variant));
+      const mediaRequestError = (statusCode) => this.albumMediaRequestError(statusCode, imageUrl);
       if ((!this.timelineMode && !token) || !filePath || !imageUrl) {
         return Promise.reject(new Error("album image auth unavailable"));
       }
@@ -1227,7 +1426,7 @@ export default {
           header,
           success(response) {
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              reject(new Error(`album image request failed: ${response.statusCode}`));
+              reject(mediaRequestError(response.statusCode));
               return;
             }
             uni.getFileSystemManager().writeFile({
@@ -1271,13 +1470,13 @@ export default {
               success: () => resolve(true),
               fail: () => {
                 if (
-                  typeof uni.showModal !== "function" ||
+                  typeof showModal !== "function" ||
                   typeof uni.openSetting !== "function"
                 ) {
                   resolve(false);
                   return;
                 }
-                uni.showModal({
+                showModal({
                   title: "需要相册权限",
                   content: "请允许保存图片到系统相册。",
                   confirmText: "去设置",
@@ -1363,30 +1562,50 @@ export default {
     },
     async loadVisiblePhotoMedia(photo, variant = "thumbnail") {
       const key = String(photo.id);
+      const requestKey = `${key}:${variant}`;
       const current = this.visiblePhotoMedia[key] || {};
       if (current[variant]) {
         return current[variant];
       }
       const loadingKey = `${variant}Loading`;
+      const activeRequests = this.visiblePhotoMediaRequests || {};
+      if (activeRequests[requestKey]) {
+        return activeRequests[requestKey];
+      }
       if (current[loadingKey]) {
         return "";
       }
       this.setVisiblePhotoMedia(photo.id, { [loadingKey]: true, [`${variant}Failed`]: false });
+      const loadRequest = this.downloadAlbumImage(photo, variant)
+        .then((displayUrl) => {
+          this.setVisiblePhotoMedia(photo.id, {
+            [variant]: displayUrl,
+            [loadingKey]: false
+          });
+          if (variant === "preview") {
+            this.updatePhotoDisplayUrl(photo.id, displayUrl);
+          }
+          return displayUrl;
+        })
+        .catch(() => {
+          this.setVisiblePhotoMedia(photo.id, {
+            [loadingKey]: false,
+            [`${variant}Failed`]: true
+          });
+          return "";
+        })
+        .finally(() => {
+          const requests = { ...(this.visiblePhotoMediaRequests || {}) };
+          delete requests[requestKey];
+          this.visiblePhotoMediaRequests = requests;
+        });
+      this.visiblePhotoMediaRequests = {
+        ...(this.visiblePhotoMediaRequests || {}),
+        [requestKey]: loadRequest
+      };
       try {
-        const displayUrl = await this.downloadAlbumImage(photo, variant);
-        this.setVisiblePhotoMedia(photo.id, {
-          [variant]: displayUrl,
-          [loadingKey]: false
-        });
-        if (variant === "preview") {
-          this.updatePhotoDisplayUrl(photo.id, displayUrl);
-        }
-        return displayUrl;
+        return await loadRequest;
       } catch (error) {
-        this.setVisiblePhotoMedia(photo.id, {
-          [loadingKey]: false,
-          [`${variant}Failed`]: true
-        });
         return "";
       }
     },
@@ -1417,7 +1636,7 @@ export default {
           if (this.visiblePhotoMedia[photo.id]?.thumbnail) {
             continue;
           }
-          const observer = uni.createIntersectionObserver(this);
+          const observer = uni.createIntersectionObserver();
           observer.relativeToViewport({ bottom: 600 }).observe(`#${this.photoDomId(photo)}`, (entry) => {
             if (entry.intersectionRatio > 0) {
               this.onPhotoVisible(photo);
@@ -1596,7 +1815,7 @@ export default {
       const uploader = photo.uploader_name || "车友";
       const createdAt = this.formatDate(photo.created_at);
       const dimensions = this.imageMetaText(photo);
-      uni.showModal({
+      showModal({
         title: "图片信息",
         content: `${this.tagSummary(photo)}\n上传者：${uploader}\n时间：${createdAt}\n尺寸：${dimensions}`,
         showCancel: false,
@@ -1633,7 +1852,7 @@ export default {
     },
     choosePhotos() {
       if (this.timelineMode || !this.canUpload || this.albumBusy) {
-        uni.showToast({ title: "发车后同车成员可上传", icon: "none" });
+        showToast({ title: "发车后同车成员可上传", icon: "none" });
         return;
       }
       uni.chooseImage({
@@ -1672,7 +1891,7 @@ export default {
       if (this.timelineMode || this.albumBusy || !photo.is_mine) {
         return;
       }
-      uni.showModal({
+      showModal({
         title: "删除照片",
         content: "确认删除这张照片？删除后清空相册才能取消这辆车。",
         confirmText: "删除",
@@ -1793,7 +2012,7 @@ export default {
     },
     confirmDownloadPhotos(content) {
       return new Promise((resolve) => {
-        uni.showModal({
+        showModal({
           title: "确认下载",
           content,
           confirmText: "下载",
@@ -1813,7 +2032,7 @@ export default {
       }
       const targets = (photos || []).filter((photo) => this.mediaUrlForPhoto(photo));
       if (targets.length === 0) {
-        uni.showToast({ title: "暂无可下载照片", icon: "none" });
+        showToast({ title: "暂无可下载照片", icon: "none" });
         return;
       }
       const confirmed = await this.confirmDownloadPhotos(
@@ -1829,7 +2048,7 @@ export default {
         const allowed = await this.ensurePhotosAlbumPermission();
         if (!allowed) {
           this.statusText = "未获得相册保存权限。";
-          uni.showToast({ title: "未获得保存权限", icon: "none" });
+          showToast({ title: "未获得保存权限", icon: "none" });
           return;
         }
         for (const [index, photo] of targets.entries()) {
@@ -1854,14 +2073,14 @@ export default {
           this.updateTopActionsFloating();
         }
         if (savedCount > 0 && failedCount === 0) {
-          uni.showToast({ title: `已保存 ${savedCount} 张`, icon: "none" });
+          showToast({ title: `已保存 ${savedCount} 张`, icon: "none" });
           return;
         }
         if (savedCount > 0) {
-          uni.showToast({ title: "部分照片保存失败", icon: "none" });
+          showToast({ title: "部分照片保存失败", icon: "none" });
           return;
         }
-        uni.showToast({ title: "下载照片失败", icon: "none" });
+        showToast({ title: "下载照片失败", icon: "none" });
       } finally {
         this.downloading = false;
         this.downloadProgressText = "";
@@ -1884,6 +2103,10 @@ export default {
       if (this.timelineMode || this.albumBusy || this.filteredPhotos.length === 0) {
         return;
       }
+      this.closePhotoPreview();
+      this.tagSheetPhoto = null;
+      this.bulkTagging = false;
+      this.selectedTagKeys = [];
       this.selectionMode = true;
       this.selectionModePurpose = "download";
       this.selectedPhotoIds = [];
@@ -1893,6 +2116,10 @@ export default {
       if (this.timelineMode || this.albumBusy || this.taggablePhotos.length === 0) {
         return;
       }
+      this.closePhotoPreview();
+      this.tagSheetPhoto = null;
+      this.bulkTagging = false;
+      this.selectedTagKeys = [];
       this.selectionMode = true;
       this.selectionModePurpose = "tag";
       this.selectedPhotoIds = [];
@@ -1955,6 +2182,11 @@ export default {
       this.selectedTagKeys = [];
       this.bulkTagging = false;
     },
+    handleTagSheetPopupVisibleChange(event = {}) {
+      if (event.detail?.visible === false) {
+        this.closeTagSheet();
+      }
+    },
     togglePerson(key) {
       if (this.selectedTagKeys.includes(key)) {
         this.selectedTagKeys = this.selectedTagKeys.filter((item) => item !== key);
@@ -1993,11 +2225,11 @@ export default {
         this.updateTopActionsFloating();
         await this.loadAlbum();
         if (allFailed) {
-          uni.showToast({ title: "标注保存失败", icon: "none" });
+          showToast({ title: "标注保存失败", icon: "none" });
           return;
         }
         if (failedCount > 0) {
-          uni.showToast({ title: "部分照片标注失败", icon: "none" });
+          showToast({ title: "部分照片标注失败", icon: "none" });
         }
       } finally {
         this.savingTags = false;
@@ -2209,12 +2441,9 @@ export default {
 
 .album-command-rail {
   display: flex;
+  gap: 8rpx;
   min-width: 0;
-  min-height: 70rpx;
-  padding: 4rpx;
-  border: 1rpx solid rgba(222, 215, 202, 0.82);
-  border-radius: 14rpx;
-  background: rgba(250, 248, 241, 0.72);
+  min-height: 44rpx;
 }
 
 .album-command,
@@ -2224,16 +2453,17 @@ export default {
   justify-content: center;
   flex: 1;
   min-width: 0;
-  min-height: 62rpx;
+  height: 44rpx;
+  min-height: 44rpx;
   margin: 0;
-  padding: 0 8rpx;
-  border: 0;
+  padding: 0 10rpx;
+  border: 1rpx solid rgba(210, 199, 181, 0.96);
   border-radius: 10rpx;
-  background: transparent;
-  color: #23483f;
-  font-size: 22rpx;
-  font-weight: 500;
-  line-height: 1.16;
+  background: rgba(255, 255, 255, 0.72);
+  color: #415766;
+  font-size: 24rpx;
+  font-weight: 600;
+  line-height: 44rpx;
   box-shadow: none;
 }
 
@@ -2242,8 +2472,7 @@ export default {
 }
 
 .album-command + .album-command {
-  border-left: 1rpx solid rgba(222, 215, 202, 0.76);
-  border-radius: 0;
+  border-radius: 10rpx;
 }
 
 .album-command[disabled] {
@@ -2252,7 +2481,9 @@ export default {
 
 .album-action-hint {
   color: #839087;
-  font-weight: 400;
+  font-weight: 500;
+  border: 0;
+  background: transparent;
 }
 
 .album-filter-panel {
@@ -2293,9 +2524,9 @@ export default {
 }
 
 .filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
+  display: block;
+  width: 100%;
+  min-width: 0;
 }
 
 .filter-chip {
@@ -2492,6 +2723,78 @@ export default {
   }
 }
 
+.photo-preview-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  overflow: hidden;
+  background: #050505;
+}
+
+.photo-preview-swiper {
+  width: 100%;
+  height: 100vh;
+}
+
+.photo-preview-slide,
+.photo-preview-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.photo-preview-image {
+  width: 100%;
+  height: 100%;
+}
+
+.photo-preview-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: #050505;
+}
+
+.photo-preview-topbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28rpx 28rpx 0;
+  padding-top: calc(28rpx + env(safe-area-inset-top));
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.photo-preview-counter,
+.photo-preview-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 80rpx;
+  height: 58rpx;
+  border-radius: 999rpx;
+  background: rgba(0, 0, 0, 0.38);
+  color: #ffffff;
+  font-size: 24rpx;
+  line-height: 1;
+}
+
+.photo-preview-close {
+  width: 58rpx;
+  min-width: 58rpx;
+  font-size: 42rpx;
+  pointer-events: auto;
+}
+
 .photo-caption-body {
   min-width: 0;
 }
@@ -2629,7 +2932,7 @@ export default {
   right: 0;
   bottom: 0;
   left: 0;
-  z-index: 1000;
+  z-index: 12000;
   display: flex;
   align-items: flex-start;
   gap: 12rpx;
@@ -2684,78 +2987,6 @@ export default {
   font-size: 25rpx;
   line-height: 1.2;
   text-align: center;
-}
-
-.photo-preview-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 1400;
-  overflow: hidden;
-  background: #050505;
-}
-
-.photo-preview-swiper {
-  width: 100%;
-  height: 100vh;
-}
-
-.photo-preview-slide,
-.photo-preview-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-}
-
-.photo-preview-image {
-  width: 100%;
-  height: 100%;
-}
-
-.photo-preview-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  background: #050505;
-}
-
-.photo-preview-topbar {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 28rpx 28rpx 0;
-  padding-top: calc(28rpx + env(safe-area-inset-top));
-  pointer-events: none;
-  box-sizing: border-box;
-}
-
-.photo-preview-counter,
-.photo-preview-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 80rpx;
-  height: 58rpx;
-  border-radius: 999rpx;
-  background: rgba(0, 0, 0, 0.38);
-  color: #ffffff;
-  font-size: 24rpx;
-  line-height: 1;
-}
-
-.photo-preview-close {
-  width: 58rpx;
-  min-width: 58rpx;
-  font-size: 42rpx;
-  pointer-events: auto;
 }
 
 .tag-mask {
