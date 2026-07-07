@@ -730,14 +730,70 @@ function verifySessionAlbumMediaQuery(photoId, query) {
   }
 }
 
-function attachSessionAlbumMediaUrls(album) {
+function signSessionAlbumDirectMediaToken(payload) {
+  const exp = payload.exp ||
+    Math.floor(Date.now() / 1000) + SESSION_ALBUM_MEDIA_TOKEN_SECONDS;
+  return signSignedPayload("session-album-media", {
+    sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
+    userId: tokenPositiveInteger(payload.userId, "userId"),
+    photoId: tokenPositiveInteger(payload.photoId, "photoId"),
+    variant: mediaVariantName(payload.variant || "preview"),
+    exp: tokenPositiveInteger(exp, "exp")
+  });
+}
+
+function sessionAlbumDirectMediaPath(photoId, album, userId, variant = "preview") {
+  const normalizedVariant = mediaVariantName(variant);
+  const token = signSessionAlbumDirectMediaToken({
+    sessionId: album.session_id,
+    userId,
+    photoId,
+    variant: normalizedVariant
+  });
+  return `/api/session-album/photos/${photoId}/image?token=${encodeURIComponent(
+    token
+  )}&variant=${encodeURIComponent(normalizedVariant)}`;
+}
+
+function verifySessionAlbumDirectMediaQuery(photoId, query) {
+  const payload = verifySignedPayload(
+    "session-album-media",
+    query.get("token") || "",
+    "album media token"
+  );
+  const tokenPhotoId = tokenPositiveInteger(payload.photoId, "photoId");
+  if (tokenPhotoId !== Number(photoId)) {
+    throw forbidden("album media token is invalid");
+  }
+  return {
+    sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
+    userId: tokenPositiveInteger(payload.userId, "userId"),
+    photoId: tokenPhotoId,
+    variant: mediaVariantName(payload.variant || "preview"),
+    exp: tokenPositiveInteger(payload.exp, "exp")
+  };
+}
+
+function mediaVariantName(variant) {
+  if (variant === "thumbnail") {
+    return "thumbnail";
+  }
+  if (variant === "preview") {
+    return "preview";
+  }
+  throw badRequest("unsupported album media variant");
+}
+
+function attachSessionAlbumMediaUrls(album, userId) {
   return {
     ...album,
     photos: album.photos.map((photo) => ({
       ...photo,
       image_url: sessionAlbumMediaPath(photo.id),
       preview_url: sessionAlbumMediaPath(photo.id, "preview"),
-      thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail")
+      thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail"),
+      preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview"),
+      thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")
     }))
   };
 }
@@ -1222,9 +1278,28 @@ async function route(request, response) {
     /^\/api\/session-album\/photos\/(\d+)\/image$/
   );
   if (request.method === "GET" && sessionAlbumMediaPhotoId) {
+    const variant = mediaVariant(url.searchParams);
+    const directMediaToken = url.searchParams.get("token") || "";
+    if (directMediaToken) {
+      const claims = verifySessionAlbumDirectMediaQuery(
+        sessionAlbumMediaPhotoId,
+        url.searchParams
+      );
+      if (claims.variant !== variant) {
+        throw forbidden("album media token is invalid");
+      }
+      const photo = await getVisibleSessionAlbumPhotoForMedia(
+        claims.userId,
+        sessionAlbumMediaPhotoId
+      );
+      if (Number(photo.session_id) !== claims.sessionId) {
+        throw forbidden("album media token is invalid");
+      }
+      await serveUploadedSessionAlbumPhoto(photo, response, { variant });
+      return;
+    }
     const user = await getAuthUser(request);
     verifySessionAlbumMediaQuery(sessionAlbumMediaPhotoId, url.searchParams);
-    const variant = mediaVariant(url.searchParams);
     const photo = await getVisibleSessionAlbumPhotoForMedia(
       user.user.id,
       sessionAlbumMediaPhotoId
@@ -1755,7 +1830,7 @@ async function route(request, response) {
     const album = await listSessionAlbum(user, sessionAlbumId);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album)
+      data: attachSessionAlbumMediaUrls(album, user.user.id)
     });
     return;
   }
@@ -1770,7 +1845,7 @@ async function route(request, response) {
     const album = await listSessionAlbum(user, adminSessionAlbumId);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album)
+      data: attachSessionAlbumMediaUrls(album, user.user.id)
     });
     return;
   }

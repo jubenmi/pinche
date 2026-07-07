@@ -1,11 +1,18 @@
 <template>
   <view class="page privacy-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="section">
       <view class="title">相册分享隐私设置</view>
       <view class="text">完整相册会展示与你相关的照片，以及 NPC、其他/风景/主线外照片；这里控制分享展示里的可见性。</view>
-      <view v-if="statusText" class="notice">{{ statusText }}</view>
+      <t-notice-bar
+        v-if="statusText"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        :content="statusText"
+      />
     </view>
 
     <view class="section settings-section">
@@ -14,9 +21,9 @@
           <view class="setting-title">允许我上传的照片出现在分享展示里</view>
           <view class="setting-note">关闭后，别人分享相册时不会展示你上传的照片。</view>
         </view>
-        <switch
+        <t-switch
           color="#1f7a68"
-          :checked="allowUploadedVisible"
+          :value="allowUploadedVisible"
           @change="allowUploadedVisible = $event.detail.value"
         />
       </view>
@@ -26,9 +33,9 @@
           <view class="setting-title">允许包含我的照片出现在分享展示里</view>
           <view class="setting-note">关闭后，别人分享相册时不会展示包含你的照片。</view>
         </view>
-        <switch
+        <t-switch
           color="#1f7a68"
-          :checked="allowTaggedVisible"
+          :value="allowTaggedVisible"
           @change="allowTaggedVisible = $event.detail.value"
         />
       </view>
@@ -43,19 +50,21 @@
     </view>
 
     <view class="bottom-action">
-      <button class="button" :class="{ disabled: saving }" @tap="savePrivacy">
+      <t-button class="button" :class="{ disabled: saving }" @tap="savePrivacy">
         {{ saving ? "保存中..." : "保存设置" }}
-      </button>
+      </t-button>
     </view>
   </view>
 </template>
 
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
+import { showToast } from "../../utils/tdesignFeedback";
 
 export default {
-  components: { AuthIdentityBar },
+  components: { AuthIdentityBar, FeedbackHost },
   data() {
     return {
       sessionId: "",
@@ -108,7 +117,7 @@ export default {
             allowTaggedVisible: this.allowTaggedVisible
           }
         });
-        uni.showToast({ title: "设置已保存", icon: "none" });
+        showToast({ title: "设置已保存", icon: "none" });
         setTimeout(() => {
           uni.navigateBack();
         }, 300);

@@ -5,33 +5,45 @@
       :class="{ empty: !user, passive: !user && passiveGuest }"
       @tap="handleIdentityTap"
     >
-      <view v-if="user" class="auth-avatar" :class="barAvatarClass">
-        <image
-          class="auth-avatar-image"
-          :src="barAvatar.src"
-          mode="aspectFill"
-          :webp="true"
-          @error="handleAvatarLoadError(barAvatar.src)"
-        />
-      </view>
-      <view class="auth-main">
-        <text class="auth-state">{{ authStateText }}</text>
-        <view class="auth-name">
-          <image v-if="barGenderIcon" class="auth-gender-icon" :src="barGenderIcon" mode="aspectFit" />
-          <text class="auth-name-text">{{ displayName }}</text>
+      <button
+        class="auth-profile-trigger"
+        plain
+        hover-class="auth-profile-trigger-hover"
+        @tap.stop="handleIdentityTap"
+      >
+        <view v-if="user" class="auth-avatar" :class="barAvatarClass">
+          <image
+            class="auth-avatar-image"
+            :src="barAvatar.src"
+            mode="aspectFill"
+            :webp="true"
+            @error="handleAvatarLoadError(barAvatar.src)"
+          />
         </view>
-      </view>
-      <view class="auth-side">
+        <view class="auth-main">
+          <text class="auth-state">{{ authStateText }}</text>
+          <view class="auth-name">
+            <t-image v-if="barGenderIcon" class="auth-gender-icon" :src="barGenderIcon" mode="aspectFit" />
+            <text class="auth-name-text">{{ displayName }}</text>
+          </view>
+        </view>
         <view v-if="rolesText" class="auth-roles">{{ rolesText }}</view>
-        <button
-          v-if="messageBadgeText"
+      </button>
+      <view v-if="messageBadgeText" class="auth-side">
+        <t-button
           class="auth-message-chip"
           hover-class="auth-message-chip-hover"
           @tap.stop="toggleMessagePanel"
         >
-          <text>消息</text>
-          <text class="auth-message-count">{{ messageBadgeText }}</text>
-        </button>
+          <view class="auth-message-chip-content">
+            <text>消息</text>
+            <t-badge
+              class="auth-message-count"
+              :count="organizerMessageCount"
+              :max-count="99"
+            />
+          </view>
+        </t-button>
       </view>
     </view>
 
@@ -42,38 +54,46 @@
           <view class="message-panel-subtitle">{{ messagePanelSummary }}</view>
         </view>
         <view class="message-panel-actions">
-          <button
+          <t-button
             class="message-panel-tool"
             :class="{ disabled: messagesLoading }"
             :disabled="messagesLoading"
             @tap.stop="refreshOrganizerMessages"
           >
             刷新
-          </button>
-          <button class="message-panel-tool" @tap.stop="closeMessagePanel">收起</button>
+          </t-button>
+          <t-button class="message-panel-tool" @tap.stop="closeMessagePanel">收起</t-button>
         </view>
       </view>
 
       <view v-if="messagesLoading" class="message-empty">正在同步消息...</view>
       <view v-else-if="messagesError" class="message-empty error">{{ messagesError }}</view>
-      <view v-else-if="organizerMessages.length === 0" class="message-empty">暂无待处理申请。</view>
+      <t-empty
+        v-else-if="organizerMessages.length === 0"
+        class="message-empty"
+        description="暂无待处理申请。"
+      />
       <block v-else>
-        <button
+        <t-button
           v-for="message in organizerMessages"
           :key="message.key"
           class="message-item"
           hover-class="message-item-hover"
           @tap.stop="goManageFromMessage(message)"
         >
-          <view class="message-copy">
-            <view class="message-title-row">
-              <text class="message-title">{{ message.title }}</text>
-              <text class="message-count">{{ message.count }}待审</text>
+          <view class="message-item-content">
+            <view class="message-copy">
+              <view class="message-title-row">
+                <text class="message-title">{{ message.title }}</text>
+                <t-tag class="message-count" theme="warning" variant="light" size="small">
+                  {{ message.count }}待审
+                </t-tag>
+              </view>
+              <text class="message-subtitle">{{ message.subtitle }}</text>
             </view>
-            <text class="message-subtitle">{{ message.subtitle }}</text>
+            <text class="message-action">{{ message.actionText }}</text>
           </view>
-          <text class="message-action">{{ message.actionText }}</text>
-        </button>
+        </t-button>
       </block>
     </view>
 
@@ -87,7 +107,7 @@
             </view>
             <view class="profile-subtitle">{{ profileSubtitle }}</view>
           </view>
-          <button v-if="!profileRequired" class="profile-close" @tap="closeProfileModal">取消</button>
+          <t-button v-if="!profileRequired" class="profile-close" @tap="closeProfileModal">取消</t-button>
         </view>
 
         <view class="profile-preview">
@@ -111,7 +131,7 @@
           </button>
           <view class="profile-preview-copy">
             <view class="profile-name-control">
-              <image
+              <t-image
                 v-if="profileGenderIcon"
                 class="profile-gender-icon"
                 :src="profileGenderIcon"
@@ -137,43 +157,55 @@
 
         <view class="profile-field-label">性别</view>
         <view class="gender-options">
-          <button
+          <t-button
             class="gender-option male"
             :class="{ selected: draftGender === 'male' }"
             @tap="selectGender('male')"
           >
-            <view class="option-avatar">
-              <image class="option-avatar-image" :src="defaultAvatars.male.src" mode="aspectFill" />
+            <view class="gender-option-content">
+              <view class="option-avatar">
+                <image
+                  class="option-avatar-image"
+                  :src="defaultAvatars.male.src"
+                  mode="aspectFill"
+                />
+              </view>
+              <view class="option-copy">
+                <text class="option-title">男</text>
+                <text class="option-subtitle">默认男生头像</text>
+              </view>
             </view>
-            <view class="option-copy">
-              <text class="option-title">男</text>
-              <text class="option-subtitle">默认男生头像</text>
-            </view>
-          </button>
-          <button
+          </t-button>
+          <t-button
             class="gender-option female"
             :class="{ selected: draftGender === 'female' }"
             @tap="selectGender('female')"
           >
-            <view class="option-avatar">
-              <image class="option-avatar-image" :src="defaultAvatars.female.src" mode="aspectFill" />
+            <view class="gender-option-content">
+              <view class="option-avatar">
+                <image
+                  class="option-avatar-image"
+                  :src="defaultAvatars.female.src"
+                  mode="aspectFill"
+                />
+              </view>
+              <view class="option-copy">
+                <text class="option-title">女</text>
+                <text class="option-subtitle">默认女生头像</text>
+              </view>
             </view>
-            <view class="option-copy">
-              <text class="option-title">女</text>
-              <text class="option-subtitle">默认女生头像</text>
-            </view>
-          </button>
+          </t-button>
         </view>
 
-        <button
+        <t-button
           class="profile-save"
           :class="{ disabled: !canSaveProfile }"
           :disabled="!canSaveProfile"
           @tap="saveProfile"
         >
           {{ saveButtonText }}
-        </button>
-        <button class="profile-logout" @tap="logoutProfile">退出登录</button>
+        </t-button>
+        <t-button class="profile-logout" @tap="logoutProfile">退出登录</t-button>
       </view>
     </view>
 
@@ -184,7 +216,7 @@
             <view class="profile-title">{{ phoneTitle }}</view>
             <view class="profile-subtitle">{{ phoneSubtitle }}</view>
           </view>
-          <button v-if="!phoneRequired" class="profile-close" @tap="skipPhoneAuthorization">跳过</button>
+          <t-button v-if="!phoneRequired" class="profile-close" @tap="skipPhoneAuthorization">跳过</t-button>
         </view>
 
         <view class="phone-copy">
@@ -192,7 +224,7 @@
           <view class="phone-copy-text">不会在公开车局、分享页或个人信息条展示。</view>
         </view>
 
-        <button
+        <t-button
           class="phone-authorize"
           :class="{ disabled: savingPhone }"
           :disabled="savingPhone"
@@ -200,8 +232,8 @@
           @getphonenumber="handlePhoneNumber"
         >
           {{ phoneButtonText }}
-        </button>
-        <button v-if="!phoneRequired" class="phone-skip" @tap="skipPhoneAuthorization">稍后再说</button>
+        </t-button>
+        <t-button v-if="!phoneRequired" class="phone-skip" @tap="skipPhoneAuthorization">稍后再说</t-button>
       </view>
     </view>
   </view>
@@ -236,6 +268,7 @@ import {
   buildOrganizerSignupMessages,
   totalOrganizerSignupMessageCount
 } from "../utils/authMessages";
+import { showToast } from "../utils/tdesignFeedback";
 
 const DEFAULT_AVATARS = {
   male: {
@@ -623,11 +656,16 @@ export default {
     handlePhoneBackdropTap() {
       if (this.phoneRequired) {
         this.finishPhoneRequest(null);
-        uni.showToast({ title: "授权手机号后继续", icon: "none" });
+        showToast({ title: "授权手机号后继续", icon: "none" });
         return;
       }
 
       this.skipPhoneAuthorization();
+    },
+    handlePhonePopupVisibleChange(event = {}) {
+      if (event.detail?.visible === false) {
+        this.handlePhoneBackdropTap();
+      }
     },
     skipPhoneAuthorization() {
       this.finishPhoneRequest(getCurrentUser());
@@ -649,7 +687,7 @@ export default {
       if (!code) {
         if (this.phoneRequired) {
           this.finishPhoneRequest(null);
-          uni.showToast({ title: "授权手机号后继续", icon: "none" });
+          showToast({ title: "授权手机号后继续", icon: "none" });
         } else {
           this.skipPhoneAuthorization();
         }
@@ -665,9 +703,9 @@ export default {
         this.user = auth.user;
         this.roles = auth.roles || [];
         this.finishPhoneRequest(auth);
-        uni.showToast({ title: "手机号已授权", icon: "none" });
+        showToast({ title: "手机号已授权", icon: "none" });
       } catch (error) {
-        uni.showToast({ title: "手机号授权失败，请重试", icon: "none" });
+        showToast({ title: "手机号授权失败，请重试", icon: "none" });
       } finally {
         this.savingPhone = false;
       }
@@ -677,9 +715,14 @@ export default {
         this.closeProfileModal();
       }
     },
+    handleProfilePopupVisibleChange(event = {}) {
+      if (event.detail?.visible === false) {
+        this.handleProfileBackdropTap();
+      }
+    },
     closeProfileModal() {
       if (this.profileRequired) {
-        uni.showToast({ title: "请选择性别后继续", icon: "none" });
+        showToast({ title: "请选择性别后继续", icon: "none" });
         return;
       }
 
@@ -708,7 +751,7 @@ export default {
         return true;
       }
       if (nickname.length > 32) {
-        uni.showToast({ title: "昵称最多32个字", icon: "none" });
+        showToast({ title: "昵称最多32个字", icon: "none" });
         return false;
       }
       this.draftNickname = nickname;
@@ -755,12 +798,12 @@ export default {
     async saveProfile() {
       if (!this.canSaveProfile) {
         if (!this.draftGender) {
-          uni.showToast({ title: "请选择性别", icon: "none" });
+          showToast({ title: "请选择性别", icon: "none" });
         }
         return;
       }
       if ((this.draftNickname || "").trim().length > 32) {
-        uni.showToast({ title: "昵称最多32个字", icon: "none" });
+        showToast({ title: "昵称最多32个字", icon: "none" });
         return;
       }
 
@@ -793,18 +836,18 @@ export default {
         if (requestId && typeof uni.$emit === "function") {
           uni.$emit(AUTH_PROFILE_RESPONSE_EVENT, { requestId, auth });
         }
-        uni.showToast({ title: "个人信息已更新", icon: "none" });
+        showToast({ title: "个人信息已更新", icon: "none" });
       } catch (error) {
         if (error?.statusCode === 401) {
           this.finishProfileRequest(null);
           this.refreshIdentity();
-          uni.showToast({
+          showToast({
             title: error.userMessage || "登录已过期，请重新登录。",
             icon: "none"
           });
           return;
         }
-        uni.showToast({ title: error?.userMessage || "个人信息保存失败", icon: "none" });
+        showToast({ title: error?.userMessage || "个人信息保存失败", icon: "none" });
       } finally {
         this.savingProfile = false;
       }
@@ -827,7 +870,7 @@ export default {
       if (requestId && typeof uni.$emit === "function") {
         uni.$emit(AUTH_PROFILE_RESPONSE_EVENT, { requestId, auth: null });
       }
-      uni.showToast({ title: "已退出登录", icon: "none" });
+      showToast({ title: "已退出登录", icon: "none" });
       goHomeAfterLogout();
     }
   }
@@ -864,6 +907,29 @@ export default {
 
 .auth-identity-bar.empty {
   color: #7a857d;
+}
+
+.auth-profile-trigger {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 14rpx;
+  height: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: normal;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.auth-profile-trigger-hover {
+  opacity: 0.82;
 }
 
 .auth-avatar {
@@ -949,7 +1015,6 @@ export default {
   align-items: center;
   justify-content: flex-end;
   gap: 8rpx;
-  max-width: 52%;
   min-width: 0;
 }
 
@@ -983,7 +1048,16 @@ export default {
   line-height: 34rpx;
 }
 
+.auth-message-chip-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6rpx;
+  min-width: 0;
+}
+
 .auth-message-chip::after,
+.auth-profile-trigger::after,
 .message-panel-tool::after,
 .message-item::after {
   border: 0;
@@ -1094,6 +1168,15 @@ export default {
   background: transparent;
   color: #183d34;
   text-align: left;
+}
+
+.message-item-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  width: 100%;
+  min-width: 0;
 }
 
 .message-copy {
@@ -1371,6 +1454,15 @@ export default {
   background: #ffffff;
   color: #183d34;
   text-align: left;
+}
+
+.gender-option-content {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14rpx;
+  width: 100%;
+  min-width: 0;
 }
 
 .gender-option.selected {

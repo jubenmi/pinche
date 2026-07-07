@@ -1,12 +1,13 @@
 <template>
   <view class="page mine-calendar-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view v-if="!hasLogin" class="section login-section">
       <view class="title">我的</view>
       <view class="text">{{ statusText }}</view>
       <view class="actions">
-        <button class="button" @tap="login">微信登录</button>
+        <t-button class="button" @tap="login">微信登录</t-button>
       </view>
     </view>
 
@@ -33,6 +34,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import SessionCalendar from "../../components/SessionCalendar.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import {
   AUTH_CHANGE_EVENT,
   clearAuth,
@@ -43,6 +45,7 @@ import {
   getToken,
   request
 } from "../../utils/api";
+import { showToast } from "../../utils/tdesignFeedback";
 
 const statusText = ref("未登录");
 const roles = ref([]);
@@ -138,7 +141,7 @@ function handleAuthExpired(error = {}) {
   resetLoggedOutState();
   if (!authExpiredToastActive) {
     authExpiredToastActive = true;
-    uni.showToast({
+    showToast({
       title: error?.userMessage || "登录已过期，请重新登录。",
       icon: "none"
     });

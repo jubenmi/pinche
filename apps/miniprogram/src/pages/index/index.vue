@@ -1,9 +1,10 @@
 <template>
   <view class="page home-page">
     <AuthIdentityBar passive-guest @guest-login="loginFromGuestBar" />
+    <FeedbackHost />
 
     <view v-if="backendStatus.maintenance" class="maintenance-state">
-      <image class="maintenance-art" src="/static/art/maintenance-landscape.jpg" mode="widthFix" />
+      <t-image class="maintenance-art" src="/static/art/maintenance-landscape.jpg" mode="widthFix" />
       <view class="maintenance-title">服务正在上线维护中</view>
       <view class="maintenance-text">我们正在准备后端服务，稍后会自动恢复。</view>
       <view v-if="backendStatus.lastCheckedAt" class="maintenance-meta">
@@ -13,18 +14,18 @@
         {{ backendStatus.lastErrorMessage }}
       </view>
       <view class="build-version">{{ buildVersion }}</view>
-      <button
+      <t-button
         class="maintenance-retry"
         :class="{ disabled: backendStatus.checking }"
         :disabled="backendStatus.checking"
-        @click="retryBackend"
+        @tap="retryBackend"
       >
         {{ retryButtonText }}
-      </button>
+      </t-button>
     </view>
 
     <view v-else class="home-normal">
-      <image
+      <t-image
         v-if="homeState !== 'calendar'"
         class="home-landscape"
         src="/static/art/ink-home-landscape.jpg"
@@ -38,14 +39,22 @@
         </view>
 
         <view class="home-panel">
-          <button class="primary-action" @click="startFirstSession">
-            <image class="action-icon create-icon" src="/static/icons/user-plus-white.png" mode="aspectFit" />
-            <text class="action-title">开始发车</text>
-          </button>
+          <t-button class="primary-action" @tap="startFirstSession">
+            <view class="primary-action-content">
+              <t-image class="action-icon create-icon" src="/static/icons/user-plus-white.png" mode="aspectFit" />
+              <text class="action-title">开始发车</text>
+            </view>
+          </t-button>
         </view>
 
         <view class="quiet-line">之后你的发车、报名和相册都会自动汇总到首页。</view>
-        <view v-if="homeStatusText" class="home-status">{{ homeStatusText }}</view>
+        <t-notice-bar
+          v-if="homeStatusText"
+          class="home-status"
+          theme="warning"
+          :visible="true"
+          :content="homeStatusText"
+        />
         <view class="build-version">{{ buildVersion }}</view>
       </view>
 
@@ -63,9 +72,11 @@
           <view class="hero-subtitle">{{ homeStatusText || "车局加载失败，请稍后重试。" }}</view>
         </view>
         <view class="home-panel">
-          <button class="primary-action" @click="loadHomeCalendar">
-            <text class="action-title">重试</text>
-          </button>
+          <t-button class="primary-action" @tap="loadHomeCalendar">
+            <view class="primary-action-content">
+              <text class="action-title">重试</text>
+            </view>
+          </t-button>
         </view>
         <view class="build-version">{{ buildVersion }}</view>
       </view>
@@ -98,6 +109,7 @@ import { onLoad, onShareAppMessage, onShareTimeline, onShow, onUnload } from "@d
 import { computed, reactive, ref } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import SessionCalendar from "../../components/SessionCalendar.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import {
   BACKEND_STATUS_CHANGE_EVENT,
   clearAuth,
@@ -112,6 +124,7 @@ import {
 } from "../../utils/api";
 import { clearCreateFlow } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
+import { showToast } from "../../utils/tdesignFeedback";
 
 const buildVersion = `版本 ${__PINCHE_BUILD_TIME__}`;
 const HOME_SHARE_FRIEND_TITLE = "剧本迷·拼车";
@@ -362,7 +375,7 @@ function handleAuthExpired(error = {}) {
   homeState.value = "first-session";
   if (!authExpiredToastActive) {
     authExpiredToastActive = true;
-    uni.showToast({
+    showToast({
       title: error?.userMessage || "登录已过期，请重新登录。",
       icon: "none"
     });
@@ -489,6 +502,14 @@ onShareTimeline(() => ({
   color: #ffffff;
   text-align: center;
   box-shadow: 0 18rpx 42rpx rgba(31, 111, 91, 0.24);
+}
+
+.primary-action-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18rpx;
+  min-width: 0;
 }
 
 .action-icon {

@@ -116,6 +116,18 @@ page {
   height: 34rpx;
 }
 
+.calendar-segmented-item {
+  padding: 4rpx 14rpx !important;
+  color: #34443e !important;
+  font-size: 20rpx !important;
+  font-weight: 500 !important;
+  line-height: 38rpx !important;
+}
+
+.calendar-segmented-thumb {
+  background: #ffffff !important;
+}
+
 .bottom-action {
   position: fixed;
   right: 30rpx;

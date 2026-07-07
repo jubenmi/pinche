@@ -40,9 +40,12 @@ assert(
   "Mine calendar list must not render the redundant pull-to-refresh instruction"
 );
 assert(
-  calendar.includes('v-for="filter in visibleFilterTabs"') &&
+  ((calendar.includes('v-for="filter in visibleFilterTabs"') ||
+    (calendar.includes(':options="visibleFilterSegmentOptions"') &&
+      calendar.includes("const visibleFilterSegmentOptions = computed") &&
+      calendar.includes("visibleFilterTabs.value.map"))) &&
     calendar.includes("const visibleFilterTabs = computed") &&
-    calendar.includes("tab.count > 0"),
+    calendar.includes("tab.count > 0")),
   "Mine calendar filters must hide zero-count state tabs"
 );
 assert(

@@ -1,6 +1,7 @@
 <template>
   <view class="page manage-page">
     <AuthIdentityBar />
+    <FeedbackHost />
 
     <view class="section overview-card">
       <view class="overview-head">
@@ -8,15 +9,23 @@
           <view class="overview-kicker">车局总览</view>
           <view class="overview-title-row">
             <view class="title">{{ session.script_name_snapshot || "车头管理" }}</view>
-            <view v-if="session.id" class="status-pill">{{ sessionStatusLabel(session.status) }}</view>
+            <t-tag v-if="session.id" class="status-pill" theme="primary" variant="light" size="small">
+              {{ sessionStatusLabel(session.status) }}
+            </t-tag>
           </view>
           <view class="text">{{ summaryText }}</view>
         </view>
-        <button class="overview-refresh" :disabled="busyAction" @click="reload">
+        <t-button class="overview-refresh" :disabled="busyAction" @tap="reload">
           {{ busyAction ? "处理中" : "刷新" }}
-        </button>
+        </t-button>
       </view>
-      <view v-if="operationText" class="notice">{{ operationText }}</view>
+      <t-notice-bar
+        v-if="operationText"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        :content="operationText"
+      />
       <view v-if="session.id" class="overview-stats">
         <view class="overview-stat">
           <view class="overview-stat-value">{{ seatStats.total }}</view>
@@ -40,18 +49,18 @@
         <view class="overview-line">时间：{{ session.start_at }}</view>
       </view>
       <view v-if="session.id" class="overview-actions">
-        <button class="mini-button muted" :disabled="busyAction" @click="subscribeSignupReminder">
+        <t-button class="mini-button muted" :disabled="busyAction" @tap="subscribeSignupReminder">
           申请提醒
-        </button>
-        <button class="mini-button muted" :disabled="busyAction" @click="goDetail">车局详情</button>
-        <button
+        </t-button>
+        <t-button class="mini-button muted" :disabled="busyAction" @tap="goDetail">车局详情</t-button>
+        <t-button
           v-if="hasOtherOnboardMembers"
           class="mini-button muted"
           :disabled="busyAction"
-          @click="leaveOrganizer"
+          @tap="leaveOrganizer"
         >
           退出车头
-        </button>
+        </t-button>
       </view>
       <view v-if="session.id" class="overview-pinned">
         <ManagePinnedMessage
@@ -74,14 +83,14 @@
           <view class="section-title">车局设置</view>
           <view class="section-note">像群设置一样，车头可以随时调整后续上车规则。</view>
         </view>
-        <button
+        <t-button
           class="mini-button"
           :class="{ disabled: busyAction || !settingsDirty }"
           :disabled="busyAction || !settingsDirty"
-          @click="updateSessionSettings"
+          @tap="updateSessionSettings"
         >
           {{ settingsDirty ? "保存" : "已保存" }}
-        </button>
+        </t-button>
       </view>
       <view class="setting-switch-row">
         <view class="setting-switch-copy">
@@ -94,9 +103,9 @@
           <view class="setting-switch-label">
             {{ joinPolicy === "review_required" ? "需要审核" : "直接上车" }}
           </view>
-          <switch
+          <t-switch
             color="#1f7a68"
-            :checked="joinPolicy === 'review_required'"
+            :value="joinPolicy === 'review_required'"
             :disabled="busyAction"
             @change="setJoinPolicy($event.detail.value ? 'review_required' : 'direct')"
           />
@@ -109,9 +118,9 @@
         </view>
         <view class="setting-switch-meta">
           <view class="setting-switch-label">{{ joinPhoneRequired ? "已开启" : "已关闭" }}</view>
-          <switch
+          <t-switch
             color="#1f7a68"
-            :checked="joinPhoneRequired"
+            :value="joinPhoneRequired"
             :disabled="busyAction"
             @change="setJoinPhoneRequired($event.detail.value)"
           />
@@ -124,9 +133,9 @@
         </view>
         <view class="setting-switch-meta">
           <view class="setting-switch-label">{{ npcJoinEnabled ? "已开启" : "已关闭" }}</view>
-          <switch
+          <t-switch
             color="#1f7a68"
-            :checked="npcJoinEnabled"
+            :value="npcJoinEnabled"
             :disabled="busyAction"
             @change="setNpcJoinEnabled($event.detail.value)"
           />
@@ -154,21 +163,22 @@
       <view v-if="!hasOtherOnboardMembers && !hasActiveAlbumPhotos">
         <view class="section-title">取消车</view>
         <view class="section-note">取消后这辆车会被直接删除，座位、报名、聊天和相册记录会一起删除。</view>
-        <textarea
-          v-model="cancelReason"
+        <t-textarea
+          :value="cancelReason"
           class="textarea"
           maxlength="200"
           placeholder="可选：写一句取消原因"
           placeholder-class="placeholder"
+          @change="cancelReason = $event.detail.value"
         />
         <view class="actions">
-          <button
+          <t-button
             class="button danger"
             :disabled="busyAction"
-            @click="cancelSession"
+            @tap="cancelSession"
           >
             取消本车
-          </button>
+          </t-button>
         </view>
       </view>
       <view v-else-if="hasOtherOnboardMembers">
@@ -179,7 +189,7 @@
         <view class="section-title">先删照片</view>
         <view class="section-note">相册已有照片，不能取消删除；请先删除所有照片，避免留下无主照片。</view>
         <view class="actions">
-          <button class="button secondary" :disabled="busyAction" @click="goAlbum">打开相册</button>
+          <t-button class="button secondary" :disabled="busyAction" @tap="goAlbum">打开相册</t-button>
         </view>
       </view>
     </view>
@@ -189,11 +199,13 @@
 <script>
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
+import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinnedMessage.vue";
 import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
+import { showActionSheet, showModal, showToast } from "../../utils/tdesignFeedback";
 
 function booleanSetting(value, fallback = true) {
   if (value === undefined || value === null || value === "") {
@@ -206,7 +218,7 @@ function booleanSetting(value, fallback = true) {
 }
 
 export default {
-  components: { AuthIdentityBar, RoleSeatBoard, ManagePinnedMessage },
+  components: { AuthIdentityBar, RoleSeatBoard, ManagePinnedMessage, FeedbackHost },
   data() {
     return {
       sessionId: "",
@@ -636,7 +648,7 @@ export default {
     },
     showRemoveMemberReasons(seat) {
       const options = this.removeReasonOptions();
-      uni.showActionSheet({
+      showActionSheet({
         itemList: options.map((option) => option.label),
         success: (result) => {
           const option = options[result.tapIndex];
@@ -781,7 +793,7 @@ export default {
           }
         });
         this.statusText = "本车已取消。";
-        uni.showToast({ title: "本车已取消", icon: "none" });
+        showToast({ title: "本车已取消", icon: "none" });
         uni.redirectTo({ url: "/pages/mine/index" });
       } catch (error) {
         this.statusText = this.cancelSessionErrorText(error);
@@ -794,7 +806,7 @@ export default {
       if (this.busyAction) {
         return;
       }
-      uni.showModal({
+      showModal({
         title: "确认操作",
         content,
         confirmText: "确认",
@@ -832,7 +844,7 @@ export default {
       try {
         await request(options);
         this.statusText = successText;
-        uni.showToast({ title: successText, icon: "none" });
+        showToast({ title: successText, icon: "none" });
         const id = this.sessionId || "d1-demo";
         uni.redirectTo({ url: `/pages/session/detail?id=${id}` });
       } catch (error) {

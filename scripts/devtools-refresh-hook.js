@@ -21,6 +21,15 @@ const devDist = path.join(miniprogramProject, "dist/dev/mp-weixin");
 const defaultCli = "/Applications/wechatwebdevtools.app/Contents/MacOS/cli";
 const cliPath = process.env.WECHAT_DEVTOOLS_CLI || defaultCli;
 const force = process.argv.includes("--force");
+const devOutputReadyTimeoutMs = 8000;
+const devOutputReadyPollMs = 250;
+const devOutputReadyFiles = [
+  "app.json",
+  "project.config.json",
+  "miniprogram_npm/tdesign-miniprogram/image/image.json",
+  "miniprogram_npm/tdesign-miniprogram/image/image.wxml",
+  "miniprogram_npm/tdesign-miniprogram/image/image.js"
+];
 
 const watchedPaths = [
   "apps/miniprogram/src",
@@ -92,20 +101,57 @@ function warn(message) {
   console.warn(`[devtools-refresh] ${message}`);
 }
 
-function openDevToolsProject() {
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function canReadJson(file) {
+  try {
+    JSON.parse(readFileSync(file, "utf8"));
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function isDevOutputReady() {
+  for (const readyFile of devOutputReadyFiles) {
+    if (!existsSync(path.join(devDist, readyFile))) {
+      return false;
+    }
+  }
+  return canReadJson(path.join(devDist, "app.json"));
+}
+
+async function waitForDevOutput() {
+  const deadline = Date.now() + devOutputReadyTimeoutMs;
+  while (Date.now() <= deadline) {
+    if (isDevOutputReady()) {
+      return true;
+    }
+    await sleep(devOutputReadyPollMs);
+  }
+  return false;
+}
+
+async function openDevToolsProject() {
   if (!existsSync(cliPath)) {
     warn(`WeChat DevTools CLI not found: ${cliPath}`);
     warn("Set WECHAT_DEVTOOLS_CLI if your CLI is installed elsewhere.");
     return false;
   }
 
-  if (!existsSync(path.join(devDist, "app.json"))) {
+  if (!(await waitForDevOutput())) {
     warn(`Dev build output is missing: ${path.join(devDist, "app.json")}`);
     warn("Run npm run dev:mp-weixin once so WeChat DevTools has dev output to load.");
+    warn("Skipped refresh so DevTools does not load a half-written UniApp output directory.");
+    return false;
   }
 
   try {
-    const child = spawn(cliPath, ["open", "--project", miniprogramProject], {
+    const child = spawn(cliPath, ["open", "--project", devDist], {
       cwd: root,
       detached: true,
       stdio: "ignore"
@@ -122,18 +168,21 @@ function openDevToolsProject() {
 
 const state = readState();
 const snapshot = relevantSnapshot();
-const shouldRefresh = force || snapshot.latestMtime > Number(state.latestMtime || 0);
+const shouldRefresh =
+  force ||
+  state.lastStatus !== "refreshed" ||
+  snapshot.latestMtime > Number(state.latestMtime || 0);
 
 if (!shouldRefresh) {
   process.exit(0);
 }
 
-const ok = openDevToolsProject();
+const ok = await openDevToolsProject();
 writeState({
-  latestMtime: snapshot.latestMtime,
+  latestMtime: ok ? snapshot.latestMtime : Number(state.latestMtime || 0),
   watchedPaths: snapshot.watchedPaths,
   lastStatus: ok ? "refreshed" : "skipped",
   cliPath,
-  projectPath: miniprogramProject,
+  projectPath: devDist,
   devDist
 });
