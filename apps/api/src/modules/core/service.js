@@ -3363,6 +3363,7 @@ export async function listMySignups(user) {
         LEFT JOIN session_npc_roles npc_role ON npc_role.id = signup.session_npc_role_id
         WHERE signup.user_id = ?
           AND signup.user_hidden_at IS NULL
+          AND signup.status IN ('pending', 'approved')
         ORDER BY session.start_at DESC, signup.id DESC
       `,
       [user.user.id]
