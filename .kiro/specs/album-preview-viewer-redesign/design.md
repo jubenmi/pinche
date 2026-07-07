@@ -1,57 +1,57 @@
-# Album Preview Viewer Redesign Design
+# 相册图片预览重设计方案
 
-## Current Context
+## 当前背景
 
-The album page is a uni-app Vue mini-program page at `apps/miniprogram/src/pages/session/album.vue`. It currently uses `t-image-viewer` from `tdesign-miniprogram`.
+相册页是 uni-app Vue 小程序页面，文件位于 `apps/miniprogram/src/pages/session/album.vue`。页面当前使用 `tdesign-miniprogram` 的 `t-image-viewer` 做全屏图片预览。
 
-TDesign ImageViewer resets its internal loaded indexes and swiper current whenever `visible`, `initialIndex`, or `images` changes. This means the plugin expects a stable image URL array and an open-time `initialIndex`. Recent dynamic URL hydration conflicted with those assumptions by changing `images` and `initialIndex` while the user was swiping.
+TDesign ImageViewer 在 `visible`、`initialIndex` 或 `images` 变化时，会重置内部已加载索引，并把内部 swiper current 设置回 `initialIndex`。这意味着插件天然期望一个稳定的图片 URL 数组，以及只在打开时使用的 `initialIndex`。近期的动态 URL hydration 方案在用户滑动时修改 `images` 和 `initialIndex`，正好破坏了这些假设。
 
-The backend currently stores album display media as processed JPEGs under `uploads/session-album/display/*.jpg`. The display image is produced with longest edge 2048px, JPEG quality 85, metadata stripped. The thumbnail variant is generated from that display image as 640px JPEG quality 75. The system does not retain or serve an upload-original image.
+后端当前把相册展示图保存为 `uploads/session-album/display/*.jpg` 下的处理后 JPEG。展示图规则是最长边 2048px、JPEG quality 85、去除元数据。缩略图变体基于展示图生成，规格为 640px、JPEG quality 75。系统不保存或提供上传原始大图。
 
-## Architecture
+## 架构
 
-Use a two-phase architecture:
+采用两阶段架构：
 
-1. **TDesign stable baseline:** keep TDesign ImageViewer, but feed it only stable direct-load preview URLs. This validates the plugin under correct usage conditions.
-2. **Optional progressive viewer:** only if thumbnail-first UX remains necessary, add a custom `AlbumProgressiveImageViewer` with per-item thumbnail and preview layers.
+1. **TDesign 稳定基线**：继续使用 TDesign ImageViewer，但只给它稳定、可直接加载的 preview URL。这个阶段用于验证插件在正确使用条件下是否稳定。
+2. **可选渐进式 viewer**：只有当 thumbnail-first 体验仍然必要时，再新增自研 `AlbumProgressiveImageViewer`，在每个 item 内部管理 thumbnail 和 preview 两层图片。
 
-The first phase is required before the second. If TDesign is stable under direct-load preview URLs, the original bug is confirmed to be caused by violating plugin assumptions rather than by TDesign's swipe logic.
+第一阶段必须先完成。若 TDesign 在直接加载 preview URL 的条件下稳定，则说明原问题来自我们破坏了插件输入条件，而不是 TDesign 的滑动逻辑本身。
 
-## Backend Media URL Design
+## 后端媒体 URL 设计
 
-Add direct-load media tokens for complete album media. Unlike the current Authorization-header path, these URLs must be consumable by WeChat `<image>`.
+为完整相册媒体新增可直接加载的短期 token URL。和当前依赖 Authorization header 的路径不同，这些 URL 必须能被微信 `<image>` 直接消费。
 
-Example routes:
+示例路由：
 
 ```http
 GET /api/session-album/photos/:photoId/image?token=<media_token>&variant=preview
 GET /api/session-album/photos/:photoId/image?token=<media_token>&variant=thumbnail
 ```
 
-The token must bind:
+token 必须绑定：
 
-- purpose: `session-album-media`
+- purpose：`session-album-media`
 - `photoId`
 - `sessionId`
-- current `userId`
-- allowed variant or variants
-- expiry timestamp
+- 当前 `userId`
+- 允许的 variant 或 variant 集合
+- 过期时间戳
 
-The album list endpoint signs the media token only after checking the same visibility rules already used by the album list:
+相册列表接口在签发媒体 token 之前，必须完成和现有相册列表一致的可见性校验：
 
-- authenticated user
-- session album is open
-- user is a valid album member
-- photo is active
-- photo is visible to the user under privacy and tag rules
+- 用户已登录
+- 车局相册已开放
+- 用户是有效相册成员
+- 照片状态为 active
+- 照片在隐私和标签规则下对该用户可见
 
-The media endpoint validates only the token and variant; it must not require Authorization for the direct-load route. Invalid, expired, or mismatched tokens return 403.
+媒体接口只校验 token 和 variant，不再要求 Authorization。无效、过期或不匹配的 token 返回 403。
 
-The existing authenticated media path may remain for download or backward compatibility during migration.
+迁移期间可以保留现有的认证媒体路径，用于下载或兼容旧逻辑。
 
-## API Response Shape
+## API 返回结构
 
-Visible photos returned by complete-album endpoints should include:
+完整相册接口返回的可见照片应包含：
 
 ```json
 {
@@ -65,13 +65,13 @@ Visible photos returned by complete-album endpoints should include:
 }
 ```
 
-`preview_load_url` is the canonical ImageViewer URL in the TDesign baseline. `thumbnail_load_url` is reserved for gallery thumbnails, prewarming, or the optional progressive viewer.
+`preview_load_url` 是 TDesign 基线中 ImageViewer 使用的标准 URL。`thumbnail_load_url` 保留给相册缩略图、预热逻辑或后续可选的渐进式 viewer。
 
-## Mini-Program TDesign Baseline
+## 小程序 TDesign 稳定基线
 
-### State Contract
+### 状态约定
 
-Keep these album page states:
+相册页保留这些状态：
 
 - `previewOverlayVisible`
 - `previewPhotos`
@@ -79,52 +79,52 @@ Keep these album page states:
 - `previewInitialIndex`
 - `previewCurrentIndex`
 
-Their meanings must be narrowed:
+但必须收窄语义：
 
-- `previewImageUrls` is generated once when opening the viewer.
-- `previewInitialIndex` is generated once when opening the viewer.
-- `previewCurrentIndex` changes on swipe and is used only for prewarming or index-dependent app behavior.
-- No method mutates `previewImageUrls` while `previewOverlayVisible` is true.
-- No method mutates `previewInitialIndex` from `handlePreviewImageViewerChange`.
+- `previewImageUrls` 只在打开 viewer 时生成一次。
+- `previewInitialIndex` 只在打开 viewer 时设置一次。
+- `previewCurrentIndex` 可随滑动变化，但只用于预热或索引相关业务逻辑。
+- viewer 打开期间，任何方法都不得修改 `previewImageUrls`。
+- `handlePreviewImageViewerChange` 不得修改 `previewInitialIndex`。
 
-### Open Flow
+### 打开流程
 
-`openPhotoPreview(photo)`:
+`openPhotoPreview(photo)`：
 
-1. Build `previewPhotos` from `previewContextPhotosForPhoto(photo)`.
-2. Find `currentIndex` from the clicked photo id.
-3. Build `previewImageUrls` from `photo.preview_load_url`.
-4. If a photo lacks `preview_load_url`, use a non-transparent direct-load fallback asset so TDesign has a concrete image source.
-5. Set `previewInitialIndex = currentIndex`.
-6. Set `previewCurrentIndex = currentIndex`.
-7. Set `previewOverlayVisible = true`.
-8. Call `prewarmPreviewUrls(currentIndex)`.
+1. 通过 `previewContextPhotosForPhoto(photo)` 构建 `previewPhotos`。
+2. 根据点击照片 id 找到 `currentIndex`。
+3. 使用 `photo.preview_load_url` 构建 `previewImageUrls`。
+4. 如果某张照片缺少 `preview_load_url`，使用非透明、可直接加载的 fallback 图片资源，确保 TDesign 拿到具体图片源。
+5. 设置 `previewInitialIndex = currentIndex`。
+6. 设置 `previewCurrentIndex = currentIndex`。
+7. 设置 `previewOverlayVisible = true`。
+8. 调用 `prewarmPreviewUrls(currentIndex)`。
 
-### Swipe Flow
+### 滑动流程
 
-`handlePreviewImageViewerChange(event)`:
+`handlePreviewImageViewerChange(event)`：
 
-1. Read `event.detail.index`.
-2. Set `previewCurrentIndex`.
-3. Call `prewarmPreviewUrls(nextIndex)`.
-4. Do not update `previewInitialIndex`.
-5. Do not update `previewImageUrls`.
+1. 读取 `event.detail.index`。
+2. 设置 `previewCurrentIndex`。
+3. 调用 `prewarmPreviewUrls(nextIndex)`。
+4. 不更新 `previewInitialIndex`。
+5. 不更新 `previewImageUrls`。
 
-### Prewarming
+### 预热流程
 
-`prewarmPreviewUrls(index)`:
+`prewarmPreviewUrls(index)`：
 
-1. Select photos from `index - 2` to `index + 2`.
-2. For each selected photo, prewarm `preview_load_url` with `uni.getImageInfo` or an equivalent hidden image preload.
-3. Store prewarm status separately from ImageViewer input state.
-4. Ignore prewarm failures for the open viewer. The viewer keeps its stable URL array.
-5. If token expiry is detected, mark the album media URLs stale and refresh them after close or before the next open, not by replacing the open viewer's `images`.
+1. 选取 `index - 2` 到 `index + 2` 的照片。
+2. 对每张照片的 `preview_load_url` 调用 `uni.getImageInfo` 或等价的隐藏图片预加载方式。
+3. 预热状态单独保存，不进入 ImageViewer 的输入状态。
+4. 预热失败不影响已经打开的 viewer；viewer 始终保留稳定 URL 数组。
+5. 如果发现 token 过期，标记相册媒体 URL 已过期，并在关闭后或下一次打开前刷新；不要在当前 viewer 打开态替换 `images`。
 
-## Optional Progressive Viewer
+## 可选渐进式 viewer
 
-If the TDesign baseline is stable but UX still needs thumbnail-first rendering, create a custom component such as `apps/miniprogram/src/components/AlbumProgressiveImageViewer.vue`.
+如果 TDesign 基线已经稳定，但产品体验仍要求先显示缩略图，则新增自研组件，例如 `apps/miniprogram/src/components/AlbumProgressiveImageViewer.vue`。
 
-The component uses native `swiper` and receives stable `photos` rather than an `images` string array:
+组件使用原生 `swiper`，接收稳定的 `photos` 数组，而不是 `images` 字符串数组：
 
 ```js
 {
@@ -140,20 +140,20 @@ The component uses native `swiper` and receives stable `photos` rather than an `
 }
 ```
 
-Each visible item renders two images:
+每个可见 item 渲染两层图片：
 
-1. thumbnail layer loads first and prevents black pages.
-2. preview layer loads concurrently and fades in over the thumbnail.
-3. preview failure leaves thumbnail visible with a light failure indicator.
-4. thumbnail failure shows a non-transparent fallback state.
+1. thumbnail 层先加载，用于避免黑页。
+2. preview 层并行加载，成功后淡入覆盖 thumbnail。
+3. preview 失败时保留 thumbnail，并显示轻量失败提示。
+4. thumbnail 失败时显示非透明 fallback 状态。
 
-The component should window DOM to current plus two on each side. This keeps rendering bounded without relying on TDesign lazy behavior.
+组件应只渲染 current 前后两张的窗口范围。这样可以限制 DOM 数量，不依赖 TDesign 的 lazy 行为。
 
-## Risk Controls
+## 风险控制
 
-- Keep TDesign ImageViewer unpatched.
-- Keep `previewImageUrls` stable while the viewer is open.
-- Keep `initialIndex` open-only.
-- Add static checks before implementation to catch regressions to dynamic `images` mutation.
-- Verify plugin stability in DevTools before building the optional progressive viewer.
+- 保持 TDesign ImageViewer 无内部 patch。
+- viewer 打开期间保持 `previewImageUrls` 稳定。
+- `initialIndex` 只在打开时使用。
+- 实施前先增加静态检查，防止回退到动态修改 `images` 的方案。
+- 必须在微信开发者工具中验证插件稳定性，再决定是否实现可选的自研渐进式 viewer。
 
