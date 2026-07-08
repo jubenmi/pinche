@@ -9,12 +9,12 @@
   - [x] `design.md` 描述数据模型、后端接口、建车校验、小程序入口、管理员审核、错误处理和测试范围。
   - [x] `tasks.md` 描述后续实现和验收清单。
 
-- [ ] D33.2 新增资料审核数据模型迁移。
-  - [ ] 给 `stores` 增加 `visibility`、`review_status`、`created_by_user_id`、`reviewed_by_admin_user_id`、`review_note`、`reviewed_at`、`merged_into_id`。
-  - [ ] 给 `scripts` 增加同名审核字段。
-  - [ ] 为 `visibility/review_status/status` 和 `created_by_user_id/review_status` 增加查询索引。
-  - [ ] 确认旧店家和剧本默认迁移为 `visibility=public`、`review_status=approved`。
-  - [ ] 确认迁移不改变现有 `status` 上下架语义。
+- [x] D33.2 新增资料审核数据模型迁移。
+  - [x] 给 `stores` 增加 `visibility`、`review_status`、`created_by_user_id`、`reviewed_by_admin_user_id`、`review_note`、`reviewed_at`、`merged_into_id`。
+  - [x] 给 `scripts` 增加同名审核字段。
+  - [x] 为 `visibility/review_status/status` 和 `created_by_user_id/review_status` 增加查询索引。
+  - [x] 确认旧店家和剧本默认迁移为 `visibility=public`、`review_status=approved`。
+  - [x] 确认迁移不改变现有 `status` 上下架语义。
 
 - [ ] D33.3 新增后端资料可见性 helper。
   - [ ] 新增 `normalizeCatalogVisibility`。
