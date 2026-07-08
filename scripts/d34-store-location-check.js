@@ -122,4 +122,17 @@ assert(
   "StoreDrawer save payload should include latitude and longitude"
 );
 
+const adminDockerfile = read("apps/admin-web/Dockerfile");
+assert(
+  adminDockerfile.includes("ARG VITE_TENCENT_MAP_KEY") &&
+    adminDockerfile.includes("ENV VITE_TENCENT_MAP_KEY=${VITE_TENCENT_MAP_KEY}"),
+  "admin-web Docker build should accept VITE_TENCENT_MAP_KEY for production maps"
+);
+
+const dockerWorkflow = read(".github/workflows/docker-publish.yml");
+assert(
+  dockerWorkflow.includes("VITE_TENCENT_MAP_KEY=${{ secrets.VITE_TENCENT_MAP_KEY }}"),
+  "docker workflow should pass VITE_TENCENT_MAP_KEY secret into admin-web build"
+);
+
 console.log("D34 store location checks passed");

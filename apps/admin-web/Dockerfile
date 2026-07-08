@@ -13,6 +13,9 @@ RUN npm install --workspace apps/admin-web
 
 COPY apps/admin-web apps/admin-web
 
+ARG VITE_TENCENT_MAP_KEY
+ENV VITE_TENCENT_MAP_KEY=${VITE_TENCENT_MAP_KEY}
+
 RUN npm --workspace apps/admin-web run build
 
 FROM nginx:1.27-alpine
