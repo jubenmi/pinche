@@ -15,6 +15,9 @@ import {
   notifySignupReviewed
 } from "../wechat/subscribe-message.js";
 
+const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
+const ALBUM_VIDEO_PROCESSING_STATUSES = new Set(["processing", "ready", "failed"]);
+
 function requireValue(body, key) {
   const value = body[key];
   if (value === undefined || value === null || value === "") {
@@ -140,6 +143,84 @@ function normalizeEntityType(value) {
   return value;
 }
 
+function normalizeCatalogVisibility(value = "public") {
+  const visibility = String(value || "public").trim();
+  if (!["public", "private"].includes(visibility)) {
+    throw badRequest("visibility must be public or private");
+  }
+  return visibility;
+}
+
+function normalizeCatalogReviewStatus(value = "approved") {
+  const status = String(value || "approved").trim();
+  if (!["pending", "needs_changes", "approved", "rejected", "merged"].includes(status)) {
+    throw badRequest("reviewStatus must be pending, needs_changes, approved, rejected, or merged");
+  }
+  return status;
+}
+
+function catalogVisibility(row = {}) {
+  return normalizeCatalogVisibility(row.visibility || "public");
+}
+
+function catalogReviewStatus(row = {}) {
+  return normalizeCatalogReviewStatus(row.review_status || "approved");
+}
+
+function isPublicCatalogUsable(row = {}) {
+  return (
+    catalogVisibility(row) === "public" &&
+    catalogReviewStatus(row) === "approved" &&
+    String(row.status || "active") === "active"
+  );
+}
+
+function isPrivateCatalogUsableByUser(row = {}, user) {
+  return (
+    user?.user?.id &&
+    catalogVisibility(row) === "private" &&
+    Number(row.created_by_user_id || 0) === Number(user.user.id) &&
+    ["pending", "needs_changes"].includes(catalogReviewStatus(row)) &&
+    String(row.status || "active") === "active"
+  );
+}
+
+function assertCatalogUsableForSession(row, user, label) {
+  if (!row) {
+    throw notFound(`${label} not found`);
+  }
+  if (isPublicCatalogUsable(row) || isPrivateCatalogUsableByUser(row, user)) {
+    return;
+  }
+  if (catalogVisibility(row) === "private" && Number(row.created_by_user_id || 0) !== Number(user.user.id)) {
+    throw notFound(`${label} not found`);
+  }
+  throw badRequest(`${label} is not available for session creation`);
+}
+
+function catalogBadge(row = {}) {
+  if (catalogVisibility(row) !== "private") {
+    return "";
+  }
+  const status = catalogReviewStatus(row);
+  if (status === "pending") {
+    return "仅自己可用";
+  }
+  if (status === "needs_changes") {
+    return "需补充";
+  }
+  return status;
+}
+
+function catalogResponse(row = {}) {
+  return {
+    ...row,
+    visibility: catalogVisibility(row),
+    review_status: catalogReviewStatus(row),
+    catalog_badge: catalogBadge(row)
+  };
+}
+
 function normalizeRoleGender(value) {
   const roleGender = String(value || "unlimited").trim();
   if (!["male", "female", "unlimited"].includes(roleGender)) {
@@ -227,6 +308,14 @@ function nonNegativeIntValue(value, label) {
   return parsed;
 }
 
+function positiveIntValue(value, label) {
+  const parsed = intValue(value, 0);
+  if (parsed <= 0) {
+    throw badRequest(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function parseRoleTemplate(value) {
   if (value === undefined || value === null || value === "") {
     return null;
@@ -277,6 +366,24 @@ function roleTemplateJson(value) {
     return null;
   }
   return JSON.stringify(parsed.map(normalizeRoleTemplateItem));
+}
+
+function defaultPrivateRoleTemplate(playerCount) {
+  return Array.from({ length: playerCount }, (_, index) => ({
+    name: `角色${index + 1}`,
+    description: "",
+    roleGender: "unlimited"
+  }));
+}
+
+function privateRoleTemplateJson(value, playerCount) {
+  const parsed = parseRoleTemplate(value) || defaultPrivateRoleTemplate(playerCount);
+  const normalized = parsed.map(normalizeRoleTemplateItem);
+  for (const role of normalized) {
+    assertPublicTextSafe("roleName", role.name);
+    assertPublicTextSafe("roleDescription", role.description);
+  }
+  return JSON.stringify(normalized);
 }
 
 function parseNpcRoles(value) {
@@ -481,6 +588,260 @@ function sessionAlbumPhotoUrl(sessionId, userId, value) {
     throw badRequest("photoUrl must contain an uploaded session album display photo");
   }
   return text;
+}
+
+function sessionAlbumVideoSourceUrl(sessionId, userId, value) {
+  const text = String(value || "").trim();
+  const sessionIdText = String(positiveId(sessionId, "sessionId"));
+  const userIdText = String(positiveId(userId, "userId"));
+  const pattern = new RegExp(
+    `^\\/uploads\\/session-album\\/videos\\/source\\/admin-video-${sessionIdText}-${userIdText}-\\d+-[a-f0-9]{16}\\.mp4$`
+  );
+  if (!pattern.test(text)) {
+    throw badRequest("sourceUrl must contain an uploaded session album video");
+  }
+  return text;
+}
+
+function albumMediaType(row = {}) {
+  return row.media_type === "video" ? "video" : "image";
+}
+
+function albumMediaProcessingStatus(row = {}) {
+  const status = row.processing_status || "ready";
+  return ALBUM_VIDEO_PROCESSING_STATUSES.has(status) ? status : "processing";
+}
+
+function albumVideoDurationSeconds(value) {
+  const durationSeconds = requiredPositiveInteger(value, "durationSeconds");
+  if (durationSeconds > ALBUM_VIDEO_MAX_DURATION_SECONDS) {
+    throw badRequest("durationSeconds must be at most 60 seconds");
+  }
+  return durationSeconds;
+}
+
+function albumVideoContentType(value) {
+  const contentType = String(value || "video/mp4").trim().toLowerCase();
+  if (contentType !== "video/mp4") {
+    throw badRequest("videoContentType must be video/mp4");
+  }
+  return contentType;
+}
+
+function albumVideoProcessingCallbackStatus(value) {
+  const status = String(value || "").trim().toLowerCase();
+  if (["ready", "success", "succeeded", "complete", "completed", "done"].includes(status)) {
+    return "ready";
+  }
+  if (status.includes("fail") || status.includes("error")) {
+    return "failed";
+  }
+  return "processing";
+}
+
+function albumVideoUploadPath(value, allowedKinds, fieldName) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  let pathText = String(value).trim();
+  if (/^https?:\/\//i.test(pathText)) {
+    try {
+      pathText = new URL(pathText).pathname;
+    } catch {
+      throw badRequest(`${fieldName} must be a valid album video object path`);
+    }
+  }
+  pathText = pathText.split("?")[0];
+  try {
+    pathText = decodeURIComponent(pathText);
+  } catch {
+    throw badRequest(`${fieldName} must be a valid album video object path`);
+  }
+  if (!pathText.startsWith("/")) {
+    pathText = `/${pathText}`;
+  }
+
+  const match = pathText.match(
+    /^\/uploads\/session-album\/videos\/(source|display|cover)\/[A-Za-z0-9._-]+$/
+  );
+  if (!match || !allowedKinds.has(match[1])) {
+    throw badRequest(`${fieldName} must be a valid album video ${[...allowedKinds].join("/")} path`);
+  }
+  if ((match[1] === "source" || match[1] === "display") && !pathText.endsWith(".mp4")) {
+    throw badRequest(`${fieldName} must be an MP4 album video path`);
+  }
+  if (match[1] === "cover" && !/\.(?:jpg|jpeg)$/i.test(pathText)) {
+    throw badRequest(`${fieldName} must be a JPG album video cover path`);
+  }
+  return pathText;
+}
+
+function deriveAlbumVideoDisplayUrl(sourceUrl) {
+  const filename = String(sourceUrl || "").split("/").pop();
+  if (!filename || !filename.endsWith(".mp4")) {
+    return null;
+  }
+  return `/uploads/session-album/videos/display/${filename}`;
+}
+
+function deriveAlbumVideoCoverUrl(sourceUrl) {
+  const filename = String(sourceUrl || "").split("/").pop();
+  if (!filename || !filename.endsWith(".mp4")) {
+    return null;
+  }
+  return `/uploads/session-album/videos/cover/${filename.replace(/\.mp4$/i, ".jpg")}`;
+}
+
+function albumVideoSnapshotSourceUrl(media) {
+  return media.display_url || media.source_url || null;
+}
+
+function normalizeCiJobId(value) {
+  const text = String(value || "").trim();
+  return text ? text.replace(/,/g, "").slice(0, 128) : null;
+}
+
+function mergeCiJobIds(currentValue, nextValue) {
+  const next = normalizeCiJobId(nextValue);
+  const currentParts = String(currentValue || "")
+    .split(",")
+    .map((part) => normalizeCiJobId(part))
+    .filter(Boolean);
+  if (!next || currentParts.includes(next)) {
+    return currentParts.join(",") || null;
+  }
+  const merged = [...currentParts, next].join(",");
+  return merged.length <= 128 ? merged : currentParts.join(",") || next;
+}
+
+function albumVideoProcessingError(value) {
+  const text = String(value || "").trim();
+  return text ? text.slice(0, 255) : null;
+}
+
+async function findSessionAlbumVideoForProcessing(connection, { mediaId, sourceUrl, ciJobId }) {
+  if (mediaId) {
+    const media = await findById(connection, "session_album_photos", mediaId);
+    if (media && media.status === "active" && albumMediaType(media) === "video") {
+      return media;
+    }
+  }
+
+  if (sourceUrl) {
+    const [rows] = await connection.query(
+      `
+        SELECT *
+        FROM session_album_photos
+        WHERE media_type = 'video'
+          AND status = 'active'
+          AND source_url = ?
+        LIMIT 1
+      `,
+      [sourceUrl]
+    );
+    if (rows[0]) {
+      return rows[0];
+    }
+  }
+
+  if (ciJobId) {
+    const [rows] = await connection.query(
+      `
+        SELECT *
+        FROM session_album_photos
+        WHERE media_type = 'video'
+          AND status = 'active'
+          AND (
+            ci_job_id = ?
+            OR ci_job_id LIKE ?
+            OR ci_job_id LIKE ?
+            OR ci_job_id LIKE ?
+          )
+        LIMIT 1
+      `,
+      [ciJobId, `${ciJobId},%`, `%,${ciJobId}`, `%,${ciJobId},%`]
+    );
+    if (rows[0]) {
+      return rows[0];
+    }
+  }
+
+  return null;
+}
+
+function canViewAlbumVideoProcessingState(user, session, media) {
+  if (Number(media.uploader_user_id) === Number(user.user.id)) {
+    return true;
+  }
+  return isAdmin(user) && Number(session.organizer_user_id) === Number(user.user.id);
+}
+
+function albumMediaResponse(media, tags = [], options = {}) {
+  const mediaType = albumMediaType(media);
+  const base = {
+    id: Number(media.id),
+    session_id: Number(media.session_id),
+    media_type: mediaType,
+    processing_status: mediaType === "video" ? albumMediaProcessingStatus(media) : "ready",
+    created_at: media.created_at,
+    tags
+  };
+
+  if (options.publicShare) {
+    if (mediaType === "video") {
+      const snapshotSourceUrl =
+        albumMediaProcessingStatus(media) === "ready" ? albumVideoSnapshotSourceUrl(media) : null;
+      return {
+        ...base,
+        has_cover: Boolean(snapshotSourceUrl),
+        video_cover_source_url: snapshotSourceUrl,
+        duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
+        video_width: media.video_width ? Number(media.video_width) : null,
+        video_height: media.video_height ? Number(media.video_height) : null,
+        video_byte_size: media.video_byte_size ? Number(media.video_byte_size) : null,
+        video_content_type: media.video_content_type || "video/mp4"
+      };
+    }
+    return {
+      ...base,
+      image_width: media.image_width ? Number(media.image_width) : null,
+      image_height: media.image_height ? Number(media.image_height) : null,
+      image_byte_size: media.image_byte_size ? Number(media.image_byte_size) : null,
+      image_content_type: media.image_content_type || "image/jpeg"
+    };
+  }
+
+  const common = {
+    ...base,
+    uploader_user_id: Number(media.uploader_user_id),
+    uploader_name: media.uploader_nickname || media.uploader_open_id || "车友",
+    is_mine: Number(media.uploader_user_id) === Number(options.userId),
+    can_tag: Number(media.uploader_user_id) === Number(options.userId)
+  };
+
+  if (mediaType === "video") {
+    const snapshotSourceUrl =
+      albumMediaProcessingStatus(media) === "ready" ? albumVideoSnapshotSourceUrl(media) : null;
+    return {
+      ...common,
+      has_cover: Boolean(snapshotSourceUrl),
+      video_cover_source_url: snapshotSourceUrl,
+      duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
+      video_width: media.video_width ? Number(media.video_width) : null,
+      video_height: media.video_height ? Number(media.video_height) : null,
+      video_byte_size: media.video_byte_size ? Number(media.video_byte_size) : null,
+      video_content_type: media.video_content_type || "video/mp4",
+      processing_error: media.processing_error || null
+    };
+  }
+
+  return {
+    ...common,
+    image_width: media.image_width ? Number(media.image_width) : null,
+    image_height: media.image_height ? Number(media.image_height) : null,
+    image_byte_size: media.image_byte_size ? Number(media.image_byte_size) : null,
+    image_content_type: media.image_content_type || "image/jpeg"
+  };
 }
 
 function optionalPositiveInteger(value, fieldName) {
@@ -1772,10 +2133,26 @@ async function clearPreStartReviewEligibilityForSession(connection, sessionId) {
   );
 }
 
-export async function listActiveStores(filters = {}) {
+export async function listActiveStores(filters = {}, user = null) {
   return withDatabaseConnection(async (connection) => {
-    const where = ["status = 'active'"];
-    const values = [];
+    const where = [
+      `
+        (
+          (COALESCE(visibility, 'public') = 'public'
+            AND COALESCE(review_status, 'approved') = 'approved'
+            AND status = 'active')
+          ${
+            user?.user?.id
+              ? `OR (visibility = 'private'
+                  AND created_by_user_id = ?
+                  AND review_status IN ('pending', 'needs_changes')
+                  AND status = 'active')`
+              : ""
+          }
+        )
+      `
+    ];
+    const values = user?.user?.id ? [user.user.id] : [];
 
     if (filters.keyword) {
       where.push("(name LIKE ? OR city LIKE ? OR district LIKE ?)");
@@ -1791,22 +2168,93 @@ export async function listActiveStores(filters = {}) {
       `SELECT * FROM stores WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return rows;
+    return rows
+      .filter(
+        (row) => isPublicCatalogUsable(row) || isPrivateCatalogUsableByUser(row, user)
+      )
+      .map(catalogResponse);
   });
 }
 
-export async function listActiveScripts(filters = {}) {
+export async function listActiveScripts(filters = {}, user = null) {
   return withDatabaseConnection(async (connection) => {
-    const where = ["scripts.status = 'active'"];
+    const where = [];
     const values = [];
     let from = "scripts";
     let select = "scripts.*";
 
     if (filters.storeId !== undefined && filters.storeId !== null && filters.storeId !== "") {
-      from = "scripts INNER JOIN store_scripts ss ON ss.script_id = scripts.id";
-      select = "scripts.*, ss.price_per_player";
-      where.push("ss.store_id = ?");
-      values.push(positiveId(filters.storeId, "storeId"));
+      const storeId = positiveId(filters.storeId, "storeId");
+      const store = await findById(connection, "stores", storeId);
+      if (!store) {
+        throw notFound("Store not found");
+      }
+      if (!isPublicCatalogUsable(store) && !isPrivateCatalogUsableByUser(store, user)) {
+        throw notFound("Store not found");
+      }
+
+      if (isPublicCatalogUsable(store)) {
+        from = "scripts LEFT JOIN store_scripts ss ON ss.script_id = scripts.id AND ss.store_id = ?";
+        select = "scripts.*, ss.price_per_player";
+        values.push(storeId);
+        where.push(
+          `
+            (
+              (COALESCE(scripts.visibility, 'public') = 'public'
+                AND COALESCE(scripts.review_status, 'approved') = 'approved'
+                AND scripts.status = 'active'
+                AND ss.store_id IS NOT NULL)
+              ${
+                user?.user?.id
+                  ? `OR (scripts.visibility = 'private'
+                      AND scripts.created_by_user_id = ?
+                      AND scripts.review_status IN ('pending', 'needs_changes')
+                      AND scripts.status = 'active')`
+                  : ""
+              }
+            )
+          `
+        );
+        if (user?.user?.id) {
+          values.push(user.user.id);
+        }
+      } else {
+        where.push(
+          `
+            (
+              (COALESCE(scripts.visibility, 'public') = 'public'
+                AND COALESCE(scripts.review_status, 'approved') = 'approved'
+                AND scripts.status = 'active')
+              OR (scripts.visibility = 'private'
+                AND scripts.created_by_user_id = ?
+                AND scripts.review_status IN ('pending', 'needs_changes')
+                AND scripts.status = 'active')
+            )
+          `
+        );
+        values.push(user.user.id);
+      }
+    } else {
+      where.push(
+        `
+          (
+            (COALESCE(scripts.visibility, 'public') = 'public'
+              AND COALESCE(scripts.review_status, 'approved') = 'approved'
+              AND scripts.status = 'active')
+            ${
+              user?.user?.id
+                ? `OR (scripts.visibility = 'private'
+                    AND scripts.created_by_user_id = ?
+                    AND scripts.review_status IN ('pending', 'needs_changes')
+                    AND scripts.status = 'active')`
+                : ""
+            }
+          )
+        `
+      );
+      if (user?.user?.id) {
+        values.push(user.user.id);
+      }
     }
 
     if (filters.keyword) {
@@ -1819,7 +2267,14 @@ export async function listActiveScripts(filters = {}) {
       `SELECT ${select} FROM ${from} WHERE ${where.join(" AND ")} ORDER BY scripts.id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return attachScriptNpcRoles(connection, rows.map(publicScriptRow));
+    return attachScriptNpcRoles(
+      connection,
+      rows
+        .filter(
+          (row) => isPublicCatalogUsable(row) || isPrivateCatalogUsableByUser(row, user)
+        )
+        .map((row) => catalogResponse(publicScriptRow(row)))
+    );
   });
 }
 
@@ -1842,7 +2297,7 @@ export async function listAdminStores(filters = {}) {
       `SELECT * FROM stores WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return rows;
+    return rows.map(catalogResponse);
   });
 }
 
@@ -1865,7 +2320,7 @@ export async function listAdminScripts(filters = {}) {
       `SELECT * FROM scripts WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return attachScriptNpcRoles(connection, rows);
+    return attachScriptNpcRoles(connection, rows.map(catalogResponse));
   });
 }
 
@@ -1968,6 +2423,37 @@ export async function replaceStoreScripts(storeId, body = {}) {
     }
 
     return { storeId: id, scriptIds, scriptLinks };
+  });
+}
+
+export async function createPrivateStore(user, body) {
+  return withDatabaseConnection(async (connection) => {
+    const name = requireValue(body, "name");
+    const city = requireValue(body, "city");
+    const district = optionalText(body.district);
+    const address = optionalText(body.address);
+    const latitude = optionalLatitude(body.latitude);
+    const longitude = optionalLongitude(body.longitude);
+    const contactNote = optionalText(body.contactNote);
+
+    assertPublicTextSafe("name", name);
+    assertPublicTextSafe("city", city);
+    assertPublicTextSafe("district", district);
+    assertPublicTextSafe("address", address);
+    assertPublicTextSafe("contactNote", contactNote);
+
+    const [result] = await connection.query(
+      `
+        INSERT INTO stores
+          (
+            name, city, district, address, latitude, longitude, contact_note, status,
+            visibility, review_status, created_by_user_id
+          )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
+      `,
+      [name, city, district, address, latitude, longitude, contactNote, user.user.id]
+    );
+    return catalogResponse(await selectInserted(connection, "stores", result));
   });
 }
 
@@ -2078,6 +2564,48 @@ export async function deleteStore(id) {
       "SELECT status FROM stores WHERE id = ?"
     )
   );
+}
+
+export async function createPrivateScript(user, body) {
+  const name = requireValue(body, "name");
+  const playerCount = positiveIntValue(requireValue(body, "playerCount"), "playerCount");
+  const typeTags = body.typeTags;
+  const summaryNoSpoiler = optionalText(body.summaryNoSpoiler);
+  const defaultSeatTemplateJson = privateRoleTemplateJson(
+    body.defaultSeatTemplate ?? body.defaultSeatTemplateJson,
+    playerCount
+  );
+
+  assertPublicTextSafe("name", name);
+  assertPublicTextSafe(
+    "typeTags",
+    Array.isArray(typeTags) ? typeTags.join(" ") : optionalText(typeTags)
+  );
+  assertPublicTextSafe("summaryNoSpoiler", summaryNoSpoiler);
+
+  return withTransaction(async (connection) => {
+    const [result] = await connection.query(
+      `
+        INSERT INTO scripts
+          (
+            name, type_tags, player_count, summary_no_spoiler,
+            default_seat_template_json, status, visibility, review_status,
+            created_by_user_id
+          )
+        VALUES (?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
+      `,
+      [
+        name,
+        jsonText(typeTags),
+        playerCount,
+        summaryNoSpoiler,
+        defaultSeatTemplateJson,
+        user.user.id
+      ]
+    );
+    const script = await selectInserted(connection, "scripts", result);
+    return scriptWithNpcRoles(connection, catalogResponse(publicScriptRow(script)));
+  });
 }
 
 export async function createScript(user, body) {
@@ -2287,6 +2815,407 @@ export async function reviewCatalogRequest(admin, id, body) {
   });
 }
 
+function catalogReviewConfig(type) {
+  const entityType = normalizeEntityType(type);
+  return entityType === "store"
+    ? { type: "store", table: "stores", sessionColumn: "store_id", label: "Store" }
+    : { type: "script", table: "scripts", sessionColumn: "script_id", label: "Script" };
+}
+
+function catalogReviewRow(type, row = {}) {
+  return {
+    ...catalogResponse(row),
+    type,
+    id: Number(row.id),
+    created_by_user_id: row.created_by_user_id ? Number(row.created_by_user_id) : null,
+    created_by_user_name: row.created_by_user_name || row.created_by_open_id || "",
+    reviewed_by_admin_user_id: row.reviewed_by_admin_user_id
+      ? Number(row.reviewed_by_admin_user_id)
+      : null,
+    merged_into_id: row.merged_into_id ? Number(row.merged_into_id) : null,
+    merged_into_name: row.merged_into_name || "",
+    session_count: Number(row.session_count || 0)
+  };
+}
+
+async function catalogReviewRows(connection, config, whereSql, values, filters = {}) {
+  const keywordValues = [];
+  const conditions = [whereSql];
+  if (filters.status) {
+    conditions.push("item.review_status = ?");
+    keywordValues.push(normalizeCatalogReviewStatus(filters.status));
+  }
+  if (filters.keyword) {
+    conditions.push("(item.name LIKE ? OR item.review_note LIKE ?)");
+    const keyword = likeKeyword(filters.keyword);
+    keywordValues.push(keyword, keyword);
+  }
+
+  const [rows] = await connection.query(
+    `
+      SELECT
+        item.*,
+        submitter.nickname AS created_by_user_name,
+        submitter.open_id AS created_by_open_id,
+        merged.name AS merged_into_name,
+        (
+          SELECT COUNT(*)
+          FROM sessions session
+          WHERE session.${config.sessionColumn} = item.id
+        ) AS session_count
+      FROM ${config.table} item
+      LEFT JOIN users submitter ON submitter.id = item.created_by_user_id
+      LEFT JOIN ${config.table} merged ON merged.id = item.merged_into_id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY item.id DESC
+      LIMIT ${limitValue(filters.limit)}
+    `,
+    [...values, ...keywordValues]
+  );
+  return rows.map((row) => catalogReviewRow(config.type, row));
+}
+
+export async function listMyCatalogReviewItems(user, filters = {}) {
+  return withDatabaseConnection(async (connection) => {
+    const stores = await catalogReviewRows(
+      connection,
+      catalogReviewConfig("store"),
+      "item.created_by_user_id = ? AND item.visibility = 'private'",
+      [user.user.id],
+      filters
+    );
+    const scripts = await catalogReviewRows(
+      connection,
+      catalogReviewConfig("script"),
+      "item.created_by_user_id = ? AND item.visibility = 'private'",
+      [user.user.id],
+      filters
+    );
+    return [...stores, ...scripts].sort((left, right) => Number(right.id) - Number(left.id));
+  });
+}
+
+function catalogReviewPatch(config, body = {}, current = {}, options = {}) {
+  const sets = [];
+  const values = [];
+  const add = (column, value) => {
+    sets.push(`${column} = ?`);
+    values.push(value);
+  };
+
+  if (body.name !== undefined) {
+    const name = requireValue(body, "name");
+    assertPublicTextSafe("name", name);
+    add("name", name);
+  }
+
+  if (config.type === "store") {
+    if (body.city !== undefined) {
+      const city = requireValue(body, "city");
+      assertPublicTextSafe("city", city);
+      add("city", city);
+    }
+    for (const [bodyKey, column, label] of [
+      ["district", "district", "district"],
+      ["address", "address", "address"],
+      ["contactNote", "contact_note", "contactNote"]
+    ]) {
+      if (body[bodyKey] !== undefined) {
+        const value = optionalText(body[bodyKey]);
+        assertPublicTextSafe(label, value);
+        add(column, value);
+      }
+    }
+    if (body.latitude !== undefined) {
+      add("latitude", optionalLatitude(body.latitude));
+    }
+    if (body.longitude !== undefined) {
+      add("longitude", optionalLongitude(body.longitude));
+    }
+  } else {
+    if (body.typeTags !== undefined) {
+      const value = body.typeTags;
+      assertPublicTextSafe("typeTags", Array.isArray(value) ? value.join(" ") : optionalText(value));
+      add("type_tags", jsonText(value));
+    }
+    let nextPlayerCount = current.player_count ? Number(current.player_count) : 0;
+    if (body.playerCount !== undefined) {
+      nextPlayerCount = positiveIntValue(body.playerCount, "playerCount");
+      add("player_count", nextPlayerCount);
+    }
+    if (body.summaryNoSpoiler !== undefined) {
+      const value = optionalText(body.summaryNoSpoiler);
+      assertPublicTextSafe("summaryNoSpoiler", value);
+      add("summary_no_spoiler", value);
+    }
+    if (body.defaultSeatTemplate !== undefined || body.defaultSeatTemplateJson !== undefined) {
+      add(
+        "default_seat_template_json",
+        privateRoleTemplateJson(
+          body.defaultSeatTemplate ?? body.defaultSeatTemplateJson,
+          Math.max(nextPlayerCount, 1)
+        )
+      );
+    }
+  }
+
+  if (options.allowReviewNote && body.reviewNote !== undefined) {
+    add("review_note", optionalText(body.reviewNote));
+  }
+
+  return { sets, values };
+}
+
+async function lockCatalogReviewItem(connection, config, id) {
+  const [rows] = await connection.query(
+    `SELECT * FROM ${config.table} WHERE id = ? FOR UPDATE`,
+    [positiveId(id, `${config.label} id`)]
+  );
+  const row = rows[0];
+  if (!row) {
+    throw notFound(`${config.label} not found`);
+  }
+  return row;
+}
+
+async function selectCatalogReviewItem(connection, config, id) {
+  const rows = await catalogReviewRows(
+    connection,
+    config,
+    "item.id = ?",
+    [positiveId(id, `${config.label} id`)],
+    { limit: 1 }
+  );
+  return rows[0] || null;
+}
+
+function assertPrivateReviewItem(row, config) {
+  if (catalogVisibility(row) !== "private") {
+    throw badRequest(`${config.label} is not a private review item`);
+  }
+}
+
+export async function updateMyCatalogReviewItem(user, type, id, body = {}) {
+  const config = catalogReviewConfig(type);
+  return withTransaction(async (connection) => {
+    const row = await lockCatalogReviewItem(connection, config, id);
+    assertPrivateReviewItem(row, config);
+    if (Number(row.created_by_user_id || 0) !== Number(user.user.id)) {
+      throw notFound(`${config.label} not found`);
+    }
+    if (catalogReviewStatus(row) !== "needs_changes") {
+      throw badRequest(`${config.label} can only be edited after changes are requested`);
+    }
+
+    const patch = catalogReviewPatch(config, body, row);
+    const sets = [...patch.sets, "review_status = 'pending'", "review_note = NULL"];
+    const values = [...patch.values, row.id];
+    await connection.query(
+      `UPDATE ${config.table} SET ${sets.join(", ")} WHERE id = ?`,
+      values
+    );
+    return selectCatalogReviewItem(connection, config, row.id);
+  });
+}
+
+export async function listAdminCatalogReviewItems(filters = {}) {
+  return withDatabaseConnection(async (connection) => {
+    const type = filters.type ? normalizeEntityType(filters.type) : "";
+    const configs = type
+      ? [catalogReviewConfig(type)]
+      : [catalogReviewConfig("store"), catalogReviewConfig("script")];
+    const rows = [];
+    for (const config of configs) {
+      rows.push(
+        ...(await catalogReviewRows(
+          connection,
+          config,
+          "item.visibility = 'private' AND item.review_status IN ('pending', 'needs_changes')",
+          [],
+          filters
+        ))
+      );
+    }
+    return rows.sort((left, right) => Number(right.id) - Number(left.id));
+  });
+}
+
+export async function updateAdminCatalogReviewItem(admin, type, id, body = {}) {
+  const config = catalogReviewConfig(type);
+  return withTransaction(async (connection) => {
+    const row = await lockCatalogReviewItem(connection, config, id);
+    assertPrivateReviewItem(row, config);
+    if (!["pending", "needs_changes"].includes(catalogReviewStatus(row))) {
+      throw badRequest(`${config.label} cannot be edited in its current review status`);
+    }
+    const patch = catalogReviewPatch(config, body, row, { allowReviewNote: true });
+    if (patch.sets.length > 0) {
+      await connection.query(
+        `UPDATE ${config.table} SET ${patch.sets.join(", ")} WHERE id = ?`,
+        [...patch.values, row.id]
+      );
+    }
+    if (config.type === "script" && (body.npcRoles !== undefined || body.npc_roles !== undefined)) {
+      await replaceScriptNpcRoles(
+        connection,
+        row.id,
+        normalizeNpcRoles(body.npcRoles ?? body.npc_roles, { source: "script" })
+      );
+    }
+    return selectCatalogReviewItem(connection, config, row.id);
+  });
+}
+
+function normalizeApprovedScriptStoreLinks(body = {}) {
+  const links = [];
+  if (Array.isArray(body.storeScriptLinks)) {
+    for (const link of body.storeScriptLinks) {
+      links.push({
+        storeId: positiveId(link.storeId ?? link.store_id, "storeId"),
+        pricePerPlayer: nonNegativeIntValue(
+          link.pricePerPlayer ?? link.price_per_player ?? 0,
+          "pricePerPlayer"
+        )
+      });
+    }
+  }
+  if (Array.isArray(body.storeIds)) {
+    for (const storeId of uniquePositiveIds(body.storeIds, "storeIds")) {
+      links.push({ storeId, pricePerPlayer: 0 });
+    }
+  }
+  const seen = new Set();
+  return links.filter((link) => {
+    if (seen.has(link.storeId)) {
+      return false;
+    }
+    seen.add(link.storeId);
+    return true;
+  });
+}
+
+async function linkApprovedScriptToStores(connection, scriptId, body = {}) {
+  const links = normalizeApprovedScriptStoreLinks(body);
+  for (const link of links) {
+    const store = await findById(connection, "stores", link.storeId);
+    if (!isPublicCatalogUsable(store)) {
+      throw badRequest(`storeId ${link.storeId} must be a public approved active store`);
+    }
+    await connection.query(
+      `
+        INSERT INTO store_scripts (store_id, script_id, price_per_player)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE price_per_player = VALUES(price_per_player)
+      `,
+      [link.storeId, scriptId, link.pricePerPlayer]
+    );
+  }
+}
+
+export async function approveCatalogReviewItem(admin, type, id, body = {}) {
+  const config = catalogReviewConfig(type);
+  return withTransaction(async (connection) => {
+    const row = await lockCatalogReviewItem(connection, config, id);
+    assertPrivateReviewItem(row, config);
+    if (!["pending", "needs_changes"].includes(catalogReviewStatus(row))) {
+      throw badRequest(`${config.label} cannot be approved in its current review status`);
+    }
+    const patch = catalogReviewPatch(config, body, row, { allowReviewNote: true });
+    const sets = [
+      ...patch.sets,
+      "visibility = 'public'",
+      "review_status = 'approved'",
+      "status = 'active'",
+      "reviewed_by_admin_user_id = ?",
+      "reviewed_at = CURRENT_TIMESTAMP"
+    ];
+    const values = [...patch.values, admin.user.id, row.id];
+    await connection.query(
+      `UPDATE ${config.table} SET ${sets.join(", ")} WHERE id = ?`,
+      values
+    );
+    if (config.type === "script") {
+      if (body.npcRoles !== undefined || body.npc_roles !== undefined) {
+        await replaceScriptNpcRoles(
+          connection,
+          row.id,
+          normalizeNpcRoles(body.npcRoles ?? body.npc_roles, { source: "script" })
+        );
+      }
+      await linkApprovedScriptToStores(connection, row.id, body);
+    }
+    return selectCatalogReviewItem(connection, config, row.id);
+  });
+}
+
+export async function markCatalogReviewItemNeedsChanges(admin, type, id, body = {}) {
+  const config = catalogReviewConfig(type);
+  return withTransaction(async (connection) => {
+    const row = await lockCatalogReviewItem(connection, config, id);
+    assertPrivateReviewItem(row, config);
+    await connection.query(
+      `
+        UPDATE ${config.table}
+        SET review_status = 'needs_changes',
+            review_note = ?,
+            reviewed_by_admin_user_id = ?,
+            reviewed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      [optionalText(body.reviewNote), admin.user.id, row.id]
+    );
+    return selectCatalogReviewItem(connection, config, row.id);
+  });
+}
+
+export async function rejectCatalogReviewItem(admin, type, id, body = {}) {
+  const config = catalogReviewConfig(type);
+  return withTransaction(async (connection) => {
+    const row = await lockCatalogReviewItem(connection, config, id);
+    assertPrivateReviewItem(row, config);
+    await connection.query(
+      `
+        UPDATE ${config.table}
+        SET review_status = 'rejected',
+            status = 'inactive',
+            review_note = ?,
+            reviewed_by_admin_user_id = ?,
+            reviewed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      [optionalText(body.reviewNote), admin.user.id, row.id]
+    );
+    return selectCatalogReviewItem(connection, config, row.id);
+  });
+}
+
+export async function mergeCatalogReviewItem(admin, type, id, body = {}) {
+  const config = catalogReviewConfig(type);
+  const targetId = positiveId(body.targetId ?? body.mergedIntoId, "targetId");
+  return withTransaction(async (connection) => {
+    const row = await lockCatalogReviewItem(connection, config, id);
+    assertPrivateReviewItem(row, config);
+    const target = await findById(connection, config.table, targetId);
+    if (!isPublicCatalogUsable(target)) {
+      throw badRequest("targetId must reference a public approved active item");
+    }
+    await connection.query(
+      `
+        UPDATE ${config.table}
+        SET review_status = 'merged',
+            status = 'inactive',
+            merged_into_id = ?,
+            review_note = ?,
+            reviewed_by_admin_user_id = ?,
+            reviewed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      [targetId, optionalText(body.reviewNote), admin.user.id, row.id]
+    );
+    return selectCatalogReviewItem(connection, config, row.id);
+  });
+}
+
 export async function upsertPerformerProfile(user, body) {
   return withTransaction(async (connection) => {
     await ensureRole(connection, user.user.id, "performer");
@@ -2343,12 +3272,8 @@ export async function createSession(user, body) {
 
     const store = await findById(connection, "stores", requireValue(body, "storeId"));
     const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
-    if (!store || store.status !== "active") {
-      throw badRequest("Active store is required");
-    }
-    if (!script || script.status !== "active") {
-      throw badRequest("Active script is required");
-    }
+    assertCatalogUsableForSession(store, user, "Store");
+    assertCatalogUsableForSession(script, user, "Script");
 
     await ensureRole(connection, user.user.id, "organizer");
 
@@ -4423,27 +5348,38 @@ export async function listSessionAlbum(user, sessionId) {
     let untaggedCount = 0;
     for (const photo of photoRows) {
       const tags = tagsMap.get(Number(photo.id)) || [];
+      const mediaType = albumMediaType(photo);
+      const processingStatus = albumMediaProcessingStatus(photo);
+      if (
+        mediaType === "video" &&
+        processingStatus !== "ready" &&
+        !canViewAlbumVideoProcessingState(user, session, photo)
+      ) {
+        continue;
+      }
       if (tags.length === 0) {
         untaggedCount += 1;
       }
-      if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, user.user.id, personalScope)) {
+      const isVisibleByAlbumPrivacy = isAlbumPhotoVisibleToUser(
+        photo,
+        tags,
+        privacyByUser,
+        user.user.id,
+        personalScope
+      );
+      if (
+        mediaType === "video" &&
+        processingStatus !== "ready" &&
+        canViewAlbumVideoProcessingState(user, session, photo)
+      ) {
+        photos.push(albumMediaResponse(photo, tags, { userId: user.user.id }));
+        continue;
+      }
+      if (!isVisibleByAlbumPrivacy) {
         hiddenCount += 1;
         continue;
       }
-      photos.push({
-        id: Number(photo.id),
-        session_id: Number(photo.session_id),
-        uploader_user_id: Number(photo.uploader_user_id),
-        uploader_name: photo.uploader_nickname || photo.uploader_open_id || "车友",
-        is_mine: Number(photo.uploader_user_id) === Number(user.user.id),
-        can_tag: Number(photo.uploader_user_id) === Number(user.user.id),
-        image_width: photo.image_width ? Number(photo.image_width) : null,
-        image_height: photo.image_height ? Number(photo.image_height) : null,
-        image_byte_size: photo.image_byte_size ? Number(photo.image_byte_size) : null,
-        image_content_type: photo.image_content_type || "image/jpeg",
-        created_at: photo.created_at,
-        tags
-      });
+      photos.push(albumMediaResponse(photo, tags, { userId: user.user.id }));
     }
     return {
       session_id: id,
@@ -4455,7 +5391,8 @@ export async function listSessionAlbum(user, sessionId) {
       visible_count: photos.length,
       hidden_count: hiddenCount,
       untagged_count: untaggedCount,
-      photos
+      photos,
+      media: photos
     };
   });
 }
@@ -4494,6 +5431,9 @@ export async function listPublicSessionAlbumShare(claims) {
     const photos = [];
     for (const photo of photoRows) {
       const tags = tagsMap.get(Number(photo.id)) || [];
+      if (albumMediaType(photo) === "video" && albumMediaProcessingStatus(photo) !== "ready") {
+        continue;
+      }
       if (
         !isAlbumPhotoVisibleInPublicShare(
           photo,
@@ -4504,15 +5444,7 @@ export async function listPublicSessionAlbumShare(claims) {
       ) {
         continue;
       }
-      photos.push({
-        id: Number(photo.id),
-        session_id: Number(photo.session_id),
-        image_width: photo.image_width ? Number(photo.image_width) : null,
-        image_height: photo.image_height ? Number(photo.image_height) : null,
-        image_byte_size: photo.image_byte_size ? Number(photo.image_byte_size) : null,
-        image_content_type: photo.image_content_type || "image/jpeg",
-        created_at: photo.created_at
-      });
+      photos.push(albumMediaResponse(photo, tags, { publicShare: true }));
     }
     return {
       session_id: normalizedClaims.sessionId,
@@ -4521,7 +5453,8 @@ export async function listPublicSessionAlbumShare(claims) {
       start_at: session.start_at,
       share_subject: albumShareSubjectForSeat(seat),
       visible_count: photos.length,
-      photos
+      photos,
+      media: photos
     };
   });
 }
@@ -4550,14 +5483,16 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
           (
             session_id,
             uploader_user_id,
+            media_type,
             photo_url,
             image_width,
             image_height,
             image_byte_size,
             image_content_type,
+            processing_status,
             status
           )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
+        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', 'active')
       `,
       [
         id,
@@ -4573,6 +5508,8 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
     return {
       id: Number(photo.id),
       session_id: Number(photo.session_id),
+      media_type: "image",
+      processing_status: "ready",
       uploader_user_id: Number(photo.uploader_user_id),
       is_mine: true,
       can_tag: true,
@@ -4582,6 +5519,210 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
       image_content_type: photo.image_content_type || "image/jpeg",
       created_at: photo.created_at,
       tags: []
+    };
+  });
+}
+
+export async function createSessionAlbumVideo(user, sessionId, body = {}, options = {}) {
+  const id = positiveId(sessionId, "sessionId");
+  if (!isAdmin(user)) {
+    throw forbidden("system_admin role required");
+  }
+  const sourceUrl = sessionAlbumVideoSourceUrl(
+    id,
+    user.user.id,
+    body.sourceUrl || body.source_url
+  );
+  const durationSeconds = albumVideoDurationSeconds(
+    body.durationSeconds ?? body.duration_seconds
+  );
+  const videoWidth = optionalPositiveInteger(body.videoWidth ?? body.video_width, "videoWidth");
+  const videoHeight = optionalPositiveInteger(body.videoHeight ?? body.video_height, "videoHeight");
+  const videoByteSize = requiredPositiveInteger(
+    body.videoByteSize ?? body.video_byte_size,
+    "videoByteSize"
+  );
+  const videoContentType = albumVideoContentType(
+    body.videoContentType || body.video_content_type
+  );
+  const localFallbackReady = options.localFallbackReady === true;
+  const processingStatus = localFallbackReady ? "ready" : "processing";
+  const displayUrl = options.displayUrl || (localFallbackReady ? sourceUrl : null);
+  const coverUrl = options.coverUrl || null;
+  const ciJobId = options.ciJobId || (localFallbackReady ? "local-fallback" : null);
+
+  return withTransaction(async (connection) => {
+    const session = await requireSessionAlbumOpen(connection, id);
+    await requireSessionAlbumMember(connection, session, user);
+    const [result] = await connection.query(
+      `
+        INSERT INTO session_album_photos
+          (
+            session_id,
+            uploader_user_id,
+            media_type,
+            photo_url,
+            source_url,
+            display_url,
+            cover_url,
+            duration_seconds,
+            video_width,
+            video_height,
+            video_byte_size,
+            video_content_type,
+            ci_job_id,
+            processing_status,
+            status
+          )
+        VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+      `,
+      [
+        id,
+        user.user.id,
+        sourceUrl,
+        displayUrl,
+        coverUrl,
+        durationSeconds,
+        videoWidth,
+        videoHeight,
+        videoByteSize,
+        videoContentType,
+        ciJobId,
+        processingStatus
+      ]
+    );
+    const media = await findById(connection, "session_album_photos", result.insertId);
+    return {
+      id: Number(media.id),
+      session_id: Number(media.session_id),
+      media_type: "video",
+      processing_status: media.processing_status || processingStatus,
+      uploader_user_id: Number(media.uploader_user_id),
+      is_mine: true,
+      can_tag: true,
+      duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
+      video_width: media.video_width ? Number(media.video_width) : null,
+      video_height: media.video_height ? Number(media.video_height) : null,
+      video_byte_size: media.video_byte_size ? Number(media.video_byte_size) : null,
+      video_content_type: media.video_content_type || "video/mp4",
+      processing_error: media.processing_error || null,
+      created_at: media.created_at,
+      tags: []
+    };
+  });
+}
+
+export async function updateSessionAlbumVideoProcessingResult(body = {}) {
+  const mediaId = optionalPositiveInteger(body.mediaId ?? body.media_id, "mediaId");
+  const ciJobId = normalizeCiJobId(body.ciJobId || body.ci_job_id || body.jobId || body.job_id);
+  const status = albumVideoProcessingCallbackStatus(
+    body.processingStatus || body.processing_status || body.status || body.state || body.code
+  );
+  const sourceUrl = albumVideoUploadPath(
+    body.sourceUrl || body.source_url || body.inputObject || body.input_object,
+    new Set(["source"]),
+    "sourceUrl"
+  );
+  let displayUrl = albumVideoUploadPath(
+    body.displayUrl || body.display_url || body.displayObject || body.display_object,
+    new Set(["display"]),
+    "displayUrl"
+  );
+  let coverUrl = albumVideoUploadPath(
+    body.coverUrl || body.cover_url || body.coverObject || body.cover_object,
+    new Set(["cover"]),
+    "coverUrl"
+  );
+
+  if (status === "ready" && sourceUrl) {
+    const kind = String(body.kind || body.operation || body.tag || "").trim().toLowerCase();
+    if (!displayUrl && (kind.includes("transcode") || kind.includes("转码"))) {
+      displayUrl = deriveAlbumVideoDisplayUrl(sourceUrl);
+    }
+    if (
+      !coverUrl &&
+      (kind.includes("snapshot") || kind.includes("screenshot") || kind.includes("截帧"))
+    ) {
+      coverUrl = deriveAlbumVideoCoverUrl(sourceUrl);
+    }
+    if (!displayUrl && !coverUrl && !kind) {
+      displayUrl = deriveAlbumVideoDisplayUrl(sourceUrl);
+      coverUrl = deriveAlbumVideoCoverUrl(sourceUrl);
+    }
+  }
+
+  if (!mediaId && !sourceUrl && !ciJobId) {
+    throw badRequest("video processing callback must include mediaId, sourceUrl, or ciJobId");
+  }
+
+  return withTransaction(async (connection) => {
+    const media = await findSessionAlbumVideoForProcessing(connection, {
+      mediaId,
+      sourceUrl,
+      ciJobId
+    });
+    if (!media) {
+      throw notFound("Album video not found for processing callback");
+    }
+
+    const nextCiJobId = mergeCiJobIds(media.ci_job_id, ciJobId);
+    const nextDisplayUrl = displayUrl || media.display_url || null;
+    const nextCoverUrl = coverUrl || media.cover_url || null;
+    const nextStatus =
+      status === "failed"
+        ? "failed"
+        : nextDisplayUrl
+          ? "ready"
+          : "processing";
+    const nextError =
+      nextStatus === "failed"
+        ? albumVideoProcessingError(
+            body.processingError ||
+              body.processing_error ||
+              body.error ||
+              body.message ||
+              body.code ||
+              "Video processing failed"
+          )
+        : null;
+
+    await connection.query(
+      `
+        UPDATE session_album_photos
+        SET
+          display_url = ?,
+          cover_url = ?,
+          ci_job_id = ?,
+          processing_status = ?,
+          processing_error = ?
+        WHERE id = ?
+      `,
+      [
+        nextDisplayUrl,
+        nextCoverUrl,
+        nextCiJobId,
+        nextStatus,
+        nextError,
+        media.id
+      ]
+    );
+
+    const updated = await findById(connection, "session_album_photos", media.id);
+    return {
+      id: Number(updated.id),
+      session_id: Number(updated.session_id),
+      media_type: "video",
+      processing_status: albumMediaProcessingStatus(updated),
+      source_url: updated.source_url,
+      display_url: updated.display_url,
+      cover_url: updated.cover_url,
+      duration_seconds: updated.duration_seconds ? Number(updated.duration_seconds) : null,
+      video_width: updated.video_width ? Number(updated.video_width) : null,
+      video_height: updated.video_height ? Number(updated.video_height) : null,
+      video_byte_size: updated.video_byte_size ? Number(updated.video_byte_size) : null,
+      video_content_type: updated.video_content_type || "video/mp4",
+      ci_job_id: updated.ci_job_id || null,
+      processing_error: updated.processing_error || null
     };
   });
 }
@@ -4657,7 +5798,21 @@ export async function deleteSessionAlbumPhoto(user, photoId) {
     }
     await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [id]);
     await connection.query("DELETE FROM session_album_photos WHERE id = ?", [id]);
-    return { id, photo_url: photo.photo_url, deleted: true };
+    return {
+      id,
+      media_type: albumMediaType(photo),
+      photo_url: photo.photo_url,
+      source_url: photo.source_url,
+      display_url: photo.display_url,
+      cover_url: photo.cover_url,
+      object_urls: [
+        photo.photo_url,
+        photo.source_url,
+        photo.display_url,
+        photo.cover_url
+      ].filter(Boolean),
+      deleted: true
+    };
   });
 }
 
@@ -4667,6 +5822,9 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
   return withDatabaseConnection(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
     if (!photo || photo.status !== "active") {
+      throw notFound("Album photo not found");
+    }
+    if (albumMediaType(photo) !== "image") {
       throw notFound("Album photo not found");
     }
     const session = await requireSessionAlbumOpen(connection, photo.session_id);
@@ -4699,6 +5857,9 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
     if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
     }
+    if (albumMediaType(photo) !== "image") {
+      throw notFound("Album photo not found");
+    }
     if (Number(photo.session_id) !== normalizedClaims.sessionId) {
       throw forbidden("Album photo is outside this public share");
     }
@@ -4718,6 +5879,71 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
       throw forbidden("Album photo is not visible in this public share");
     }
     return photo;
+  });
+}
+
+export async function getVisibleSessionAlbumVideoForPlayback(user, mediaId) {
+  const id = positiveId(mediaId, "mediaId");
+  return withDatabaseConnection(async (connection) => {
+    const media = await findById(connection, "session_album_photos", id);
+    if (!media || media.status !== "active" || albumMediaType(media) !== "video") {
+      throw notFound("Album video not found");
+    }
+    if (albumMediaProcessingStatus(media) !== "ready" || !media.display_url) {
+      throw forbidden("Album video is not ready");
+    }
+    const session = await requireSessionAlbumOpen(connection, media.session_id);
+    if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
+      throw forbidden("Only session members can view the session album");
+    }
+    const personalScope = await sessionAlbumPersonalScope(connection, session, user.user.id);
+    const tagsMap = await albumTagsForPhotos(connection, [id]);
+    const tags = tagsMap.get(id) || [];
+    const privacyByUser = await albumPrivacyMap(
+      connection,
+      media.session_id,
+      [
+        media.uploader_user_id,
+        ...tags.map((tag) => tag.user_id).filter(Boolean)
+      ]
+    );
+    if (!isAlbumPhotoVisibleToUser(media, tags, privacyByUser, user.user.id, personalScope)) {
+      throw forbidden("Album video is not visible");
+    }
+    return media;
+  });
+}
+
+export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
+  const id = positiveId(mediaId, "mediaId");
+  const normalizedClaims = normalizeAlbumShareClaims(claims);
+  return withDatabaseConnection(async (connection) => {
+    const media = await findById(connection, "session_album_photos", id);
+    if (!media || media.status !== "active" || albumMediaType(media) !== "video") {
+      throw notFound("Album video not found");
+    }
+    if (albumMediaProcessingStatus(media) !== "ready" || !media.cover_url) {
+      throw notFound("Album video cover not found");
+    }
+    if (Number(media.session_id) !== normalizedClaims.sessionId) {
+      throw forbidden("Album video is outside this public share");
+    }
+    await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
+    await requirePublicAlbumShareSeat(connection, normalizedClaims);
+    const tagsMap = await albumTagsForPhotos(connection, [id]);
+    const tags = tagsMap.get(id) || [];
+    const privacyByUser = await albumPrivacyMap(
+      connection,
+      normalizedClaims.sessionId,
+      [
+        media.uploader_user_id,
+        ...tags.map((tag) => tag.user_id).filter(Boolean)
+      ]
+    );
+    if (!isAlbumPhotoVisibleInPublicShare(media, tags, privacyByUser, normalizedClaims)) {
+      throw forbidden("Album video is not visible in this public share");
+    }
+    return media;
   });
 }
 

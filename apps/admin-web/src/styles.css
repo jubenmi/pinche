@@ -701,6 +701,14 @@ td {
   white-space: nowrap;
 }
 
+.muted-cell {
+  display: block;
+  margin-top: 3px;
+  color: var(--admin-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .data-table tbody tr {
   transition: background-color 120ms ease;
 }
@@ -754,6 +762,31 @@ td {
   color: var(--admin-danger);
 }
 
+.status-pill.pending {
+  background: #fff8e5;
+  color: #8a5a00;
+}
+
+.status-pill.needs_changes {
+  background: #fff1ef;
+  color: var(--admin-danger);
+}
+
+.status-pill.approved {
+  background: #e1f3ed;
+  color: var(--admin-accent-strong);
+}
+
+.status-pill.rejected {
+  background: #f4e9e7;
+  color: var(--admin-danger);
+}
+
+.status-pill.merged {
+  background: #eef1ef;
+  color: var(--admin-muted-strong);
+}
+
 .row-actions {
   gap: 8px;
   white-space: nowrap;
@@ -780,6 +813,44 @@ td {
   height: 120px;
   color: var(--admin-muted);
   text-align: center;
+}
+
+.review-footer {
+  display: grid;
+  flex: 1;
+  gap: 10px;
+}
+
+.review-footer-fields,
+.review-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.review-footer-fields input {
+  min-width: 180px;
+  flex: 1;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--admin-border);
+  background: #ffffff;
+  color: var(--admin-text);
+  outline: none;
+}
+
+.review-footer-fields input:focus {
+  border-color: var(--admin-accent);
+  box-shadow: 0 0 0 3px var(--admin-focus);
+}
+
+.review-footer-actions button {
+  height: 38px;
+  padding: 0 13px;
+  border: 1px solid var(--admin-border);
+  background: #ffffff;
+  color: var(--admin-text);
+  font-weight: 700;
 }
 
 .table-footer {
@@ -1243,6 +1314,49 @@ td {
   object-fit: cover;
 }
 
+.video-card .photo-preview {
+  color: #ffffff;
+  background: #17231f;
+}
+
+.admin-video-placeholder {
+  display: grid;
+  min-height: 168px;
+  place-items: center;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-video-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.44);
+  color: #ffffff;
+  font-size: 20px;
+  transform: translate(-50%, -50%);
+}
+
+.admin-video-state {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 24px;
+  padding: 0 8px;
+}
+
 .album-selection-checkbox {
   position: absolute;
   top: 10px;
@@ -1372,6 +1486,15 @@ td {
   border-radius: 8px;
   object-fit: cover;
   background: #eef1ef;
+}
+
+.album-tag-drawer .video-tag-preview {
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  background: #17231f;
 }
 
 .bulk-tag-summary {

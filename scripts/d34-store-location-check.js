@@ -107,6 +107,10 @@ for (const token of [
   "TMap.Map",
   "TMap.MultiMarker",
   "handleMapClick",
+  "地点搜索",
+  "searchPoiByKeyword",
+  "applyPoiResult",
+  "poiSearchResults",
   "store.latitude",
   "store.longitude"
 ]) {

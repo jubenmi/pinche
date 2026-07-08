@@ -115,6 +115,11 @@
               <view class="item-title">{{ store.name }}</view>
               <view class="item-sub">{{ store.city }} {{ store.district || "" }}</view>
               <view class="item-sub">{{ store.address || "暂无地址" }}</view>
+              <view class="audit-row">
+                <view class="audit-badge" :class="catalogAuditClass(store)">
+                  {{ catalogAuditLabel(store) }}
+                </view>
+              </view>
             </view>
             <view class="item-actions">
               <t-button class="mini-button" @tap="editStore(store)">编辑</t-button>
@@ -214,6 +219,11 @@
               <view class="item-title">{{ script.name }}</view>
               <view class="item-sub">{{ displayTags(script.type_tags) }} / {{ script.player_count || 0 }}人</view>
               <view class="item-sub">{{ script.summary_no_spoiler || "暂无简介" }}</view>
+              <view class="audit-row">
+                <view class="audit-badge" :class="catalogAuditClass(script)">
+                  {{ catalogAuditLabel(script) }}
+                </view>
+              </view>
             </view>
             <view class="item-actions">
               <t-button class="mini-button" @tap="editScript(script)">编辑</t-button>
@@ -227,7 +237,7 @@
 
       <view v-if="activeTab === 'requests'" class="panel">
         <view class="section">
-          <view class="section-title">新增资料申请</view>
+          <view class="section-title">待审核资料</view>
           <view class="search-row">
             <t-search
               :value="requestKeyword"
@@ -254,19 +264,31 @@
           <t-input
             :value="reviewNote"
             class="field"
-            placeholder="拒绝原因/审核备注"
+            placeholder="审核备注，会写入用户可见结果"
             @change="reviewNote = $event.detail.value"
+          />
+          <t-input
+            :value="mergeTargetId"
+            class="field"
+            type="number"
+            placeholder="合并目标公共资料 ID，仅合并时填写"
+            @change="mergeTargetId = $event.detail.value"
           />
           <view v-for="item in requests" :key="item.id" class="item">
             <view class="item-main">
-              <view class="item-title">{{ item.request_type === "store" ? "店家" : "剧本" }}：{{ item.name }}</view>
-              <view class="item-sub">{{ item.city || "北京" }} {{ item.district || "" }} / {{ item.status }}</view>
-              <view class="item-sub">{{ item.description || "无描述" }}</view>
+              <view class="item-title">{{ itemTypeLabel(item.type) }}：{{ item.name }}</view>
+              <view class="item-sub">{{ reviewItemMeta(item) }} / {{ reviewStatusLabel(item.review_status) }}</view>
+              <view class="item-sub">
+                提交人：{{ item.created_by_user_name || item.created_by_user_id || "未知" }} · 使用车局数：{{ item.session_count || 0 }}
+              </view>
               <view v-if="item.review_note" class="item-sub">备注：{{ item.review_note }}</view>
+              <view v-if="item.merged_into_name" class="item-sub">合并到：{{ item.merged_into_name }}</view>
             </view>
-            <view v-if="item.status === 'pending'" class="item-actions">
-              <t-button class="mini-button" @tap="approveRequest(item)">通过</t-button>
-              <t-button class="mini-button muted" @tap="rejectRequest(item)">拒绝</t-button>
+            <view class="item-actions">
+              <t-button class="mini-button" @tap="approveReviewItem(item)">批准公开</t-button>
+              <t-button class="mini-button muted" @tap="needsChangesReviewItem(item)">需要补充</t-button>
+              <t-button class="mini-button muted" @tap="rejectReviewItem(item)">拒绝</t-button>
+              <t-button class="mini-button muted" @tap="mergeReviewItem(item)">合并</t-button>
             </view>
           </view>
         </view>
@@ -286,7 +308,7 @@ import { showModal, showToast } from "../../utils/tdesignFeedback";
 const tabs = [
   { key: "stores", label: "店家" },
   { key: "scripts", label: "剧本" },
-  { key: "requests", label: "申请" }
+  { key: "requests", label: "待审核" }
 ];
 const statusFilters = [
   { value: "", label: "全部" },
@@ -295,8 +317,10 @@ const statusFilters = [
 ];
 const requestStatusFilters = [
   { value: "pending", label: "待审" },
-  { value: "approved", label: "通过" },
+  { value: "needs_changes", label: "补充" },
+  { value: "approved", label: "公开" },
   { value: "rejected", label: "拒绝" },
+  { value: "merged", label: "合并" },
   { value: "", label: "全部" }
 ];
 
@@ -367,6 +391,7 @@ const requests = ref([]);
 const requestKeyword = ref("");
 const requestStatus = ref("pending");
 const reviewNote = ref("");
+const mergeTargetId = ref("");
 
 onLoad(() => {
   roles.value = getCurrentUser().roles || [];
@@ -644,7 +669,7 @@ async function toggleScript(script) {
 
 async function loadRequests() {
   const response = await request({
-    url: "/api/admin/catalog-requests" + queryString({
+    url: "/api/admin/catalog-review-items" + queryString({
       keyword: requestKeyword.value,
       status: requestStatus.value,
       limit: 80
@@ -658,44 +683,97 @@ function setRequestStatus(status) {
   loadRequests();
 }
 
-async function approveRequest(item) {
-  const data =
-    item.request_type === "script"
-      ? {
-          status: "approved",
-          reviewNote: reviewNote.value || "通过",
-          typeTags: ["情感"],
-          playerCount: 6,
-          defaultSeatTemplate: JSON.parse(defaultSeatTemplate)
-        }
-      : {
-          status: "approved",
-          reviewNote: reviewNote.value || "通过",
-          city: item.city || "北京",
-          district: item.district || ""
-        };
-  await request({
-    url: `/api/admin/catalog-requests/${item.id}`,
-    method: "PATCH",
-    data
-  });
-  showMessage("已通过");
-  loadRequests();
-  loadStores();
-  loadScripts();
+function itemTypeLabel(type) {
+  return type === "script" ? "剧本" : "店家";
 }
 
-async function rejectRequest(item) {
+function reviewStatusLabel(status) {
+  const labels = {
+    pending: "待审核",
+    needs_changes: "需要补充",
+    approved: "已公开",
+    rejected: "已拒绝",
+    merged: "已合并"
+  };
+  return labels[status] || status || "-";
+}
+
+function catalogAuditStatus(item) {
+  return item.review_status || "approved";
+}
+
+function catalogAuditLabel(item) {
+  return reviewStatusLabel(catalogAuditStatus(item));
+}
+
+function catalogAuditClass(item) {
+  return catalogAuditStatus(item);
+}
+
+function reviewItemMeta(item) {
+  if (item.type === "script") {
+    return `${displayTags(item.type_tags)} / ${item.player_count || 0}人`;
+  }
+  return `${item.city || "北京"} ${item.district || ""}`;
+}
+
+function reviewPayload(defaultNote) {
+  return {
+    reviewNote: reviewNote.value || defaultNote
+  };
+}
+
+async function finishReviewAction(message) {
+  showMessage(message);
+  reviewNote.value = "";
+  mergeTargetId.value = "";
+  await loadRequests();
+  await loadStores();
+  await loadScripts();
+}
+
+async function approveReviewItem(item) {
   await request({
-    url: `/api/admin/catalog-requests/${item.id}`,
-    method: "PATCH",
+    url: `/api/admin/catalog-review-items/${item.type}/${item.id}/approve`,
+    method: "POST",
+    data: reviewPayload("通过，已公开")
+  });
+  await finishReviewAction("已批准公开");
+}
+
+async function needsChangesReviewItem(item) {
+  await request({
+    url: `/api/admin/catalog-review-items/${item.type}/${item.id}/needs-changes`,
+    method: "POST",
+    data: reviewPayload("请补充资料")
+  });
+  await finishReviewAction("已标记需要补充");
+}
+
+async function rejectReviewItem(item) {
+  await request({
+    url: `/api/admin/catalog-review-items/${item.type}/${item.id}/reject`,
+    method: "POST",
+    data: reviewPayload("资料不完整，未通过")
+  });
+  await finishReviewAction("已拒绝");
+}
+
+async function mergeReviewItem(item) {
+  const targetId = Number(mergeTargetId.value || 0);
+  if (!Number.isInteger(targetId) || targetId <= 0) {
+    showMessage("请填写合并目标公共资料 ID");
+    return;
+  }
+  await request({
+    url: `/api/admin/catalog-review-items/${item.type}/${item.id}/merge`,
+    method: "POST",
     data: {
-      status: "rejected",
-      reviewNote: reviewNote.value || "资料不完整"
+      ...reviewPayload("已合并到已有公共资料"),
+      mergedIntoId: targetId
     }
   });
-  showMessage("已拒绝");
-  loadRequests();
+  await finishReviewAction("已合并");
 }
 </script>
 
@@ -809,6 +887,46 @@ async function rejectRequest(item) {
   color: #64748b;
   font-size: 24rpx;
   line-height: 1.45;
+}
+
+.audit-row {
+  display: flex;
+  margin-top: 10rpx;
+}
+
+.audit-badge {
+  padding: 5rpx 12rpx;
+  border-radius: 6rpx;
+  background: #eef2f7;
+  color: #334155;
+  font-size: 22rpx;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.audit-badge.pending {
+  background: #fbf6e9;
+  color: #967139;
+}
+
+.audit-badge.needs_changes {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.audit-badge.approved {
+  background: #eef7f4;
+  color: #1f7a68;
+}
+
+.audit-badge.rejected {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.audit-badge.merged {
+  background: #eef2f7;
+  color: #64748b;
 }
 
 .item-actions {

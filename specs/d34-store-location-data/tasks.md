@@ -47,6 +47,9 @@
   - [x] 增加帮助文案说明 admin web 和微信小程序共用 GCJ-02 坐标。
   - [x] `VITE_TENCENT_MAP_KEY` 存在时按需加载腾讯位置服务 Web SDK。
   - [x] 管理员点击地图时回填 `latitude` 和 `longitude`。
+  - [x] 增加 `地点搜索` 输入，调用腾讯位置服务 POI 搜索。
+  - [x] 管理员选择 POI 搜索结果时回填地址、纬度和经度。
+  - [x] 当前 key 未开启 WebServiceAPI 时展示明确提示。
   - [x] 地图不可用时保留手填坐标。
   - 2026-07-08 进度：用户确认 admin web 和微信小程序共用腾讯位置服务 key；D34 admin 范围从“只手填”调整为“腾讯地图选点 + 手填兜底”。
 
@@ -77,6 +80,7 @@
 
 - [ ] D34.10 更新静态检查、烟测和构建验证。
   - [x] 新增 `scripts/d34-store-location-check.js` 静态检查后端迁移、坐标校验、admin 表单和腾讯地图按需加载。
+  - [x] 扩展 D34 静态检查，覆盖 admin POI 搜索入口、搜索函数和选择结果回填逻辑。
   - [ ] 新增或扩展后端烟测，覆盖合法坐标保存。
   - [ ] 后端烟测覆盖非法纬度返回 400。
   - [ ] 后端烟测覆盖非法经度返回 400。
@@ -114,7 +118,7 @@
 - [x] 非法纬度和经度会被后端拒绝。
 - [x] 店家列表和管理员店家列表返回坐标字段。
 - [x] 车局详情返回店家地址和坐标字段。
-- [x] admin web 店家表单支持腾讯地图选点和手填 GCJ-02 坐标。
+- [x] admin web 店家表单支持腾讯地图选点、POI 搜索和手填 GCJ-02 坐标。
 - [ ] 小程序补录店家支持地图选点。
 - [ ] 小程序车局详情支持有坐标时打开地图。
 - [ ] 小程序不主动读取或保存用户当前位置。
@@ -127,3 +131,4 @@
 
 - 2026-07-08：D34 spec 三件套已创建。实现、自动验证和微信开发者工具手工验证待后续任务执行时补充。
 - 2026-07-08：完成 backend/admin 子集：新增 `stores.latitude` / `stores.longitude` 迁移，后端管理员创建、编辑和车局详情支持坐标，admin web 店家表单支持手填和腾讯地图选点。已运行 `node scripts/d34-store-location-check.js`、`node --check apps/api/src/modules/core/service.js`、`node --check scripts/d34-store-location-check.js`、`npm --workspace apps/admin-web run build`。
+- 2026-07-08：admin web 增加 POI 搜索 UI 和候选结果回填逻辑。接口连通性测试显示当前腾讯位置服务 key 返回 `199 此key未开启WebserviceAPI功能`，需要在腾讯控制台开启 WebServiceAPI 后才能返回真实搜索结果。
