@@ -176,6 +176,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { getTencentMapKey } from "../runtimeConfig.js";
 
 const props = defineProps({
   store: { type: Object, required: true },
@@ -190,7 +191,7 @@ const emit = defineEmits(["save", "close"]);
 
 const model = reactive({});
 const scriptKeyword = ref("");
-const tencentMapKey = import.meta.env.VITE_TENCENT_MAP_KEY || "";
+const tencentMapKey = getTencentMapKey();
 const mapContainer = ref(null);
 const mapVisible = ref(false);
 const mapLoading = ref(false);
