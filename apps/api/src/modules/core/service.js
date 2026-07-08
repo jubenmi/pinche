@@ -41,6 +41,28 @@ function optionalText(value) {
   return String(value);
 }
 
+function optionalCoordinate(value, fieldName, min, max) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    throw badRequest(`${fieldName} must be a finite number`);
+  }
+  if (number < min || number > max) {
+    throw badRequest(`${fieldName} must be between ${min} and ${max}`);
+  }
+  return number;
+}
+
+function optionalLatitude(value) {
+  return optionalCoordinate(value, "latitude", -90, 90);
+}
+
+function optionalLongitude(value) {
+  return optionalCoordinate(value, "longitude", -180, 180);
+}
+
 function jsonText(value) {
   if (value === undefined || value === null) {
     return null;
@@ -1951,17 +1973,24 @@ export async function replaceStoreScripts(storeId, body = {}) {
 
 export async function createStore(user, body) {
   return withDatabaseConnection(async (connection) => {
+    const latitude = optionalLatitude(body.latitude);
+    const longitude = optionalLongitude(body.longitude);
     const [result] = await connection.query(
       `
         INSERT INTO stores
-          (name, city, district, address, contact_note, status, claim_status, created_by_admin_user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (
+            name, city, district, address, latitude, longitude, contact_note,
+            status, claim_status, created_by_admin_user_id
+          )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         requireValue(body, "name"),
         requireValue(body, "city"),
         optionalText(body.district),
         optionalText(body.address),
+        latitude,
+        longitude,
         optionalText(body.contactNote),
         body.status || "active",
         body.claimStatus || "unclaimed",
@@ -1973,12 +2002,21 @@ export async function createStore(user, body) {
 }
 
 export async function updateStore(id, body) {
+  const storeBody = { ...body };
+  if (body.latitude !== undefined) {
+    storeBody.latitude = optionalLatitude(body.latitude);
+  }
+  if (body.longitude !== undefined) {
+    storeBody.longitude = optionalLongitude(body.longitude);
+  }
   return withDatabaseConnection(async (connection) =>
-    updateAllowed(connection, "stores", id, body, [
+    updateAllowed(connection, "stores", id, storeBody, [
       ["name", "name"],
       ["city", "city"],
       ["district", "district"],
       ["address", "address"],
+      ["latitude", "latitude"],
+      ["longitude", "longitude"],
       ["contactNote", "contact_note"],
       ["status", "status"],
       ["claimStatus", "claim_status"]
@@ -2387,9 +2425,13 @@ export async function getSession(id) {
     );
     const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
     const activeAlbumPhotoCount = await activeSessionAlbumPhotoCount(connection, id);
+    const storeLocation = session.store_id ? await findById(connection, "stores", session.store_id) : null;
     const { note, cancelled_by_user_id: _cancelledByUserId, ...publicSession } = session;
     return {
       ...publicSession,
+      store_address: storeLocation?.address || null,
+      store_latitude: storeLocation?.latitude ?? null,
+      store_longitude: storeLocation?.longitude ?? null,
       join_policy: publicSession.join_policy || "review_required",
       join_phone_required: Boolean(Number(publicSession.join_phone_required ?? 1)),
       npc_join_enabled: Boolean(Number(publicSession.npc_join_enabled ?? 1)),

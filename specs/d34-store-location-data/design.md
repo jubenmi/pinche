@@ -4,7 +4,7 @@
 
 ## Overview
 
-D34 给店家资料增加统一位置数据：`address` 继续作为文本地址，新增 `latitude` 和 `longitude` 保存 GCJ-02 坐标。小程序用微信内置地图能力选点和打开地图；admin web 本次只读写同一套坐标字段，不接地图 SDK。
+D34 给店家资料增加统一位置数据：`address` 继续作为文本地址，新增 `latitude` 和 `longitude` 保存 GCJ-02 坐标。小程序用微信内置地图能力选点和打开地图；admin web 使用腾讯位置服务 Web SDK 选点，并在地图不可用时保留手填坐标。
 
 本设计不迁移到微信云开发，不改变现有自建 API 架构。小程序、admin web 和后端继续通过现有 `apps/api` 交互。
 
@@ -45,8 +45,8 @@ stores.longitude  GCJ-02
 前端能力分端实现：
 
 - 小程序：`uni.chooseLocation` 写入坐标，`uni.openLocation` 打开坐标。
-- admin web：本次手填和回显坐标。
-- 后续 admin web 地图选点：使用腾讯位置服务 Web SDK 或 WebService API，继续写入同一字段。
+- admin web：使用腾讯位置服务 Web SDK 点选坐标，或手填和回显坐标。
+- 后续地址解析：使用服务端 WebService API Key 代理，继续写入同一字段。
 
 禁止混存：
 
@@ -136,10 +136,11 @@ longitude
 
 ### StoreDrawer
 
-`apps/admin-web/src/components/StoreDrawer.vue` 在地址字段后增加两个输入：
+`apps/admin-web/src/components/StoreDrawer.vue` 在地址字段后增加位置设置区：
 
 - `纬度（GCJ-02）`
 - `经度（GCJ-02）`
+- `地图选点`，仅在 `VITE_TENCENT_MAP_KEY` 存在时展示
 
 model 字段：
 
@@ -161,8 +162,10 @@ longitude: store.longitude ?? ""
 UI 约束：
 
 - 坐标不是必填。
-- 帮助文案说明“小程序地图和后续腾讯地图 web 选点共用 GCJ-02 坐标”。
-- 不新增地图弹窗、地图脚本或腾讯位置服务 key 配置。
+- 帮助文案说明“admin web 和微信小程序共用 GCJ-02 坐标”。
+- 腾讯地图脚本只在管理员打开地图选点时按需加载。
+- 地图点击只回填坐标，不自动逆地址解析；地址仍由管理员确认或手填。
+- `VITE_TENCENT_MAP_KEY` 缺失或地图加载失败时，保留手填坐标。
 - 列表暂不增加坐标列，避免表格拥挤。
 
 ## Mini Program Design
@@ -278,7 +281,8 @@ admin web 静态检查覆盖：
 
 - `StoreDrawer` 包含 GCJ-02 纬度和经度输入。
 - 保存 payload 包含 `latitude` 和 `longitude`。
-- 不引入腾讯地图 web SDK 或地图脚本。
+- `StoreDrawer` 通过 `VITE_TENCENT_MAP_KEY` 按需加载腾讯地图 Web SDK。
+- `StoreDrawer` 点击地图后回填 `latitude` 和 `longitude`。
 
 最终验证：
 
@@ -294,8 +298,6 @@ admin web 静态检查覆盖：
 
 D34 不实现：
 
-- admin web 地图选点弹窗。
-- 腾讯位置服务 key 配置。
 - 地址自动解析经纬度。
 - 附近店家和距离排序。
 - 用户当前位置读取、存储和推荐。

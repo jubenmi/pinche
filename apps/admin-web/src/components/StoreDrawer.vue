@@ -25,6 +25,51 @@
             <span>地址</span>
             <input v-model.trim="model.address" name="storeAddress" />
           </label>
+          <section class="location-panel full">
+            <div class="location-panel-head">
+              <div>
+                <strong>位置设置</strong>
+                <span>admin web 和微信小程序共用 GCJ-02 坐标</span>
+              </div>
+              <button
+                v-if="hasTencentMapKey"
+                class="secondary-action location-map-button"
+                type="button"
+                :disabled="saving || mapLoading"
+                @click="toggleMapPicker"
+              >
+                {{ mapVisible ? "收起地图" : "地图选点" }}
+              </button>
+            </div>
+            <div class="coordinate-grid">
+              <label>
+                <span>纬度（GCJ-02）</span>
+                <input
+                  v-model.trim="model.latitude"
+                  name="storeLatitude"
+                  inputmode="decimal"
+                  placeholder="39.9042000"
+                />
+              </label>
+              <label>
+                <span>经度（GCJ-02）</span>
+                <input
+                  v-model.trim="model.longitude"
+                  name="storeLongitude"
+                  inputmode="decimal"
+                  placeholder="116.4074000"
+                />
+              </label>
+            </div>
+            <p v-if="!hasTencentMapKey" class="location-hint">
+              未配置腾讯位置服务 Key，可手填 GCJ-02 坐标。
+            </p>
+            <div v-if="mapVisible" class="map-picker-shell">
+              <div ref="mapContainer" class="tencent-map-picker"></div>
+              <p class="location-hint">{{ mapStatus }}</p>
+              <p v-if="mapError" class="location-error">{{ mapError }}</p>
+            </div>
+          </section>
           <label class="full">
             <span>联系备注</span>
             <textarea v-model.trim="model.contactNote" name="storeContactNote" rows="3"></textarea>
@@ -94,7 +139,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 
 const props = defineProps({
   store: { type: Object, required: true },
@@ -107,6 +152,17 @@ const emit = defineEmits(["save", "close"]);
 
 const model = reactive({});
 const scriptKeyword = ref("");
+const tencentMapKey = import.meta.env.VITE_TENCENT_MAP_KEY || "";
+const mapContainer = ref(null);
+const mapVisible = ref(false);
+const mapLoading = ref(false);
+const mapStatus = ref("");
+const mapError = ref("");
+let tencentMapPromise = null;
+let mapInstance = null;
+let mapMarker = null;
+
+const hasTencentMapKey = computed(() => Boolean(tencentMapKey));
 
 function parseJsonArray(value) {
   if (!value) {
@@ -162,6 +218,126 @@ function isScriptSelected(scriptId) {
   return (model.scriptIds || []).includes(Number(scriptId));
 }
 
+function coordinateText(value) {
+  return value === undefined || value === null || value === "" ? "" : String(value);
+}
+
+function coordinateNumber(value, min, max) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) && number >= min && number <= max ? number : null;
+}
+
+function fixedCoordinate(value) {
+  return Number(value).toFixed(7);
+}
+
+function validMapPoint(TMap) {
+  const latitude = coordinateNumber(model.latitude, -90, 90);
+  const longitude = coordinateNumber(model.longitude, -180, 180);
+  if (latitude !== null && longitude !== null) {
+    return new TMap.LatLng(latitude, longitude);
+  }
+  return null;
+}
+
+function currentMapPoint(TMap) {
+  const point = validMapPoint(TMap);
+  if (point) {
+    return point;
+  }
+  return new TMap.LatLng(39.9042, 116.4074);
+}
+
+function loadTencentMapSdk() {
+  if (window.TMap) {
+    return Promise.resolve(window.TMap);
+  }
+  if (!tencentMapPromise) {
+    tencentMapPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `https://map.qq.com/api/gljs?v=1.exp&key=${encodeURIComponent(tencentMapKey)}`;
+      script.async = true;
+      script.onload = () => (window.TMap ? resolve(window.TMap) : reject(new Error("TMap missing")));
+      script.onerror = () => reject(new Error("Tencent map script failed"));
+      document.head.appendChild(script);
+    });
+  }
+  return tencentMapPromise;
+}
+
+function syncMapMarker(TMap, point) {
+  if (!mapMarker) {
+    mapMarker = new TMap.MultiMarker({
+      map: mapInstance,
+      geometries: [{ id: "store-location", position: point }]
+    });
+    return;
+  }
+  mapMarker.updateGeometries([{ id: "store-location", position: point }]);
+}
+
+function latLngValue(point, key) {
+  const value = typeof point[key] === "function" ? point[key]() : point[key];
+  return Number(value);
+}
+
+function applyMapPoint(point) {
+  model.latitude = fixedCoordinate(latLngValue(point, "lat"));
+  model.longitude = fixedCoordinate(latLngValue(point, "lng"));
+  mapStatus.value = "已回填地图点选坐标";
+}
+
+function handleMapClick(event) {
+  if (!window.TMap || !event?.latLng) {
+    return;
+  }
+  applyMapPoint(event.latLng);
+  syncMapMarker(window.TMap, event.latLng);
+}
+
+async function ensureMapPicker() {
+  if (!hasTencentMapKey.value || mapLoading.value) {
+    return;
+  }
+  mapLoading.value = true;
+  mapError.value = "";
+  mapStatus.value = "地图加载中...";
+  try {
+    const TMap = await loadTencentMapSdk();
+    await nextTick();
+    if (!mapContainer.value) {
+      return;
+    }
+    const center = currentMapPoint(TMap);
+    if (!mapInstance) {
+      mapInstance = new TMap.Map(mapContainer.value, {
+        center,
+        zoom: 16
+      });
+      mapInstance.on("click", handleMapClick);
+    } else {
+      mapInstance.setCenter(center);
+    }
+    syncMapMarker(TMap, center);
+    mapStatus.value = "点击地图选择店家位置";
+  } catch (error) {
+    mapError.value = "腾讯地图加载失败，可继续手填 GCJ-02 坐标。";
+    mapStatus.value = "";
+  } finally {
+    mapLoading.value = false;
+  }
+}
+
+async function toggleMapPicker() {
+  mapVisible.value = !mapVisible.value;
+  if (mapVisible.value) {
+    await ensureMapPicker();
+  }
+}
+
 watch(
   [() => props.store, () => props.linkedScripts, () => props.linkedScriptIds],
   ([store, linkedScripts, linkedScriptIds]) => {
@@ -180,15 +356,44 @@ watch(
       city: store.city || "北京",
       district: store.district || "",
       address: store.address || "",
+      latitude: coordinateText(store.latitude),
+      longitude: coordinateText(store.longitude),
       contactNote: store.contact_note || store.contactNote || "",
       status: store.status || "active",
       scriptIds: linkedSource.map(linkScriptId).filter(Boolean),
       storeScriptPriceYuanById
     });
     scriptKeyword.value = "";
+    mapError.value = "";
+    if (mapVisible.value) {
+      nextTick(() => ensureMapPicker());
+    }
   },
   { immediate: true }
 );
+
+watch(
+  [() => model.latitude, () => model.longitude],
+  () => {
+    if (!mapInstance || !window.TMap) {
+      return;
+    }
+    const point = validMapPoint(window.TMap);
+    if (!point) {
+      return;
+    }
+    mapInstance.setCenter(point);
+    syncMapMarker(window.TMap, point);
+  }
+);
+
+onBeforeUnmount(() => {
+  if (mapInstance?.destroy) {
+    mapInstance.destroy();
+  }
+  mapInstance = null;
+  mapMarker = null;
+});
 
 function submit() {
   if (props.saving) {
@@ -198,11 +403,79 @@ function submit() {
     scriptId: Number(scriptId),
     pricePerPlayer: Number(model.storeScriptPriceYuanById?.[Number(scriptId)] || 0) * 100
   }));
-  emit("save", { ...model, scriptLinks });
+  emit("save", {
+    ...model,
+    latitude: model.latitude,
+    longitude: model.longitude,
+    scriptLinks
+  });
 }
 </script>
 
 <style scoped>
+.location-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #dfe8e4;
+  border-radius: 8px;
+  background: #f8fbfa;
+}
+
+.location-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.location-panel-head div {
+  display: grid;
+  gap: 3px;
+}
+
+.location-panel-head strong {
+  color: #17211f;
+  font-size: 14px;
+}
+
+.location-panel-head span,
+.location-hint,
+.location-error {
+  margin: 0;
+  color: #63716d;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.location-error {
+  color: #b42318;
+}
+
+.location-map-button {
+  min-width: 88px;
+}
+
+.coordinate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.map-picker-shell {
+  display: grid;
+  gap: 8px;
+}
+
+.tencent-map-picker {
+  width: 100%;
+  min-height: 260px;
+  overflow: hidden;
+  border: 1px solid #dce6e2;
+  border-radius: 8px;
+  background: #eef5f2;
+}
+
 .script-links-head {
   display: flex;
   align-items: flex-start;
@@ -283,5 +556,16 @@ function submit() {
 
 .script-empty {
   margin: 12px 0 0;
+}
+
+@media (max-width: 680px) {
+  .coordinate-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .location-panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 </style>
