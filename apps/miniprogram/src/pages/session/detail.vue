@@ -53,6 +53,13 @@
     <view v-if="session.id" class="section info-section">
       <view class="section-title">基础信息</view>
       <view class="info-row">店家：{{ session.store_name_snapshot }}</view>
+      <view v-if="session.store_address || hasStoreLocation" class="info-row location-row">
+        <view v-if="session.store_address" class="location-text">地址：{{ session.store_address }}</view>
+        <view v-else class="location-text subtle">地址：未填写</view>
+        <t-button v-if="hasStoreLocation" class="map-button" @tap="openStoreMap">
+          查看地图
+        </t-button>
+      </view>
       <view class="info-row">时间：{{ session.start_at }}</view>
       <view class="info-row">指定DM：{{ session.dm_name_snapshot || "未指定" }}</view>
       <view class="info-row">指定NPC：{{ session.npc_name_snapshot || "未指定" }}</view>
@@ -151,6 +158,14 @@ import {
 } from "../../utils/api";
 import { showToast } from "../../utils/tdesignFeedback";
 
+function coordinateNumber(value, min, max) {
+  if (value === "" || value === null || value === undefined) {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) && number >= min && number <= max ? number : null;
+}
+
 export default {
   components: { AuthIdentityBar, RoleSeatBoard, ChatEntry, FeedbackHost },
   data() {
@@ -227,6 +242,15 @@ export default {
       const applied = seats.filter((seat) => seat.status === "applied").length;
       const onboard = seats.filter((seat) => ["confirmed", "locked"].includes(seat.status)).length;
       return `${open} 个可选，${applied} 个待审，${onboard} 个已上车`;
+    },
+    storeMapLatitude() {
+      return coordinateNumber(this.session.store_latitude, -90, 90);
+    },
+    storeMapLongitude() {
+      return coordinateNumber(this.session.store_longitude, -180, 180);
+    },
+    hasStoreLocation() {
+      return this.storeMapLatitude !== null && this.storeMapLongitude !== null;
     },
     detailSeatCards() {
       return (this.session.seats || []).map((seat) => {
@@ -508,6 +532,20 @@ export default {
       const id = this.sessionId || "d1-demo";
       uni.navigateTo({ url: `/pages/session/review?id=${id}` });
     },
+    openStoreMap() {
+      if (!this.hasStoreLocation || typeof uni.openLocation !== "function") {
+        showToast({ title: "地图打开失败，请稍后再试", icon: "none" });
+        return;
+      }
+      uni.openLocation({
+        latitude: this.storeMapLatitude,
+        longitude: this.storeMapLongitude,
+        name: this.session.store_name_snapshot || "店家",
+        address: this.session.store_address || "",
+        scale: 18,
+        fail: () => showToast({ title: "地图打开失败，请稍后再试", icon: "none" })
+      });
+    },
     async goAlbum() {
       const auth = await this.ensureProtectedActionLogin();
       if (!auth) {
@@ -768,6 +806,31 @@ export default {
 
 .info-row.subtle {
   color: #8a948d;
+}
+
+.location-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.location-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.map-button {
+  flex: 0 0 148rpx;
+  width: 148rpx;
+  min-width: 148rpx;
+  height: 56rpx;
+  margin: 0;
+  border-radius: 8rpx;
+  color: #1f7a68;
+  font-size: 24rpx;
+  line-height: 56rpx;
 }
 
 .review-edit {

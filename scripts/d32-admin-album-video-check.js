@@ -24,6 +24,11 @@ function assertIncludes(file, text, label = text) {
   assert(content.includes(text), `${file} should include ${label}`);
 }
 
+function assertNotIncludes(file, text, label = text) {
+  const content = read(file);
+  assert(!content.includes(text), `${file} should not include ${label}`);
+}
+
 function assertMatches(file, pattern, label = pattern.source) {
   const content = read(file);
   assert(pattern.test(content), `${file} should match ${label}`);
@@ -75,6 +80,14 @@ assertIncludes("apps/api/src/server.js", "ci-process");
 assertIncludes("apps/api/src/server.js", "snapshot");
 assertIncludes("apps/api/src/server.js", "SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES");
 assertIncludes("apps/api/src/server.js", "uploads/session-album/videos/source/");
+assertIncludes("apps/api/src/server.js", "readyOnCreate: true");
+assertNotIncludes(
+  "apps/api/src/server.js",
+  "localFallbackReady: !isCosUploadStorageEnabled()",
+  "COS-enabled videos waiting for cloud transcode"
+);
+assertIncludes("apps/api/src/modules/core/service.js", "readyOnCreate");
+assertIncludes("apps/api/src/modules/core/service.js", "readyOnCreate ? sourceUrl : null");
 
 const server = read("apps/api/src/server.js");
 const videoRouteStart = server.indexOf("const sessionAlbumMediaVideoUrlId");

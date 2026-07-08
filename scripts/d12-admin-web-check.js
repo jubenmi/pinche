@@ -700,6 +700,21 @@ assert(
   storeDrawer.includes("reviewMode") && storeDrawer.includes("footer-actions"),
   "store drawer should support D33 review mode footer actions"
 );
+for (const token of [
+  "纬度（GCJ-02）",
+  "经度（GCJ-02）",
+  "getTencentMapKey",
+  "map.qq.com/api/gljs",
+  "TMap.Map",
+  "TMap.MultiMarker",
+  "地点搜索",
+  "searchPoiByKeyword",
+  "applyPoiResult",
+  "latitude: model.latitude",
+  "longitude: model.longitude"
+]) {
+  assert(storeDrawer.includes(token), `store drawer should support D34 location field: ${token}`);
+}
 
 assert(webApi.includes("scriptLinks"), "web API should save store-script link prices");
 for (const token of [

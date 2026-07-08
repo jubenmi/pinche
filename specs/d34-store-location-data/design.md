@@ -140,8 +140,8 @@ longitude
 
 - `纬度（GCJ-02）`
 - `经度（GCJ-02）`
-- `地图选点`，仅在 `VITE_TENCENT_MAP_KEY` 存在时展示
-- `地点搜索`，仅在 `VITE_TENCENT_MAP_KEY` 存在时展示
+- `地图选点`，仅在运行时腾讯位置服务 key 存在时展示
+- `地点搜索`，仅在运行时腾讯位置服务 key 存在时展示
 
 model 字段：
 
@@ -169,7 +169,7 @@ UI 约束：
 - 地点搜索调用腾讯位置服务 Place Search，按当前 `city` 做 `region(city,0)` 边界搜索。
 - 地点搜索结果只在管理员选择候选后回填 `address`、`latitude` 和 `longitude`，不覆盖店家名称。
 - 当前腾讯 key 未开启 WebServiceAPI 时，展示明确提示并保留地图点选和手填坐标。
-- `VITE_TENCENT_MAP_KEY` 缺失或地图加载失败时，保留手填坐标。
+- 运行时腾讯位置服务 key 缺失或地图加载失败时，保留手填坐标。
 - 列表暂不增加坐标列，避免表格拥挤。
 
 ## Mini Program Design
@@ -287,7 +287,7 @@ admin web 静态检查覆盖：
 
 - `StoreDrawer` 包含 GCJ-02 纬度和经度输入。
 - 保存 payload 包含 `latitude` 和 `longitude`。
-- `StoreDrawer` 通过 `VITE_TENCENT_MAP_KEY` 按需加载腾讯地图 Web SDK。
+- `StoreDrawer` 通过运行时腾讯位置服务 key 按需加载腾讯地图 Web SDK。
 - `StoreDrawer` 点击地图后回填 `latitude` 和 `longitude`。
 - `StoreDrawer` 包含 POI 搜索入口、搜索调用和选择结果回填逻辑。
 

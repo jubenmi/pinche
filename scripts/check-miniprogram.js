@@ -1263,6 +1263,34 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (createGoNextSource.includes("ensureLoggedIn")) {
     fail("Store next button must let users continue browsing before login");
   }
+  for (const requiredD34StoreLocationText of [
+    "latitude: \"\"",
+    "longitude: \"\"",
+    "地图选点",
+    "pickStoreLocation",
+    "uni.chooseLocation",
+    "storeForm.latitude",
+    "storeForm.longitude",
+    "latitude: this.storeForm.latitude",
+    "longitude: this.storeForm.longitude"
+  ]) {
+    if (!createSource.includes(requiredD34StoreLocationText)) {
+      fail(`D34 store location create flow is missing ${requiredD34StoreLocationText}`);
+    }
+  }
+  if (createSource.includes("uni.getLocation") || createSource.includes("wx.getLocation")) {
+    fail("D34 store location flow must not read current user location");
+  }
+  const mpWeixinConfig = manifestJson?.["mp-weixin"] || {};
+  if (!mpWeixinConfig.permission?.["scope.userLocation"]?.desc?.includes("剧本店位置")) {
+    fail("D34 store location manifest must explain chooseLocation is only for selecting a script store location");
+  }
+  if (!mpWeixinConfig.requiredPrivateInfos?.includes("chooseLocation")) {
+    fail("D34 store location manifest must declare chooseLocation in requiredPrivateInfos");
+  }
+  if (mpWeixinConfig.requiredPrivateInfos?.includes("getLocation")) {
+    fail("D34 store location manifest must not declare getLocation");
+  }
 
   const scriptSource = fs.existsSync(firstFlowFiles["script step"])
     ? fs.readFileSync(firstFlowFiles["script step"], "utf8")
@@ -1783,6 +1811,22 @@ if (!fs.existsSync(pagesJsonPath)) {
   const detailSource = fs.existsSync(path.join(srcRoot, "pages/session/detail.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/session/detail.vue"), "utf8")
     : "";
+  for (const requiredD34DetailLocationText of [
+    "session.store_address",
+    "session.store_address || hasStoreLocation",
+    "查看地图",
+    "hasStoreLocation",
+    "openStoreMap",
+    "uni.openLocation",
+    "store_latitude",
+    "store_longitude",
+    "scale: 18",
+    "地图打开失败，请稍后再试"
+  ]) {
+    if (!detailSource.includes(requiredD34DetailLocationText)) {
+      fail(`D34 store location detail page is missing ${requiredD34DetailLocationText}`);
+    }
+  }
   const roleSeatBoardPath = path.join(srcRoot, "components/RoleSeatBoard.vue");
   const roleSeatBoardSource = fs.existsSync(roleSeatBoardPath)
     ? fs.readFileSync(roleSeatBoardPath, "utf8")

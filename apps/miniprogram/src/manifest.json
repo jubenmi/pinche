@@ -14,6 +14,14 @@
       "postcss": true,
       "minified": true
     },
-    "usingComponents": true
+    "usingComponents": true,
+    "permission": {
+      "scope.userLocation": {
+        "desc": "用于用户主动选择剧本店位置"
+      }
+    },
+    "requiredPrivateInfos": [
+      "chooseLocation"
+    ]
   }
 }
