@@ -567,10 +567,16 @@ function sessionNpcRoleResponse(row = {}) {
     source: row.source || "session",
     bound_user_id: row.bound_user_id ? Number(row.bound_user_id) : null,
     bound_user_name: row.bound_user_nickname || row.bound_user_open_id || "",
+    bound_user_avatar_url: row.bound_user_avatar_url || "",
+    bound_user_gender: row.bound_user_gender || "",
     pending_signup_id: row.pending_signup_id ? Number(row.pending_signup_id) : null,
     pending_signup_user_id: row.pending_signup_user_id
       ? Number(row.pending_signup_user_id)
       : null,
+    pending_signup_user_name:
+      row.pending_signup_user_nickname || row.pending_signup_user_open_id || "",
+    pending_signup_user_avatar_url: row.pending_signup_user_avatar_url || "",
+    pending_signup_user_gender: row.pending_signup_user_gender || "",
     sort_order: Number(row.sort_order || 0),
     status: row.status || "active"
   };
@@ -695,6 +701,8 @@ async function sessionNpcRolesForSession(connection, sessionId) {
         role.*,
         user.nickname AS bound_user_nickname,
         user.open_id AS bound_user_open_id,
+        user.avatar_url AS bound_user_avatar_url,
+        user.gender AS bound_user_gender,
         (
           SELECT signup.id
           FROM signups signup
@@ -710,7 +718,43 @@ async function sessionNpcRolesForSession(connection, sessionId) {
             AND signup.status = 'pending'
           ORDER BY signup.id
           LIMIT 1
-        ) AS pending_signup_user_id
+        ) AS pending_signup_user_id,
+        (
+          SELECT pending_user.nickname
+          FROM signups signup
+          JOIN users pending_user ON pending_user.id = signup.user_id
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_nickname,
+        (
+          SELECT pending_user.open_id
+          FROM signups signup
+          JOIN users pending_user ON pending_user.id = signup.user_id
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_open_id,
+        (
+          SELECT pending_user.avatar_url
+          FROM signups signup
+          JOIN users pending_user ON pending_user.id = signup.user_id
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_avatar_url,
+        (
+          SELECT pending_user.gender
+          FROM signups signup
+          JOIN users pending_user ON pending_user.id = signup.user_id
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_gender
       FROM session_npc_roles role
       LEFT JOIN users user ON user.id = role.bound_user_id
       WHERE role.session_id = ?
@@ -729,6 +773,8 @@ async function sessionNpcRoleById(connection, npcRoleId) {
         role.*,
         user.nickname AS bound_user_nickname,
         user.open_id AS bound_user_open_id,
+        user.avatar_url AS bound_user_avatar_url,
+        user.gender AS bound_user_gender,
         (
           SELECT signup.id
           FROM signups signup
@@ -744,7 +790,43 @@ async function sessionNpcRoleById(connection, npcRoleId) {
             AND signup.status = 'pending'
           ORDER BY signup.id
           LIMIT 1
-        ) AS pending_signup_user_id
+        ) AS pending_signup_user_id,
+        (
+          SELECT pending_user.nickname
+          FROM signups signup
+          JOIN users pending_user ON pending_user.id = signup.user_id
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_nickname,
+        (
+          SELECT pending_user.open_id
+          FROM signups signup
+          JOIN users pending_user ON pending_user.id = signup.user_id
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_open_id,
+        (
+          SELECT pending_user.avatar_url
+          FROM signups signup
+          JOIN users pending_user ON pending_user.id = signup.user_id
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_avatar_url,
+        (
+          SELECT pending_user.gender
+          FROM signups signup
+          JOIN users pending_user ON pending_user.id = signup.user_id
+          WHERE signup.session_npc_role_id = role.id
+            AND signup.status = 'pending'
+          ORDER BY signup.id
+          LIMIT 1
+        ) AS pending_signup_user_gender
       FROM session_npc_roles role
       LEFT JOIN users user ON user.id = role.bound_user_id
       WHERE role.id = ?
@@ -961,6 +1043,169 @@ async function releaseUserOtherConfirmedSeats(
   );
 
   return confirmedRows;
+}
+
+async function clearAppliedSeatsWithoutPending(connection, sessionId) {
+  await connection.query(
+    `
+      UPDATE session_seats
+      SET status = 'open'
+      WHERE session_id = ?
+        AND status = 'applied'
+        AND confirmed_user_id IS NULL
+        AND id NOT IN (
+          SELECT pending_seat_id
+          FROM (
+            SELECT DISTINCT seat_id AS pending_seat_id
+            FROM signups
+            WHERE session_id = ?
+              AND seat_id IS NOT NULL
+              AND status = 'pending'
+          ) pending_seats
+        )
+    `,
+    [sessionId, sessionId]
+  );
+}
+
+async function cancelUserOtherPendingSignups(
+  connection,
+  sessionId,
+  userId,
+  keepSeatId = 0,
+  keepNpcRoleId = 0
+) {
+  await connection.query(
+    `
+      UPDATE signups
+      SET status = 'cancelled'
+      WHERE session_id = ?
+        AND user_id = ?
+        AND status = 'pending'
+        AND NOT (
+          COALESCE(seat_id, 0) = ?
+          AND COALESCE(session_npc_role_id, 0) = ?
+        )
+    `,
+    [sessionId, userId, keepSeatId || 0, keepNpcRoleId || 0]
+  );
+  await clearAppliedSeatsWithoutPending(connection, sessionId);
+}
+
+async function releaseUserOtherSessionNpcRoles(
+  connection,
+  sessionId,
+  userId,
+  npcRoleId = 0
+) {
+  const [boundRows] = await connection.query(
+    `
+      SELECT id, name
+      FROM session_npc_roles
+      WHERE session_id = ?
+        AND bound_user_id = ?
+        AND id <> ?
+        AND status = 'active'
+      FOR UPDATE
+    `,
+    [sessionId, userId, npcRoleId || 0]
+  );
+
+  await connection.query(
+    `
+      UPDATE signups
+      SET status = 'cancelled'
+      WHERE session_id = ?
+        AND user_id = ?
+        AND status IN ('pending', 'approved')
+        AND session_npc_role_id IN (
+          SELECT id
+          FROM session_npc_roles
+          WHERE session_id = ?
+            AND id <> ?
+        )
+    `,
+    [sessionId, userId, sessionId, npcRoleId || 0]
+  );
+  await connection.query(
+    `
+      UPDATE session_npc_roles
+      SET bound_user_id = NULL
+      WHERE session_id = ?
+        AND bound_user_id = ?
+        AND id <> ?
+    `,
+    [sessionId, userId, npcRoleId || 0]
+  );
+
+  return boundRows;
+}
+
+async function cleanupSessionExclusiveRoleSelections(connection, sessionId) {
+  const [ordinaryMemberRows] = await connection.query(
+    `
+      SELECT DISTINCT confirmed_user_id AS user_id
+      FROM session_seats
+      WHERE session_id = ?
+        AND confirmed_user_id IS NOT NULL
+        AND confirmed_user_id > 0
+        AND status IN ('confirmed', 'locked')
+    `,
+    [sessionId]
+  );
+  for (const row of ordinaryMemberRows) {
+    await releaseUserOtherSessionNpcRoles(
+      connection,
+      sessionId,
+      row.user_id,
+      0
+    );
+  }
+
+  const [duplicateNpcRoleRows] = await connection.query(
+    `
+      SELECT role.id
+      FROM session_npc_roles role
+      JOIN (
+        SELECT bound_user_id, MIN(id) AS keep_id
+        FROM session_npc_roles
+        WHERE session_id = ?
+          AND bound_user_id IS NOT NULL
+          AND bound_user_id > 0
+          AND status = 'active'
+        GROUP BY bound_user_id
+        HAVING COUNT(*) > 1
+      ) duplicate_npc_roles ON duplicate_npc_roles.bound_user_id = role.bound_user_id
+      WHERE role.session_id = ?
+        AND role.id <> duplicate_npc_roles.keep_id
+    `,
+    [sessionId, sessionId]
+  );
+  const duplicateNpcRoleIds = duplicateNpcRoleRows.map((row) => row.id).filter(Boolean);
+  if (duplicateNpcRoleIds.length === 0) {
+    return;
+  }
+
+  const placeholders = duplicateNpcRoleIds.map(() => "?").join(", ");
+  await connection.query(
+    `
+      UPDATE signups
+      SET status = 'cancelled'
+      WHERE session_id = ?
+        AND status IN ('pending', 'approved')
+        AND session_npc_role_id IN (${placeholders})
+    `,
+    [sessionId, ...duplicateNpcRoleIds]
+  );
+  await connection.query(
+    `
+      UPDATE session_npc_roles
+      SET bound_user_id = NULL
+      WHERE session_id = ?
+        AND id IN (${placeholders})
+    `,
+    [sessionId, ...duplicateNpcRoleIds]
+  );
 }
 
 function reviewWindowSql() {
@@ -2118,14 +2363,26 @@ export async function createSession(user, body) {
 }
 
 export async function getSession(id) {
-  return withDatabaseConnection(async (connection) => {
+  return withTransaction(async (connection) => {
     const session = await findById(connection, "sessions", id);
     if (!session) {
       throw notFound("Session not found");
     }
+    await cleanupSessionExclusiveRoleSelections(connection, id);
 
     const [seats] = await connection.query(
-      "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id",
+      `
+        SELECT
+          seat.*,
+          user.nickname AS confirmed_user_nickname,
+          user.open_id AS confirmed_user_open_id,
+          user.avatar_url AS confirmed_user_avatar_url,
+          user.gender AS confirmed_user_gender
+        FROM session_seats seat
+        LEFT JOIN users user ON user.id = seat.confirmed_user_id
+        WHERE seat.session_id = ?
+        ORDER BY seat.id
+      `,
       [id]
     );
     const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
@@ -2740,7 +2997,9 @@ export async function updateSessionNpcRole(user, npcRoleId, body = {}) {
         SELECT
           role.*,
           user.nickname AS bound_user_nickname,
-          user.open_id AS bound_user_open_id
+          user.open_id AS bound_user_open_id,
+          user.avatar_url AS bound_user_avatar_url,
+          user.gender AS bound_user_gender
         FROM session_npc_roles role
         LEFT JOIN users user ON user.id = role.bound_user_id
         WHERE role.id = ?
@@ -2943,6 +3202,25 @@ export async function createSignup(user, body) {
     }
     await assertUserCanJoinSession(connection, seat.session_id, user.user.id);
     requireJoinPhoneIfNeeded(user, seat);
+    await releaseUserOtherConfirmedSeats(
+      connection,
+      seat.session_id,
+      user.user.id,
+      seat.id
+    );
+    await releaseUserOtherSessionNpcRoles(
+      connection,
+      seat.session_id,
+      user.user.id,
+      0
+    );
+    await cancelUserOtherPendingSignups(
+      connection,
+      seat.session_id,
+      user.user.id,
+      seat.id,
+      0
+    );
 
     const contactText = optionalText(body.contactText);
     const note = optionalText(body.note);
@@ -3085,6 +3363,19 @@ export async function claimSessionSeat(user, seatId, body = {}) {
       user.user.id,
       seat.id
     );
+    await releaseUserOtherSessionNpcRoles(
+      connection,
+      seat.session_id,
+      user.user.id,
+      0
+    );
+    await cancelUserOtherPendingSignups(
+      connection,
+      seat.session_id,
+      user.user.id,
+      seat.id,
+      0
+    );
 
     await connection.query(
       `
@@ -3204,6 +3495,25 @@ export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
     if (otherPendingRows.length > 0 && !role.bound_user_id) {
       throw conflict("NPC role already has a pending signup");
     }
+    await releaseUserOtherConfirmedSeats(
+      connection,
+      role.session_id,
+      currentUserId,
+      0
+    );
+    await releaseUserOtherSessionNpcRoles(
+      connection,
+      role.session_id,
+      currentUserId,
+      id
+    );
+    await cancelUserOtherPendingSignups(
+      connection,
+      role.session_id,
+      currentUserId,
+      0,
+      id
+    );
 
     const contactText = optionalText(body.contactText);
     const note = optionalText(body.note);
@@ -3460,6 +3770,26 @@ export async function approveSignup(user, signupId) {
       ) {
         throw conflict("NPC role already has a bound user");
       }
+      await lockSessionSeats(connection, signup.session_id);
+      await releaseUserOtherConfirmedSeats(
+        connection,
+        signup.session_id,
+        signup.user_id,
+        0
+      );
+      await releaseUserOtherSessionNpcRoles(
+        connection,
+        signup.session_id,
+        signup.user_id,
+        signup.session_npc_role_id
+      );
+      await cancelUserOtherPendingSignups(
+        connection,
+        signup.session_id,
+        signup.user_id,
+        0,
+        signup.session_npc_role_id
+      );
       await connection.query(
         `
           UPDATE session_npc_roles
@@ -3510,6 +3840,19 @@ export async function approveSignup(user, signupId) {
       signup.session_id,
       signup.user_id,
       signup.seat_id
+    );
+    await releaseUserOtherSessionNpcRoles(
+      connection,
+      signup.session_id,
+      signup.user_id,
+      0
+    );
+    await cancelUserOtherPendingSignups(
+      connection,
+      signup.session_id,
+      signup.user_id,
+      signup.seat_id,
+      0
     );
 
     await connection.query(
