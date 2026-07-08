@@ -2906,7 +2906,7 @@ async function route(request, response) {
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideosId);
     const video = await createSessionAlbumVideo(user, adminSessionAlbumVideosId, body, {
-      localFallbackReady: !isCosUploadStorageEnabled()
+      readyOnCreate: true
     });
     jsonResponse(response, 201, {
       ok: true,
