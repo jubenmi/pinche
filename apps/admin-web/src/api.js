@@ -101,7 +101,7 @@ async function apiFormDataRequest(path, formData, options = {}) {
 function fileExtensionFromName(name) {
   const match = String(name || "").match(/\.([A-Za-z0-9]+)$/);
   const extension = match ? match[1].toLowerCase() : "";
-  if (extension === "jpg" || extension === "jpeg" || extension === "png") {
+  if (extension === "jpg" || extension === "jpeg" || extension === "png" || extension === "mp4") {
     return `.${extension}`;
   }
   return ".jpg";
@@ -250,6 +250,45 @@ export function listScripts(filters) {
   return apiRequest(`/api/admin/scripts?${new URLSearchParams(filters)}`);
 }
 
+export function listCatalogReviewItems(filters) {
+  return apiRequest(`/api/admin/catalog-review-items?${new URLSearchParams(filters)}`);
+}
+
+export function updateCatalogReviewItem(type, id, body) {
+  return apiRequest(`/api/admin/catalog-review-items/${type}/${id}`, {
+    method: "PATCH",
+    body
+  });
+}
+
+export function approveCatalogReviewItem(type, id, body) {
+  return apiRequest(`/api/admin/catalog-review-items/${type}/${id}/approve`, {
+    method: "POST",
+    body
+  });
+}
+
+export function requestCatalogReviewItemNeedsChanges(type, id, body) {
+  return apiRequest(`/api/admin/catalog-review-items/${type}/${id}/needs-changes`, {
+    method: "POST",
+    body
+  });
+}
+
+export function rejectCatalogReviewItem(type, id, body) {
+  return apiRequest(`/api/admin/catalog-review-items/${type}/${id}/reject`, {
+    method: "POST",
+    body
+  });
+}
+
+export function mergeCatalogReviewItem(type, id, body) {
+  return apiRequest(`/api/admin/catalog-review-items/${type}/${id}/merge`, {
+    method: "POST",
+    body
+  });
+}
+
 export function saveScript(script) {
   const method = script.id ? "PATCH" : "POST";
   const path = script.id ? `/api/admin/scripts/${script.id}` : "/api/admin/scripts";
@@ -316,6 +355,16 @@ async function fallbackUploadSessionAlbumPhoto(sessionId, file, options = {}) {
   return data.photoUrl;
 }
 
+async function fallbackUploadSessionAlbumVideo(sessionId, file) {
+  const formData = new FormData();
+  formData.append("video", file);
+  const data = await apiFormDataRequest(
+    `/api/admin/sessions/${sessionId}/album/videos/uploads`,
+    formData
+  );
+  return data.sourceUrl;
+}
+
 async function fallbackUploadSessionReviewPhoto(file) {
   const formData = new FormData();
   formData.append("photo", file);
@@ -334,11 +383,32 @@ export async function uploadSessionAlbumPhoto(sessionId, file, options = {}) {
   return { photoUrl };
 }
 
+export async function uploadSessionAlbumVideo(sessionId, file) {
+  const sourceUrl = await uploadCosBackedFile({
+    kind: "adminSessionAlbumVideo",
+    file,
+    intentData: { sessionId },
+    fallbackUpload: (nextFile) => fallbackUploadSessionAlbumVideo(sessionId, nextFile)
+  });
+  return { sourceUrl };
+}
+
 export function createSessionAlbumPhoto(sessionId, photoUrl, options = {}) {
   return apiRequest(`${sessionAlbumBasePath(sessionId, options)}/photos`, {
     method: "POST",
     body: { photoUrl }
   });
+}
+
+export function createSessionAlbumVideo(sessionId, payload) {
+  return apiRequest(`/api/admin/sessions/${sessionId}/album/videos`, {
+    method: "POST",
+    body: payload
+  });
+}
+
+export function getSessionAlbumVideoUrl(mediaId) {
+  return apiRequest(`/api/session-album/media/${mediaId}/video-url`);
 }
 
 export function updateSessionAlbumPhotoTags(photoId, tagKeys) {

@@ -1,4 +1,4 @@
-export const catalogTabs = new Set(["stores", "scripts", "sessions"]);
+export const catalogTabs = new Set(["stores", "scripts", "sessions", "review"]);
 export const miniScreens = new Set([
   "home",
   "create",

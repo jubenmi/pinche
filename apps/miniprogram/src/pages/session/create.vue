@@ -37,12 +37,65 @@
         <view class="row-main">
           <view class="row-title">{{ store.name }}</view>
           <view class="row-meta">{{ storeMeta(store) }}</view>
+          <view v-if="storeBadge(store)" class="private-badge">{{ storeBadge(store) }}</view>
         </view>
         <t-image
           class="row-status-icon"
           :src="isSelectedStore(store) ? '/static/icons/check.png' : '/static/icons/pin.png'"
           mode="aspectFit"
         />
+      </view>
+      <view v-if="stores.length === 0 && !statusText" class="empty-row">
+        <view class="empty-title">没有找到店家</view>
+        <view class="empty-text">添加给自己用，管理员审核后会变成公共资料。</view>
+        <t-button class="inline-button" size="small" @tap="showStoreForm = true">添加给自己用</t-button>
+      </view>
+      <view class="add-row" @tap="showStoreForm = !showStoreForm">
+        {{ showStoreForm ? "收起添加店家" : "没有找到？添加一个店家" }}
+      </view>
+    </view>
+
+    <view v-if="showStoreForm" class="private-form">
+      <view class="form-title">添加给自己用</view>
+      <t-input
+        :value="storeForm.name"
+        class="field"
+        placeholder="店家名称"
+        @change="storeForm.name = $event.detail.value"
+      />
+      <view class="field-row">
+        <t-input
+          :value="storeForm.city"
+          class="field half"
+          placeholder="城市"
+          @change="storeForm.city = $event.detail.value"
+        />
+        <t-input
+          :value="storeForm.district"
+          class="field half"
+          placeholder="区域"
+          @change="storeForm.district = $event.detail.value"
+        />
+      </view>
+      <t-input
+        :value="storeForm.address"
+        class="field"
+        placeholder="地址"
+        @change="storeForm.address = $event.detail.value"
+      />
+      <t-textarea
+        :value="storeForm.contactNote"
+        class="textarea"
+        placeholder="备注，如门店电话、包间信息"
+        @change="storeForm.contactNote = $event.detail.value"
+      />
+      <view class="form-actions">
+        <t-button class="button" :disabled="creatingStore" @tap="submitPrivateStore">
+          {{ creatingStore ? "提交中..." : "提交并使用" }}
+        </t-button>
+        <t-button class="button secondary" :disabled="creatingStore" @tap="resetStoreForm">
+          清空
+        </t-button>
       </view>
     </view>
 
@@ -67,6 +120,16 @@ const FALLBACK_STORES = [
   { id: "demo-store-5", name: "时光机沉浸馆（中关村店）", city: "北京", district: "海淀", area: "中关村", distance: "5.2km" }
 ];
 
+function defaultStoreForm() {
+  return {
+    name: "",
+    city: "北京",
+    district: "",
+    address: "",
+    contactNote: ""
+  };
+}
+
 export default {
   components: { AuthIdentityBar, FeedbackHost },
   data() {
@@ -74,7 +137,10 @@ export default {
       keyword: "",
       stores: [],
       selectedStore: null,
-      statusText: ""
+      statusText: "",
+      showStoreForm: false,
+      creatingStore: false,
+      storeForm: defaultStoreForm()
     };
   },
   onLoad() {
@@ -88,7 +154,7 @@ export default {
           url: "/api/stores" + queryString({ keyword: this.keyword, limit: 20 })
         });
         const stores = dataOf(response) || [];
-        this.stores = stores.length > 0 ? stores : FALLBACK_STORES;
+        this.stores = stores;
         this.statusText = "";
       } catch (error) {
         this.stores = FALLBACK_STORES;
@@ -113,6 +179,59 @@ export default {
       const district = store.district ? `${store.district}区` : store.city || "位置待定";
       const area = store.area || store.business_area || "商圈待定";
       return [district, area, store.distance].filter(Boolean).join(" · ");
+    },
+    storeBadge(store) {
+      if (store.visibility !== "private") {
+        return "";
+      }
+      if (store.review_status === "pending") {
+        return "仅自己可用 · 待审核";
+      }
+      if (store.review_status === "needs_changes") {
+        return "仅自己可用 · 需补充";
+      }
+      return store.catalog_badge || "仅自己可用";
+    },
+    resetStoreForm() {
+      this.storeForm = defaultStoreForm();
+    },
+    async submitPrivateStore() {
+      if (this.creatingStore) {
+        return;
+      }
+      if (!this.storeForm.name || !this.storeForm.city) {
+        showToast({ title: "请填写店家名称和城市", icon: "none" });
+        return;
+      }
+      this.creatingStore = true;
+      try {
+        const response = await request({
+          url: "/api/stores",
+          method: "POST",
+          data: {
+            name: this.storeForm.name,
+            city: this.storeForm.city,
+            district: this.storeForm.district,
+            address: this.storeForm.address,
+            contactNote: this.storeForm.contactNote
+          }
+        });
+        const store = dataOf(response);
+        if (!store) {
+          throw new Error("missing store");
+        }
+        this.stores = [store, ...this.stores.filter((item) => String(item.id) !== String(store.id))];
+        this.selectedStore = store;
+        writeCreateFlow({ store, script: null, role: null });
+        this.resetStoreForm();
+        this.showStoreForm = false;
+        this.statusText = "";
+        showToast({ title: "已添加，仅自己可用 · 待审核", icon: "none" });
+      } catch (error) {
+        showToast({ title: error?.userMessage || "店家提交失败", icon: "none" });
+      } finally {
+        this.creatingStore = false;
+      }
     },
     async goNext() {
       if (!this.selectedStore) {
@@ -217,10 +336,98 @@ export default {
   font-size: 24rpx;
 }
 
+.private-badge {
+  display: inline-flex;
+  margin-top: 12rpx;
+  padding: 5rpx 12rpx;
+  border: 1rpx solid rgba(31, 122, 104, 0.18);
+  border-radius: 6rpx;
+  background: #eef7f4;
+  color: #1f7a68;
+  font-size: 22rpx;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
 .row-status-icon {
   width: 34rpx;
   height: 34rpx;
   margin-left: 18rpx;
+}
+
+.empty-row {
+  padding: 42rpx 28rpx;
+  text-align: center;
+}
+
+.empty-title {
+  color: #153f34;
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.empty-text {
+  margin-top: 10rpx;
+  color: #7a857d;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.inline-button {
+  margin-top: 22rpx;
+}
+
+.add-row {
+  padding: 26rpx 28rpx;
+  border-top: 1rpx solid #eee8da;
+  color: #1f7a68;
+  font-size: 26rpx;
+  font-weight: 600;
+  text-align: center;
+}
+
+.private-form {
+  margin-top: 22rpx;
+  padding: 24rpx;
+  border: 1rpx solid rgba(223, 216, 204, 0.9);
+  border-radius: 16rpx;
+  background: rgba(255, 255, 252, 0.96);
+  box-shadow: 0 16rpx 42rpx rgba(51, 69, 59, 0.05);
+}
+
+.form-title {
+  margin-bottom: 18rpx;
+  color: #153f34;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+
+.field-row,
+.form-actions {
+  display: flex;
+  gap: 14rpx;
+}
+
+.field,
+.textarea {
+  width: 100%;
+  margin-bottom: 16rpx;
+  box-sizing: border-box;
+  border: 1rpx solid #d7dde5;
+  border-radius: 8rpx;
+  background: #ffffff;
+}
+
+.field.half {
+  flex: 1;
+}
+
+.textarea {
+  min-height: 132rpx;
+  padding: 18rpx 20rpx;
+  color: #1f2933;
+  font-size: 26rpx;
+  line-height: 1.45;
 }
 
 </style>

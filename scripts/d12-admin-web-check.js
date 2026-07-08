@@ -241,6 +241,16 @@ assert(webApi.includes("listStoreScripts"), "web API should list store-script li
 assert(webApi.includes("saveStoreScripts"), "web API should save store-script links");
 assert(webApi.includes("export function listAdminSessions"), "web API should list admin sessions");
 assert(webApi.includes("export function deleteAdminSession"), "web API should force delete sessions as admin");
+for (const token of [
+  "listCatalogReviewItems",
+  "updateCatalogReviewItem",
+  "approveCatalogReviewItem",
+  "requestCatalogReviewItemNeedsChanges",
+  "rejectCatalogReviewItem",
+  "mergeCatalogReviewItem"
+]) {
+  assert(webApi.includes(`export function ${token}`), `web API should export D33 review helper ${token}`);
+}
 assert(!webApi.includes("restoreAdminSession"), "web API should not restore sessions as admin");
 assert(!webApi.includes("downlistSession"), "web API should not expose session downlisting");
 
@@ -287,6 +297,8 @@ const {
 const catalogSessionsRoute = parseAdminRouteQuery("?view=catalog&catalogTab=sessions");
 assert(catalogSessionsRoute.activeView === "catalog", "route parser should keep catalog view");
 assert(catalogSessionsRoute.catalogTab === "sessions", "route parser should keep catalog tab");
+const catalogReviewRoute = parseAdminRouteQuery("?view=catalog&catalogTab=review");
+assert(catalogReviewRoute.catalogTab === "review", "route parser should keep review catalog tab");
 assert(
   parseAdminRouteQuery("?view=miniapp&screen=album&sessionId=12").miniScreen === "album",
   "route parser should keep session-backed mini screen"
@@ -510,10 +522,23 @@ for (const token of [
   assert(catalogWorkspace.includes(token), `catalog workspace should support batch catalog actions with ${token}`);
 }
 assert(
-  catalogWorkspace.includes('v-if="tab !== \'sessions\'"') &&
+  catalogWorkspace.includes("isCatalogEntityTab") &&
     catalogWorkspace.includes("clearSelection()"),
-  "catalog batch controls should be scoped away from sessions and clear selection on context changes"
+  "catalog batch controls should be scoped to catalog entities and clear selection on context changes"
 );
+for (const token of [
+  "switchTab('review')",
+  "listCatalogReviewItems",
+  "saveCatalogReviewDraft",
+  "reviewAction",
+  "approveCatalogReviewItem",
+  "requestCatalogReviewItemNeedsChanges",
+  "rejectCatalogReviewItem",
+  "mergeCatalogReviewItem",
+  "待审核"
+]) {
+  assert(catalogWorkspace.includes(token), `catalog workspace should include D33 review flow ${token}`);
+}
 for (const token of [
   'aria-label="选择全部车局"',
   "`选择车局${item.id}`",
@@ -527,9 +552,9 @@ for (const token of [
   );
 }
 assert(
-  catalogWorkspace.includes('visibleSelectableItems = computed(() => items.value)') &&
+  catalogWorkspace.includes('visibleSelectableItems = computed(() => (tab.value === "review" ? [] : items.value))') &&
     catalogWorkspace.includes('v-if="tab === \'sessions\' && selectedSessionCount > 0"'),
-  "catalog workspace should let session rows be selected and expose session-specific bulk actions"
+  "catalog workspace should let session rows be selected, exclude review rows, and expose session-specific bulk actions"
 );
 assert(
   catalogWorkspace.includes("toggleStatus"),
@@ -633,6 +658,7 @@ for (const token of ["saving", ':disabled="saving"', 'saving ? "保存中..." : 
 for (const token of ["drawer-body", "drawer-footer", "secondary-action", "role-table-wrap"]) {
   assert(scriptDrawer.includes(token), `script drawer should use operator drawer ${token}`);
 }
+assert(scriptDrawer.includes("footer-actions"), "script drawer should expose review footer actions slot");
 assert(scriptDrawer.includes("角色介绍"), "script roles should use a role introduction field");
 for (const removedRoleToken of [
   "<th>类型</th>",
@@ -670,6 +696,10 @@ for (const token of ["saving", ':disabled="saving"', 'saving ? "保存中..." : 
 for (const token of ["drawer-body", "drawer-footer", "secondary-action", "script-link-count"]) {
   assert(storeDrawer.includes(token), `store drawer should use operator drawer ${token}`);
 }
+assert(
+  storeDrawer.includes("reviewMode") && storeDrawer.includes("footer-actions"),
+  "store drawer should support D33 review mode footer actions"
+);
 
 assert(webApi.includes("scriptLinks"), "web API should save store-script link prices");
 for (const token of [

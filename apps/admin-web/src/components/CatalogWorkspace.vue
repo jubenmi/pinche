@@ -33,6 +33,14 @@
         >
           车局
         </button>
+        <button
+          :class="{ active: tab === 'review' }"
+          type="button"
+          :disabled="operationPending"
+          @click="switchTab('review')"
+        >
+          待审核
+        </button>
       </div>
 
       <div class="toolbar toolbar-primary">
@@ -45,7 +53,7 @@
             @keyup.enter="load"
           />
           <select
-            v-if="tab !== 'sessions'"
+            v-if="isCatalogEntityTab"
             v-model="status"
             name="catalogStatus"
             :disabled="operationPending"
@@ -54,6 +62,20 @@
             <option value="">全部状态</option>
             <option value="active">上架</option>
             <option value="inactive">下架</option>
+          </select>
+          <select
+            v-else-if="tab === 'review'"
+            v-model="status"
+            name="catalogReviewStatus"
+            :disabled="operationPending"
+            @change="load"
+          >
+            <option value="pending">待审核</option>
+            <option value="needs_changes">需要补充</option>
+            <option value="approved">已公开</option>
+            <option value="rejected">已拒绝</option>
+            <option value="merged">已合并</option>
+            <option value="">全部状态</option>
           </select>
           <select
             v-else
@@ -73,7 +95,7 @@
           </button>
         </div>
         <button
-          v-if="tab !== 'sessions'"
+          v-if="isCatalogEntityTab"
           class="primary"
           type="button"
           :disabled="operationPending"
@@ -83,7 +105,7 @@
         </button>
       </div>
 
-      <div v-if="tab !== 'sessions' && selectedCount > 0" class="bulk-actions">
+      <div v-if="isCatalogEntityTab && selectedCount > 0" class="bulk-actions">
         <span>已选 {{ selectedCount }} 项</span>
         <button type="button" :disabled="operationPending" @click="batchUpdateStatus('active')">
           批量上架
@@ -133,6 +155,7 @@
             <th>城市</th>
             <th>区域</th>
             <th>地址</th>
+            <th>审核</th>
             <th>状态</th>
             <th>操作</th>
           </tr>
@@ -150,7 +173,17 @@
             <th>标签</th>
             <th>人数</th>
             <th>角色</th>
+            <th>审核</th>
             <th>状态</th>
+            <th>操作</th>
+          </tr>
+          <tr v-else-if="tab === 'review'">
+            <th>类型</th>
+            <th>名称</th>
+            <th>提交人</th>
+            <th>使用车局数</th>
+            <th>状态</th>
+            <th>创建时间</th>
             <th>操作</th>
           </tr>
           <tr v-else>
@@ -197,6 +230,11 @@
               <td>{{ item.district || "-" }}</td>
               <td>{{ item.address || "-" }}</td>
               <td>
+                <span class="status-pill" :class="catalogAuditStatus(item)">
+                  {{ catalogAuditLabel(item) }}
+                </span>
+              </td>
+              <td>
                 <span class="status-pill" :class="item.status">
                   {{ statusLabel(item.status) }}
                 </span>
@@ -219,10 +257,30 @@
               <td>{{ item.player_count || 0 }}</td>
               <td>{{ roleCount(item.default_seat_template_json) }}</td>
               <td>
+                <span class="status-pill" :class="catalogAuditStatus(item)">
+                  {{ catalogAuditLabel(item) }}
+                </span>
+              </td>
+              <td>
                 <span class="status-pill" :class="item.status">
                   {{ statusLabel(item.status) }}
                 </span>
               </td>
+            </template>
+            <template v-else-if="tab === 'review'">
+              <td>{{ itemTypeLabel(item.type) }}</td>
+              <td>
+                <div class="cell-title">{{ item.name }}</div>
+                <small class="muted-cell">{{ reviewItemMeta(item) }}</small>
+              </td>
+              <td>{{ item.created_by_user_name || item.created_by_user_id || "-" }}</td>
+              <td>{{ item.session_count || 0 }}</td>
+              <td>
+                <span class="status-pill" :class="item.review_status">
+                  {{ statusLabel(item.review_status) }}
+                </span>
+              </td>
+              <td>{{ formatDateTime(item.created_at) }}</td>
             </template>
             <template v-else>
               <td class="selection-cell">
@@ -248,7 +306,7 @@
                 </span>
               </td>
             </template>
-            <td v-if="tab !== 'sessions'" class="row-actions">
+            <td v-if="isCatalogEntityTab" class="row-actions">
               <button
                 class="action-button"
                 type="button"
@@ -276,6 +334,16 @@
                 {{ deleteActionLabel(item) }}
               </button>
             </td>
+            <td v-else-if="tab === 'review'" class="row-actions">
+              <button
+                class="action-button"
+                type="button"
+                :disabled="operationPending"
+                @click="openEdit(item)"
+              >
+                审核
+              </button>
+            </td>
             <td v-else class="row-actions">
               <button
                 type="button"
@@ -288,7 +356,7 @@
             </td>
           </tr>
           <tr v-if="items.length === 0">
-            <td class="empty-cell" :colspan="tab === 'sessions' ? 9 : 7">
+            <td class="empty-cell" :colspan="emptyColspan">
               {{ tab === "sessions" ? "没有匹配的车局" : "没有匹配的数据" }}
             </td>
           </tr>
@@ -306,17 +374,80 @@
       :available-scripts="availableScripts"
       :linked-scripts="linkedScripts"
       :linked-script-ids="linkedScriptIds"
+      :review-mode="tab === 'review'"
       :saving="operationPending"
+      :title="tab === 'review' ? '审核店家资料' : ''"
       @save="saveStoreItem"
       @close="closeDrawer"
-    />
+    >
+      <template v-if="tab === 'review'" #footer-actions>
+        <div class="review-footer">
+          <div class="review-footer-fields">
+            <input v-model.trim="reviewNote" name="reviewNote" placeholder="审核备注" />
+            <input v-model.trim="mergeTargetId" name="mergeTargetId" placeholder="合并目标公共店家 ID" />
+          </div>
+          <div class="review-footer-actions">
+            <button class="secondary-action" type="button" :disabled="operationPending" @click="closeDrawer">
+              取消
+            </button>
+            <button type="button" :disabled="operationPending" @click="saveCatalogReviewDraft">
+              保存修改
+            </button>
+            <button class="primary" type="button" :disabled="operationPending" @click="reviewAction('approve')">
+              批准公开
+            </button>
+            <button type="button" :disabled="operationPending" @click="reviewAction('needs_changes')">
+              需要补充
+            </button>
+            <button type="button" class="danger" :disabled="operationPending" @click="reviewAction('reject')">
+              拒绝
+            </button>
+            <button type="button" :disabled="operationPending" @click="reviewAction('merge')">
+              合并
+            </button>
+          </div>
+        </div>
+      </template>
+    </StoreDrawer>
     <ScriptDrawer
       v-if="drawer === 'script'"
       :script="selected"
+      :review-mode="tab === 'review'"
       :saving="operationPending"
+      :title="tab === 'review' ? '审核剧本资料' : ''"
       @save="saveScriptItem"
       @close="closeDrawer"
-    />
+    >
+      <template v-if="tab === 'review'" #footer-actions>
+        <div class="review-footer">
+          <div class="review-footer-fields">
+            <input v-model.trim="reviewNote" name="reviewNote" placeholder="审核备注" />
+            <input v-model.trim="mergeTargetId" name="mergeTargetId" placeholder="合并目标公共剧本 ID" />
+            <input v-model.trim="reviewStoreIdsText" name="reviewStoreIds" placeholder="批准后关联店家 ID，逗号分隔" />
+          </div>
+          <div class="review-footer-actions">
+            <button class="secondary-action" type="button" :disabled="operationPending" @click="closeDrawer">
+              取消
+            </button>
+            <button type="button" :disabled="operationPending" @click="saveCatalogReviewDraft">
+              保存修改
+            </button>
+            <button class="primary" type="button" :disabled="operationPending" @click="reviewAction('approve')">
+              批准公开
+            </button>
+            <button type="button" :disabled="operationPending" @click="reviewAction('needs_changes')">
+              需要补充
+            </button>
+            <button type="button" class="danger" :disabled="operationPending" @click="reviewAction('reject')">
+              拒绝
+            </button>
+            <button type="button" :disabled="operationPending" @click="reviewAction('merge')">
+              合并
+            </button>
+          </div>
+        </div>
+      </template>
+    </ScriptDrawer>
   </section>
 </template>
 
@@ -324,16 +455,22 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { catalogTabs, writeAdminRoute } from "../adminRoute";
 import {
+  approveCatalogReviewItem,
   deleteAdminSession,
   deleteScript,
   deleteStore,
   listAdminSessions,
+  listCatalogReviewItems,
   listScripts,
   listStoreScripts,
   listStores,
+  mergeCatalogReviewItem,
+  rejectCatalogReviewItem,
+  requestCatalogReviewItemNeedsChanges,
   saveScript,
   saveStore,
-  saveStoreScripts
+  saveStoreScripts,
+  updateCatalogReviewItem
 } from "../api";
 import ScriptDrawer from "./ScriptDrawer.vue";
 import StoreDrawer from "./StoreDrawer.vue";
@@ -343,7 +480,13 @@ const props = defineProps({
 });
 
 function tabPlaceholder(nextTab) {
-  return nextTab === "sessions" ? "搜索车局ID、剧本、店家、车头" : "搜索名称、城市、标签";
+  if (nextTab === "sessions") {
+    return "搜索车局ID、剧本、店家、车头";
+  }
+  if (nextTab === "review") {
+    return "搜索待审核资料名称或备注";
+  }
+  return "搜索名称、城市、标签";
 }
 
 const tab = ref(catalogTabs.has(props.initialTab) ? props.initialTab : "stores");
@@ -359,11 +502,16 @@ const error = ref("");
 const pendingOperation = ref("");
 const pendingOperationText = ref("");
 const selectedItemIds = ref([]);
+const reviewNote = ref("");
+const mergeTargetId = ref("");
+const reviewStoreIdsText = ref("");
 
 const keywordPlaceholder = ref(tabPlaceholder(tab.value));
 const operationPending = computed(() => Boolean(pendingOperation.value));
 const operationText = computed(() => pendingOperationText.value || "正在处理，请稍候...");
-const visibleSelectableItems = computed(() => items.value);
+const isCatalogEntityTab = computed(() => tab.value === "stores" || tab.value === "scripts");
+const visibleSelectableItems = computed(() => (tab.value === "review" ? [] : items.value));
+const emptyColspan = computed(() => (tab.value === "sessions" ? 9 : tab.value === "review" ? 7 : 8));
 const selectedIdSet = computed(() => new Set(selectedItemIds.value));
 const selectedItems = computed(() =>
   visibleSelectableItems.value.filter((item) => selectedIdSet.value.has(String(item.id)))
@@ -454,9 +602,33 @@ function statusLabel(value) {
     draft: "草稿",
     recruiting: "招募中",
     locked: "已锁车",
-    cancelled: "已取消"
+    cancelled: "已取消",
+    pending: "待审核",
+    needs_changes: "需要补充",
+    approved: "已公开",
+    rejected: "已拒绝",
+    merged: "已合并"
   };
   return labels[value] || value || "-";
+}
+
+function catalogAuditStatus(item) {
+  return item.review_status || "approved";
+}
+
+function catalogAuditLabel(item) {
+  return statusLabel(catalogAuditStatus(item));
+}
+
+function itemTypeLabel(type) {
+  return type === "script" ? "剧本" : "店家";
+}
+
+function reviewItemMeta(item) {
+  if (item.type === "script") {
+    return `${displayTags(item.type_tags)} / ${item.player_count || 0}人`;
+  }
+  return [item.city || "城市待补充", item.district, item.address].filter(Boolean).join(" · ");
 }
 
 function isSelected(item) {
@@ -469,7 +641,7 @@ function switchTab(nextTab) {
   }
   closeDrawer();
   clearSelection();
-  status.value = "";
+  status.value = nextTab === "review" ? "pending" : "";
   tab.value = nextTab;
   keywordPlaceholder.value = tabPlaceholder(nextTab);
   writeAdminRoute({ activeView: "catalog", catalogTab: nextTab });
@@ -495,6 +667,8 @@ async function loadItems() {
       items.value = await listStores(filters);
     } else if (tab.value === "scripts") {
       items.value = await listScripts(filters);
+    } else if (tab.value === "review") {
+      items.value = await listCatalogReviewItems(filters);
     } else {
       items.value = await listAdminSessions(filters);
     }
@@ -508,7 +682,7 @@ async function refreshScriptOptions() {
 }
 
 async function openCreate() {
-  if (operationPending.value || tab.value === "sessions") {
+  if (operationPending.value || !isCatalogEntityTab.value) {
     return;
   }
   selected.value = {};
@@ -537,6 +711,13 @@ async function openEdit(item) {
     return;
   }
   selected.value = { ...item };
+  if (tab.value === "review") {
+    reviewNote.value = item.review_note || "";
+    mergeTargetId.value = item.merged_into_id ? String(item.merged_into_id) : "";
+    reviewStoreIdsText.value = "";
+    drawer.value = item.type === "script" ? "script" : "store";
+    return;
+  }
   if (tab.value === "stores") {
     if (!beginOperation(`edit:${item.id}`, "正在载入店家关联剧本...")) {
       return;
@@ -566,9 +747,16 @@ function closeDrawer(force = false) {
   selected.value = {};
   linkedScripts.value = [];
   linkedScriptIds.value = [];
+  reviewNote.value = "";
+  mergeTargetId.value = "";
+  reviewStoreIdsText.value = "";
 }
 
 async function saveStoreItem(store) {
+  if (tab.value === "review") {
+    await saveCatalogReviewDraft(store);
+    return;
+  }
   if (!beginOperation("save:store", "正在保存店家...")) {
     return;
   }
@@ -587,6 +775,10 @@ async function saveStoreItem(store) {
 }
 
 async function saveScriptItem(script) {
+  if (tab.value === "review") {
+    await saveCatalogReviewDraft(script);
+    return;
+  }
   if (!beginOperation("save:script", "正在保存剧本...")) {
     return;
   }
@@ -599,6 +791,97 @@ async function saveScriptItem(script) {
     error.value = err.message;
   } finally {
     endOperation("save:script");
+  }
+}
+
+function reviewItemType() {
+  return selected.value?.type === "script" ? "script" : "store";
+}
+
+function reviewItemId() {
+  return Number(selected.value?.id || 0);
+}
+
+function reviewNoteBody(defaultNote) {
+  return { reviewNote: reviewNote.value || defaultNote };
+}
+
+function parseIdList(value) {
+  return String(value || "")
+    .split(/[，,]/)
+    .map((item) => Number(item.trim()))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
+async function saveCatalogReviewDraft(payload = selected.value) {
+  const type = reviewItemType();
+  const id = reviewItemId();
+  if (!id || tab.value !== "review") {
+    return;
+  }
+  if (!beginOperation(`reviewDraft:${id}`, "正在保存待审核资料...")) {
+    return;
+  }
+  error.value = "";
+  const { scriptIds, scriptLinks, storeScriptPriceYuanById, ...body } = payload;
+  try {
+    await updateCatalogReviewItem(type, id, body);
+    await loadItems();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    endOperation(`reviewDraft:${id}`);
+  }
+}
+
+async function reviewAction(action) {
+  const type = reviewItemType();
+  const id = reviewItemId();
+  if (!id || tab.value !== "review") {
+    return;
+  }
+  const labels = {
+    approve: "批准公开",
+    needs_changes: "标记需要补充",
+    reject: "拒绝",
+    merge: "合并"
+  };
+  if (!window.confirm(`确认${labels[action]}「${selected.value.name}」？`)) {
+    return;
+  }
+  const operationKey = `reviewAction:${action}:${id}`;
+  if (!beginOperation(operationKey, `正在${labels[action]}...`)) {
+    return;
+  }
+  error.value = "";
+  try {
+    if (action === "approve") {
+      const body = reviewNoteBody("通过，已公开");
+      const storeIds = type === "script" ? parseIdList(reviewStoreIdsText.value) : [];
+      if (storeIds.length > 0) {
+        body.storeIds = storeIds;
+      }
+      await approveCatalogReviewItem(type, id, body);
+    } else if (action === "needs_changes") {
+      await requestCatalogReviewItemNeedsChanges(type, id, reviewNoteBody("请补充资料"));
+    } else if (action === "reject") {
+      await rejectCatalogReviewItem(type, id, reviewNoteBody("资料不完整，未通过"));
+    } else if (action === "merge") {
+      const mergedIntoId = Number(mergeTargetId.value || 0);
+      if (!Number.isInteger(mergedIntoId) || mergedIntoId <= 0) {
+        throw new Error("请填写合并目标公共资料 ID。");
+      }
+      await mergeCatalogReviewItem(type, id, {
+        ...reviewNoteBody("已合并到已有公共资料"),
+        mergedIntoId
+      });
+    }
+    closeDrawer(true);
+    await loadItems();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    endOperation(operationKey);
   }
 }
 

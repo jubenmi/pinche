@@ -83,20 +83,16 @@
 
       <SessionCalendar
         v-else
-        title="我的车局"
         :sessions="sessions"
         :signups="signups"
         :loading="isCalendarLoading"
         :refreshing="isRefreshingCalendar"
-        :updated-at="lastLoadedAt"
         :status-text="homeStatusText"
         show-create-button
-        create-button-label="发车"
+        create-button-label="我的车局（点击发车）"
         :show-admin-button="isAdmin"
-        show-logout-button
         @create="goCreate"
         @admin="goAdmin"
-        @logout="logout"
         @refresh="refreshCalendar"
         @auth-expired="handleAuthExpired"
       />

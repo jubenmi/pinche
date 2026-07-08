@@ -1018,6 +1018,40 @@ if (!fs.existsSync(pagesJsonPath)) {
   const mineSource = fs.existsSync(path.join(srcRoot, "pages/mine/index.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/mine/index.vue"), "utf8")
     : "";
+  const appVueSource = fs.existsSync(path.join(srcRoot, "App.vue"))
+    ? fs.readFileSync(path.join(srcRoot, "App.vue"), "utf8")
+    : "";
+  const d33CreateSource = fs.existsSync(path.join(srcRoot, "pages/session/create.vue"))
+    ? fs.readFileSync(path.join(srcRoot, "pages/session/create.vue"), "utf8")
+    : "";
+  const d33ScriptSource = fs.existsSync(path.join(srcRoot, "pages/session/script.vue"))
+    ? fs.readFileSync(path.join(srcRoot, "pages/session/script.vue"), "utf8")
+    : "";
+  const d33AdminCatalogSource = fs.existsSync(path.join(srcRoot, "pages/admin/catalog.vue"))
+    ? fs.readFileSync(path.join(srcRoot, "pages/admin/catalog.vue"), "utf8")
+    : "";
+  for (const requiredD33PrivateCatalogText of [
+    "submitPrivateStore",
+    "没有找到？添加一个店家",
+    "storeBadge",
+    "submitPrivateScript",
+    "没有找到？添加一个剧本",
+    "scriptBadge",
+    "/api/catalog-review-items/mine",
+    "我的资料提交",
+    "submitCatalogEdit",
+    "/api/admin/catalog-review-items",
+    "待审核资料",
+    "/approve",
+    "/needs-changes",
+    "/reject",
+    "/merge"
+  ]) {
+    const combinedD33Source = `${d33CreateSource}\n${d33ScriptSource}\n${mineSource}\n${d33AdminCatalogSource}`;
+    if (!combinedD33Source.includes(requiredD33PrivateCatalogText)) {
+      fail(`D33 private catalog review mini-program flow is missing ${requiredD33PrivateCatalogText}`);
+    }
+  }
   const sessionCalendarPath = path.join(srcRoot, "components/SessionCalendar.vue");
   if (!fs.existsSync(sessionCalendarPath)) {
     fail("D22 must extract the shared session calendar component: components/SessionCalendar.vue");
@@ -1025,6 +1059,81 @@ if (!fs.existsSync(pagesJsonPath)) {
   const sessionCalendarSource = fs.existsSync(sessionCalendarPath)
     ? fs.readFileSync(sessionCalendarPath, "utf8")
     : "";
+  if (sessionCalendarSource.includes("{{ totalCount }} 场车局")) {
+    fail("Session calendar hero must not repeat total count; the filter tabs already show counts");
+  }
+  for (const forbiddenCalendarHeaderCopy of [
+    "calendarUpdatedText",
+    "hero-subtitle",
+    "hero-copy",
+    "showLogoutButton",
+    "show-logout-button",
+    "<t-icon",
+    ">退出</t-button>",
+    ">管理员</t-button>"
+  ]) {
+    if (sessionCalendarSource.includes(forbiddenCalendarHeaderCopy)) {
+      fail(`Session calendar action bar must not keep redundant header copy or logout controls: ${forbiddenCalendarHeaderCopy}`);
+    }
+  }
+  if (indexSource.includes("show-logout-button") || mineSource.includes("show-logout-button")) {
+    fail("Session calendar callers must not render a page-header logout button; logout lives in the identity bar");
+  }
+  if (!indexSource.includes('create-button-label="我的车局（点击发车）"')) {
+    fail("Entry calendar primary action must be labelled 我的车局（点击发车）");
+  }
+  for (const requiredCompactCalendarActionBar of [
+    'v-if="showCalendarActions"',
+    "calendar-action-bar",
+    "showCalendarActions",
+    "primary-action-inner",
+    "admin-icon-button",
+    "admin-action-icon",
+    "min-height: 92rpx",
+    "width: 92rpx",
+    'src="/static/icons/toolbox-light.svg"',
+    "linear-gradient(145deg, #2d8069 0%, #1f6f5b 100%)",
+    'src="/static/icons/user-plus-white.png"'
+  ]) {
+    if (!sessionCalendarSource.includes(requiredCompactCalendarActionBar)) {
+      fail(`Session calendar must keep the compact action bar layout: ${requiredCompactCalendarActionBar}`);
+    }
+  }
+  for (const requiredAlignedCalendarControls of [
+    "height: 64rpx; box-sizing: border-box",
+    "grid-template-columns: minmax(0, 1fr) 216rpx",
+    "align-items: stretch",
+    "height: 64rpx",
+    "line-height: 64rpx",
+    "--td-segmented-item-label-font: 600 23rpx / 52rpx sans-serif"
+  ]) {
+    if (!sessionCalendarSource.includes(requiredAlignedCalendarControls)) {
+      fail(`Session calendar top controls must be visually aligned: ${requiredAlignedCalendarControls}`);
+    }
+  }
+  for (const requiredCalendarSegmentedGlobalStyle of [
+    "height: 52rpx !important",
+    "font-size: 23rpx !important",
+    "border-radius: 10rpx !important"
+  ]) {
+    if (!appVueSource.includes(requiredCalendarSegmentedGlobalStyle)) {
+      fail(`Calendar segmented global style must align with the top buttons: ${requiredCalendarSegmentedGlobalStyle}`);
+    }
+  }
+  for (const forbiddenPillButtonSelector of [
+    ".primary-quiet-button",
+    ".admin-icon-button",
+    ".today-reset-button"
+  ]) {
+    const escapedSelector = forbiddenPillButtonSelector.replace(".", "\\.");
+    if (
+      new RegExp(`${escapedSelector}(?:\\s*,[^\\{]+)?\\s*\\{[^}]*border-radius:\\s*999rpx`).test(
+        sessionCalendarSource
+      )
+    ) {
+      fail(`Session calendar header controls must use rounded-square buttons, not pill buttons: ${forbiddenPillButtonSelector}`);
+    }
+  }
   if (
     !sessionCalendarSource.includes('v-if="item.canManage"') ||
     !sessionCalendarSource.includes('@tap.stop="goManage(item.sessionId)"') ||
@@ -2053,6 +2162,22 @@ if (!fs.existsSync(pagesJsonPath)) {
   ]) {
     if (!albumSource.includes(requiredAlbumBusyText)) {
       fail(`Album page must lock related controls while busy: ${requiredAlbumBusyText}`);
+    }
+  }
+  for (const requiredD32AlbumVideoText of [
+    // D32 admin album video: media_type === "image" and media_type === "video".
+    "D32 admin album video",
+    "MAX_ALBUM_VIDEO_DURATION_SECONDS",
+    "wx.chooseMedia",
+    "wx.compressVideo",
+    "chooseVideo",
+    "canUploadVideo",
+    "media_type === \"image\"",
+    "media_type === \"video\"",
+    "打开小程序查看视频"
+  ]) {
+    if (!albumSource.includes(requiredD32AlbumVideoText)) {
+      fail(`D32 admin album video flow is missing ${requiredD32AlbumVideoText}`);
     }
   }
   const deletePhotoSource = methodBody(albumSource, "deletePhoto");

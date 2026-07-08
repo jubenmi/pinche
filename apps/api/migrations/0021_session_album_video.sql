@@ -1,0 +1,15 @@
+ALTER TABLE session_album_photos
+  MODIFY COLUMN photo_url VARCHAR(512) NULL,
+  ADD COLUMN media_type VARCHAR(16) NOT NULL DEFAULT 'image' AFTER uploader_user_id,
+  ADD COLUMN processing_status VARCHAR(32) NOT NULL DEFAULT 'ready' AFTER status,
+  ADD COLUMN source_url VARCHAR(512) NULL AFTER photo_url,
+  ADD COLUMN display_url VARCHAR(512) NULL AFTER source_url,
+  ADD COLUMN cover_url VARCHAR(512) NULL AFTER display_url,
+  ADD COLUMN duration_seconds INT UNSIGNED NULL AFTER image_content_type,
+  ADD COLUMN video_width INT UNSIGNED NULL AFTER duration_seconds,
+  ADD COLUMN video_height INT UNSIGNED NULL AFTER video_width,
+  ADD COLUMN video_byte_size BIGINT UNSIGNED NULL AFTER video_height,
+  ADD COLUMN video_content_type VARCHAR(64) NULL AFTER video_byte_size,
+  ADD COLUMN ci_job_id VARCHAR(128) NULL AFTER video_content_type,
+  ADD COLUMN processing_error VARCHAR(255) NULL AFTER ci_job_id,
+  ADD INDEX idx_session_album_media_type_status (session_id, media_type, processing_status);

@@ -23,6 +23,13 @@ function sortedHeaderEntries(headers = {}) {
     .sort(([left], [right]) => left.localeCompare(right));
 }
 
+function sortedUrlParamEntries(urlParams = {}) {
+  return Object.entries(urlParams)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => [encodeCosComponent(key).toLowerCase(), encodeCosComponent(value)])
+    .sort(([left], [right]) => left.localeCompare(right));
+}
+
 export function cosStorageEnabled(cosConfig = {}) {
   return Boolean(
     cosConfig.enabled &&
@@ -58,7 +65,8 @@ export function cosUploadPathForKey(key) {
   const keyText = String(key || "");
   if (
     !/^uploads\/(avatars|session-reviews)\/[A-Za-z0-9._-]+$/.test(keyText) &&
-    !/^uploads\/session-album\/display\/[A-Za-z0-9._-]+$/.test(keyText)
+    !/^uploads\/session-album\/display\/[A-Za-z0-9._-]+$/.test(keyText) &&
+    !/^uploads\/session-album\/videos\/(source|display|cover)\/[A-Za-z0-9._-]+$/.test(keyText)
   ) {
     throw new Error("invalid COS object key");
   }
@@ -69,16 +77,20 @@ export function buildCosAuthorization({
   method,
   key,
   headers,
+  urlParams,
   nowSeconds = Math.floor(Date.now() / 1000),
   expiresInSeconds = DEFAULT_SIGN_EXPIRES_SECONDS,
   config
 }) {
   const keyTime = `${nowSeconds};${nowSeconds + expiresInSeconds}`;
   const headerEntries = sortedHeaderEntries(headers);
+  const urlParamEntries = sortedUrlParamEntries(urlParams);
   const headerList = headerEntries.map(([name]) => name).join(";");
+  const urlParamList = urlParamEntries.map(([name]) => name).join(";");
   const httpHeaders = headerEntries.map(([name, value]) => `${name}=${value}`).join("&");
+  const httpParameters = urlParamEntries.map(([name, value]) => `${name}=${value}`).join("&");
   const uriPathname = `/${String(key || "").split("/").map(encodeURIComponent).join("/")}`;
-  const httpString = `${method.toLowerCase()}\n${uriPathname}\n\n${httpHeaders}\n`;
+  const httpString = `${method.toLowerCase()}\n${uriPathname}\n${httpParameters}\n${httpHeaders}\n`;
   const stringToSign = `${SIGN_ALGORITHM}\n${keyTime}\n${sha1(httpString)}\n`;
   const signKey = hmacSha1(config.secretKey, keyTime);
   const signature = hmacSha1(signKey, stringToSign);
@@ -89,7 +101,7 @@ export function buildCosAuthorization({
     `q-sign-time=${keyTime}`,
     `q-key-time=${keyTime}`,
     `q-header-list=${headerList}`,
-    "q-url-param-list=",
+    `q-url-param-list=${urlParamList}`,
     `q-signature=${signature}`
   ].join("&");
 }

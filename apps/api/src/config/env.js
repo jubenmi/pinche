@@ -182,7 +182,8 @@ export const config = {
     secretId: process.env.COS_SECRET_ID || "",
     secretKey: process.env.COS_SECRET_KEY || "",
     bucket: process.env.COS_BUCKET || "",
-    region: process.env.COS_REGION || ""
+    region: process.env.COS_REGION || "",
+    ciCallbackToken: process.env.COS_CI_CALLBACK_TOKEN || ""
   },
   wechat: {
     mockLogin: booleanEnv("WECHAT_MOCK_LOGIN", true),

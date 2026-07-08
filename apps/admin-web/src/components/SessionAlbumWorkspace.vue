@@ -205,6 +205,7 @@
               <article
                 class="admin-photo"
                 :class="{
+                  'video-card': photo.media_type === 'video',
                   selectable: bulkSelectionMode && photo.can_tag,
                   selected: bulkSelectionMode && isAlbumPhotoSelected(photo),
                   disabled: bulkSelectionMode && !photo.can_tag
@@ -212,11 +213,28 @@
               >
                 <button
                   class="photo-preview"
+                  :class="{ 'video-preview': photo.media_type === 'video' }"
                   type="button"
                   :disabled="albumActionBusy || (bulkSelectionMode && !photo.can_tag)"
-                  @click="bulkSelectionMode ? toggleAlbumPhotoSelection(photo) : previewPhoto(photo)"
+                  @click="bulkSelectionMode ? toggleAlbumPhotoSelection(photo) : previewMedia(photo)"
                 >
+                  <template v-if="photo.media_type === 'video'">
+                    <AuthorizedLazyImage
+                      v-if="photo.cover_url"
+                      :src="photo.cover_url"
+                      :ratio="photoAspectRatio(photo)"
+                      @loaded="rerenderAlbumWaterfall"
+                    />
+                    <div v-else class="admin-video-placeholder">
+                      {{ videoStateText(photo) }}
+                    </div>
+                    <span v-if="videoReady(photo)" class="admin-video-play">▶</span>
+                    <span class="admin-video-state">
+                      {{ videoReady(photo) ? formatVideoDuration(photo.duration_seconds) : videoStateText(photo) }}
+                    </span>
+                  </template>
                   <AuthorizedLazyImage
+                    v-else
                     :src="photo.thumbnail_url || photo.image_url"
                     :ratio="photoAspectRatio(photo)"
                     @loaded="rerenderAlbumWaterfall"
@@ -234,7 +252,7 @@
               <div class="photo-info">
                 <strong>{{ tagSummary(photo) }}</strong>
                 <span>{{ photo.uploader_name || "车友" }} · {{ formatDate(photo.created_at) }}</span>
-                <span>{{ imageMetaText(photo) }}</span>
+                <span>{{ mediaMetaText(photo) }}</span>
               </div>
               <div v-if="!bulkSelectionMode" class="photo-actions">
                 <button
@@ -276,7 +294,15 @@
         </button>
       </div>
       <div class="drawer-body">
-        <img v-if="!bulkTagging" class="tag-preview" :src="taggingPhoto.display_url" alt="" />
+        <img
+          v-if="!bulkTagging && taggingPhoto.display_url"
+          class="tag-preview"
+          :src="taggingPhoto.display_url"
+          alt=""
+        />
+        <div v-else-if="!bulkTagging && taggingPhoto.media_type === 'video'" class="tag-preview video-tag-preview">
+          {{ videoStateText(taggingPhoto) }}
+        </div>
         <div v-else class="bulk-tag-summary">
           <strong>已选 {{ selectedAlbumPhotoCount }} 张照片</strong>
           <span>保存后，这些照片会替换成同一组标签。</span>
@@ -435,6 +461,7 @@ import {
   getMySessionAlbumPrivacy,
   getSession,
   getSessionAlbum,
+  getSessionAlbumVideoUrl,
   getStoredAuth,
   listSessionAlbumPeople,
   updateMySessionAlbumPrivacy,
@@ -754,7 +781,7 @@ function tagSummary(photo) {
   if (!photo.tags || photo.tags.length === 0) {
     return "待标注";
   }
-  return `照片里：${photo.tags.map((tag) => tag.label).join("、")}`;
+  return `${photo.media_type === "video" ? "视频" : "照片"}里：${photo.tags.map((tag) => tag.label).join("、")}`;
 }
 
 function tagsFromSelectedKeys() {
@@ -811,9 +838,57 @@ function imageMetaText(photo) {
   return sizeText;
 }
 
+function formatFileSize(byteSize) {
+  const size = Number(byteSize || 0);
+  if (size >= 1024 * 1024) {
+    return `${Math.max(0.1, size / 1024 / 1024).toFixed(1)}MB`;
+  }
+  return `${Math.max(1, Math.round(size / 1024))}KB`;
+}
+
+function formatVideoDuration(seconds) {
+  const totalSeconds = Math.max(0, Math.round(Number(seconds || 0)));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainder = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${remainder}`;
+}
+
+function videoReady(photo) {
+  return photo?.media_type === "video" && photo.processing_status === "ready";
+}
+
+function videoStateText(photo) {
+  if (photo?.media_type !== "video") {
+    return "";
+  }
+  if (photo.processing_status === "processing") {
+    return "处理中";
+  }
+  if (photo.processing_status === "failed") {
+    return "处理失败";
+  }
+  return "短视频";
+}
+
+function videoMetaText(photo) {
+  const width = Number(photo.video_width || 0);
+  const height = Number(photo.video_height || 0);
+  const byteSize = Number(photo.video_byte_size || 0);
+  const sizeText = byteSize > 0 ? formatFileSize(byteSize) : "大小未知";
+  const durationText = formatVideoDuration(photo.duration_seconds);
+  if (width > 0 && height > 0) {
+    return `${durationText} · ${width}x${height} · ${sizeText}`;
+  }
+  return `${durationText} · ${sizeText}`;
+}
+
+function mediaMetaText(photo) {
+  return photo.media_type === "video" ? videoMetaText(photo) : imageMetaText(photo);
+}
+
 function photoAspectRatio(photo) {
-  const width = Number(photo.image_width || 0);
-  const height = Number(photo.image_height || 0);
+  const width = Number(photo.media_type === "video" ? photo.video_width || 0 : photo.image_width || 0);
+  const height = Number(photo.media_type === "video" ? photo.video_height || 0 : photo.image_height || 0);
   if (width > 0 && height > 0) {
     return Math.min(1.8, Math.max(0.68, width / height));
   }
@@ -824,9 +899,24 @@ function normalizeAlbumMedia(albumData) {
   return {
     ...albumData,
     photos: (albumData.photos || []).map((photo) => {
+      if (photo.media_type === "video") {
+        return {
+          ...photo,
+          media_type: "video",
+          processing_status: photo.processing_status || "processing",
+          tags: photo.tags || [],
+          cover_url: photo.cover_url || "",
+          video_url: photo.video_url || "",
+          thumbnail_url: photo.cover_url || "",
+          image_url: photo.cover_url || "",
+          display_url: ""
+        };
+      }
       const previewUrl = photo.preview_url || photo.image_url || "";
       return {
         ...photo,
+        media_type: "image",
+        processing_status: photo.processing_status || "ready",
         tags: photo.tags || [],
         image_url: previewUrl,
         preview_url: previewUrl,
@@ -857,6 +947,15 @@ function updatePhotoDisplayUrl(photoId, displayUrl) {
 async function ensurePreviewMedia(photo) {
   if (photo.display_url) {
     return photo.display_url;
+  }
+  if (photo.media_type === "video") {
+    if (!photo.cover_url) {
+      return "";
+    }
+    const displayUrl = await fetchAuthorizedMediaObjectUrl(photo.cover_url);
+    mediaObjectUrls.add(displayUrl);
+    updatePhotoDisplayUrl(photo.id, displayUrl);
+    return displayUrl;
   }
   const displayUrl = await fetchAuthorizedMediaObjectUrl(photo.preview_url || photo.image_url);
   mediaObjectUrls.add(displayUrl);
@@ -1002,6 +1101,30 @@ async function uploadFiles(files) {
     albumError.value = err.message;
   } finally {
     uploading.value = false;
+  }
+}
+
+function previewMedia(photo) {
+  if (photo.media_type === "video") {
+    previewVideo(photo);
+    return;
+  }
+  previewPhoto(photo);
+}
+
+async function previewVideo(photo) {
+  if (!videoReady(photo)) {
+    albumStatus.value = videoStateText(photo) || "视频暂不可播放。";
+    return;
+  }
+  try {
+    const data = await getSessionAlbumVideoUrl(photo.id);
+    if (!data?.url) {
+      throw new Error("video url missing");
+    }
+    window.open(data.url, "_blank", "noopener,noreferrer");
+  } catch (err) {
+    albumError.value = "视频播放地址获取失败，请刷新后重试。";
   }
 }
 
@@ -1203,7 +1326,8 @@ async function deletePhoto(photo) {
   if (albumActionBusy.value || !photo.is_mine) {
     return;
   }
-  if (!window.confirm("确认删除这张照片？")) {
+  const mediaLabel = photo.media_type === "video" ? "视频" : "照片";
+  if (!window.confirm(`确认删除这${mediaLabel === "视频" ? "段" : "张"}${mediaLabel}？`)) {
     return;
   }
   deletingPhotoId.value = photo.id;
