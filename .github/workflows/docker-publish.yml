@@ -62,15 +62,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Validate admin web map key secret
-        env:
-          VITE_TENCENT_MAP_KEY: ${{ secrets.VITE_TENCENT_MAP_KEY }}
-        run: |
-          if [ -z "${VITE_TENCENT_MAP_KEY}" ]; then
-            echo "VITE_TENCENT_MAP_KEY secret is required for admin web map features." >&2
-            exit 1
-          fi
-
       - name: Build and push API image
         uses: docker/build-push-action@v6
         with:
@@ -86,5 +77,3 @@ jobs:
           file: apps/admin-web/Dockerfile
           push: true
           tags: ${{ steps.tags.outputs.admin_web_tags }}
-          build-args: |
-            VITE_TENCENT_MAP_KEY=${{ secrets.VITE_TENCENT_MAP_KEY }}
