@@ -18,6 +18,9 @@ RUN npm --workspace apps/admin-web run build
 FROM nginx:1.27-alpine
 
 COPY apps/admin-web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY apps/admin-web/docker-entrypoint.d/40-admin-runtime-config.sh /docker-entrypoint.d/
 COPY --from=build /app/apps/admin-web/dist /usr/share/nginx/html
+
+RUN chmod +x /docker-entrypoint.d/40-admin-runtime-config.sh
 
 EXPOSE 8080
