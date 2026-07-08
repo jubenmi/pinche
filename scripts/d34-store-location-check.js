@@ -102,7 +102,7 @@ for (const token of [
   "位置设置",
   "纬度（GCJ-02）",
   "经度（GCJ-02）",
-  "VITE_TENCENT_MAP_KEY",
+  "getTencentMapKey",
   "map.qq.com/api/gljs",
   "TMap.Map",
   "TMap.MultiMarker",
@@ -120,6 +120,88 @@ assert(
   storeDrawer.includes("latitude: model.latitude") &&
     storeDrawer.includes("longitude: model.longitude"),
   "StoreDrawer save payload should include latitude and longitude"
+);
+
+const miniprogramCreate = read("apps/miniprogram/src/pages/session/create.vue");
+for (const token of [
+  "latitude: \"\"",
+  "longitude: \"\"",
+  "地图选点",
+  "pickStoreLocation",
+  "uni.chooseLocation",
+  "storeForm.latitude",
+  "storeForm.longitude",
+  "latitude: this.storeForm.latitude",
+  "longitude: this.storeForm.longitude",
+  "writeCreateFlow({ store, script: null, role: null })"
+]) {
+  assert(miniprogramCreate.includes(token), `Mini-program create page should include ${token}`);
+}
+assert(
+  !miniprogramCreate.includes("uni.getLocation") && !miniprogramCreate.includes("wx.getLocation"),
+  "Mini-program create page should not read current user location"
+);
+
+const miniprogramDetail = read("apps/miniprogram/src/pages/session/detail.vue");
+for (const token of [
+  "session.store_address",
+  "session.store_address || hasStoreLocation",
+  "查看地图",
+  "hasStoreLocation",
+  "openStoreMap",
+  "uni.openLocation",
+  "store_latitude",
+  "store_longitude",
+  "scale: 18",
+  "地图打开失败，请稍后再试"
+]) {
+  assert(miniprogramDetail.includes(token), `Mini-program detail page should include ${token}`);
+}
+
+const manifest = JSON.parse(read("apps/miniprogram/src/manifest.json"));
+const mpWeixin = manifest["mp-weixin"] || {};
+assert(
+  mpWeixin.permission?.["scope.userLocation"]?.desc?.includes("剧本店位置"),
+  "Mini-program manifest should declare why chooseLocation needs location access"
+);
+assert(
+  Array.isArray(mpWeixin.requiredPrivateInfos) &&
+    mpWeixin.requiredPrivateInfos.includes("chooseLocation"),
+  "Mini-program manifest should declare chooseLocation as a required private API"
+);
+assert(
+  !mpWeixin.requiredPrivateInfos?.includes("getLocation"),
+  "Mini-program manifest should not declare getLocation"
+);
+
+const smoke = read("scripts/d34-store-location-smoke.js");
+for (const token of [
+  "private store should save legal GCJ-02 coordinates",
+  "admin store creation should save coordinates",
+  "admin store update should save coordinates",
+  "expectedStatus = 200",
+  "91",
+  "181",
+  "session detail should return store address",
+  "session detail should return store coordinates",
+  "store without coordinates should remain searchable",
+  "store without coordinates should still be usable for session creation"
+]) {
+  assert(smoke.includes(token), `D34 smoke should cover ${token}`);
+}
+
+const packageJson = JSON.parse(read("package.json"));
+assert(
+  packageJson.scripts.check.includes("node scripts/d34-store-location-check.js"),
+  "npm run check should run D34 static check"
+);
+assert(
+  packageJson.scripts.check.includes("node --check scripts/d34-store-location-smoke.js"),
+  "npm run check should syntax-check D34 smoke"
+);
+assert(
+  packageJson.scripts["d34:smoke"] === "node scripts/d34-store-location-smoke.js",
+  "package scripts should expose d34:smoke"
 );
 
 console.log("D34 store location checks passed");

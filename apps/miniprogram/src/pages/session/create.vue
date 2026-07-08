@@ -83,6 +83,18 @@
         placeholder="地址"
         @change="storeForm.address = $event.detail.value"
       />
+      <view class="location-actions">
+        <t-button
+          class="location-button secondary"
+          :disabled="creatingStore"
+          @tap="pickStoreLocation"
+        >
+          地图选点
+        </t-button>
+        <view v-if="storeForm.latitude && storeForm.longitude" class="location-state">
+          已选坐标 {{ storeForm.latitude }}，{{ storeForm.longitude }}
+        </view>
+      </view>
       <t-textarea
         :value="storeForm.contactNote"
         class="textarea"
@@ -126,8 +138,19 @@ function defaultStoreForm() {
     city: "北京",
     district: "",
     address: "",
+    latitude: "",
+    longitude: "",
     contactNote: ""
   };
+}
+
+function coordinateText(value) {
+  const coordinate = Number(value);
+  return Number.isFinite(coordinate) ? coordinate.toFixed(7) : "";
+}
+
+function isChooseLocationCancel(error) {
+  return /cancel/i.test(String(error?.errMsg || error?.message || ""));
 }
 
 export default {
@@ -195,6 +218,28 @@ export default {
     resetStoreForm() {
       this.storeForm = defaultStoreForm();
     },
+    pickStoreLocation() {
+      if (typeof uni.chooseLocation !== "function") {
+        showToast({ title: "当前环境不支持地图选点，请手动填写地址", icon: "none" });
+        return;
+      }
+      uni.chooseLocation({
+        success: (location) => {
+          this.storeForm = {
+            ...this.storeForm,
+            address: location.address || location.name || this.storeForm.address,
+            latitude: coordinateText(location.latitude),
+            longitude: coordinateText(location.longitude)
+          };
+        },
+        fail: (error) => {
+          if (isChooseLocationCancel(error)) {
+            return;
+          }
+          showToast({ title: "地图选点失败，请手动填写地址", icon: "none" });
+        }
+      });
+    },
     async submitPrivateStore() {
       if (this.creatingStore) {
         return;
@@ -213,13 +258,21 @@ export default {
             city: this.storeForm.city,
             district: this.storeForm.district,
             address: this.storeForm.address,
+            latitude: this.storeForm.latitude,
+            longitude: this.storeForm.longitude,
             contactNote: this.storeForm.contactNote
           }
         });
-        const store = dataOf(response);
-        if (!store) {
+        const createdStore = dataOf(response);
+        if (!createdStore) {
           throw new Error("missing store");
         }
+        const store = {
+          ...createdStore,
+          address: createdStore.address ?? this.storeForm.address,
+          latitude: createdStore.latitude ?? this.storeForm.latitude,
+          longitude: createdStore.longitude ?? this.storeForm.longitude
+        };
         this.stores = [store, ...this.stores.filter((item) => String(item.id) !== String(store.id))];
         this.selectedStore = store;
         writeCreateFlow({ store, script: null, role: null });
@@ -420,6 +473,27 @@ export default {
 
 .field.half {
   flex: 1;
+}
+
+.location-actions {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-bottom: 16rpx;
+}
+
+.location-button {
+  flex: 0 0 176rpx;
+  min-width: 176rpx;
+}
+
+.location-state {
+  flex: 1;
+  min-width: 0;
+  color: #64748b;
+  font-size: 22rpx;
+  line-height: 1.45;
+  word-break: break-all;
 }
 
 .textarea {
