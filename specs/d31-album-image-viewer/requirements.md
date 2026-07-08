@@ -6,7 +6,7 @@
 
 D31 将相册全屏预览从页面内联 swiper 抽成独立 `AlbumImageViewer` 组件。组件直接消费后端已经返回的 `thumbnail_load_url` 和 `preview_load_url`，先显示缩略图，再在同一页加载并淡入展示图，避免快速左右滑动时依赖本地缓存回填造成黑屏、跳回或加载空洞。
 
-第一版只做 TDesign ImageViewer 同级基础体验：左右滑动、顶部关闭、索引计数、下滑关闭、缩略图占位、大图淡入、失败态可继续滑动。完整相册提供下载入口，但下载必须先确认；分享相册不提供下载。
+第一版只做 TDesign ImageViewer 同级基础体验：左右滑动、顶部关闭、索引计数、下滑关闭、缩略图占位、大图淡入、失败态可继续滑动。完整相册提供显式下载入口，但下载必须先确认；分享相册不提供下载。
 
 ## Requirements
 
@@ -57,13 +57,13 @@ D31 将相册全屏预览从页面内联 swiper 抽成独立 `AlbumImageViewer` 
 
 1. WHEN 完整相册预览打开且 `allowDownload = true` THEN 组件 SHALL 显示右上角下载图标。
 2. WHEN 完整相册用户点击下载图标 THEN 组件 SHALL 抛出 `download({ index, photo, trigger: "button" })`。
-3. WHEN 完整相册用户长按当前图片 THEN 组件 SHALL 抛出 `download({ index, photo, trigger: "longpress" })`。
+3. WHEN 完整相册用户长按当前图片 THEN 组件 SHALL NOT 触发下载确认或保存。
 4. WHEN 相册页收到下载事件 THEN 页面 SHALL 调用现有 `downloadSinglePhoto(photo)`。
 5. WHEN `downloadSinglePhoto(photo)` 执行 THEN 页面 SHALL 先展示确认弹窗。
 6. WHEN 用户取消确认 THEN 系统 SHALL NOT 下载或保存照片。
 7. WHEN 用户确认 THEN 系统 SHALL 复用现有权限检查、token 刷新、下载和保存逻辑。
 8. WHEN 分享相册预览打开 THEN 组件 SHALL NOT 显示下载图标。
-9. WHEN 分享相册用户长按图片 THEN 系统 SHALL NOT 触发保存。
+9. WHEN 分享相册用户长按图片 THEN 系统 SHALL NOT 触发下载确认或保存。
 
 ### Requirement 5: 不扩大范围并保留回退
 

@@ -16,10 +16,16 @@ function cssBlock(source, selector) {
   return source.match(pattern)?.[1] || "";
 }
 
-function hasYellowSelectionRing(block) {
+function hasOwnerGenderSelectionFrame(source, block) {
   return (
-    block.includes("0 0 0 3rpx rgba(216, 167, 61") &&
-    block.includes("inset 0 0 0 1rpx rgba(216, 167, 61")
+    block.includes("border-width: 9rpx") &&
+    !block.includes("background:") &&
+    source.includes(".role-choice.mine.owner-male") &&
+    source.includes(".role-choice.switching.owner-male") &&
+    source.includes("border-color: #2f6fed") &&
+    source.includes(".role-choice.mine.owner-female") &&
+    source.includes(".role-choice.switching.owner-female") &&
+    source.includes("border-color: #8f5bd6")
   );
 }
 
@@ -187,18 +193,14 @@ const checks = [
       source.includes(".role-choice.female")
   },
   {
-    label: "shared role board selected state preserves gender tint with yellow ring",
+    label: "shared role board selected state preserves role tint with owner-gender frame",
     file: "apps/miniprogram/src/components/RoleSeatBoard.vue",
     test: (source) => {
       const block = cssBlock(
         source,
         ".role-choice.pending,\n.role-choice.mine,\n.role-choice.switching,\n.role-choice.selected,\n.role-choice.focused"
       );
-      return (
-        hasYellowSelectionRing(block) &&
-        !block.includes("border-color:") &&
-        !block.includes("background:")
-      );
+      return hasOwnerGenderSelectionFrame(source, block);
     }
   },
   {
@@ -242,7 +244,7 @@ const checks = [
       read("apps/miniprogram/src/components/RoleSeatBoard.vue").includes(".role-choice.female")
   },
   {
-    label: "shared role board selected states preserve gender tint with yellow ring",
+    label: "shared role board selected states preserve gender tint with owner-gender frame",
     file: "apps/miniprogram/src/components/RoleSeatBoard.vue",
     test: (source) => {
       const sharedStateBlock = cssBlock(
@@ -250,7 +252,7 @@ const checks = [
         ".role-choice.pending,\n.role-choice.mine,\n.role-choice.switching,\n.role-choice.selected,\n.role-choice.focused"
       );
       return (
-        hasYellowSelectionRing(sharedStateBlock) &&
+        hasOwnerGenderSelectionFrame(source, sharedStateBlock) &&
         !cssBlock(source, ".role-choice.pending").includes("background:") &&
         !cssBlock(source, ".role-choice.mine").includes("background:") &&
         !cssBlock(source, ".role-choice.switching").includes("background:")

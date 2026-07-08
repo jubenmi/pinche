@@ -60,9 +60,19 @@ const calendar = read("apps/miniprogram/src/components/SessionCalendar.vue");
 assert(mine.includes("SessionCalendar"), "Mine page must render the shared calendar component");
 assert(mine.includes("loadMySignups"), "Mine page must load joined sessions");
 assert(calendar.includes('label: "发起"'), "Mine calendar must label created sessions");
-assert(calendar.includes('label: "参与"'), "Mine calendar must keep the joined-session filter");
+assert(
+  calendar.includes("joinedSignups") && calendar.includes("item.isJoined"),
+  "Mine calendar must keep joined sessions in the combined calendar"
+);
 assert(calendar.includes("compactSignupRoleText"), "Mine calendar must identify joined sessions by compact role text");
-assert(calendar.includes("goReview"), "Mine calendar must navigate to review page");
+assert(
+  calendar.includes("handleCalendarAction") &&
+    calendar.includes("goShare") &&
+    calendar.includes("goAlbum") &&
+    calendar.includes("/pages/session/share?id=") &&
+    calendar.includes("/pages/session/album?id="),
+  "Mine calendar must navigate unstarted cards to share page and started cards to album"
+);
 assert(calendar.includes("mergeCalendarItems"), "Mine calendar must merge created and joined calendar rows");
 assert(
   calendar.includes("const itemsBySession = new Map()") &&

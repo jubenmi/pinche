@@ -60,7 +60,8 @@ for (const token of [
 const album = read("apps/miniprogram/src/pages/session/album.vue");
 for (const token of [
   "empty-upload-button",
-  "上传第一张照片",
+  "album-upload-button-content",
+  "albumUploadButtonLabel",
   "@tap=\"choosePhotos\""
 ]) {
   assert(album.includes(token), `mini-program album empty state must include ${token}`);

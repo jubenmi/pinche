@@ -242,7 +242,12 @@ function isAllowedNativeAvatarPrimitiveTag(tag, tagSource) {
   }
   const className = classMatch[1];
   if (tag === "image") {
-    return /\bavatar\b/.test(className) || /avatar/.test(className) || /photo-preview-image/.test(className);
+    return (
+      /\bavatar\b/.test(className) ||
+      /avatar/.test(className) ||
+      /photo-preview-image/.test(className) ||
+      /album-image-viewer__image/.test(className)
+    );
   }
   if (tag === "button") {
     return /profile-avatar-button/.test(className) || /auth-profile-trigger/.test(className);
@@ -1033,6 +1038,23 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!sessionCalendarSource.includes("item.canManage = item.isOrganized")) {
     fail("Session calendar management button must only appear for sessions the user organizes");
   }
+  const calendarActionSource = methodBody(sessionCalendarSource, "handleCalendarAction");
+  const calendarShareSource = methodBody(sessionCalendarSource, "goShare");
+  if (!calendarShareSource.includes("/pages/session/share?id=")) {
+    fail("Session calendar must expose share-page navigation for pre-start organized cards");
+  }
+  if (!calendarActionSource.includes("goShare(item.sessionId)")) {
+    fail("Pre-start organized calendar card taps must open the share page");
+  }
+  for (const forbiddenCalendarCardAction of [
+    "goManage(item.sessionId)",
+    "goDetail(item.sessionId)",
+    "goReview(item.sessionId)"
+  ]) {
+    if (calendarActionSource.includes(forbiddenCalendarCardAction)) {
+      fail(`Calendar card primary tap must only choose album-or-share navigation, not ${forbiddenCalendarCardAction}`);
+    }
+  }
   for (const requiredCalendarStripeText of [
     ':class="item.stripeTone"',
     "calendarStripeTone",
@@ -1049,6 +1071,40 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   if (sessionCalendarSource.includes(".session-row.joined .session-stripe")) {
     fail("Session calendar stripe must represent car state, not joined/organized identity");
+  }
+  for (const forbiddenSessionCalendarWxssSelector of [
+    ".load-more text",
+    "button::after"
+  ]) {
+    if (sessionCalendarSource.includes(forbiddenSessionCalendarWxssSelector)) {
+      fail(`SessionCalendar component wxss must not use unsupported tag selectors: ${forbiddenSessionCalendarWxssSelector}`);
+    }
+  }
+  for (const requiredSessionCalendarSegmentedSafety of [
+    ':options="safeVisibleFilterSegmentOptions"',
+    "safeVisibleFilterSegmentOptions",
+    "Array.isArray(visibleFilterSegmentOptions.value)"
+  ]) {
+    if (!sessionCalendarSource.includes(requiredSessionCalendarSegmentedSafety)) {
+      fail(`SessionCalendar segmented options must always pass an array: ${requiredSessionCalendarSegmentedSafety}`);
+    }
+  }
+  const sessionCalendarFilterTabsSource =
+    sessionCalendarSource.match(/const filterTabs = computed\(\(\) => \[[\s\S]*?\]\);/)?.[0] || "";
+  for (const requiredCalendarFilterTab of [
+    '{ value: "all", label: "全部", count: totalCount.value }',
+    '{ value: "organized", label: "发起", count: organizedCount.value }'
+  ]) {
+    if (!sessionCalendarFilterTabsSource.includes(requiredCalendarFilterTab)) {
+      fail(`Session calendar must keep the compact useful filters: ${requiredCalendarFilterTab}`);
+    }
+  }
+  if (
+    sessionCalendarFilterTabsSource.includes('label: "参与"') ||
+    sessionCalendarFilterTabsSource.includes('value: "joined"') ||
+    sessionCalendarSource.includes('activeCalendarFilter.value === "joined"')
+  ) {
+    fail("Session calendar must not show a redundant 参与 filter; 全部 already covers joined sessions");
   }
   if (!mineSource.includes("SessionCalendar")) {
     fail("Mine page must reuse the shared SessionCalendar component");
@@ -1119,14 +1175,64 @@ if (!fs.existsSync(pagesJsonPath)) {
   const shareSource = fs.existsSync(firstFlowFiles["share step"])
     ? fs.readFileSync(firstFlowFiles["share step"], "utf8")
     : "";
+  const shareLightIconPath = path.join(srcRoot, "static/icons/share-light.svg");
+  const shareLightIconSource = fs.existsSync(shareLightIconPath)
+    ? fs.readFileSync(shareLightIconPath, "utf8")
+    : "";
   const sharedRoleSeatBoardSourceForShare = fs.existsSync(
     path.join(srcRoot, "components/RoleSeatBoard.vue")
   )
     ? fs.readFileSync(path.join(srcRoot, "components/RoleSeatBoard.vue"), "utf8")
     : "";
-  for (const requiredShareText of ["角色状态", "可选", "我选", "已选", "换选"]) {
+  for (const requiredShareText of ["角色状态", "可选", "已选", "换选"]) {
     if (!shareSource.includes(requiredShareText)) {
       fail(`Share page must let invited players inspect and choose open roles: ${requiredShareText}`);
+    }
+  }
+  for (const requiredWechatShareStyle of [
+    'src="/static/icons/share-light.svg"',
+    'custom-style="height: 88rpx; min-height: 88rpx; border-color: #1a5d4d; background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%); color: #ffffff;',
+    'width="48rpx"',
+    'height="48rpx"',
+    'custom-style="width: 48rpx; height: 48rpx; opacity: 0.82;"',
+    ".wechat-action {",
+    "background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%)",
+    "color: #ffffff",
+    ".wechat-action .button-icon",
+    "width: 48rpx",
+    "opacity: 0.82"
+  ]) {
+    if (!shareSource.includes(requiredWechatShareStyle)) {
+      fail(`Share page bottom action must use a green background, white text, and larger light share icon: ${requiredWechatShareStyle}`);
+    }
+  }
+  if (shareSource.includes('src="/static/icons/wechat.png"')) {
+    fail("Share page bottom action must use a share icon instead of the WeChat icon");
+  }
+  for (const requiredShareIconShape of [
+    '<circle cx="34" cy="64"',
+    '<circle cx="84" cy="36"',
+    '<circle cx="88" cy="92"',
+    'd="M45 59L73 43M46 70L76 86"'
+  ]) {
+    if (!shareLightIconSource.includes(requiredShareIconShape)) {
+      fail(`Share light icon must be a three-node share symbol, not an upload symbol: ${requiredShareIconShape}`);
+    }
+  }
+  if (/M36 74v18|M72 22v58|M48 46l24-24 24 24/.test(shareLightIconSource)) {
+    fail("Share light icon must not contain upload arrow/tray paths");
+  }
+  for (const forbiddenSelectedLabelSource of [
+    shareSource,
+    fs.existsSync(path.join(srcRoot, "pages/session/role.vue"))
+      ? fs.readFileSync(path.join(srcRoot, "pages/session/role.vue"), "utf8")
+      : "",
+    fs.existsSync(path.join(srcRoot, "pages/session/detail.vue"))
+      ? fs.readFileSync(path.join(srcRoot, "pages/session/detail.vue"), "utf8")
+      : ""
+  ]) {
+    if (/\?\s*"我选"/.test(forbiddenSelectedLabelSource)) {
+      fail("Selected role cards must not render the redundant 我选 state label");
     }
   }
   if (shareSource.includes('class="button role-action"') || shareSource.includes("role-action")) {
@@ -1153,6 +1259,57 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   if (!shareSource.includes("分享给好友或群聊")) {
     fail("Share page must use one combined friend/group share button");
+  }
+  for (const requiredShareSeatAvatarText of [
+    "confirmedUserAvatarUrl: seat.confirmed_user_avatar_url || \"\"",
+    "confirmedUserGender: seat.confirmed_user_gender || \"\"",
+    "confirmedUserName: seat.confirmed_user_nickname || seat.confirmed_user_open_id || \"\"",
+    "note: this.roleOccupantDisplayName(role)",
+    "avatarUrl: this.roleOccupantAvatarUrl(role)",
+    "avatarGender: this.roleOccupantGender(role)",
+    "ownerGender: this.roleOccupantGender(role)"
+  ]) {
+    if (!shareSource.includes(requiredShareSeatAvatarText)) {
+      fail(`Share page must pass selected seat avatars into role cards: ${requiredShareSeatAvatarText}`);
+    }
+  }
+  if (shareSource.includes("note: seat.role_name || this.seatTypeLabel(seat.seat_type)")) {
+    fail("Share page role cards must not repeat the role name as the secondary line");
+  }
+  for (const requiredShareNpcAvatarText of [
+    "currentUserEffectiveNpcRole",
+    "const effectiveCurrentNpcRole = this.currentUserEffectiveNpcRole",
+    "const duplicateCurrentUserNpcRole = boundByCurrentUser && !mine",
+    "const effectiveBoundUserId = duplicateCurrentUserNpcRole ? 0 : boundUserId",
+    "const taken = effectiveBoundUserId > 0 || effectivePendingUserId > 0",
+    "note: this.npcRoleOccupantDisplayName(displayRole, mine, pendingMine)",
+    "avatarUrl: this.npcRoleOccupantAvatarUrl(displayRole, mine, pendingMine)",
+    "avatarGender: this.npcRoleOccupantGender(displayRole, mine, pendingMine)",
+    "ownerGender: this.npcRoleOccupantGender(displayRole, mine, pendingMine)",
+    "crossCast: (mine || pendingMine) && isCrossCast(this.currentUserGender, role.role_gender)"
+  ]) {
+    if (!shareSource.includes(requiredShareNpcAvatarText)) {
+      fail(`Share page must pass NPC role avatars into role cards: ${requiredShareNpcAvatarText}`);
+    }
+  }
+  if (
+    !/class="ticket-mountains"[\s\S]*src="\/static\/art\/ticket-landscape\.jpg"[\s\S]*mode="aspectFill"[\s\S]*width="100%"[\s\S]*height="72rpx"[\s\S]*custom-style="width: 100%; height: 72rpx;"/.test(
+      shareSource
+    )
+  ) {
+    fail("Share ticket landscape art must use a fixed-height crop instead of expanding the card");
+  }
+  if (!/\.ticket-card\s*\{[\s\S]*padding:\s*42rpx 42rpx 48rpx;/.test(shareSource)) {
+    fail("Share ticket card must stay compact with note-height bottom spacing");
+  }
+  if (!/\.ticket-mountains\s*\{[\s\S]*bottom:\s*-12rpx;[\s\S]*height:\s*72rpx;/.test(shareSource)) {
+    fail("Share ticket landscape art must stay about as tall as the note row");
+  }
+  if (!shareSource.includes('<view class="share-role-board">\n      <RoleSeatBoard')) {
+    fail("Share page must wrap the role board so card spacing survives mini-program component compilation");
+  }
+  if (!/\.share-role-board\s*\{[\s\S]*margin-top:\s*24rpx;/.test(shareSource)) {
+    fail("Share page must keep visible breathing room between the ticket and role cards");
   }
   const shareTimelineSource = methodBody(shareSource, "onShareTimeline");
   if (!shareTimelineSource) {
@@ -1228,11 +1385,14 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (/onLoad\s*\(\s*options\s*\)\s*\{\s*const auth = await ensureLoggedIn\s*\(/.test(shareSource)) {
     fail("Share page must let invited users browse before login");
   }
-  if (!/async confirmRole\(\)\s*\{[\s\S]*ensureSeatSelectionLogin\s*\(/.test(shareSource)) {
+  if (!/async confirmRole\(role = null, options = \{\}\)\s*\{[\s\S]*ensureSeatSelectionLogin\s*\(/.test(shareSource)) {
     fail("Share page must require login before applying a role selection");
   }
   const shareChooseRoleSource = methodBody(shareSource, "chooseRole");
+  const shareChooseNpcRoleSource = methodBody(shareSource, "chooseNpcRole");
   const shareConfirmRoleSource = methodBody(shareSource, "confirmRole");
+  const shareConfirmSwitchRoleSource = methodBody(shareSource, "confirmSwitchRole");
+  const shareCurrentSelectionForSwitchSource = methodBody(shareSource, "currentSelectionForSwitch");
   const shareOnLoadSource = methodBody(shareSource, "onLoad");
   const refreshCurrentUserGenderSource = methodBody(shareSource, "refreshCurrentUserGender");
   const clearSeatSelectionWhenLoggedOutSource = methodBody(shareSource, "clearSeatSelectionWhenLoggedOut");
@@ -1260,8 +1420,8 @@ if (!fs.existsSync(pagesJsonPath)) {
   assertBefore(
     shareChooseRoleSource,
     "ensureSeatSelectionLogin",
-    "this.pendingRole = targetRole",
-    "Share role selection must not set a pending role before login"
+    "confirmRole(targetRole",
+    "Share role selection must not apply a role before login"
   );
   assertBefore(
     shareConfirmRoleSource,
@@ -1272,7 +1432,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   assertBefore(
     shareConfirmRoleSource,
     "ensureSeatSelectionLogin",
-    "this.role = this.pendingRole",
+    "this.role = targetRole",
     "Share role application must request login before updating local role state"
   );
   if (!shareConfirmRoleSource.includes("requirePhone: this.joinRequiresPhone")) {
@@ -1285,12 +1445,52 @@ if (!fs.existsSync(pagesJsonPath)) {
     "Share role application must apply the session phone setting before claiming a role"
   );
   if (
-    !/async chooseRole\(role\)\s*\{[\s\S]*ensureSeatSelectionLogin[\s\S]*confirmCrossCastRole[\s\S]*this\.pendingRole = targetRole[\s\S]*await this\.confirmRole\(\);/.test(shareSource)
+    !/async chooseRole\(role\)\s*\{[\s\S]*ensureSeatSelectionLogin[\s\S]*confirmCrossCastRole[\s\S]*await this\.confirmRole\(targetRole,\s*\{[\s\S]*revealPending: !this\.sessionId[\s\S]*\}\);/.test(shareSource)
   ) {
     fail("Share role selection should apply immediately after tapping a role card");
   }
+  if (shareChooseRoleSource.includes("this.pendingRole = targetRole")) {
+    fail("Published share role switching must not render the target role as an intermediate pending card");
+  }
+  for (const requiredSilentSwitchText of [
+    "roleSelectionSubmitting",
+    "if (this.roleSelectionSubmitting)",
+    "this.roleSelectionSubmitting = true",
+    "this.roleSelectionSubmitting = false",
+    "async confirmRole(role = null, options = {})",
+    "const targetRole = role || this.pendingRole",
+    "const revealPending = options.revealPending !== false",
+    "await this.claimSeat(targetRole)"
+  ]) {
+    if (!shareSource.includes(requiredSilentSwitchText)) {
+      fail(`Share role switching must hide intermediate selection state: ${requiredSilentSwitchText}`);
+    }
+  }
+  if (claimSeatSource.trim().startsWith('this.statusText = "";')) {
+    fail("Share role switching must not clear the status notice before the final seat state is ready");
+  }
   if (!shareSource.includes("confirmSwitchRole")) {
     fail("Share role selection must keep a confirmation dialog before switching away from the current role");
+  }
+  if (
+    !shareConfirmSwitchRoleSource.includes("this.currentSelectionForSwitch(role)") ||
+    !shareCurrentSelectionForSwitchSource.includes("this.currentUserNpcRole") ||
+    !shareCurrentSelectionForSwitchSource.includes('role.boardType === "npc"')
+  ) {
+    fail("Share role switching must treat ordinary seats and NPC roles as one exclusive role pool");
+  }
+  for (const requiredNpcSwitchText of [
+    "if (this.roleSelectionSubmitting)",
+    "const selectedRoleKey = this.roleKey(npcRole)",
+    "const targetRole = this.npcRoleCards.find((item) => this.roleKey(item) === selectedRoleKey) || npcRole",
+    "const switchConfirmed = await this.confirmSwitchRole(targetRole)",
+    "const confirmed = await this.confirmCrossCastRole(targetRole)",
+    "this.confirmedCrossCastRoleKey = this.roleKey(targetRole)",
+    "url: `/api/session-npc-roles/${targetRole.id}/claim`"
+  ]) {
+    if (!shareChooseNpcRoleSource.includes(requiredNpcSwitchText)) {
+      fail(`NPC role selection must mirror ordinary role switching: ${requiredNpcSwitchText}`);
+    }
   }
   for (const forbiddenShareActionText of [
     "分享到群",
@@ -1514,6 +1714,137 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`Shared role seat board must truncate overflowing names: ${requiredRoleSeatBoardOverflowText}`);
     }
   }
+  for (const requiredRoleSeatBoardAvatarText of [
+    "DEFAULT_AVATARS",
+    "/static/avatars/default-male.jpg",
+    "/static/avatars/default-female.jpg",
+    "roleAvatarSrc(item)",
+    "roleAvatarClass(item)",
+    "roleSelectionToneClass(item)",
+    "shouldShowRoleAvatar(item)",
+    'class="role-avatar"',
+    ":src=\"roleAvatarSrc(item)\"",
+    ".role-choice.with-avatar",
+    ".role-avatar-image"
+  ]) {
+    if (!roleSeatBoardSource.includes(requiredRoleSeatBoardAvatarText)) {
+      fail(`Shared role seat board must show occupied role avatars with gender defaults: ${requiredRoleSeatBoardAvatarText}`);
+    }
+  }
+  for (const requiredRoleSeatBoardNameLayoutText of [
+    ".role-choice-title",
+    "flex: 0 1 auto",
+    ".role-choice-note",
+    ".role-choice-note-text",
+    "text-overflow: ellipsis",
+    "white-space: nowrap"
+  ]) {
+    if (!roleSeatBoardSource.includes(requiredRoleSeatBoardNameLayoutText)) {
+      fail(`Shared role seat board must keep gender beside role name and truncate user nicknames: ${requiredRoleSeatBoardNameLayoutText}`);
+    }
+  }
+  const roleBoardStyle = roleSeatBoardSource.match(/\.role-board\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  if (!roleBoardStyle.includes("grid-template-columns: repeat(2, minmax(0, 1fr));")) {
+    fail("Shared role seat board must lock seat columns with minmax(0, 1fr)");
+  }
+  const roleChoiceStyle = roleSeatBoardSource.match(/\.role-choice\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  for (const requiredLockedSeatCardStyle of [
+    "width: 100%;",
+    "min-width: 0;",
+    "overflow: hidden;"
+  ]) {
+    if (!roleChoiceStyle.includes(requiredLockedSeatCardStyle)) {
+      fail(`Shared role seat card width must stay locked inside its column: ${requiredLockedSeatCardStyle}`);
+    }
+  }
+  const roleChoiceNameStyle = roleSeatBoardSource.match(/\.role-choice-name\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  if (!roleChoiceNameStyle.includes("flex: 1 1 0;")) {
+    fail("Shared role seat card title row must allocate a fixed remaining width before ellipsis");
+  }
+  const roleChoiceNoteStyle = roleSeatBoardSource.match(/\.role-choice-note\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  for (const requiredLockedSeatNoteStyle of [
+    "width: 100%;",
+    "max-width: 100%;"
+  ]) {
+    if (!roleChoiceNoteStyle.includes(requiredLockedSeatNoteStyle)) {
+      fail(`Shared role seat nickname row must truncate against the locked card width: ${requiredLockedSeatNoteStyle}`);
+    }
+  }
+  for (const requiredRoleSeatBoardSelectedFrameText of [
+    "owner-male",
+    "owner-female",
+    ".role-choice.mine.owner-male",
+    ".role-choice.mine.owner-female",
+    "border-width: 9rpx",
+    "padding: 14rpx 10rpx",
+    "border-color: #2f6fed",
+    "border-color: #8f5bd6"
+  ]) {
+    if (!roleSeatBoardSource.includes(requiredRoleSeatBoardSelectedFrameText)) {
+      fail(`Shared role seat board selected frame must follow the selecting user gender: ${requiredRoleSeatBoardSelectedFrameText}`);
+    }
+  }
+  const selectedMaleStyle =
+    roleSeatBoardSource.match(/\.role-choice\.mine\.male,[\s\S]*?\.role-choice\.focused\.male\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  const selectedFemaleStyle =
+    roleSeatBoardSource.match(/\.role-choice\.mine\.female,[\s\S]*?\.role-choice\.focused\.female\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  if (!selectedMaleStyle.includes("background: rgba(242, 248, 247, 0.98);")) {
+    fail("Shared role seat board selected male card must keep the male green background");
+  }
+  if (!selectedFemaleStyle.includes("background: rgba(255, 248, 245, 0.98);")) {
+    fail("Shared role seat board selected female card must keep the female pink background");
+  }
+  const selectedOwnerMaleStyle =
+    roleSeatBoardSource.match(/\.role-choice\.mine\.owner-male,[\s\S]*?\.role-choice\.focused\.owner-male\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  const selectedOwnerFemaleStyle =
+    roleSeatBoardSource.match(/\.role-choice\.mine\.owner-female,[\s\S]*?\.role-choice\.focused\.owner-female\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  if (!selectedOwnerMaleStyle.includes("border-color: #2f6fed;")) {
+    fail("Shared role seat board selected owner-male card must use the blue frame even when the role is female");
+  }
+  if (!selectedOwnerFemaleStyle.includes("border-color: #8f5bd6;")) {
+    fail("Shared role seat board selected owner-female card must use the purple frame even when the role is male");
+  }
+  for (const forbiddenRoleGenderFrameText of [
+    ".role-choice.mine.male,\n.role-choice.switching.male,\n.role-choice.selected.male,\n.role-choice.focused.male {\n  border-color",
+    ".role-choice.mine.female,\n.role-choice.switching.female,\n.role-choice.selected.female,\n.role-choice.focused.female {\n  border-color"
+  ]) {
+    if (roleSeatBoardSource.includes(forbiddenRoleGenderFrameText)) {
+      fail(`Shared role seat board selected frame must not use role gender classes for frame color: ${forbiddenRoleGenderFrameText}`);
+    }
+  }
+  if (
+    !/\.role-choice\.taken\.male,[\s\S]*?\.role-choice\.unavailable\.male\s*\{[\s\S]*?background:\s*rgba\(242,\s*248,\s*247,\s*0\.98\);/.test(
+      roleSeatBoardSource
+    )
+  ) {
+    fail("Shared role seat board occupied male card must keep the male green background");
+  }
+  if (
+    !/\.role-choice\.taken\.female,[\s\S]*?\.role-choice\.unavailable\.female\s*\{[\s\S]*?background:\s*rgba\(255,\s*248,\s*245,\s*0\.98\);/.test(
+      roleSeatBoardSource
+    )
+  ) {
+    fail("Shared role seat board occupied female card must keep the female pink background");
+  }
+  for (const forbiddenRoleSeatBoardSelectedFrameText of [
+    "0 0 0 3rpx rgba(216, 167, 61",
+    "inset 0 0 0 1rpx rgba(216, 167, 61",
+    "background: #b89458"
+  ]) {
+    if (roleSeatBoardSource.includes(forbiddenRoleSeatBoardSelectedFrameText)) {
+      fail(`Shared role seat board selected frame must not use the old golden selected styling: ${forbiddenRoleSeatBoardSelectedFrameText}`);
+    }
+  }
+  if (roleSeatBoardSource.includes('<t-tag v-if="item.crossCast" class="cross-cast-tag"')) {
+    fail("Shared role seat board cross-cast label must render beside the occupant nickname, not in the cramped title row");
+  }
+  if (
+    !roleSeatBoardSource.includes('v-if="item.note || item.crossCast" class="role-choice-note"') ||
+    !roleSeatBoardSource.includes('<text v-if="item.note" class="role-choice-note-text">{{ item.note }}</text>') ||
+    !roleSeatBoardSource.includes('<text v-if="item.crossCast" class="cross-cast-tag">反串</text>')
+  ) {
+    fail("Shared role seat board must render cross-cast label after the occupant nickname");
+  }
   for (const [pageLabel, pagePath] of Object.entries({
     "role page": path.join(srcRoot, "pages/session/role.vue"),
     "share page": path.join(srcRoot, "pages/session/share.vue"),
@@ -1681,6 +2012,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   const albumSource = fs.existsSync(path.join(srcRoot, "pages/session/album.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/session/album.vue"), "utf8")
     : "";
+  const albumImageViewerPath = path.join(srcRoot, "components/AlbumImageViewer.vue");
+  const albumImageViewerSource = fs.existsSync(albumImageViewerPath)
+    ? fs.readFileSync(albumImageViewerPath, "utf8")
+    : "";
   const apiServerSource = fs.existsSync(apiServerPath)
     ? fs.readFileSync(apiServerPath, "utf8")
     : "";
@@ -1816,9 +2151,11 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Album page must use native page scrolling; wrapping the album in scroll-view hides the fixed selection toolbar in WeChat DevTools");
   }
   if (
+    albumSource.includes('<cover-view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">') ||
+    !albumSource.includes('<root-portal :enable="!timelineMode && selectionMode && !tagSheetPhoto">') ||
     !albumSource.includes('<view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">')
   ) {
-    fail("Album selection toolbar must be a root-level fixed view so it appears immediately above the photo list");
+    fail("Album selection toolbar must render in a root-portal view so it survives scroll and selection rerenders");
   }
   if (
     !albumFloatingToolbarStyle.includes("height: 132rpx") ||
@@ -1872,27 +2209,106 @@ if (!fs.existsSync(pagesJsonPath)) {
     "countAlbumPhotosForFilter",
     "selectedRoleFilter",
     "albumRoleFilterOptions",
+    "albumFilterSegmentOptions",
+    "handleAlbumFilterChange",
+    "canSelectAlbumFilter",
     "handleRoleFilterChange",
     "photoMatchesSelectedRole",
     "roleFilterOptionLabel",
-    "album-metrics",
-    "metric-value",
-    "{{ filteredPhotos.length }}",
-    "{{ filteredTaggedPhotoCount }}",
-    "{{ filteredUntaggedPhotoCount }}",
-    "当前筛选",
-    "已标注",
-    "待标注",
-    "标注 {{ filteredTagProgressPercent }}%",
     "photoDetailText",
     "formatDate(photo.created_at)",
     "album-filter-panel",
-    "查看照片",
     "角色"
   ]) {
     if (!albumSource.includes(requiredAlbumAdminParityText)) {
       fail(`Album page must match admin album filter and info affordances: ${requiredAlbumAdminParityText}`);
     }
+  }
+  for (const removedAlbumToolbarText of [
+    "album-action-hint",
+    "filter-panel-head",
+    "filter-panel-title",
+    "filter-panel-count",
+    '<view class="album-action-hint">待标注 {{ filteredUntaggedPhotoCount }}</view>',
+    '<view class="filter-panel-title">查看照片</view>',
+    '<view class="filter-panel-count">当前 {{ filteredPhotos.length }} 张</view>'
+  ]) {
+    if (albumSource.includes(removedAlbumToolbarText)) {
+      fail(`Album toolbar must not render duplicated filter or tag summary text: ${removedAlbumToolbarText}`);
+    }
+  }
+  for (const removedAlbumHeaderMetricText of [
+    "album-metrics",
+    "album-metric",
+    "metric-value",
+    "metric-label",
+    "我的照片",
+    "当前筛选",
+    "已标注",
+    '<text class="metric-label">待标注</text>'
+  ]) {
+    if (albumSource.includes(removedAlbumHeaderMetricText)) {
+      fail(`Album page must not show the removed header metric strip: ${removedAlbumHeaderMetricText}`);
+    }
+  }
+  for (const removedAlbumTitleHeaderText of [
+    "album-head-copy",
+    "album-kicker",
+    "album-title-row",
+    "album-progress-badge",
+    "album-intro",
+    "{{ albumTitle }}",
+    "{{ albumIntro }}",
+    "车局影像",
+    "标注 {{ filteredTagProgressPercent }}%"
+  ]) {
+    if (albumSource.includes(removedAlbumTitleHeaderText)) {
+      fail(`Album page must not render the removed title header: ${removedAlbumTitleHeaderText}`);
+    }
+  }
+  for (const requiredAlbumUploadButtonText of [
+    "albumUploadButtonLabel",
+    "album-upload-button-content",
+    "album-upload-label",
+    "album-upload-icon",
+    "/static/icons/upload-bold.png",
+    "albumUploadButtonCustomStyle",
+    "--td-button-default-bg-color: #1f6f5b",
+    "--td-button-default-color: #ffffff",
+    "width: 48rpx",
+    "[${roleName}·${scriptName}]",
+    "载入中"
+  ]) {
+    if (!albumSource.includes(requiredAlbumUploadButtonText)) {
+      fail(`Album upload action must show role/script label with upload icon: ${requiredAlbumUploadButtonText}`);
+    }
+  }
+  const albumUploadButtonLabelSource = methodBody(albumSource, "albumUploadButtonLabel");
+  for (const forbiddenAlbumUploadLabelFallbackText of [
+    '|| "角色"',
+    '|| "剧本"'
+  ]) {
+    if (albumUploadButtonLabelSource.includes(forbiddenAlbumUploadLabelFallbackText)) {
+      fail(
+        `Album upload label must show loading before real role/script names arrive: ${forbiddenAlbumUploadLabelFallbackText}`
+      );
+    }
+  }
+  if (!albumUploadButtonLabelSource.includes("!roleName || !scriptName")) {
+    fail("Album upload label must show loading until both role and script names are available");
+  }
+  const albumUploadIconPath = path.join(srcRoot, "static/icons/upload-bold.png");
+  if (!fs.existsSync(albumUploadIconPath)) {
+    fail("Album upload action must use the generated bold upload icon asset");
+  }
+  if (albumSource.includes("rotate(180deg)")) {
+    fail("Album upload action must not reuse the small rotated download icon");
+  }
+  if (albumSource.includes('{{ uploading ? "上传中..." : "上传照片" }}')) {
+    fail("Album upload action must not render the old plain upload text");
+  }
+  if (albumSource.includes('{{ uploading ? "上传中..." : "上传第一张照片" }}')) {
+    fail("Album empty upload action must reuse the role/script upload button content");
   }
   for (const requiredAlbumFilterLabel of [
     '{ value: "all", label: "全部" }',
@@ -1912,6 +2328,18 @@ if (!fs.existsSync(pagesJsonPath)) {
     if (albumSource.includes(outdatedAlbumFilterLabel)) {
       fail(`Album segmented filter label is too long: ${outdatedAlbumFilterLabel}`);
     }
+  }
+  const albumFilterSegmentOptionsSource = methodBody(albumSource, "albumFilterSegmentOptions");
+  const handleAlbumFilterChangeSource = methodBody(albumSource, "handleAlbumFilterChange");
+  const canSelectAlbumFilterSource = methodBody(albumSource, "canSelectAlbumFilter");
+  if (
+    !albumFilterSegmentOptionsSource.includes("disabled: filter.count === 0") ||
+    !albumSource.includes('@change="handleAlbumFilterChange"') ||
+    !handleAlbumFilterChangeSource.includes("this.canSelectAlbumFilter(value)") ||
+    !canSelectAlbumFilterSource.includes("option.count > 0") ||
+    albumSource.includes('@change="activeFilter = $event.detail.value"')
+  ) {
+    fail("Album segmented filters with zero photos must be disabled and ignored when tapped");
   }
   for (const outdatedAlbumCardText of [
     "photo-info-grid",
@@ -2001,19 +2429,81 @@ if (!fs.existsSync(pagesJsonPath)) {
     "onPageScroll",
     "updateTopActionsFloating",
     "album-action-groups",
-    "album-action-group",
-    "album-action-group-title",
-    "保存到手机",
-    "整理标注",
+    "album-command-content",
+    "album-command-icon",
+    "album-privacy-button-content",
+    "album-privacy-icon",
+    "album-download-all-command",
+    "album-download-selected-command",
+    "album-tag-command",
+    "/static/icons/album-download.svg",
+    "/static/icons/album-select.svg",
+    "/static/icons/album-tag-white.svg",
+    "/static/icons/album-privacy.svg",
     "album-filter-panel",
-    "filter-panel-head",
-    "查看照片",
     "角色",
     "openDownloadSelectionMode",
     "openTagSelectionMode"
   ]) {
     if (!albumSource.includes(requiredAlbumActionGroupText)) {
       fail(`Album page must group header actions by user task: ${requiredAlbumActionGroupText}`);
+    }
+  }
+  for (const forbiddenAlbumActionGroupText of [
+    "album-action-group-title",
+    "album-download-action-group",
+    "album-download-command-rail",
+    "album-tag-action-group full",
+    "album-tag-command-rail",
+    "保存到手机",
+    "整理标注"
+  ]) {
+    if (albumSource.includes(forbiddenAlbumActionGroupText)) {
+      fail(`Album toolbar commands must render as one compact row: ${forbiddenAlbumActionGroupText}`);
+    }
+  }
+  for (const forbiddenAlbumToolbarPngText of [
+    "/static/icons/download.png",
+    "/static/icons/check.png",
+    "/static/icons/note.png",
+    "/static/icons/album-download.png",
+    "/static/icons/album-select.png",
+    "/static/icons/album-tag-white.png",
+    "/static/icons/album-privacy.png"
+  ]) {
+    if (albumSource.includes(forbiddenAlbumToolbarPngText)) {
+      fail(`Album toolbar must use the custom vector icon set, not raster PNG icons: ${forbiddenAlbumToolbarPngText}`);
+    }
+  }
+  for (const requiredAlbumToolbarIconPath of [
+    "static/icons/album-download.svg",
+    "static/icons/album-select.svg",
+    "static/icons/album-tag-white.svg",
+    "static/icons/album-privacy.svg"
+  ]) {
+    if (!fs.existsSync(path.join(srcRoot, requiredAlbumToolbarIconPath))) {
+      fail(`Album toolbar custom vector icon asset is missing: ${requiredAlbumToolbarIconPath}`);
+    }
+  }
+  const albumActionGroupsStyle = albumSource.match(/\.album-action-groups\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  if (
+    !albumActionGroupsStyle.includes(
+      "grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);"
+    )
+  ) {
+    fail("Album toolbar commands must use 1/4, 1/4 and 1/2 column widths");
+  }
+  for (const requiredCompactAlbumCommandText of [
+    "height: 52rpx",
+    "min-height: 52rpx",
+    "font-size: 23rpx",
+    "width: 30rpx",
+    "--td-button-default-bg-color: #1f6f5b",
+    "--td-button-default-color: #ffffff",
+    "--td-button-default-border-color: #1f6f5b"
+  ]) {
+    if (!albumSource.includes(requiredCompactAlbumCommandText)) {
+      fail(`Album toolbar commands must match the selected compact primary/secondary mockup: ${requiredCompactAlbumCommandText}`);
     }
   }
   if (
@@ -2118,6 +2608,13 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (albumUsingComponents["t-image-viewer"]) {
     fail("Album page must not register TDesign ImageViewer for the native non-sliding preview");
   }
+  const tdesignImageViewerSourcePath = path.join(
+    srcRoot,
+    "wxcomponents/tdesign-miniprogram/image-viewer"
+  );
+  if (fs.existsSync(tdesignImageViewerSourcePath)) {
+    fail("Unused TDesign ImageViewer source directory must be removed from the mini-program");
+  }
   if (!apiServerSource) {
     fail("API server source must be readable for album direct media URL checks");
   }
@@ -2177,61 +2674,219 @@ if (!fs.existsSync(pagesJsonPath)) {
     "getVisibleSessionAlbumPhotoForMedia",
     "Album direct media token must be validated before visible media is served"
   );
-  for (const requiredPreTdesignPreviewText of [
+  if (!albumImageViewerSource) {
+    fail("AlbumImageViewer component must exist for D31 preview");
+  }
+  for (const requiredAlbumImageViewerText of [
+    "thumbnail_display_url",
+    "previewLoadedById",
+    "previewFailedById",
+    "thumbnailLoadedById",
+    "thumbnailFailedById",
+    "$emit(\"download\"",
+    "allowDownload",
+    "mediaProgress",
+    "loadingProgressText(photo)",
+    "album-image-viewer__loading-progress-bar",
+    "previewCanLoad(photo)",
+    "handlePreviewLoad",
+    "handlePreviewError",
+    "handleThumbnailLoad",
+    "handleThumbnailError"
+  ]) {
+    if (!albumImageViewerSource.includes(requiredAlbumImageViewerText)) {
+      fail(`AlbumImageViewer must implement D31 viewer behavior: ${requiredAlbumImageViewerText}`);
+    }
+  }
+  if (!albumImageViewerSource.includes('v-if="previewCanLoad(photo) && !previewFailed(photo)"')) {
+    fail("AlbumImageViewer preview image must wait for thumbnail load before mounting");
+  }
+  const albumViewerCounterSource = methodBody(albumImageViewerSource, "counterText");
+  if (!albumViewerCounterSource.includes("this.currentIndex + 1")) {
+    fail("AlbumImageViewer counter must display the 1-based current index");
+  }
+  if (!albumViewerCounterSource.includes("this.photos.length")) {
+    fail("AlbumImageViewer counter must display the full preview photo count");
+  }
+  const albumViewerSwiperChangeSource = methodBody(albumImageViewerSource, "handleSwiperChange");
+  for (const requiredSwiperChangeText of [
+    "event?.detail?.current",
+    "this.currentIndex = nextIndex",
+    "this.swiperIndex = nextIndex",
+    'this.$emit("change"'
+  ]) {
+    if (!albumViewerSwiperChangeSource.includes(requiredSwiperChangeText)) {
+      fail(`AlbumImageViewer must keep 1-20 swipe state in sync: ${requiredSwiperChangeText}`);
+    }
+  }
+  const albumViewerPhotosWatcherSource = methodBody(albumImageViewerSource, "photos");
+  if (albumViewerPhotosWatcherSource.includes("syncInitialIndex")) {
+    fail("AlbumImageViewer photos watcher must not reset swiper to initialIndex during media hydration");
+  }
+  if (!albumViewerPhotosWatcherSource.includes("syncCurrentIndexAfterPhotosChange")) {
+    fail("AlbumImageViewer photos watcher must preserve the current swiper index during media hydration");
+  }
+  const albumViewerThumbnailUrlSource = methodBody(albumImageViewerSource, "thumbnailUrl");
+  if (!albumViewerThumbnailUrlSource.includes("photo?.thumbnail_display_url")) {
+    fail("AlbumImageViewer must prefer cached visible thumbnails before remote thumbnail URLs");
+  }
+  if (
+    albumViewerThumbnailUrlSource.includes("thumbnail_load_url") ||
+    albumViewerThumbnailUrlSource.includes("thumbnail_url")
+  ) {
+    fail("AlbumImageViewer thumbnail image must not render remote album URLs directly");
+  }
+  if (!albumViewerThumbnailUrlSource.includes("thumbnail !== preview")) {
+    fail("AlbumImageViewer must not render duplicate thumbnail/preview layers for the same URL");
+  }
+  const albumViewerPreviewUrlSource = methodBody(albumImageViewerSource, "previewUrl");
+  if (!albumViewerPreviewUrlSource.includes("photo?.preview_display_url")) {
+    fail("AlbumImageViewer must prefer cached visible previews before remote preview URLs");
+  }
+  if (
+    albumViewerPreviewUrlSource.includes("preview_load_url") ||
+    albumViewerPreviewUrlSource.includes("preview_url") ||
+    albumViewerPreviewUrlSource.includes("image_url")
+  ) {
+    fail("AlbumImageViewer preview image must not render remote album URLs directly");
+  }
+  if (!albumSource.includes("viewerPhotoWithCachedMedia(photo)")) {
+    fail("Album D31 preview must pass cached list thumbnails into the image viewer");
+  }
+  for (const requiredAlbumMediaProgressText of [
+    "mediaProgressById",
+    "setAlbumMediaProgress",
+    "onProgressUpdate",
+    "progress: progress.progress",
+    "uni.downloadFile",
+    ':media-progress="mediaProgressById"'
+  ]) {
+    if (!albumSource.includes(requiredAlbumMediaProgressText)) {
+      fail(`Album D31 preview must expose local media download progress to the viewer: ${requiredAlbumMediaProgressText}`);
+    }
+  }
+  const albumDownloadOnceSource = methodBody(albumSource, "downloadAlbumImageOnce");
+  if (!albumSource.includes("requestAlbumImageOnce(photo, variant")) {
+    fail("Album D31 media download must fall back to request-based cache writes when downloadFile is unavailable");
+  }
+  if (/uni\.downloadFile\(\{[\s\S]*?\bfilePath\b/.test(albumDownloadOnceSource)) {
+    fail("Album D31 media download must not pass a persistent cache filePath directly to uni.downloadFile");
+  }
+  for (const requiredAlbumPreviewMediaHydrationText of [
+    "ensurePreviewMediaAround(currentIndex)",
+    "updatePreviewPhotoDisplayMedia(photo.id",
+    'this.loadVisiblePhotoMedia(photo, "preview")'
+  ]) {
+    if (!albumSource.includes(requiredAlbumPreviewMediaHydrationText)) {
+      fail(`Album D31 preview must hydrate local viewer media instead of using remote image URLs: ${requiredAlbumPreviewMediaHydrationText}`);
+    }
+  }
+  if (!albumSource.includes("thumbnail_display_url: visibleMedia.thumbnail")) {
+    fail("Album D31 preview must use visiblePhotoMedia thumbnail cache as the viewer thumbnail");
+  }
+  const viewerPhotoWithCachedMediaSource = methodBody(albumSource, "viewerPhotoWithCachedMedia");
+  if (!viewerPhotoWithCachedMediaSource.includes("preview_display_url: visibleMedia.preview")) {
+    fail("Album D31 preview must pass cached list preview media into the image viewer");
+  }
+  for (const requiredAlbumThumbnailGateText of [
+    "listThumbnailLoadedById",
+    "listThumbnailFailedById",
+    "@load=\"handleListThumbnailLoad(photo)\"",
+    "@error=\"handleListThumbnailError(photo)\"",
+    "canOpenPhotoPreview(photo)",
+    "listThumbnailLoaded(photo)"
+  ]) {
+    if (!albumSource.includes(requiredAlbumThumbnailGateText)) {
+      fail(
+        `Album D31 preview must block opening until the list thumbnail image has loaded: ${requiredAlbumThumbnailGateText}`
+      );
+    }
+  }
+  const albumThumbnailGatePreviewPhotoSource = methodBody(albumSource, "previewPhoto");
+  if (!albumThumbnailGatePreviewPhotoSource.includes("!this.canOpenPhotoPreview(photo)")) {
+    fail("Album D31 preview must ignore taps while the list thumbnail image is still loading");
+  }
+  if (!albumThumbnailGatePreviewPhotoSource.includes("return")) {
+    fail("Album D31 preview thumbnail-loading guard must return before opening preview");
+  }
+  for (const forbiddenAlbumImageViewerText of [
+    "getToken",
+    "downloadSinglePhoto",
+    "saveImageToPhotosAlbum",
+    "uni.request",
+    "getFileSystemManager"
+  ]) {
+    if (albumImageViewerSource.includes(forbiddenAlbumImageViewerText)) {
+      fail(`AlbumImageViewer must not own album download business: ${forbiddenAlbumImageViewerText}`);
+    }
+  }
+  for (const forbiddenAlbumImageViewerDownloadTrigger of [
+    "@longpress",
+    "@longtap",
+    "requestDownload('longpress')",
+    'requestDownload("longpress")'
+  ]) {
+    if (albumImageViewerSource.includes(forbiddenAlbumImageViewerDownloadTrigger)) {
+      fail(
+        `AlbumImageViewer preview surface must not trigger download on long press: ${forbiddenAlbumImageViewerDownloadTrigger}`
+      );
+    }
+  }
+  for (const requiredAlbumImageViewerIntegrationText of [
+    'import AlbumImageViewer from "../../components/AlbumImageViewer.vue"',
+    "components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost, AlbumImageViewer }",
+    "<AlbumImageViewer",
+    ':allow-download="!timelineMode"',
+    '@download="handlePreviewDownload"',
+    "handlePreviewChange(event)",
+    "handlePreviewDownload(event)",
+    "this.downloadSinglePhoto(photo)"
+  ]) {
+    if (!albumSource.includes(requiredAlbumImageViewerIntegrationText)) {
+      fail(`Album page must integrate AlbumImageViewer for D31: ${requiredAlbumImageViewerIntegrationText}`);
+    }
+  }
+  for (const forbiddenInlineAlbumPreviewText of [
     'class="photo-preview-mask"',
     'class="photo-preview-swiper"',
-    "<swiper",
-    "<swiper-item",
-    ':current="previewSwiperIndex"',
-    '@change="handlePreviewSwiperChange"',
-    '@touchstart="handlePreviewTouchStart"',
-    '@touchmove="handlePreviewTouchMove"',
-    '@touchend="handlePreviewTouchEnd"',
-    'class="photo-preview-content"',
-    'class="photo-preview-image"',
-    ':src="photoPreviewImageUrl(photo)"',
-    'class="photo-preview-loading"',
-    'class="photo-preview-counter"',
-    "{{ previewCounterText }}",
-    "previewPhotos: []",
-    "previewCurrentIndex: 0",
-    "previewSwiperIndex: 0",
-    "previewPreloadRadius: 2",
-    "previewTouchStartX: 0",
-    "previewTouchStartY: 0",
-    "previewCounterText()",
-    "openPhotoPreview(photo)",
-    "const previewPhotos = [...this.filteredPhotos].reverse()",
-    "this.previewPhotos = previewPhotos",
-    "this.previewCurrentIndex = currentIndex",
-    "this.previewSwiperIndex = currentIndex",
+    "previewSwiperIndex",
+    "previewTouchStartX",
+    "handlePreviewSwiperChange",
+    "handlePreviewTouchStart",
+    "handlePreviewTouchEnd",
     "photoPreviewImageUrl(photo)",
-    "hydratePreviewWindow(centerIndex)",
-    "handlePreviewSwiperChange(event)",
-    "handlePreviewTouchStart(event)",
-    "handlePreviewTouchMove()",
-    "handlePreviewTouchEnd(event)",
-    "albumMediaUrlExpiresSoon(path",
-    "refreshAlbumMediaUrlsForPreview()",
-    "shouldRefreshAlbumMediaBeforeDownload(photo, variant)",
-    "this.loadVisiblePhotoMedia(photo, \"preview\")",
-    "preview_load_url",
-    "thumbnail_load_url"
+    "hydratePreviewWindow(centerIndex)"
   ]) {
-    if (!albumSource.includes(requiredPreTdesignPreviewText)) {
-      fail(`Album photo preview must match the pre-TDesign overlay logic: ${requiredPreTdesignPreviewText}`);
+    if (albumSource.includes(forbiddenInlineAlbumPreviewText)) {
+      fail(`Album page must move inline preview behavior into AlbumImageViewer: ${forbiddenInlineAlbumPreviewText}`);
     }
   }
   const openPhotoPreviewSource = methodBody(albumSource, "openPhotoPreview");
-  if (!openPhotoPreviewSource.includes("const previewPhotos = [...this.filteredPhotos].reverse()")) {
-    fail("Album pre-TDesign preview must build its preview list from the current filtered photos");
+  if (
+    !openPhotoPreviewSource.includes("const previewPhotos = [...this.filteredPhotos]") &&
+    !openPhotoPreviewSource.includes("const previewPhotos = this.filteredPhotos.map")
+  ) {
+    fail("Album D31 preview must build its preview list from the current filtered photos");
+  }
+  if (openPhotoPreviewSource.includes(".reverse()")) {
+    fail("Album D31 preview order must match the visible filtered photo order");
   }
   if (!openPhotoPreviewSource.includes("this.previewPhotos = previewPhotos")) {
-    fail("Album pre-TDesign preview must assign the filtered preview list");
+    fail("Album D31 preview must assign the filtered preview list");
+  }
+  if (!openPhotoPreviewSource.includes("this.previewInitialIndex = currentIndex")) {
+    fail("Album D31 preview must set previewInitialIndex only when opening");
+  }
+  const normalizePhotoMediaSource = methodBody(albumSource, "normalizePhotoMedia");
+  if (!normalizePhotoMediaSource.includes("this.normalizeAlbumMediaUrl")) {
+    fail("Album D31 preview media URLs must be normalized before image components receive them");
+  }
+  const normalizeAlbumMediaUrlSource = methodBody(albumSource, "normalizeAlbumMediaUrl");
+  if (!normalizeAlbumMediaUrlSource.includes("apiUrl(path)")) {
+    fail("Album D31 preview media URL normalization must expand /api relative URLs with apiUrl()");
   }
   for (const forbiddenAlbumPreviewText of [
     "<t-image-viewer",
-    "previewInitialIndex",
     "previewViewerCustomStyle",
     "previewImageProps",
     ":show-index",
@@ -2251,7 +2906,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "preparePhotoPreviewUrls"
   ]) {
     if (albumSource.includes(forbiddenAlbumPreviewText)) {
-      fail(`Album pre-TDesign preview must not keep TDesign ImageViewer dynamic-image logic: ${forbiddenAlbumPreviewText}`);
+      fail(`Album D31 preview must not keep TDesign ImageViewer dynamic-image logic: ${forbiddenAlbumPreviewText}`);
     }
   }
   const mediaUrlForPhotoSource = methodBody(albumSource, "mediaUrlForPhoto");
@@ -2278,7 +2933,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Album direct media URL normalization must not collapse direct-load URLs back to legacy preview URLs");
   }
   if (previewPhotoSource.includes("uni.showLoading") || previewPhotoSource.includes("uni.previewImage")) {
-    fail("Album pre-TDesign overlay preview must not use blocking native previewImage");
+    fail("Album D31 preview must not use blocking native previewImage");
   }
   if (albumSource.includes("createIntersectionObserver(this)")) {
     fail("Album visible photo observer must not pass the Vue component proxy to createIntersectionObserver");
@@ -2294,9 +2949,6 @@ if (!fs.existsSync(pagesJsonPath)) {
     const builtAlbumWxml = fs.readFileSync(builtAlbumWxmlPath, "utf8");
     if (builtAlbumWxml.includes("<t-image-viewer")) {
       fail(`${packageLabel} album preview must not render TDesign ImageViewer`);
-    }
-    if (!builtAlbumWxml.includes("photo-preview-mask") || !builtAlbumWxml.includes("photo-preview-swiper")) {
-      fail(`${packageLabel} album preview must render the pre-TDesign preview mask and swiper`);
     }
   }
   for (const [packageRoot, packageLabel] of [
@@ -2620,8 +3272,11 @@ if (!fs.existsSync(pagesJsonPath)) {
     "isCustomElement"
   ]) {
     if (!viteConfigSource.includes(requiredTdesignBuildText)) {
-      fail(`Mini-program Vite build must copy TDesign ImageViewer npm assets: ${requiredTdesignBuildText}`);
+      fail(`Mini-program Vite build must copy TDesign miniprogram npm assets: ${requiredTdesignBuildText}`);
     }
+  }
+  if (!viteConfigSource.includes('"root-portal"')) {
+    fail("Mini-program Vite config must keep root-portal as a native WeChat component");
   }
   if (viteConfigSource.includes("fs.rmSync(tdesignTarget")) {
     fail("Mini-program Vite build must not remove the live TDesign miniprogram_npm directory while DevTools may be hot-reloading");
@@ -2668,7 +3323,7 @@ if (!fs.existsSync(devtoolsHookPath)) {
     "apps/miniprogram",
     "dist/dev/mp-weixin",
     "waitForDevOutput",
-    "miniprogram_npm/tdesign-miniprogram/image/image.json",
+    "wxcomponents/tdesign-miniprogram/image/image.json",
     "[\"open\", \"--project\", devDist]",
     "projectPath: devDist",
     "open",

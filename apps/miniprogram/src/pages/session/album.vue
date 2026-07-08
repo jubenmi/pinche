@@ -3,18 +3,10 @@
     <AuthIdentityBar v-if="!timelineMode" />
     <FeedbackHost />
 
-    <view class="section album-head">
-      <view class="album-head-copy">
-        <view class="album-kicker">{{ timelineMode ? "分享相册" : "车局影像" }}</view>
-        <view class="album-title-row">
-          <view class="title album-title">{{ albumTitle }}</view>
-          <t-tag v-if="!timelineMode" class="album-progress-badge" theme="primary" variant="light" size="small">
-            标注 {{ filteredTagProgressPercent }}%
-          </t-tag>
-        </view>
-        <view class="album-intro">{{ albumIntro }}</view>
-      </view>
-
+    <view
+      v-if="operationText || (!timelineMode && hiddenCount > 0)"
+      class="section album-head"
+    >
       <t-notice-bar
         v-if="operationText"
         class="notice album-notice"
@@ -22,25 +14,6 @@
         :visible="true"
         :content="operationText"
       />
-
-      <view class="album-metrics" :class="{ public: timelineMode }">
-        <view class="album-metric primary">
-          <text class="metric-value">{{ photos.length }}</text>
-          <text class="metric-label">{{ timelineMode ? "展示照片" : "我的照片" }}</text>
-        </view>
-        <view v-if="!timelineMode" class="album-metric">
-          <text class="metric-value">{{ filteredPhotos.length }}</text>
-          <text class="metric-label">当前筛选</text>
-        </view>
-        <view v-if="!timelineMode" class="album-metric">
-          <text class="metric-value">{{ filteredTaggedPhotoCount }}</text>
-          <text class="metric-label">已标注</text>
-        </view>
-        <view v-if="!timelineMode" class="album-metric">
-          <text class="metric-value">{{ filteredUntaggedPhotoCount }}</text>
-          <text class="metric-label">待标注</text>
-        </view>
-      </view>
 
       <view v-if="!timelineMode && hiddenCount > 0" class="album-privacy-note">
         另有 {{ hiddenCount }} 张非本人照片或受隐私保护未展示
@@ -58,17 +31,32 @@
           <t-button
             class="button album-action-primary"
             :class="{ disabled: albumBusy }"
+            :custom-style="albumUploadButtonCustomStyle"
             :disabled="albumBusy"
             @tap="choosePhotos"
           >
-            {{ uploading ? "上传中..." : "上传照片" }}
+            <view class="album-upload-button-content">
+              <text class="album-upload-label">{{ albumUploadButtonLabel }}</text>
+              <t-image
+                class="album-upload-icon"
+                src="/static/icons/upload-bold.png"
+                mode="aspectFit"
+              />
+            </view>
           </t-button>
           <t-button
             class="button secondary album-privacy-action"
             :disabled="albumBusy"
             @tap="goPrivacy"
           >
-            隐私设置
+            <view class="album-privacy-button-content">
+              <t-image
+                class="album-privacy-icon"
+                src="/static/icons/album-privacy.svg"
+                mode="aspectFit"
+              />
+              <text>隐私</text>
+            </view>
           </t-button>
         </view>
 
@@ -76,54 +64,60 @@
           v-if="photos.length || taggablePhotos.length"
           class="album-action-groups"
         >
-          <view v-if="photos.length" class="album-action-group">
-            <view class="album-action-group-title">保存到手机</view>
-            <view class="album-command-rail">
-              <t-button
-                class="album-command"
-                size="extra-small"
-                custom-style="height: 44rpx; min-height: 44rpx; padding: 0 10rpx; font-size: 24rpx; font-weight: 600; line-height: 44rpx;"
-                :disabled="albumBusy"
-                @tap="downloadAllPhotos"
-              >
-                全部下载
-              </t-button>
-              <t-button
-                v-if="filteredPhotos.length"
-                class="album-command"
-                size="extra-small"
-                custom-style="height: 44rpx; min-height: 44rpx; padding: 0 10rpx; font-size: 24rpx; font-weight: 600; line-height: 44rpx;"
-                :disabled="albumBusy"
-                @tap="openDownloadSelectionMode"
-              >
-                多选下载
-              </t-button>
+          <t-button
+            v-if="photos.length"
+            class="album-command album-download-all-command"
+            size="extra-small"
+            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
+            :disabled="albumBusy"
+            @tap="downloadAllPhotos"
+          >
+            <view class="album-command-content">
+              <t-image
+                class="album-command-icon"
+                src="/static/icons/album-download.svg"
+                mode="aspectFit"
+              />
+              <text class="album-command-label">全部下载</text>
             </view>
-          </view>
-
-          <view v-if="taggablePhotos.length" class="album-action-group">
-            <view class="album-action-group-title">整理标注</view>
-            <view class="album-command-rail">
-              <t-button
-                class="album-command"
-                size="extra-small"
-                custom-style="height: 44rpx; min-height: 44rpx; padding: 0 10rpx; font-size: 24rpx; font-weight: 600; line-height: 44rpx;"
-                :disabled="albumBusy"
-                @tap="openTagSelectionMode"
-              >
-                批量标注
-              </t-button>
-              <view class="album-action-hint">待标注 {{ filteredUntaggedPhotoCount }}</view>
+          </t-button>
+          <t-button
+            v-if="filteredPhotos.length"
+            class="album-command album-download-selected-command"
+            size="extra-small"
+            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
+            :disabled="albumBusy"
+            @tap="openDownloadSelectionMode"
+          >
+            <view class="album-command-content">
+              <t-image
+                class="album-command-icon"
+                src="/static/icons/album-select.svg"
+                mode="aspectFit"
+              />
+              <text class="album-command-label">多选下载</text>
             </view>
-          </view>
+          </t-button>
+          <t-button
+            v-if="taggablePhotos.length"
+            class="album-command album-tag-command"
+            size="extra-small"
+            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; border-color: #1f6f5b; background: #1f6f5b; color: #ffffff; font-size: 23rpx; font-weight: 700; line-height: 52rpx; --td-button-default-bg-color: #1f6f5b; --td-button-default-color: #ffffff; --td-button-default-border-color: #1f6f5b;"
+            :disabled="albumBusy"
+            @tap="openTagSelectionMode"
+          >
+            <view class="album-command-content">
+              <t-image
+                class="album-command-icon album-tag-command-icon"
+                src="/static/icons/album-tag-white.svg"
+                mode="aspectFit"
+              />
+              <text class="album-command-label">批量标注</text>
+            </view>
+          </t-button>
         </view>
 
         <view class="album-filter-panel album-toolbar-filter-panel">
-          <view class="filter-panel-head">
-            <view class="filter-panel-title">查看照片</view>
-            <view class="filter-panel-count">当前 {{ filteredPhotos.length }} 张</view>
-          </view>
-
           <t-segmented
             class="filter-row"
             block
@@ -131,7 +125,7 @@
             :disabled="albumBusy"
             :value="activeFilter"
             :options="albumFilterSegmentOptions"
-            @change="activeFilter = $event.detail.value"
+            @change="handleAlbumFilterChange"
           />
 
           <view class="role-filter-row">
@@ -164,10 +158,18 @@
         v-if="canUpload && !timelineMode"
         class="button empty-upload-button"
         :class="{ disabled: albumBusy }"
+        :custom-style="albumUploadButtonCustomStyle"
         :disabled="albumBusy"
         @tap="choosePhotos"
       >
-        {{ uploading ? "上传中..." : "上传第一张照片" }}
+        <view class="album-upload-button-content">
+          <text class="album-upload-label">{{ albumUploadButtonLabel }}</text>
+          <t-image
+            class="album-upload-icon"
+            src="/static/icons/upload-bold.png"
+            mode="aspectFit"
+          />
+        </view>
       </t-button>
     </view>
 
@@ -198,17 +200,20 @@
           >
             <view
               class="photo-image-shell"
+              :class="{ loading: !listThumbnailLoaded(photo) }"
               :style="photoImageStyle(photo)"
               @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
               @longpress.stop="showPhotoInfo(photo)"
             >
               <t-image
-                v-if="visiblePhotoMedia[photo.id]?.thumbnail"
+                v-if="visiblePhotoMedia[photo.id]?.thumbnail && !listThumbnailFailed(photo)"
                 class="photo-image"
                 :src="visiblePhotoMedia[photo.id].thumbnail"
                 mode="aspectFill"
+                @load="handleListThumbnailLoad(photo)"
+                @error="handleListThumbnailError(photo)"
               />
-              <view v-else class="photo-placeholder">
+              <view v-if="!listThumbnailLoaded(photo)" class="photo-placeholder">
                 <view class="photo-loading-dot"></view>
               </view>
               <view
@@ -293,17 +298,20 @@
           >
             <view
               class="photo-image-shell"
+              :class="{ loading: !listThumbnailLoaded(photo) }"
               :style="photoImageStyle(photo)"
               @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
               @longpress.stop="showPhotoInfo(photo)"
             >
               <t-image
-                v-if="visiblePhotoMedia[photo.id]?.thumbnail"
+                v-if="visiblePhotoMedia[photo.id]?.thumbnail && !listThumbnailFailed(photo)"
                 class="photo-image"
                 :src="visiblePhotoMedia[photo.id].thumbnail"
                 mode="aspectFill"
+                @load="handleListThumbnailLoad(photo)"
+                @error="handleListThumbnailError(photo)"
               />
-              <view v-else class="photo-placeholder">
+              <view v-if="!listThumbnailLoaded(photo)" class="photo-placeholder">
                 <view class="photo-loading-dot"></view>
               </view>
               <view
@@ -374,66 +382,41 @@
       </template>
     </uv-waterfall>
 
-    <view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">
-      <view class="floating-toolbar-button secondary" @tap="toggleSelectionMode">
-        取消
-      </view>
-      <view class="bulk-count">已选 {{ selectedPhotoCount }} 张</view>
-      <view
-        v-if="selectionModePurpose === 'download'"
-        class="floating-toolbar-button primary"
-        :class="{ disabled: albumBusy || selectedPhotoCount === 0 }"
-        @tap="downloadSelectedPhotos"
-      >
-        下载所选
-      </view>
-      <view
-        v-else
-        class="floating-toolbar-button primary"
-        :class="{ disabled: albumBusy || selectedTagTargetCount === 0 }"
-        @tap="openBulkTagSheet"
-      >
-        批量标注
-      </view>
-    </view>
-
-    <view
-      v-if="previewOverlayVisible"
-      class="photo-preview-mask"
-      @touchstart="handlePreviewTouchStart"
-      @touchmove="handlePreviewTouchMove"
-      @touchend="handlePreviewTouchEnd"
-      @tap.stop
-    >
-      <swiper
-        class="photo-preview-swiper"
-        :current="previewSwiperIndex"
-        :duration="220"
-        @change="handlePreviewSwiperChange"
-      >
-        <swiper-item
-          v-for="photo in previewPhotos"
-          :key="photo.id"
-          class="photo-preview-slide"
+    <root-portal :enable="!timelineMode && selectionMode && !tagSheetPhoto">
+      <view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">
+        <view class="floating-toolbar-button secondary" @tap="toggleSelectionMode">
+          取消
+        </view>
+        <view class="bulk-count">已选 {{ selectedPhotoCount }} 张</view>
+        <view
+          v-if="selectionModePurpose === 'download'"
+          class="floating-toolbar-button primary"
+          :class="{ disabled: albumBusy || selectedPhotoCount === 0 }"
+          @tap="downloadSelectedPhotos"
         >
-          <view class="photo-preview-content">
-            <image
-              v-if="photoPreviewImageUrl(photo)"
-              class="photo-preview-image"
-              :src="photoPreviewImageUrl(photo)"
-              mode="aspectFit"
-            />
-            <view v-else class="photo-preview-loading">
-              <view class="photo-loading-dot"></view>
-            </view>
-          </view>
-        </swiper-item>
-      </swiper>
-      <view class="photo-preview-topbar">
-        <view class="photo-preview-counter">{{ previewCounterText }}</view>
-        <view class="photo-preview-close" @tap.stop="closePhotoPreview">×</view>
+          下载所选
+        </view>
+        <view
+          v-else
+          class="floating-toolbar-button primary"
+          :class="{ disabled: albumBusy || selectedTagTargetCount === 0 }"
+          @tap="openBulkTagSheet"
+        >
+          批量标注
+        </view>
       </view>
-    </view>
+    </root-portal>
+
+    <AlbumImageViewer
+      :visible="previewOverlayVisible"
+      :photos="previewPhotos"
+      :initial-index="previewInitialIndex"
+      :allow-download="!timelineMode"
+      :media-progress="mediaProgressById"
+      @close="closePhotoPreview"
+      @change="handlePreviewChange"
+      @download="handlePreviewDownload"
+    />
 
     <t-popup
       :visible="tagSheetVisible"
@@ -513,6 +496,7 @@
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
+import AlbumImageViewer from "../../components/AlbumImageViewer.vue";
 import {
   apiUrl,
   dataOf,
@@ -536,7 +520,7 @@ function albumMediaCachePath(photoId, variant = "preview") {
 }
 
 export default {
-  components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost },
+  components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost, AlbumImageViewer },
   data() {
     return {
       sessionId: "",
@@ -567,6 +551,9 @@ export default {
       waterfallList1: [],
       waterfallList2: [],
       visiblePhotoMedia: {},
+      mediaProgressById: {},
+      listThumbnailLoadedById: {},
+      listThumbnailFailedById: {},
       photoObservers: [],
       tagSheetPhoto: null,
       selectedTagKeys: [],
@@ -577,10 +564,7 @@ export default {
       previewOverlayVisible: false,
       previewPhotos: [],
       previewCurrentIndex: 0,
-      previewSwiperIndex: 0,
-      previewPreloadRadius: 2,
-      previewTouchStartX: 0,
-      previewTouchStartY: 0,
+      previewInitialIndex: 0,
       previewMediaUrlRefreshRequest: null,
       filters: [
         { value: "all", label: "全部" },
@@ -597,12 +581,6 @@ export default {
     previewCurrentPhoto() {
       return this.previewPhotos[this.previewCurrentIndex] || null;
     },
-    previewCounterText() {
-      if (!this.previewPhotos.length) {
-        return "";
-      }
-      return `${this.previewPhotos.length - this.previewCurrentIndex}/${this.previewPhotos.length}`;
-    },
     albumTitle() {
       if (this.timelineMode) {
         return this.shareSubjectLabel ? `${this.shareSubjectLabel}的相册` : "分享相册";
@@ -614,6 +592,28 @@ export default {
         return "";
       }
       return `[${this.currentAlbumRoleName}·${this.albumScriptName}] 相册`;
+    },
+    albumUploadButtonLabel() {
+      const roleName = this.currentAlbumRoleName;
+      const scriptName = this.albumScriptName;
+      if (!roleName || !scriptName) {
+        return "载入中";
+      }
+      return `[${roleName}·${scriptName}]`;
+    },
+    albumUploadButtonCustomStyle() {
+      return [
+        "height: 78rpx",
+        "min-height: 78rpx",
+        "border: 0",
+        "background: #1f6f5b",
+        "color: #ffffff",
+        "--td-button-default-bg-color: #1f6f5b",
+        "--td-button-default-color: #ffffff",
+        "--td-button-default-border-color: #1f6f5b",
+        "--td-button-primary-bg-color: #1f6f5b",
+        "--td-button-primary-color: #ffffff"
+      ].join("; ");
     },
     albumScriptName() {
       return String(this.albumSession?.script_name_snapshot || "").trim();
@@ -690,7 +690,8 @@ export default {
     albumFilterSegmentOptions() {
       return this.albumFilterOptions.map((filter) => ({
         value: filter.value,
-        label: `${filter.label} ${filter.count}`
+        label: `${filter.label} ${filter.count}`,
+        disabled: filter.count === 0
       }));
     },
     albumRoleFilterOptions() {
@@ -1133,6 +1134,17 @@ export default {
     countAlbumPhotosForFilter(filterValue) {
       return this.photosForAlbumFilter(filterValue).length;
     },
+    canSelectAlbumFilter(value) {
+      const option = this.albumFilterOptions.find((filter) => filter.value === value);
+      return Boolean(option && option.count > 0);
+    },
+    handleAlbumFilterChange(event) {
+      const value = event?.detail?.value;
+      if (!this.canSelectAlbumFilter(value)) {
+        return;
+      }
+      this.activeFilter = value;
+    },
     countPhotosForRole(roleKey) {
       if (!roleKey) {
         return this.photosForAlbumFilter(this.activeFilter, { includeRole: false }).length;
@@ -1186,6 +1198,9 @@ export default {
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
         this.visiblePhotoMediaRequests = {};
+        this.mediaProgressById = {};
+        this.listThumbnailLoadedById = {};
+        this.listThumbnailFailedById = {};
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.albumSession = this.albumSessionSummary(data);
         this.hiddenCount = Number(data.hidden_count || 0);
@@ -1234,6 +1249,9 @@ export default {
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
         this.visiblePhotoMediaRequests = {};
+        this.mediaProgressById = {};
+        this.listThumbnailLoadedById = {};
+        this.listThumbnailFailedById = {};
         this.people = [];
         this.canUpload = false;
         this.hiddenCount = 0;
@@ -1257,12 +1275,21 @@ export default {
         this.loadingAlbum = false;
       }
     },
+    normalizeAlbumMediaUrl(path) {
+      if (!path) {
+        return "";
+      }
+      return apiUrl(path);
+    },
     normalizePhotoMedia(photo) {
-      const imageUrl = photo.image_url || photo.preview_url || "";
-      const previewUrl = photo.preview_url || imageUrl;
-      const thumbnailUrl = photo.thumbnail_url || previewUrl || imageUrl;
-      const previewLoadUrl = photo.preview_load_url || "";
-      const thumbnailLoadUrl = photo.thumbnail_load_url || "";
+      const rawImageUrl = photo.image_url || photo.preview_url || "";
+      const rawPreviewUrl = photo.preview_url || rawImageUrl;
+      const rawThumbnailUrl = photo.thumbnail_url || rawPreviewUrl || rawImageUrl;
+      const imageUrl = this.normalizeAlbumMediaUrl(rawImageUrl);
+      const previewUrl = this.normalizeAlbumMediaUrl(rawPreviewUrl);
+      const thumbnailUrl = this.normalizeAlbumMediaUrl(rawThumbnailUrl);
+      const previewLoadUrl = this.normalizeAlbumMediaUrl(photo.preview_load_url || "");
+      const thumbnailLoadUrl = this.normalizeAlbumMediaUrl(photo.thumbnail_load_url || "");
       return {
         ...photo,
         tags: photo.tags || [],
@@ -1304,6 +1331,19 @@ export default {
       error.statusCode = statusCode;
       error.imageUrl = imageUrl;
       return error;
+    },
+    albumMediaProgressKey(photoId, variant = "preview") {
+      return `${String(photoId)}:${variant}`;
+    },
+    setAlbumMediaProgress(photoId, variant, values) {
+      const key = this.albumMediaProgressKey(photoId, variant);
+      this.mediaProgressById = {
+        ...this.mediaProgressById,
+        [key]: {
+          ...(this.mediaProgressById[key] || {}),
+          ...values
+        }
+      };
     },
     isAlbumMediaAuthError(error) {
       return error?.statusCode === 401 || error?.statusCode === 403;
@@ -1410,36 +1450,174 @@ export default {
       }
     },
     downloadAlbumImageOnce(photo, variant = "preview") {
+      return this.downloadAlbumImageWithProgress(photo, variant).catch((error) => {
+        if (this.isAlbumMediaAuthError(error)) {
+          throw error;
+        }
+        return this.requestAlbumImageOnce(photo, variant);
+      });
+    },
+    albumMediaDownloadContext(photo, variant = "preview") {
       const token = getToken();
       const filePath = albumMediaCachePath(photo.id, variant);
       const imageUrl = apiUrl(this.mediaUrlForPhoto(photo, variant));
       const mediaRequestError = (statusCode) => this.albumMediaRequestError(statusCode, imageUrl);
       if ((!this.timelineMode && !token) || !filePath || !imageUrl) {
-        return Promise.reject(new Error("album image auth unavailable"));
+        return null;
+      }
+      return {
+        filePath,
+        imageUrl,
+        mediaRequestError,
+        header: token ? { Authorization: `Bearer ${token}` } : {}
+      };
+    },
+    writeAlbumMediaFile(filePath, data) {
+      if (
+        typeof uni === "undefined" ||
+        typeof uni.getFileSystemManager !== "function" ||
+        !filePath
+      ) {
+        return Promise.reject(new Error("album image file system unavailable"));
       }
       return new Promise((resolve, reject) => {
-        const header = token ? { Authorization: `Bearer ${token}` } : {};
-        uni.request({
-          url: imageUrl,
-          method: "GET",
-          responseType: "arraybuffer",
-          header,
-          success(response) {
-            if (response.statusCode < 200 || response.statusCode >= 300) {
-              reject(mediaRequestError(response.statusCode));
-              return;
+        try {
+          uni.getFileSystemManager().writeFile({
+            filePath,
+            data,
+            success() {
+              resolve(filePath);
+            },
+            fail: reject
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    },
+    copyAlbumMediaFile(sourcePath, filePath) {
+      if (!sourcePath || !filePath || sourcePath === filePath) {
+        return Promise.resolve(sourcePath || filePath);
+      }
+      if (typeof uni === "undefined" || typeof uni.getFileSystemManager !== "function") {
+        return Promise.resolve(sourcePath);
+      }
+      return new Promise((resolve) => {
+        try {
+          const fileSystem = uni.getFileSystemManager();
+          if (!fileSystem || typeof fileSystem.copyFile !== "function") {
+            resolve(sourcePath);
+            return;
+          }
+          fileSystem.copyFile({
+            srcPath: sourcePath,
+            destPath: filePath,
+            success() {
+              resolve(filePath);
+            },
+            fail() {
+              resolve(sourcePath);
             }
-            uni.getFileSystemManager().writeFile({
-              filePath,
-              data: response.data,
-              success() {
-                resolve(filePath);
-              },
-              fail: reject
+          });
+        } catch (error) {
+          resolve(sourcePath);
+        }
+      });
+    },
+    downloadAlbumImageWithProgress(photo, variant = "preview") {
+      const context = this.albumMediaDownloadContext(photo, variant);
+      if (!context) {
+        return Promise.reject(new Error("album image auth unavailable"));
+      }
+      if (typeof uni === "undefined" || typeof uni.downloadFile !== "function") {
+        return Promise.reject(new Error("album image downloadFile unavailable"));
+      }
+      return new Promise((resolve, reject) => {
+        let downloadTask = null;
+        try {
+          downloadTask = uni.downloadFile({
+            url: context.imageUrl,
+            header: context.header,
+            success: (response) => {
+              if (response.statusCode < 200 || response.statusCode >= 300) {
+                reject(context.mediaRequestError(response.statusCode));
+                return;
+              }
+              const localPath = response.tempFilePath || response.filePath || "";
+              if (!localPath) {
+                reject(new Error("album image download path unavailable"));
+                return;
+              }
+              this.copyAlbumMediaFile(localPath, context.filePath)
+                .then((displayPath) => {
+                  this.setAlbumMediaProgress(photo.id, variant, {
+                    loading: false,
+                    failed: false,
+                    progress: 100
+                  });
+                  resolve(displayPath);
+                })
+                .catch(reject);
+            },
+            fail: reject
+          });
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        try {
+          if (downloadTask && typeof downloadTask.onProgressUpdate === "function") {
+            downloadTask.onProgressUpdate((progress) => {
+              this.setAlbumMediaProgress(photo.id, variant, {
+                loading: true,
+                failed: false,
+                progress: progress.progress,
+                totalBytesWritten: progress.totalBytesWritten,
+                totalBytesExpectedToWrite: progress.totalBytesExpectedToWrite
+              });
             });
-          },
-          fail: reject
-        });
+          }
+        } catch (error) {
+          reject(error);
+        }
+      });
+    },
+    requestAlbumImageOnce(photo, variant = "preview") {
+      const context = this.albumMediaDownloadContext(photo, variant);
+      if (!context) {
+        return Promise.reject(new Error("album image auth unavailable"));
+      }
+      if (typeof uni === "undefined" || typeof uni.request !== "function") {
+        return Promise.reject(new Error("album image request unavailable"));
+      }
+      return new Promise((resolve, reject) => {
+        try {
+          uni.request({
+            url: context.imageUrl,
+            method: "GET",
+            responseType: "arraybuffer",
+            header: context.header,
+            success: (response) => {
+              if (response.statusCode < 200 || response.statusCode >= 300) {
+                reject(context.mediaRequestError(response.statusCode));
+                return;
+              }
+              this.writeAlbumMediaFile(context.filePath, response.data)
+                .then((displayPath) => {
+                  this.setAlbumMediaProgress(photo.id, variant, {
+                    loading: false,
+                    failed: false,
+                    progress: 100
+                  });
+                  resolve(displayPath);
+                })
+                .catch(reject);
+            },
+            fail: reject
+          });
+        } catch (error) {
+          reject(error);
+        }
       });
     },
     ensurePhotosAlbumPermission() {
@@ -1560,6 +1738,59 @@ export default {
         }
       };
     },
+    updatePreviewPhotoDisplayMedia(photoId, values) {
+      const key = String(photoId);
+      if (!key || !this.previewPhotos.length) {
+        return;
+      }
+      this.previewPhotos = this.previewPhotos.map((photo) =>
+        String(photo.id) === key
+          ? {
+              ...photo,
+              ...values
+            }
+          : photo
+      );
+    },
+    listThumbnailStateKey(photo) {
+      return photo?.id === undefined || photo?.id === null ? "" : String(photo.id);
+    },
+    listThumbnailLoaded(photo) {
+      const key = this.listThumbnailStateKey(photo);
+      return Boolean(key && this.listThumbnailLoadedById[key]);
+    },
+    listThumbnailFailed(photo) {
+      const key = this.listThumbnailStateKey(photo);
+      return Boolean(key && this.listThumbnailFailedById[key]);
+    },
+    setListThumbnailState(photo, values) {
+      const key = this.listThumbnailStateKey(photo);
+      if (!key) {
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(values, "loaded")) {
+        this.listThumbnailLoadedById = {
+          ...this.listThumbnailLoadedById,
+          [key]: Boolean(values.loaded)
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(values, "failed")) {
+        this.listThumbnailFailedById = {
+          ...this.listThumbnailFailedById,
+          [key]: Boolean(values.failed)
+        };
+      }
+    },
+    handleListThumbnailLoad(photo) {
+      this.setListThumbnailState(photo, { loaded: true, failed: false });
+    },
+    handleListThumbnailError(photo) {
+      this.setListThumbnailState(photo, { loaded: false, failed: true });
+    },
+    canOpenPhotoPreview(photo) {
+      const key = this.listThumbnailStateKey(photo);
+      return Boolean(key && this.visiblePhotoMedia[key]?.thumbnail && this.listThumbnailLoaded(photo));
+    },
     async loadVisiblePhotoMedia(photo, variant = "thumbnail") {
       const key = String(photo.id);
       const requestKey = `${key}:${variant}`;
@@ -1576,11 +1807,25 @@ export default {
         return "";
       }
       this.setVisiblePhotoMedia(photo.id, { [loadingKey]: true, [`${variant}Failed`]: false });
+      this.setAlbumMediaProgress(photo.id, variant, {
+        loading: true,
+        failed: false,
+        progress: 0
+      });
       const loadRequest = this.downloadAlbumImage(photo, variant)
         .then((displayUrl) => {
           this.setVisiblePhotoMedia(photo.id, {
             [variant]: displayUrl,
             [loadingKey]: false
+          });
+          this.setAlbumMediaProgress(photo.id, variant, {
+            loading: false,
+            failed: false,
+            progress: 100
+          });
+          this.updatePreviewPhotoDisplayMedia(photo.id, {
+            [`${variant}_display_url`]: displayUrl,
+            ...(variant === "preview" ? { display_url: displayUrl } : {})
           });
           if (variant === "preview") {
             this.updatePhotoDisplayUrl(photo.id, displayUrl);
@@ -1591,6 +1836,10 @@ export default {
           this.setVisiblePhotoMedia(photo.id, {
             [loadingKey]: false,
             [`${variant}Failed`]: true
+          });
+          this.setAlbumMediaProgress(photo.id, variant, {
+            loading: false,
+            failed: true
           });
           return "";
         })
@@ -1924,12 +2173,39 @@ export default {
       if (this.deletingPhotoId) {
         return;
       }
+      if (!this.canOpenPhotoPreview(photo)) {
+        return;
+      }
       this.openPhotoPreview(photo);
     },
+    viewerPhotoWithCachedMedia(photo) {
+      const visibleMedia = this.visiblePhotoMedia[String(photo.id)] || {};
+      return {
+        ...photo,
+        thumbnail_display_url: visibleMedia.thumbnail || photo.thumbnail_display_url || "",
+        preview_display_url: visibleMedia.preview || photo.preview_display_url || photo.display_url || ""
+      };
+    },
+    ensurePreviewMediaAround(centerIndex) {
+      const start = Math.max(0, centerIndex - 1);
+      const end = Math.min(this.previewPhotos.length, centerIndex + 2);
+      this.previewPhotos.slice(start, end).forEach((photo) => {
+        if (!photo || photo.id === undefined || photo.id === null) {
+          return;
+        }
+        const visibleMedia = this.visiblePhotoMedia[String(photo.id)] || {};
+        if (!visibleMedia.thumbnail) {
+          this.loadVisiblePhotoMedia(photo, "thumbnail");
+        }
+        if (!visibleMedia.preview) {
+          this.loadVisiblePhotoMedia(photo, "preview");
+        }
+      });
+    },
     openPhotoPreview(photo) {
-      const previewPhotos = [...this.filteredPhotos].reverse();
+      const previewPhotos = this.filteredPhotos.map((item) => this.viewerPhotoWithCachedMedia(item));
       if (!previewPhotos.some((item) => String(item.id) === String(photo.id))) {
-        previewPhotos.unshift(photo);
+        previewPhotos.unshift(this.viewerPhotoWithCachedMedia(photo));
       }
       const currentIndex = Math.max(
         0,
@@ -1937,60 +2213,33 @@ export default {
       );
       this.previewPhotos = previewPhotos;
       this.previewCurrentIndex = currentIndex;
-      this.previewSwiperIndex = currentIndex;
+      this.previewInitialIndex = currentIndex;
       this.previewOverlayVisible = true;
-      this.hydratePreviewWindow(currentIndex);
+      this.ensurePreviewMediaAround(currentIndex);
     },
     closePhotoPreview() {
       this.previewOverlayVisible = false;
       this.previewPhotos = [];
       this.previewCurrentIndex = 0;
-      this.previewSwiperIndex = 0;
-      this.previewTouchStartX = 0;
-      this.previewTouchStartY = 0;
+      this.previewInitialIndex = 0;
       this.skipNextAlbumRefreshOnShow = false;
     },
-    photoPreviewImageUrl(photo) {
+    handlePreviewChange(event) {
+      const payload = event?.detail || event || {};
+      const index = Number(payload.index || 0);
+      this.previewCurrentIndex = index;
+      this.ensurePreviewMediaAround(index);
+    },
+    handlePreviewDownload(event) {
+      if (this.timelineMode) {
+        return;
+      }
+      const payload = event?.detail || event || {};
+      const photo = payload.photo;
       if (!photo) {
-        return "";
-      }
-      return this.visiblePhotoMedia[photo.id]?.preview || photo.display_url || "";
-    },
-    hydratePreviewWindow(centerIndex) {
-      const start = Math.max(0, centerIndex - this.previewPreloadRadius);
-      const end = Math.min(this.previewPhotos.length, centerIndex + this.previewPreloadRadius + 1);
-      this.previewPhotos.slice(start, end).forEach((photo) => {
-        if (!photo || !this.mediaUrlForPhoto(photo) || this.photoPreviewImageUrl(photo)) {
-          return;
-        }
-        this.loadVisiblePhotoMedia(photo, "preview");
-      });
-    },
-    handlePreviewSwiperChange(event) {
-      const nextIndex = Number(event?.detail?.current || 0);
-      this.previewCurrentIndex = nextIndex;
-      this.previewSwiperIndex = nextIndex;
-      this.hydratePreviewWindow(nextIndex);
-    },
-    handlePreviewTouchStart(event) {
-      const touch = event?.touches?.[0];
-      if (!touch) {
         return;
       }
-      this.previewTouchStartX = Number(touch.clientX || 0);
-      this.previewTouchStartY = Number(touch.clientY || 0);
-    },
-    handlePreviewTouchMove() {},
-    handlePreviewTouchEnd(event) {
-      const touch = event?.changedTouches?.[0];
-      if (!touch) {
-        return;
-      }
-      const deltaX = Number(touch.clientX || 0) - this.previewTouchStartX;
-      const deltaY = Number(touch.clientY || 0) - this.previewTouchStartY;
-      if (deltaY > 90 && deltaY > Math.abs(deltaX) * 1.2) {
-        this.closePhotoPreview();
-      }
+      this.downloadSinglePhoto(photo);
     },
     async downloadSinglePhoto(photo) {
       await this.downloadPhotos([photo], {
@@ -2253,47 +2502,6 @@ export default {
   box-shadow: 0 14rpx 36rpx rgba(42, 58, 49, 0.05);
 }
 
-.album-head-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 8rpx;
-}
-
-.album-kicker {
-  color: #8a7c63;
-  font-size: 22rpx;
-  line-height: 1.2;
-}
-
-.album-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18rpx;
-}
-
-.album-title {
-  margin-bottom: 0;
-  font-size: 40rpx;
-  line-height: 1.12;
-}
-
-.album-progress-badge {
-  flex-shrink: 0;
-  padding: 8rpx 14rpx;
-  border-radius: 999rpx;
-  background: rgba(31, 111, 91, 0.08);
-  color: #1f6f5b;
-  font-size: 22rpx;
-  line-height: 1.2;
-}
-
-.album-intro {
-  color: #738078;
-  font-size: 25rpx;
-  line-height: 1.5;
-}
-
 .notice {
   margin-top: 14rpx;
   padding: 16rpx;
@@ -2309,58 +2517,6 @@ export default {
   padding: 14rpx 16rpx;
   border-radius: 10rpx;
   font-size: 23rpx;
-}
-
-.album-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
-  margin-top: 24rpx;
-  padding: 18rpx 0;
-  border-top: 1rpx solid rgba(222, 215, 202, 0.62);
-  border-bottom: 1rpx solid rgba(222, 215, 202, 0.62);
-}
-
-.album-metrics.public {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.album-metric {
-  min-width: 0;
-  padding: 0 16rpx;
-  border-left: 1rpx solid rgba(222, 215, 202, 0.62);
-}
-
-.album-metric:first-child {
-  border-left: 0;
-  padding-left: 0;
-}
-
-.album-metric:last-child {
-  padding-right: 0;
-}
-
-.metric-value,
-.metric-label {
-  display: block;
-}
-
-.metric-value {
-  color: #153f34;
-  font-size: 30rpx;
-  font-weight: 600;
-  line-height: 1.1;
-}
-
-.album-metric.primary .metric-value {
-  color: #1f6f5b;
-}
-
-.metric-label {
-  margin-top: 6rpx;
-  color: #839087;
-  font-size: 20rpx;
-  line-height: 1.2;
 }
 
 .album-privacy-note {
@@ -2415,55 +2571,78 @@ export default {
 }
 
 .album-action-primary {
+  background: #1f6f5b;
+  color: #ffffff;
   box-shadow: 0 12rpx 24rpx rgba(31, 111, 91, 0.18);
+}
+
+.album-upload-button-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
+  width: 100%;
+  min-width: 0;
+}
+
+.album-upload-label {
+  min-width: 0;
+  overflow: hidden;
+  color: #ffffff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-upload-icon {
+  width: 48rpx;
+  height: 48rpx;
+  flex-shrink: 0;
 }
 
 .album-privacy-action {
   padding: 0 18rpx;
 }
 
+.album-privacy-button-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10rpx;
+  width: 100%;
+  min-width: 0;
+}
+
+.album-privacy-icon {
+  width: 36rpx;
+  height: 36rpx;
+  flex-shrink: 0;
+}
+
 .album-action-groups {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14rpx;
-}
-
-.album-action-group {
-  min-width: 0;
-}
-
-.album-action-group-title {
-  margin-bottom: 8rpx;
-  color: #8a7c63;
-  font-size: 21rpx;
-  line-height: 1.2;
-}
-
-.album-command-rail {
-  display: flex;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
   gap: 8rpx;
   min-width: 0;
-  min-height: 44rpx;
+  min-height: 52rpx;
 }
 
-.album-command,
-.album-action-hint {
+.album-command {
   display: flex;
   align-items: center;
   justify-content: center;
   flex: 1;
   min-width: 0;
-  height: 44rpx;
-  min-height: 44rpx;
+  height: 52rpx;
+  min-height: 52rpx;
   margin: 0;
   padding: 0 10rpx;
   border: 1rpx solid rgba(210, 199, 181, 0.96);
   border-radius: 10rpx;
   background: rgba(255, 255, 255, 0.72);
-  color: #415766;
-  font-size: 24rpx;
+  color: #253f3b;
+  font-size: 23rpx;
   font-weight: 600;
-  line-height: 44rpx;
+  line-height: 52rpx;
   box-shadow: none;
 }
 
@@ -2479,11 +2658,47 @@ export default {
   color: #9aa39c;
 }
 
-.album-action-hint {
-  color: #839087;
-  font-weight: 500;
-  border: 0;
-  background: transparent;
+.album-command-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8rpx;
+  width: 100%;
+  min-width: 0;
+}
+
+.album-command-icon {
+  width: 30rpx;
+  height: 30rpx;
+  flex-shrink: 0;
+}
+
+.album-command-label {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-download-all-command {
+  grid-column: 1;
+}
+
+.album-download-selected-command {
+  grid-column: 2;
+}
+
+.album-tag-command {
+  grid-column: 3;
+  border-color: #1f6f5b;
+  background: #1f6f5b;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.album-tag-command-icon {
+  opacity: 0.96;
 }
 
 .album-filter-panel {
@@ -2501,26 +2716,6 @@ export default {
   border-top: 1rpx solid rgba(223, 216, 204, 0.9);
   border-radius: 0;
   background: transparent;
-}
-
-.filter-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16rpx;
-  margin-bottom: 14rpx;
-}
-
-.filter-panel-title {
-  color: #153f34;
-  font-size: 25rpx;
-  font-weight: 600;
-}
-
-.filter-panel-count {
-  flex-shrink: 0;
-  color: #839087;
-  font-size: 21rpx;
 }
 
 .filter-row {
@@ -2723,78 +2918,6 @@ export default {
   }
 }
 
-.photo-preview-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 1400;
-  overflow: hidden;
-  background: #050505;
-}
-
-.photo-preview-swiper {
-  width: 100%;
-  height: 100vh;
-}
-
-.photo-preview-slide,
-.photo-preview-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-}
-
-.photo-preview-image {
-  width: 100%;
-  height: 100%;
-}
-
-.photo-preview-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  background: #050505;
-}
-
-.photo-preview-topbar {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 28rpx 28rpx 0;
-  padding-top: calc(28rpx + env(safe-area-inset-top));
-  pointer-events: none;
-  box-sizing: border-box;
-}
-
-.photo-preview-counter,
-.photo-preview-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 80rpx;
-  height: 58rpx;
-  border-radius: 999rpx;
-  background: rgba(0, 0, 0, 0.38);
-  color: #ffffff;
-  font-size: 24rpx;
-  line-height: 1;
-}
-
-.photo-preview-close {
-  width: 58rpx;
-  min-width: 58rpx;
-  font-size: 42rpx;
-  pointer-events: auto;
-}
-
 .photo-caption-body {
   min-width: 0;
 }
@@ -2919,7 +3042,8 @@ export default {
 }
 
 .empty-upload-button {
-  width: 260rpx;
+  width: 520rpx;
+  max-width: 88vw;
   margin: 22rpx auto 0;
 }
 

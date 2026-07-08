@@ -4,7 +4,7 @@
 
 ## Overview
 
-D31 新增 `AlbumImageViewer`，把相册全屏预览从 `pages/session/album.vue` 中抽离。相册页负责筛选照片、打开/关闭预览、确认下载和保存；组件负责看图交互，包括左右滑动、索引、关闭、缩略图占位、展示图淡入、失败态和下载事件。
+D31 新增 `AlbumImageViewer`，把相册全屏预览从 `pages/session/album.vue` 中抽离。相册页负责筛选照片、打开/关闭预览、确认下载和保存；组件负责看图交互，包括左右滑动、索引、关闭、缩略图占位、展示图淡入、失败态和显式下载事件。
 
 该设计沿用后端已经返回的直载 URL：`thumbnail_load_url` 和 `preview_load_url`。组件直接把这些 URL 交给小程序 `<image>` 加载，不再依赖 `visiblePhotoMedia[photo.id].preview` 或 `uni.request` 写本地文件后再渲染预览。
 
@@ -75,7 +75,6 @@ thumbnailFailedById: {}
           mode="aspectFit"
           @load="handlePreviewLoad(photo)"
           @error="handlePreviewError(photo)"
-          @longpress="requestDownload('longpress')"
         />
         <view v-if="showFallback(photo)" class="album-image-viewer__fallback">图片加载失败</view>
       </view>
@@ -159,6 +158,8 @@ if deltaY > 90 && deltaY > abs(deltaX) * 1.2:
 3. 若当前照片不存在，直接返回。
 4. 抛出 `download({ index: currentIndex, photo, trigger })`。
 
+下载只由右上角下载按钮触发。预览 slide 和图片本体不绑定长按下载，避免打开照片时的持续按压误触发确认弹窗，导致用户以为进入了下载界面。
+
 组件不弹确认框。确认框由相册页现有 `downloadSinglePhoto(photo)` 负责。
 
 ## Album Page Integration
@@ -188,6 +189,7 @@ if deltaY > 90 && deltaY > abs(deltaX) * 1.2:
 6. `handlePreviewDownload` 必须调用 `downloadSinglePhoto`，因此继续复用确认下载。
 7. `album.vue` 必须传 `:allow-download="!timelineMode"`。
 8. `album.vue` 不再保留 `.photo-preview-mask` 内联预览层。
+9. `AlbumImageViewer.vue` 不得通过 `requestDownload("longpress")` 或 `requestDownload('longpress')` 绑定长按下载。
 
 ## Rollback
 
