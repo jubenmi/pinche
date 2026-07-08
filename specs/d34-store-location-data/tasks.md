@@ -102,13 +102,14 @@
     - 2026-07-09：使用本地临时 API `http://127.0.0.1:3029`、本地 MySQL `127.0.0.1:3307` 和 `WECHAT_MOCK_LOGIN=true` 实跑 `BASE_URL=http://127.0.0.1:3029 node scripts/d34-store-location-smoke.js`，通过。
   - [x] 修复 D34 范围内导致的检查、烟测或构建失败。
 
-- [ ] D34.12 完成微信开发者工具手工验证。
-  - [ ] 在微信开发者工具中确认选店页可以打开地图选点。
-  - [ ] 选点后确认地址、纬度、经度回填。
-  - [ ] 创建私有店家后确认坐标被保存。
-  - [ ] 打开车局详情并确认 `查看地图` 能打开微信内置地图。
-  - [ ] 使用无坐标旧店家确认详情不展示地图入口且页面正常。
+- [x] D34.12 完成微信开发者工具手工验证。
+  - [x] 在微信开发者工具中确认选店页可以打开地图选点。
+  - [x] 选点后确认地址、纬度、经度回填。
+  - [x] 创建私有店家后确认坐标被保存。
+  - [x] 打开车局详情并确认 `查看地图` 能打开微信内置地图。
+  - [x] 使用无坐标旧店家确认详情不展示地图入口且页面正常。
   - 2026-07-08 进度：已运行 `npm --workspace apps/miniprogram run dev:mp-weixin` 生成最新 dev 输出，并用微信开发者工具 CLI 通过绝对路径打开项目；当前桌面截图返回黑屏，无法可靠完成 UI 手工验证，因此保持未勾选。
+  - 2026-07-09 验证：使用微信开发者工具 Nightly `2.01.2512242` 打开构建产物并点击 `编译`，在选店页打开 `添加一个店家` 表单；通过 automator mock `chooseLocation` 返回地址和 GCJ-02 坐标后，点击 `地图选点`，页面显示 `已选坐标 39.9042000，116.4074000`。随后将小程序运行态临时切到本地 API `http://127.0.0.1:3029`，提交本地私有店家并通过本地 API 查回 `address: 北京市朝阳区D34自动化地址`、`latitude: 39.9042000`、`longitude: 116.4074000`。创建本地车局后，详情页展示 `查看地图`；点击后 mock `openLocation` 记录到 `latitude: 39.9042`、`longitude: 116.4074`、`name: D3store`、`address: 北京市朝阳区D34自动化地址`、`scale: 18`。另建无坐标本地店家和车局，详情页正常展示地址和时间，未展示 `查看地图`。
 
 ## D34 验收
 
@@ -122,8 +123,8 @@
 - [x] 店家列表和管理员店家列表返回坐标字段。
 - [x] 车局详情返回店家地址和坐标字段。
 - [x] admin web 店家表单支持腾讯地图选点、POI 搜索和手填 GCJ-02 坐标。
-- [ ] 小程序补录店家支持地图选点。
-- [ ] 小程序车局详情支持有坐标时打开地图。
+- [x] 小程序补录店家支持地图选点。
+- [x] 小程序车局详情支持有坐标时打开地图。
 - [x] 小程序不主动读取或保存用户当前位置。
 - [x] admin web 通过运行时腾讯位置服务 key 按需加载腾讯位置服务 Web SDK。
 - [x] 旧店家无坐标时仍可搜索、选择和建车。
@@ -140,3 +141,5 @@
 - 2026-07-08：补充详情页边界：有完整坐标但地址为空时仍展示 `查看地图`，并加入 `scripts/d34-store-location-check.js` 与 `scripts/check-miniprogram.js` 回归检查。复跑 `node scripts/d34-store-location-check.js`、`node scripts/check-miniprogram.js`、`npm run build:mp-weixin`、`npm run check`、`node --check apps/api/src/modules/core/service.js`、`node --check scripts/d34-store-location-check.js`、`npm --workspace apps/admin-web run build` 均通过；构建产物 `app.json` 已确认包含 `chooseLocation` 且不包含 `getLocation`。
 - 2026-07-09：用户批准后，先确认当前默认 `.env` 指向腾讯云数据库，因此未对线上库执行写入烟测；改用本地临时 API `http://127.0.0.1:3029`、本地 MySQL `127.0.0.1:3307`、`WECHAT_MOCK_LOGIN=true` 执行 `BASE_URL=http://127.0.0.1:3029 node scripts/d34-store-location-smoke.js`，结果通过。覆盖私有店家坐标保存、非法纬度/经度 400、admin 创建/编辑坐标、车局详情位置字段，以及旧店家无坐标仍可搜索、选择和建车。
 - 2026-07-09：线上 admin `https://admin.pinche.jubenmi.com/?view=catalog&tab=stores` 已验证登录态下店家表单显示 `位置设置`、`地图选点` 和 `地点搜索`；点击 `地图选点` 后腾讯地图画布加载成功，点击地图可回填纬度 `39.9042015` 和经度 `116.4074107`。POI 搜索请求带线上 Referer 调用腾讯接口返回 `121 此key每日调用量已达到上限`，已补充 admin web 对 `110` 来源域名未授权和 `121` 每日调用量上限的明确提示；该问题需要腾讯位置服务配额恢复或调整后 POI 搜索才能返回真实候选。
+- 2026-07-09：publish CI `28982042197` 成功后，在 Portainer `pinche` stack 执行 re-pull/redeploy；线上 admin asset 更新到 `/assets/index-WXabztsM.js`，已确认包含 POI 配额和来源域名错误提示。复测线上 admin 店家表单：腾讯地图画布加载，点击地图可回填纬度 `39.9041933` 和经度 `116.4074107`；POI 搜索在当前腾讯位置服务配额耗尽时展示明确配额提示。
+- 2026-07-09：完成微信开发者工具手工验证闭环。微信开发者工具 Nightly `2.01.2512242` 中，选店页 `地图选点` 使用 mock `chooseLocation` 成功回填地址和坐标；小程序提交到本地 API 的私有店家经 API 查回保留 `address`、`latitude`、`longitude`；车局详情页在有坐标时展示 `查看地图` 并调用 `openLocation`，传参包含店名、地址、GCJ-02 坐标和 `scale: 18`；无坐标店家详情页正常展示且不出现地图入口。
