@@ -1,6 +1,6 @@
 # D34 Tasks: 店家地图定位数据统一执行清单
 
-更新日期：2026-07-08
+更新日期：2026-07-09
 
 ## D34 执行任务
 
@@ -9,12 +9,12 @@
   - [x] `design.md` 描述数据模型、GCJ-02 约定、后端接口影响、admin web 表单、小程序交互、错误处理和测试范围。
   - [x] `tasks.md` 描述后续实现和验收清单。
 
-- [ ] D34.2 新增店家位置数据模型迁移。
+- [x] D34.2 新增店家位置数据模型迁移。
   - [x] 新增 `apps/api/migrations/0022_store_location_data.sql`。
   - [x] 给 `stores` 增加 `latitude DECIMAL(10, 7) NULL`。
   - [x] 给 `stores` 增加 `longitude DECIMAL(10, 7) NULL`。
   - [x] 使用幂等迁移写法，重复执行不报错。
-  - [ ] 确认旧店家迁移后坐标为空且仍可搜索、选择和建车。
+  - [x] 确认旧店家迁移后坐标为空且仍可搜索、选择和建车。
 
 - [x] D34.3 新增后端坐标归一化和校验 helper。
   - [x] 在 `apps/api/src/modules/core/service.js` 新增 `optionalCoordinate`。
@@ -91,16 +91,16 @@
   - [x] 确认静态检查要求 admin web 按需加载腾讯位置服务 Web SDK，并保留手填坐标兜底。
   - [x] 将 D34 检查加入 `npm run check`。
 
-- [ ] D34.11 执行自动验证。
+- [x] D34.11 执行自动验证。
   - [x] 运行 `npm run check`。
   - [x] 运行 `npm run build:mp-weixin`。
   - [x] 运行 `node scripts/d34-store-location-check.js`。
   - [x] 运行 `node --check apps/api/src/modules/core/service.js`。
   - [x] 运行 `node --check scripts/d34-store-location-check.js`。
   - [x] 运行 `npm --workspace apps/admin-web run build`。
-  - [ ] 运行 D34 后端烟测。
-    - 2026-07-08 阻塞：`node scripts/d34-store-location-smoke.js` 在 sandbox 内连接本地 API 返回 `EPERM`；提权执行审批未通过，需要用户显式批准后再实跑。
-  - [ ] 修复 D34 范围内导致的检查、烟测或构建失败。
+  - [x] 运行 D34 后端烟测。
+    - 2026-07-09：使用本地临时 API `http://127.0.0.1:3029`、本地 MySQL `127.0.0.1:3307` 和 `WECHAT_MOCK_LOGIN=true` 实跑 `BASE_URL=http://127.0.0.1:3029 node scripts/d34-store-location-smoke.js`，通过。
+  - [x] 修复 D34 范围内导致的检查、烟测或构建失败。
 
 - [ ] D34.12 完成微信开发者工具手工验证。
   - [ ] 在微信开发者工具中确认选店页可以打开地图选点。
@@ -116,7 +116,7 @@
 - [x] D34 design 已落地到 [design.md](./design.md)。
 - [x] D34 tasks 已落地到本文件。
 - [x] `stores` 支持保存 GCJ-02 纬度和经度。
-- [ ] 私有店家创建能保存坐标。
+- [x] 私有店家创建能保存坐标。
 - [x] 管理员创建和编辑店家能保存坐标。
 - [x] 非法纬度和经度会被后端拒绝。
 - [x] 店家列表和管理员店家列表返回坐标字段。
@@ -126,7 +126,7 @@
 - [ ] 小程序车局详情支持有坐标时打开地图。
 - [x] 小程序不主动读取或保存用户当前位置。
 - [x] admin web 通过运行时腾讯位置服务 key 按需加载腾讯位置服务 Web SDK。
-- [ ] 旧店家无坐标时仍可搜索、选择和建车。
+- [x] 旧店家无坐标时仍可搜索、选择和建车。
 - [x] `npm run check` 通过。
 - [x] `npm run build:mp-weixin` 通过。
 
@@ -136,5 +136,6 @@
 - 2026-07-08：完成 backend/admin 子集：新增 `stores.latitude` / `stores.longitude` 迁移，后端管理员创建、编辑和车局详情支持坐标，admin web 店家表单支持手填和腾讯地图选点。已运行 `node scripts/d34-store-location-check.js`、`node --check apps/api/src/modules/core/service.js`、`node --check scripts/d34-store-location-check.js`、`npm --workspace apps/admin-web run build`。
 - 2026-07-08：admin web 增加 POI 搜索 UI 和候选结果回填逻辑。接口连通性测试显示当前腾讯位置服务 key 返回 `199 此key未开启WebserviceAPI功能`，需要在腾讯控制台开启 WebServiceAPI 后才能返回真实搜索结果。
 - 2026-07-08：完成小程序 D34 子集：私有店家表单支持 `uni.chooseLocation` 回填地址和 GCJ-02 坐标，提交私有店家时携带坐标，车局详情有完整坐标时显示 `查看地图` 并调用 `uni.openLocation`，`manifest.json` 声明 `chooseLocation` 且不声明/调用 `getLocation`。已运行 `node scripts/d34-store-location-check.js`、`node scripts/check-miniprogram.js`、`node scripts/d12-admin-web-check.js`、`node --check scripts/d34-store-location-smoke.js`、`npm run build:mp-weixin`、`npm run check`。
-- 2026-07-08：新增 `scripts/d34-store-location-smoke.js` 覆盖私有店家坐标保存、admin 创建/编辑坐标、非法坐标 400、车局详情位置字段、无坐标店家仍可搜索和建车。实跑 `node scripts/d34-store-location-smoke.js` 因 sandbox 本地网络 `EPERM` 且提权审批未通过，待用户批准后执行。
+- 2026-07-08：新增 `scripts/d34-store-location-smoke.js` 覆盖私有店家坐标保存、admin 创建/编辑坐标、非法坐标 400、车局详情位置字段、无坐标店家仍可搜索和建车。首次实跑 `node scripts/d34-store-location-smoke.js` 因 sandbox 本地网络 `EPERM` 且提权审批未通过而未完成，后续见 2026-07-09 验证记录。
 - 2026-07-08：补充详情页边界：有完整坐标但地址为空时仍展示 `查看地图`，并加入 `scripts/d34-store-location-check.js` 与 `scripts/check-miniprogram.js` 回归检查。复跑 `node scripts/d34-store-location-check.js`、`node scripts/check-miniprogram.js`、`npm run build:mp-weixin`、`npm run check`、`node --check apps/api/src/modules/core/service.js`、`node --check scripts/d34-store-location-check.js`、`npm --workspace apps/admin-web run build` 均通过；构建产物 `app.json` 已确认包含 `chooseLocation` 且不包含 `getLocation`。
+- 2026-07-09：用户批准后，先确认当前默认 `.env` 指向腾讯云数据库，因此未对线上库执行写入烟测；改用本地临时 API `http://127.0.0.1:3029`、本地 MySQL `127.0.0.1:3307`、`WECHAT_MOCK_LOGIN=true` 执行 `BASE_URL=http://127.0.0.1:3029 node scripts/d34-store-location-smoke.js`，结果通过。覆盖私有店家坐标保存、非法纬度/经度 400、admin 创建/编辑坐标、车局详情位置字段，以及旧店家无坐标仍可搜索、选择和建车。
