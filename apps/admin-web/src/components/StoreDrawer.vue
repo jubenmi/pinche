@@ -356,6 +356,12 @@ function tencentPoiErrorMessage(error) {
   if (error?.status === 199) {
     return "POI 搜索需要在腾讯位置服务 key 开启 WebServiceAPI。";
   }
+  if (error?.status === 110) {
+    return "POI 搜索需要在腾讯位置服务 key 授权当前 admin 域名。";
+  }
+  if (error?.status === 121) {
+    return "腾讯位置服务 POI 搜索今日调用量已达到上限，可继续地图点选或手填坐标。";
+  }
   return "地点搜索失败，可继续地图点选或手填坐标。";
 }
 

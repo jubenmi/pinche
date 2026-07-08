@@ -111,6 +111,10 @@ for (const token of [
   "searchPoiByKeyword",
   "applyPoiResult",
   "poiSearchResults",
+  "error?.status === 110",
+  "error?.status === 121",
+  "授权当前 admin 域名",
+  "今日调用量已达到上限",
   "store.latitude",
   "store.longitude"
 ]) {
