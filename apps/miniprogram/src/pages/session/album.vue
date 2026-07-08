@@ -27,7 +27,7 @@
       :class="{ floating: topActionsFloating }"
     >
       <view class="album-actions album-sticky-actions" :class="{ floating: topActionsFloating }">
-        <view v-if="canUpload" class="album-primary-actions">
+        <view v-if="canUpload" class="album-primary-actions" :class="{ 'has-video': canUploadVideo }">
           <t-button
             class="button album-action-primary"
             :class="{ disabled: albumBusy }"
@@ -42,6 +42,16 @@
                 src="/static/icons/upload-bold.png"
                 mode="aspectFit"
               />
+            </view>
+          </t-button>
+          <t-button
+            v-if="canUploadVideo"
+            class="button secondary album-video-upload-action"
+            :disabled="albumBusy"
+            @tap="chooseVideo"
+          >
+            <view class="album-privacy-button-content">
+              <text>短视频</text>
             </view>
           </t-button>
           <t-button
@@ -65,7 +75,7 @@
           class="album-action-groups"
         >
           <t-button
-            v-if="photos.length"
+            v-if="downloadablePhotos.length"
             class="album-command album-download-all-command"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
@@ -82,7 +92,7 @@
             </view>
           </t-button>
           <t-button
-            v-if="filteredPhotos.length"
+            v-if="filteredDownloadablePhotos.length"
             class="album-command album-download-selected-command"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
@@ -192,29 +202,56 @@
             :key="photo.id"
             class="photo-card waterfall-photo-card"
             :class="{
+              'video-card': photo.media_type === 'video',
               selectable: !timelineMode && selectionMode && canSelectPhoto(photo),
               selected: !timelineMode && selectionMode && isPhotoSelected(photo),
               disabled: !timelineMode && selectionMode && !canSelectPhoto(photo)
             }"
             @tap="togglePhotoSelection(photo)"
-          >
-            <view
-              class="photo-image-shell"
-              :class="{ loading: !listThumbnailLoaded(photo) }"
-              :style="photoImageStyle(photo)"
-              @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
-              @longpress.stop="showPhotoInfo(photo)"
             >
+              <view
+                class="photo-image-shell"
+                :class="{
+                  loading: !listThumbnailLoaded(photo),
+                  video: photo.media_type === 'video',
+                  processing: videoProcessing(photo),
+                  failed: videoFailed(photo)
+                }"
+                :style="photoImageStyle(photo)"
+                @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
+                @longpress.stop="showPhotoInfo(photo)"
+              >
               <t-image
-                v-if="visiblePhotoMedia[photo.id]?.thumbnail && !listThumbnailFailed(photo)"
+                v-if="photo.media_type === 'image' && visiblePhotoMedia[photo.id]?.thumbnail && !listThumbnailFailed(photo)"
                 class="photo-image"
                 :src="visiblePhotoMedia[photo.id].thumbnail"
                 mode="aspectFill"
                 @load="handleListThumbnailLoad(photo)"
                 @error="handleListThumbnailError(photo)"
               />
-              <view v-if="!listThumbnailLoaded(photo)" class="photo-placeholder">
-                <view class="photo-loading-dot"></view>
+              <t-image
+                v-if="photo.media_type === 'video' && visiblePhotoMedia[photo.id]?.thumbnail && !listThumbnailFailed(photo)"
+                class="photo-image"
+                :src="visiblePhotoMedia[photo.id].thumbnail"
+                mode="aspectFill"
+                @load="handleListThumbnailLoad(photo)"
+                @error="handleListThumbnailError(photo)"
+              />
+              <view
+                v-if="!listThumbnailLoaded(photo)"
+                class="photo-placeholder"
+                :class="{ 'video-placeholder': photo.media_type === 'video' }"
+              >
+                <view v-if="photo.media_type === 'video'" class="video-placeholder-copy">
+                  {{ videoStateText(photo) }}
+                </view>
+                <view v-else class="photo-loading-dot"></view>
+              </view>
+              <view v-if="photo.media_type === 'video'" class="video-overlay">
+                <view v-if="videoReady(photo)" class="video-play-badge">▶</view>
+                <view class="video-state-badge">
+                  {{ videoReady(photo) ? formatVideoDuration(photo.duration_seconds) : videoStateText(photo) }}
+                </view>
               </view>
               <view
                 v-if="!timelineMode && selectionMode"
@@ -228,7 +265,7 @@
             </view>
             <view v-if="timelineMode" class="photo-meta public-photo-meta">
               <view class="photo-caption-body">
-                <view class="photo-caption-title">{{ publicPhotoCaption }}</view>
+                <view class="photo-caption-title">{{ publicMediaCaption(photo) }}</view>
               </view>
             </view>
             <view v-else class="photo-meta">
@@ -262,6 +299,7 @@
                     标注
                   </t-button>
                   <t-button
+                    v-if="photo.media_type === 'image'"
                     class="photo-action-text"
                     :disabled="albumBusy"
                     @tap.stop="downloadSinglePhoto(photo)"
@@ -290,29 +328,56 @@
             :key="photo.id"
             class="photo-card waterfall-photo-card"
             :class="{
+              'video-card': photo.media_type === 'video',
               selectable: !timelineMode && selectionMode && canSelectPhoto(photo),
               selected: !timelineMode && selectionMode && isPhotoSelected(photo),
               disabled: !timelineMode && selectionMode && !canSelectPhoto(photo)
             }"
             @tap="togglePhotoSelection(photo)"
-          >
-            <view
-              class="photo-image-shell"
-              :class="{ loading: !listThumbnailLoaded(photo) }"
-              :style="photoImageStyle(photo)"
-              @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
-              @longpress.stop="showPhotoInfo(photo)"
             >
+              <view
+                class="photo-image-shell"
+                :class="{
+                  loading: !listThumbnailLoaded(photo),
+                  video: photo.media_type === 'video',
+                  processing: videoProcessing(photo),
+                  failed: videoFailed(photo)
+                }"
+                :style="photoImageStyle(photo)"
+                @tap.stop="selectionMode ? togglePhotoSelection(photo) : previewPhoto(photo)"
+                @longpress.stop="showPhotoInfo(photo)"
+              >
               <t-image
-                v-if="visiblePhotoMedia[photo.id]?.thumbnail && !listThumbnailFailed(photo)"
+                v-if="photo.media_type === 'image' && visiblePhotoMedia[photo.id]?.thumbnail && !listThumbnailFailed(photo)"
                 class="photo-image"
                 :src="visiblePhotoMedia[photo.id].thumbnail"
                 mode="aspectFill"
                 @load="handleListThumbnailLoad(photo)"
                 @error="handleListThumbnailError(photo)"
               />
-              <view v-if="!listThumbnailLoaded(photo)" class="photo-placeholder">
-                <view class="photo-loading-dot"></view>
+              <t-image
+                v-if="photo.media_type === 'video' && visiblePhotoMedia[photo.id]?.thumbnail && !listThumbnailFailed(photo)"
+                class="photo-image"
+                :src="visiblePhotoMedia[photo.id].thumbnail"
+                mode="aspectFill"
+                @load="handleListThumbnailLoad(photo)"
+                @error="handleListThumbnailError(photo)"
+              />
+              <view
+                v-if="!listThumbnailLoaded(photo)"
+                class="photo-placeholder"
+                :class="{ 'video-placeholder': photo.media_type === 'video' }"
+              >
+                <view v-if="photo.media_type === 'video'" class="video-placeholder-copy">
+                  {{ videoStateText(photo) }}
+                </view>
+                <view v-else class="photo-loading-dot"></view>
+              </view>
+              <view v-if="photo.media_type === 'video'" class="video-overlay">
+                <view v-if="videoReady(photo)" class="video-play-badge">▶</view>
+                <view class="video-state-badge">
+                  {{ videoReady(photo) ? formatVideoDuration(photo.duration_seconds) : videoStateText(photo) }}
+                </view>
               </view>
               <view
                 v-if="!timelineMode && selectionMode"
@@ -326,7 +391,7 @@
             </view>
             <view v-if="timelineMode" class="photo-meta public-photo-meta">
               <view class="photo-caption-body">
-                <view class="photo-caption-title">{{ publicPhotoCaption }}</view>
+                <view class="photo-caption-title">{{ publicMediaCaption(photo) }}</view>
               </view>
             </view>
             <view v-else class="photo-meta">
@@ -360,6 +425,7 @@
                     标注
                   </t-button>
                   <t-button
+                    v-if="photo.media_type === 'image'"
                     class="photo-action-text"
                     :disabled="albumBusy"
                     @tap.stop="downloadSinglePhoto(photo)"
@@ -417,6 +483,29 @@
       @change="handlePreviewChange"
       @download="handlePreviewDownload"
     />
+
+    <t-popup
+      class="video-player-popup"
+      :visible="videoPlayerVisible"
+      placement="center"
+      :close-on-overlay-click="true"
+      @visible-change="handleVideoPlayerVisibleChange"
+    >
+      <view class="video-player-sheet" @tap.stop>
+        <view class="video-player-head">
+          <text>{{ videoPlayerTitle || "短视频" }}</text>
+          <text class="video-player-close" @tap="closeVideoPlayer">关闭</text>
+        </view>
+        <video
+          v-if="videoPlayerUrl"
+          class="album-video-player"
+          :src="videoPlayerUrl"
+          :controls="true"
+          :autoplay="false"
+          object-fit="contain"
+        />
+      </view>
+    </t-popup>
 
     <t-popup
       :visible="tagSheetVisible"
@@ -505,6 +594,8 @@ import {
   getToken,
   queryString,
   request,
+  createSessionAlbumVideo,
+  uploadSessionAlbumVideo,
   uploadSessionAlbumPhoto
 } from "../../utils/api";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
@@ -518,6 +609,10 @@ function albumMediaCachePath(photoId, variant = "preview") {
     "";
   return root ? `${root}/session-album-${photoId}-${variant}.jpg` : "";
 }
+
+// D32 admin album video keeps short video upload scoped to system_admin testing.
+const MAX_ALBUM_VIDEO_DURATION_SECONDS = 60;
+const MAX_ALBUM_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export default {
   components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost, AlbumImageViewer },
@@ -546,6 +641,7 @@ export default {
       savingTags: false,
       deletingPhotoId: null,
       currentUserId: "",
+      currentRoles: [],
       mediaLoadSerial: 0,
       waterfallPhotos: [],
       waterfallList1: [],
@@ -566,6 +662,9 @@ export default {
       previewCurrentIndex: 0,
       previewInitialIndex: 0,
       previewMediaUrlRefreshRequest: null,
+      videoPlayerVisible: false,
+      videoPlayerUrl: "",
+      videoPlayerTitle: "",
       filters: [
         { value: "all", label: "全部" },
         { value: "mine", label: "上传" },
@@ -577,6 +676,18 @@ export default {
   computed: {
     tagSheetVisible() {
       return !this.timelineMode && Boolean(this.tagSheetPhoto);
+    },
+    isSystemAdmin() {
+      return this.currentRoles.includes("system_admin");
+    },
+    canUploadVideo() {
+      return !this.timelineMode && this.canUpload && this.isSystemAdmin;
+    },
+    downloadablePhotos() {
+      return this.photos.filter((photo) => photo.media_type === "image");
+    },
+    filteredDownloadablePhotos() {
+      return this.filteredPhotos.filter((photo) => photo.media_type === "image");
     },
     previewCurrentPhoto() {
       return this.previewPhotos[this.previewCurrentIndex] || null;
@@ -817,6 +928,7 @@ export default {
       return;
     }
     this.currentUserId = auth.user.id || "";
+    this.currentRoles = auth.roles || [];
     await this.loadAlbum();
     await this.ensureAlbumShareToken();
   },
@@ -832,6 +944,7 @@ export default {
     }
     const auth = getCurrentUser();
     this.currentUserId = auth.user?.id || this.currentUserId;
+    this.currentRoles = auth.roles || this.currentRoles;
     if (this.sessionId && this.currentUserId) {
       await this.loadAlbum();
       await this.ensureAlbumShareToken();
@@ -1282,6 +1395,19 @@ export default {
       return apiUrl(path);
     },
     normalizePhotoMedia(photo) {
+      const mediaType = photo.media_type === "video" ? "video" : "image";
+      if (mediaType === "video") {
+        return {
+          ...photo,
+          media_type: "video",
+          processing_status: photo.processing_status || "processing",
+          tags: photo.tags || [],
+          cover_url: this.normalizeAlbumMediaUrl(photo.cover_url || ""),
+          video_url: this.normalizeAlbumMediaUrl(photo.video_url || ""),
+          duration_seconds: Number(photo.duration_seconds || 0),
+          display_url: ""
+        };
+      }
       const rawImageUrl = photo.image_url || photo.preview_url || "";
       const rawPreviewUrl = photo.preview_url || rawImageUrl;
       const rawThumbnailUrl = photo.thumbnail_url || rawPreviewUrl || rawImageUrl;
@@ -1292,6 +1418,8 @@ export default {
       const thumbnailLoadUrl = this.normalizeAlbumMediaUrl(photo.thumbnail_load_url || "");
       return {
         ...photo,
+        media_type: "image",
+        processing_status: photo.processing_status || "ready",
         tags: photo.tags || [],
         image_url: imageUrl || previewLoadUrl,
         preview_url: previewUrl || previewLoadUrl,
@@ -1302,6 +1430,9 @@ export default {
       };
     },
     mediaUrlForPhoto(photo, variant = "preview") {
+      if (photo?.media_type === "video") {
+        return variant === "thumbnail" ? photo.cover_url || "" : "";
+      }
       if (variant === "thumbnail") {
         return (
           photo.thumbnail_load_url ||
@@ -1367,6 +1498,13 @@ export default {
     },
     mediaFieldsFromPhoto(photo) {
       const normalized = this.normalizePhotoMedia(photo || {});
+      if (normalized.media_type === "video") {
+        return {
+          cover_url: normalized.cover_url,
+          video_url: normalized.video_url,
+          processing_status: normalized.processing_status
+        };
+      }
       return {
         image_url: normalized.image_url,
         preview_url: normalized.preview_url,
@@ -1788,6 +1926,9 @@ export default {
       this.setListThumbnailState(photo, { loaded: false, failed: true });
     },
     canOpenPhotoPreview(photo) {
+      if (photo?.media_type === "video") {
+        return this.videoReady(photo);
+      }
       const key = this.listThumbnailStateKey(photo);
       return Boolean(key && this.visiblePhotoMedia[key]?.thumbnail && this.listThumbnailLoaded(photo));
     },
@@ -1859,6 +2000,9 @@ export default {
       }
     },
     onPhotoVisible(photo) {
+      if (photo?.media_type === "video" && !photo.cover_url) {
+        return;
+      }
       this.loadVisiblePhotoMedia(photo, "thumbnail");
     },
     disconnectPhotoObservers() {
@@ -1926,8 +2070,12 @@ export default {
     },
     photoImageStyle(photo) {
       const columnWidth = Number(photo.width || 0);
-      const imageWidth = Number(photo.image_width || 0);
-      const imageHeight = Number(photo.image_height || 0);
+      const imageWidth = Number(
+        photo.media_type === "video" ? photo.video_width || 0 : photo.image_width || 0
+      );
+      const imageHeight = Number(
+        photo.media_type === "video" ? photo.video_height || 0 : photo.image_height || 0
+      );
       if (columnWidth > 0 && imageWidth > 0 && imageHeight > 0) {
         const ratio = Math.min(1.8, Math.max(0.68, imageHeight / imageWidth));
         return `height:${Math.round(columnWidth * ratio)}px;`;
@@ -2034,12 +2182,51 @@ export default {
     },
     tagSummary(photo) {
       if (this.timelineMode) {
-        return this.publicPhotoCaption;
+        return this.publicMediaCaption(photo);
       }
       if (!photo.tags || photo.tags.length === 0) {
         return "待标注";
       }
-      return `照片里：${photo.tags.map((tag) => tag.label).join("、")}`;
+      return `${photo.media_type === "video" ? "视频" : "照片"}里：${photo.tags.map((tag) => tag.label).join("、")}`;
+    },
+    isVideoMedia(photo) {
+      return photo?.media_type === "video";
+    },
+    isImageMedia(photo) {
+      return photo?.media_type === "image";
+    },
+    videoReady(photo) {
+      return this.isVideoMedia(photo) && photo.processing_status === "ready";
+    },
+    videoProcessing(photo) {
+      return this.isVideoMedia(photo) && photo.processing_status === "processing";
+    },
+    videoFailed(photo) {
+      return this.isVideoMedia(photo) && photo.processing_status === "failed";
+    },
+    videoStateText(photo) {
+      if (!this.isVideoMedia(photo)) {
+        return "";
+      }
+      if (this.videoProcessing(photo)) {
+        return "处理中";
+      }
+      if (this.videoFailed(photo)) {
+        return "处理失败";
+      }
+      return "短视频";
+    },
+    publicMediaCaption(photo) {
+      if (photo?.media_type === "video") {
+        return "打开小程序查看视频";
+      }
+      return this.publicPhotoCaption;
+    },
+    formatVideoDuration(seconds) {
+      const totalSeconds = Math.max(0, Math.round(Number(seconds || 0)));
+      const minutes = Math.floor(totalSeconds / 60);
+      const remainder = String(totalSeconds % 60).padStart(2, "0");
+      return `${minutes}:${remainder}`;
     },
     photoDetailText(photo) {
       return `${photo.uploader_name || "车友"} · ${this.formatDate(photo.created_at)}`;
@@ -2063,13 +2250,31 @@ export default {
       }
       const uploader = photo.uploader_name || "车友";
       const createdAt = this.formatDate(photo.created_at);
-      const dimensions = this.imageMetaText(photo);
+      const dimensions = photo.media_type === "video" ? this.videoMetaText(photo) : this.imageMetaText(photo);
       showModal({
-        title: "图片信息",
+        title: photo.media_type === "video" ? "视频信息" : "图片信息",
         content: `${this.tagSummary(photo)}\n上传者：${uploader}\n时间：${createdAt}\n尺寸：${dimensions}`,
         showCancel: false,
         confirmText: "知道了"
       });
+    },
+    videoMetaText(photo) {
+      const width = Number(photo.video_width || 0);
+      const height = Number(photo.video_height || 0);
+      const byteSize = Number(photo.video_byte_size || 0);
+      const sizeText = byteSize > 0 ? this.formatFileSize(byteSize) : "大小未知";
+      const durationText = this.formatVideoDuration(photo.duration_seconds);
+      if (width > 0 && height > 0) {
+        return `${durationText} · ${width}x${height} · ${sizeText}`;
+      }
+      return `${durationText} · ${sizeText}`;
+    },
+    formatFileSize(byteSize) {
+      const size = Number(byteSize || 0);
+      if (size >= 1024 * 1024) {
+        return `${Math.max(0.1, size / 1024 / 1024).toFixed(1)}MB`;
+      }
+      return `${Math.max(1, Math.round(size / 1024))}KB`;
     },
     imageMetaText(photo) {
       const width = Number(photo.image_width || 0);
@@ -2113,6 +2318,153 @@ export default {
         }
       });
     },
+    chooseVideo() {
+      if (!this.canUploadVideo || this.albumBusy) {
+        showToast({ title: "只有管理员可测试上传视频", icon: "none" });
+        return;
+      }
+      if (typeof wx === "undefined" || typeof wx.chooseMedia !== "function") {
+        showToast({ title: "当前微信版本不支持选择视频", icon: "none" });
+        return;
+      }
+      wx.chooseMedia({
+        count: 1,
+        mediaType: ["video"],
+        sourceType: ["album", "camera"],
+        success: async (result) => {
+          const file = (result.tempFiles || [])[0] || {};
+          await this.uploadChosenVideo(file);
+        }
+      });
+    },
+    getVideoFileInfo(filePath) {
+      return new Promise((resolve) => {
+        if (typeof wx === "undefined") {
+          resolve({});
+          return;
+        }
+        const resolveWithFileSize = () => {
+          if (typeof wx.getFileInfo !== "function") {
+            resolve({});
+            return;
+          }
+          wx.getFileInfo({
+            filePath,
+            success: (result) => resolve({ size: Number(result.size || 0) }),
+            fail: () => resolve({})
+          });
+        };
+        if (typeof wx.getVideoInfo !== "function") {
+          resolveWithFileSize();
+          return;
+        }
+        wx.getVideoInfo({
+          src: filePath,
+          success: (result) => resolve(result || {}),
+          fail: resolveWithFileSize
+        });
+      });
+    },
+    async compressVideoBeforeUpload(filePath, originalInfo = {}) {
+      if (typeof wx === "undefined" || typeof wx.compressVideo !== "function") {
+        return { filePath, ...originalInfo };
+      }
+      return new Promise((resolve) => {
+        wx.compressVideo({
+          src: filePath,
+          quality: "medium",
+          success: async (result) => {
+            const compressedPath = result.tempFilePath || filePath;
+            const compressedInfo = await this.getVideoFileInfo(compressedPath);
+            resolve({
+              filePath: compressedPath,
+              size: Number(result.size || compressedInfo.size || 0),
+              width: compressedInfo.width || originalInfo.width || null,
+              height: compressedInfo.height || originalInfo.height || null
+            });
+          },
+          fail: () => resolve({ filePath, ...originalInfo })
+        });
+      });
+    },
+    confirmVideoUpload({ durationSeconds, uploadSize }) {
+      return new Promise((resolve) => {
+        showModal({
+          title: "上传短视频",
+          content: `时长 ${this.formatVideoDuration(durationSeconds)}，预计上传 ${this.formatFileSize(uploadSize)}。上传后按相册隐私展示。`,
+          confirmText: "上传",
+          cancelText: "取消",
+          success(result) {
+            resolve(Boolean(result.confirm));
+          },
+          fail() {
+            resolve(false);
+          }
+        });
+      });
+    },
+    async uploadChosenVideo(file) {
+      const originalPath = file.tempFilePath || file.path || "";
+      if (!originalPath) {
+        showToast({ title: "没有可上传的视频", icon: "none" });
+        return;
+      }
+      const originalInfo = await this.getVideoFileInfo(originalPath);
+      const durationSeconds = Math.ceil(
+        Number(file.duration || originalInfo.duration || 0)
+      );
+      if (durationSeconds > MAX_ALBUM_VIDEO_DURATION_SECONDS) {
+        showToast({ title: "视频最长支持 60 秒，请先剪辑后再上传", icon: "none" });
+        return;
+      }
+      if (!durationSeconds) {
+        showToast({ title: "无法读取视频时长，请换一个视频", icon: "none" });
+        return;
+      }
+      const originalSize = Number(file.size || originalInfo.size || 0);
+      this.statusText = "正在压缩视频...";
+      const compressed = await this.compressVideoBeforeUpload(originalPath, {
+        filePath: originalPath,
+        size: originalSize,
+        width: originalInfo.width || null,
+        height: originalInfo.height || null
+      });
+      const compressedSize = Number(compressed.size || 0);
+      const useCompressed = compressed.filePath !== originalPath &&
+        compressedSize > 0 &&
+        (!originalSize || compressedSize < originalSize);
+      const uploadPath = useCompressed ? compressed.filePath : originalPath;
+      const uploadSize = Math.max(1, useCompressed ? compressedSize : originalSize);
+      if (uploadSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
+        showToast({ title: "视频文件过大，请压缩或剪辑后再上传", icon: "none" });
+        this.statusText = "";
+        return;
+      }
+      const confirmed = await this.confirmVideoUpload({ durationSeconds, uploadSize });
+      if (!confirmed || this.albumBusy) {
+        this.statusText = "";
+        return;
+      }
+      this.uploading = true;
+      this.statusText = "正在上传视频...";
+      try {
+        const sourceUrl = await uploadSessionAlbumVideo(this.sessionId, uploadPath);
+        await createSessionAlbumVideo(this.sessionId, {
+          sourceUrl,
+          durationSeconds,
+          videoWidth: compressed.width || originalInfo.width || null,
+          videoHeight: compressed.height || originalInfo.height || null,
+          videoByteSize: uploadSize,
+          videoContentType: "video/mp4"
+        });
+        this.statusText = "";
+        await this.loadAlbum();
+      } catch (error) {
+        this.statusText = error?.userMessage || "相册视频上传失败，请稍后重试。";
+      } finally {
+        this.uploading = false;
+      }
+    },
     async uploadChosenPhotos(paths) {
       if (this.albumBusy || paths.length === 0) {
         return;
@@ -2140,9 +2492,10 @@ export default {
       if (this.timelineMode || this.albumBusy || !photo.is_mine) {
         return;
       }
+      const mediaLabel = photo.media_type === "video" ? "视频" : "照片";
       showModal({
-        title: "删除照片",
-        content: "确认删除这张照片？删除后清空相册才能取消这辆车。",
+        title: `删除${mediaLabel}`,
+        content: `确认删除这${mediaLabel === "视频" ? "段" : "张"}${mediaLabel}？删除后清空相册才能取消这辆车。`,
         confirmText: "删除",
         cancelText: "再想想",
         success: async (result) => {
@@ -2162,7 +2515,7 @@ export default {
             this.statusText = "";
             await this.loadAlbum();
           } catch (error) {
-            this.statusText = error?.userMessage || "照片删除失败，请稍后重试。";
+            this.statusText = error?.userMessage || `${mediaLabel}删除失败，请稍后重试。`;
           } finally {
             this.deletingPhotoId = null;
           }
@@ -2171,6 +2524,10 @@ export default {
     },
     previewPhoto(photo) {
       if (this.deletingPhotoId) {
+        return;
+      }
+      if (photo?.media_type === "video") {
+        this.openVideoPlayer(photo);
         return;
       }
       if (!this.canOpenPhotoPreview(photo)) {
@@ -2203,7 +2560,8 @@ export default {
       });
     },
     openPhotoPreview(photo) {
-      const previewPhotos = this.filteredPhotos.map((item) => this.viewerPhotoWithCachedMedia(item));
+      const previewPhotos = this.filteredPhotos.map((item) => this.viewerPhotoWithCachedMedia(item))
+        .filter((item) => item.media_type === "image");
       if (!previewPhotos.some((item) => String(item.id) === String(photo.id))) {
         previewPhotos.unshift(this.viewerPhotoWithCachedMedia(photo));
       }
@@ -2224,6 +2582,38 @@ export default {
       this.previewInitialIndex = 0;
       this.skipNextAlbumRefreshOnShow = false;
     },
+    async openVideoPlayer(photo) {
+      if (this.timelineMode) {
+        showToast({ title: "打开小程序查看视频", icon: "none" });
+        return;
+      }
+      if (!this.videoReady(photo)) {
+        showToast({ title: this.videoStateText(photo) || "视频暂不可播放", icon: "none" });
+        return;
+      }
+      try {
+        const response = await request({ url: photo.video_url || `/api/session-album/media/${photo.id}/video-url` });
+        const data = dataOf(response) || {};
+        if (!data.url) {
+          throw new Error("video url missing");
+        }
+        this.videoPlayerUrl = apiUrl(data.url);
+        this.videoPlayerTitle = this.tagSummary(photo);
+        this.videoPlayerVisible = true;
+      } catch (error) {
+        showToast({ title: "视频播放地址获取失败", icon: "none" });
+      }
+    },
+    closeVideoPlayer() {
+      this.videoPlayerVisible = false;
+      this.videoPlayerUrl = "";
+      this.videoPlayerTitle = "";
+    },
+    handleVideoPlayerVisibleChange(event = {}) {
+      if (event.detail?.visible === false) {
+        this.closeVideoPlayer();
+      }
+    },
     handlePreviewChange(event) {
       const payload = event?.detail || event || {};
       const index = Number(payload.index || 0);
@@ -2242,21 +2632,27 @@ export default {
       this.downloadSinglePhoto(photo);
     },
     async downloadSinglePhoto(photo) {
+      if (photo?.media_type !== "image") {
+        showToast({ title: "视频暂不支持下载", icon: "none" });
+        return;
+      }
       await this.downloadPhotos([photo], {
         confirmContent: "将保存这张照片到系统相册，是否继续？"
       });
     },
     async downloadSelectedPhotos() {
       const selectedIdSet = new Set(this.selectedPhotoIds.map((photoId) => Number(photoId)));
-      const photos = this.filteredPhotos.filter((photo) => selectedIdSet.has(Number(photo.id)));
+      const photos = this.filteredPhotos.filter(
+        (photo) => photo.media_type === "image" && selectedIdSet.has(Number(photo.id))
+      );
       await this.downloadPhotos(photos, {
         exitSelection: true,
         confirmContent: `将保存所选 ${photos.length} 张照片到系统相册，是否继续？`
       });
     },
     async downloadAllPhotos() {
-      await this.downloadPhotos(this.photos, {
-        confirmContent: `将保存我的相册中 ${this.photos.length} 张照片到系统相册，是否继续？`
+      await this.downloadPhotos(this.downloadablePhotos, {
+        confirmContent: `将保存我的相册中 ${this.downloadablePhotos.length} 张照片到系统相册，是否继续？`
       });
     },
     confirmDownloadPhotos(content) {
@@ -2279,7 +2675,9 @@ export default {
       if (this.timelineMode || this.albumBusy) {
         return;
       }
-      const targets = (photos || []).filter((photo) => this.mediaUrlForPhoto(photo));
+      const targets = (photos || []).filter(
+        (photo) => photo.media_type === "image" && this.mediaUrlForPhoto(photo)
+      );
       if (targets.length === 0) {
         showToast({ title: "暂无可下载照片", icon: "none" });
         return;
@@ -2349,7 +2747,7 @@ export default {
       this.selectedTagKeys = (photo.tags || []).map((tag) => tag.key);
     },
     openDownloadSelectionMode() {
-      if (this.timelineMode || this.albumBusy || this.filteredPhotos.length === 0) {
+      if (this.timelineMode || this.albumBusy || this.filteredDownloadablePhotos.length === 0) {
         return;
       }
       this.closePhotoPreview();
@@ -2392,7 +2790,7 @@ export default {
         return false;
       }
       if (this.selectionModePurpose === "download") {
-        return Boolean(this.mediaUrlForPhoto(photo));
+        return photo?.media_type === "image" && Boolean(this.mediaUrlForPhoto(photo));
       }
       return Boolean(photo.can_tag);
     },
@@ -2562,7 +2960,12 @@ export default {
   gap: 12rpx;
 }
 
+.album-primary-actions.has-video {
+  grid-template-columns: minmax(0, 1fr) 148rpx 148rpx;
+}
+
 .album-action-primary,
+.album-video-upload-action,
 .album-privacy-action {
   height: 78rpx;
   margin: 0;
@@ -2599,6 +3002,7 @@ export default {
   flex-shrink: 0;
 }
 
+.album-video-upload-action,
 .album-privacy-action {
   padding: 0 18rpx;
 }
@@ -2839,6 +3243,14 @@ export default {
   background: #eef5ef;
 }
 
+.photo-image-shell.video {
+  background: #15201d;
+}
+
+.photo-image-shell.failed {
+  background: #3b2424;
+}
+
 .photo-image {
   display: block;
   width: 100%;
@@ -2861,6 +3273,52 @@ export default {
   border-top-color: rgba(31, 122, 104, 0.72);
   border-radius: 999rpx;
   animation: album-spin 0.9s linear infinite;
+}
+
+.video-placeholder {
+  background: linear-gradient(145deg, #1f2c29 0%, #28352f 100%);
+}
+
+.video-placeholder-copy {
+  color: #ffffff;
+  font-size: 25rpx;
+  font-weight: 700;
+}
+
+.video-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.video-play-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 76rpx;
+  height: 76rpx;
+  border: 3rpx solid rgba(255, 255, 255, 0.92);
+  border-radius: 999rpx;
+  background: rgba(15, 23, 42, 0.42);
+  color: #ffffff;
+  font-size: 34rpx;
+  line-height: 76rpx;
+}
+
+.video-state-badge {
+  position: absolute;
+  right: 12rpx;
+  bottom: 12rpx;
+  border-radius: 8rpx;
+  background: rgba(15, 23, 42, 0.68);
+  color: #ffffff;
+  font-size: 22rpx;
+  font-weight: 700;
+  line-height: 36rpx;
+  padding: 0 10rpx;
 }
 
 .selection-checkbox {
@@ -2985,6 +3443,40 @@ export default {
   justify-content: flex-end;
   gap: 12rpx;
   min-width: 0;
+}
+
+.video-player-sheet {
+  box-sizing: border-box;
+  width: 690rpx;
+  max-width: 92vw;
+  border-radius: 16rpx;
+  background: #101816;
+  padding: 18rpx;
+}
+
+.video-player-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  color: #ffffff;
+  font-size: 26rpx;
+  font-weight: 700;
+  line-height: 42rpx;
+  margin-bottom: 14rpx;
+}
+
+.video-player-close {
+  flex: 0 0 auto;
+  color: #bde5d8;
+  font-size: 24rpx;
+}
+
+.album-video-player {
+  display: block;
+  width: 100%;
+  height: 388rpx;
+  background: #000000;
 }
 
 .photo-action-text {

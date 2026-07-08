@@ -1,7 +1,7 @@
 <template>
   <aside class="drawer wide">
     <header class="drawer-head">
-      <h2>{{ model.id ? "编辑剧本" : "新增剧本" }}</h2>
+      <h2>{{ title || (model.id ? "编辑剧本" : "新增剧本") }}</h2>
       <button class="close-button" type="button" :disabled="saving" @click="$emit('close')">
         关闭
       </button>
@@ -118,12 +118,14 @@
       </div>
 
       <footer class="drawer-footer">
-        <button class="secondary-action" type="button" :disabled="saving" @click="$emit('close')">
-          取消
-        </button>
-        <button class="primary" type="submit" :disabled="saving">
-          {{ saving ? "保存中..." : "保存剧本" }}
-        </button>
+        <slot name="footer-actions" :submit="submit">
+          <button class="secondary-action" type="button" :disabled="saving" @click="$emit('close')">
+            取消
+          </button>
+          <button class="primary" type="submit" :disabled="saving">
+            {{ saving ? "保存中..." : "保存剧本" }}
+          </button>
+        </slot>
       </footer>
     </form>
   </aside>
@@ -134,7 +136,9 @@ import { computed, reactive, watch } from "vue";
 
 const props = defineProps({
   script: { type: Object, required: true },
-  saving: { type: Boolean, default: false }
+  saving: { type: Boolean, default: false },
+  reviewMode: { type: Boolean, default: false },
+  title: { type: String, default: "" }
 });
 const emit = defineEmits(["save", "close"]);
 const model = reactive({ defaultSeatTemplate: [], npcRoles: [] });

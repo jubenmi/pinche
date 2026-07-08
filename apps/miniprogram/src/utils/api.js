@@ -439,7 +439,7 @@ export function userGenderLabel(gender) {
 function fileExtensionFromPath(filePath) {
   const match = String(filePath || "").match(/\.([A-Za-z0-9]+)(?:[?#].*)?$/);
   const extension = match ? match[1].toLowerCase() : "";
-  if (extension === "jpg" || extension === "jpeg" || extension === "png") {
+  if (extension === "jpg" || extension === "jpeg" || extension === "png" || extension === "mp4") {
     return `.${extension}`;
   }
   return ".jpg";
@@ -776,6 +776,35 @@ export async function uploadSessionAlbumPhoto(sessionId, filePath) {
     intentData: { sessionId },
     fallbackUpload: (path) => fallbackUploadSessionAlbumPhoto(sessionId, path)
   });
+}
+
+function fallbackUploadSessionAlbumVideo(sessionId, filePath) {
+  return uploadBackendFile({
+    filePath,
+    url: `/api/admin/sessions/${sessionId}/album/videos/uploads`,
+    name: "video",
+    responseField: "sourceUrl",
+    timeoutMessage: "相册视频上传超时，请确认本地后端已启动。",
+    failMessage: "相册视频上传失败，请稍后重试。"
+  });
+}
+
+export async function uploadSessionAlbumVideo(sessionId, filePath) {
+  return uploadCosBackedFile({
+    kind: "adminSessionAlbumVideo",
+    filePath,
+    intentData: { sessionId },
+    fallbackUpload: (path) => fallbackUploadSessionAlbumVideo(sessionId, path)
+  });
+}
+
+export async function createSessionAlbumVideo(sessionId, payload) {
+  const response = await request({
+    url: `/api/admin/sessions/${sessionId}/album/videos`,
+    method: "POST",
+    data: payload
+  });
+  return dataOf(response);
 }
 
 export async function updateUserProfile(patch) {

@@ -35,8 +35,11 @@ import {
   claimSessionNpcRole,
   claimSessionSeat,
   createSessionAlbumPhoto,
+  createSessionAlbumVideo,
   createCatalogRequest,
   createEntityClaim,
+  createPrivateScript,
+  createPrivateStore,
   createScript,
   createSeat,
   createSession,
@@ -50,21 +53,26 @@ import {
   deleteScript,
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
+  getPublicSessionAlbumVideoCoverForMedia,
   getSession,
   getSessionAlbumShareSubject,
   getSessionShareStats,
   getMySessionAlbumPrivacy,
   getMySessionReview,
   getVisibleSessionAlbumPhotoForMedia,
+  getVisibleSessionAlbumVideoForPlayback,
   hideMySignup,
   kickSessionSeat,
   leaveSessionOrganizer,
+  approveCatalogReviewItem,
   listAdminScripts,
+  listAdminCatalogReviewItems,
   listAdminSessions,
   listAdminStores,
   listActiveScripts,
   listActiveStores,
   listCatalogRequests,
+  listMyCatalogReviewItems,
   listPublicSessionAlbumShare,
   listSessionAlbum,
   listSessionAlbumPeople,
@@ -75,16 +83,22 @@ import {
   listSessionSignups,
   listStoreScripts,
   lockSeat,
+  markCatalogReviewItemNeedsChanges,
+  mergeCatalogReviewItem,
   publishSession,
   rejectSignup,
+  rejectCatalogReviewItem,
   relinkMySessionMembership,
   replaceStoreScripts,
   reviewCatalogRequest,
   transferSessionOrganizer,
+  updateAdminCatalogReviewItem,
   updateDeposit,
+  updateMyCatalogReviewItem,
   updateScript,
   updateSeat,
   updateSession,
+  updateSessionAlbumVideoProcessingResult,
   updateMySessionAlbumPrivacy,
   updateSessionAlbumPhotoTags,
   updateSessionNpcRole,
@@ -99,15 +113,26 @@ const avatarUploadDir = path.join(apiRoot, "uploads", "avatars");
 const sessionReviewUploadDir = path.join(apiRoot, "uploads", "session-reviews");
 const sessionAlbumUploadDir = path.join(apiRoot, "uploads", "session-album");
 const sessionAlbumDisplayUploadDir = path.join(sessionAlbumUploadDir, "display");
+const sessionAlbumVideoUploadDir = path.join(sessionAlbumUploadDir, "videos");
+const sessionAlbumVideoSourceUploadDir = path.join(sessionAlbumVideoUploadDir, "source");
+const sessionAlbumVideoDisplayUploadDir = path.join(sessionAlbumVideoUploadDir, "display");
+const sessionAlbumVideoCoverUploadDir = path.join(sessionAlbumVideoUploadDir, "cover");
 const AVATAR_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 const AVATAR_MULTIPART_MAX_BYTES = AVATAR_UPLOAD_MAX_BYTES + 64 * 1024;
 const SESSION_REVIEW_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_REVIEW_MULTIPART_MAX_BYTES = SESSION_REVIEW_UPLOAD_MAX_BYTES + 64 * 1024;
 const SESSION_ALBUM_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_ALBUM_MULTIPART_MAX_BYTES = SESSION_ALBUM_UPLOAD_MAX_BYTES + 64 * 1024;
+const SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+const SESSION_ALBUM_VIDEO_MULTIPART_MAX_BYTES = SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES + 256 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
+const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
+  "ci-process": "snapshot",
+  time: "1",
+  format: "jpg"
+};
 const AVATAR_WEBP_RULE = "imageMogr2/auto-orient/thumbnail/512x512>/format/webp/quality/80";
 const SESSION_ALBUM_DISPLAY_JPG_RULE =
   "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip";
@@ -210,6 +235,258 @@ async function bodyFor(request) {
   }
 }
 
+function safeTextEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function verifyCosCiCallbackToken(url) {
+  const expectedToken = config.cos.ciCallbackToken;
+  if (!expectedToken) {
+    if (config.nodeEnv === "production") {
+      throw forbidden("COS CI callback token is not configured");
+    }
+    return;
+  }
+
+  const token = url.searchParams.get("token") || url.searchParams.get("callbackToken") || "";
+  if (!safeTextEqual(token, expectedToken)) {
+    throw forbidden("COS CI callback token is invalid");
+  }
+}
+
+function xmlUnescape(value) {
+  return String(value || "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function xmlTextValues(xml, tagName) {
+  const pattern = new RegExp(`<${tagName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tagName}>`, "gi");
+  const values = [];
+  let match = pattern.exec(xml);
+  while (match) {
+    values.push(xmlUnescape(match[1].trim()));
+    match = pattern.exec(xml);
+  }
+  return values.filter(Boolean);
+}
+
+function parseJsonText(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}
+
+function firstDeepValue(value, names) {
+  const nameSet = new Set(names.map((name) => name.toLowerCase()));
+  const stack = [value];
+  while (stack.length > 0) {
+    const current = stack.shift();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    if (Array.isArray(current)) {
+      stack.push(...current);
+      continue;
+    }
+    for (const [key, item] of Object.entries(current)) {
+      if (nameSet.has(key.toLowerCase()) && item !== undefined && item !== null && item !== "") {
+        return item;
+      }
+      if (item && typeof item === "object") {
+        stack.push(item);
+      }
+    }
+  }
+  return null;
+}
+
+function collectDeepValues(value, names) {
+  const nameSet = new Set(names.map((name) => name.toLowerCase()));
+  const stack = [value];
+  const values = [];
+  while (stack.length > 0) {
+    const current = stack.shift();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    if (Array.isArray(current)) {
+      stack.push(...current);
+      continue;
+    }
+    for (const [key, item] of Object.entries(current)) {
+      if (nameSet.has(key.toLowerCase()) && item !== undefined && item !== null && item !== "") {
+        values.push(item);
+      }
+      if (item && typeof item === "object") {
+        stack.push(item);
+      }
+    }
+  }
+  return values;
+}
+
+function callbackObjectPath(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  let text = String(value).trim();
+  if (/^https?:\/\//i.test(text)) {
+    try {
+      text = new URL(text).pathname;
+    } catch {
+      return null;
+    }
+  }
+  text = text.split("?")[0];
+  try {
+    text = decodeURIComponent(text);
+  } catch {
+    return null;
+  }
+  if (!text.startsWith("/")) {
+    text = `/${text}`;
+  }
+  return text.startsWith("/uploads/session-album/videos/") ? text : null;
+}
+
+function callbackStatus({ code, state, status }) {
+  const codeText = String(code || "").trim();
+  if (codeText && !/^success$/i.test(codeText)) {
+    return "failed";
+  }
+  const value = String(state || status || code || "").trim();
+  if (/success|ready|complete|done/i.test(value)) {
+    return "ready";
+  }
+  if (/fail|error/i.test(value)) {
+    return "failed";
+  }
+  return "processing";
+}
+
+function parseSessionAlbumVideoProcessingCallback(rawBody) {
+  const text = Buffer.isBuffer(rawBody) ? rawBody.toString("utf8").trim() : String(rawBody || "");
+  if (!text) {
+    throw badRequest("COS CI callback body is required");
+  }
+
+  const jsonPayload = text.startsWith("{") || text.startsWith("[") ? parseJsonText(text) : {};
+  const isJson = Object.keys(jsonPayload).length > 0 || Array.isArray(jsonPayload);
+  const userDataText = isJson
+    ? firstDeepValue(jsonPayload, ["UserData", "userData", "Userdata"])
+    : xmlTextValues(text, "UserData")[0];
+  const userData =
+    userDataText && typeof userDataText === "object" ? userDataText : parseJsonText(userDataText);
+  const objectValues = isJson
+    ? collectDeepValues(jsonPayload, ["Object", "object"])
+    : xmlTextValues(text, "Object");
+  const objectPaths = objectValues.map(callbackObjectPath).filter(Boolean);
+  const inputObject =
+    callbackObjectPath(userData.sourceUrl || userData.source_url || userData.inputObject) ||
+    objectPaths.find((item) => item.startsWith("/uploads/session-album/videos/source/")) ||
+    objectPaths[0] ||
+    null;
+  const outputObject =
+    objectPaths.length > 1 ? objectPaths[objectPaths.length - 1] : objectPaths[0] || null;
+  const tag = String(
+    userData.kind ||
+      userData.tag ||
+      (isJson
+        ? firstDeepValue(jsonPayload, ["Tag", "tag", "Operation"])
+        : xmlTextValues(text, "Tag")[0]) ||
+      ""
+  );
+  const code = String(
+    userData.code ||
+      (isJson ? firstDeepValue(jsonPayload, ["Code", "code"]) : xmlTextValues(text, "Code")[0]) ||
+      ""
+  );
+  const state = String(
+    userData.state ||
+      (isJson
+        ? firstDeepValue(jsonPayload, ["State", "state"])
+        : xmlTextValues(text, "State")[0]) ||
+      ""
+  );
+  const message = String(
+    userData.message ||
+      (isJson
+        ? firstDeepValue(jsonPayload, ["Message", "message", "ErrorMessage"])
+        : xmlTextValues(text, "Message")[0]) ||
+      ""
+  );
+  let displayObject =
+    callbackObjectPath(userData.displayUrl || userData.display_url || userData.displayObject) ||
+    null;
+  let coverObject =
+    callbackObjectPath(userData.coverUrl || userData.cover_url || userData.coverObject) || null;
+
+  if (outputObject) {
+    const lowerOutput = outputObject.toLowerCase();
+    const lowerTag = tag.toLowerCase();
+    if (
+      lowerOutput.includes("/cover/") ||
+      /\.(?:jpg|jpeg)$/.test(lowerOutput) ||
+      lowerTag.includes("snapshot") ||
+      lowerTag.includes("screenshot") ||
+      lowerTag.includes("截帧")
+    ) {
+      coverObject = coverObject || outputObject;
+    }
+    if (
+      lowerOutput.includes("/display/") ||
+      lowerOutput.endsWith(".mp4") ||
+      lowerTag.includes("transcode") ||
+      lowerTag.includes("转码")
+    ) {
+      displayObject = displayObject || outputObject;
+    }
+  }
+
+  return {
+    mediaId: userData.mediaId || userData.media_id || firstDeepValue(jsonPayload, ["mediaId"]),
+    ciJobId:
+      userData.ciJobId ||
+      userData.ci_job_id ||
+      userData.jobId ||
+      (isJson
+        ? firstDeepValue(jsonPayload, ["JobId", "JobID", "jobId"])
+        : xmlTextValues(text, "JobId")[0]),
+    processingStatus: callbackStatus({
+      code,
+      state,
+      status: userData.status || firstDeepValue(jsonPayload, ["Status", "status"])
+    }),
+    kind: tag,
+    sourceUrl: inputObject,
+    displayUrl: displayObject,
+    coverUrl: coverObject,
+    processingError: message || code || null
+  };
+}
+
+async function handleSessionAlbumVideoProcessingCallback(url, request) {
+  verifyCosCiCallbackToken(url);
+  const rawBody = await readRawBody(request, 1024 * 1024);
+  const callback = parseSessionAlbumVideoProcessingCallback(rawBody);
+  return updateSessionAlbumVideoProcessingResult(callback);
+}
+
 function splitBuffer(buffer, separator) {
   const parts = [];
   let start = 0;
@@ -302,6 +579,70 @@ function parseMultipartImageUpload(contentType, body, options = {}) {
   throw badRequest(`${label} file is required`);
 }
 
+function isMp4FileBytes(file) {
+  return (
+    file.length >= 12 &&
+    file[4] === 0x66 &&
+    file[5] === 0x74 &&
+    file[6] === 0x79 &&
+    file[7] === 0x70
+  );
+}
+
+function parseMultipartVideoUpload(contentType, body, options = {}) {
+  const fieldName = options.fieldName || "video";
+  const maxBytes = options.maxBytes || SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES;
+  const label = options.label || fieldName;
+  const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[1] ||
+    contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[2];
+  if (!boundary) {
+    throw badRequest("multipart boundary is required");
+  }
+
+  const boundaryBuffer = Buffer.from(`--${boundary}`);
+  for (const rawPart of splitBuffer(body, boundaryBuffer)) {
+    let part = rawPart;
+    if (part.length >= 2 && part[0] === 13 && part[1] === 10) {
+      part = part.subarray(2);
+    }
+    if (part.length === 0 || part.subarray(0, 2).toString() === "--") {
+      continue;
+    }
+
+    const headerEnd = part.indexOf(Buffer.from("\r\n\r\n"));
+    if (headerEnd === -1) {
+      continue;
+    }
+
+    const headersText = part.subarray(0, headerEnd).toString("utf8");
+    const disposition = headersText.match(/^content-disposition:\s*(.+)$/im)?.[1] || "";
+    if (!disposition.includes(`name="${fieldName}"`) || !/filename="/.test(disposition)) {
+      continue;
+    }
+
+    const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "";
+    const mimeType = headersText.match(/^content-type:\s*([^\r\n;]+)/im)?.[1]?.trim() || "";
+    const file = trimMultipartPayload(part.subarray(headerEnd + 4));
+    if (file.length === 0) {
+      throw badRequest(`${label} file is required`);
+    }
+    if (file.length > maxBytes) {
+      throw badRequest(`${label} file is too large`);
+    }
+    if (
+      mimeType.toLowerCase() !== "video/mp4" &&
+      !/\.mp4$/i.test(filename) &&
+      !isMp4FileBytes(file)
+    ) {
+      throw badRequest(`${label} must be an MP4 video`);
+    }
+
+    return { extension: ".mp4", file, mimeType: "video/mp4" };
+  }
+
+  throw badRequest(`${label} file is required`);
+}
+
 function parseMultipartAvatarUpload(contentType, body) {
   return parseMultipartImageUpload(contentType, body, {
     fieldName: "avatar",
@@ -341,6 +682,9 @@ function avatarContentType(filename) {
   }
   if (extension === ".webp") {
     return "image/webp";
+  }
+  if (extension === ".mp4") {
+    return "video/mp4";
   }
   return "application/octet-stream";
 }
@@ -398,12 +742,41 @@ function normalizeUploadExtension(extension) {
   return ".jpg";
 }
 
+function normalizeVideoUploadExtension(extension) {
+  const normalized = String(extension || "").trim().toLowerCase();
+  if (normalized === "mp4" || normalized === ".mp4") {
+    return ".mp4";
+  }
+  return ".mp4";
+}
+
 async function createCosDirectUploadIntent({ kind, extension, user, userId, sessionId }) {
   if (!isCosUploadStorageEnabled()) {
     return { direct: false };
   }
 
   const uploadUserId = user?.user?.id || userId;
+  if (kind === "adminSessionAlbumVideo") {
+    requireRole(user, "system_admin");
+    normalizeVideoUploadExtension(extension);
+    const session = await assertSessionAlbumUploadAllowed(user, sessionId);
+    const key = `uploads/session-album/videos/source/${uploadFilenameBase(
+      `admin-video-${session.id}`,
+      uploadUserId
+    )}.mp4`;
+    return {
+      direct: true,
+      kind,
+      sessionId: Number(session.id),
+      bucket: config.cos.bucket,
+      region: config.cos.region,
+      key,
+      uploadPath: `/${key}`,
+      maxBytes: SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES,
+      contentType: "video/mp4"
+    };
+  }
+
   const sourceExtension = normalizeUploadExtension(extension);
   if (kind === "avatar") {
     const key = `uploads/avatars/${uploadFilenameBase("user", uploadUserId)}.webp`;
@@ -503,6 +876,15 @@ function directUploadKindForKey(key, userId) {
     return { kind: "adminSessionAlbumPhoto", sessionId: Number(adminAlbumMatch[1]) };
   }
 
+  const adminAlbumVideoMatch = key.match(
+    new RegExp(
+      `^uploads/session-album/videos/source/admin-video-(\\d+)-${userIdText}-\\d+-[a-f0-9]{16}\\.mp4$`
+    )
+  );
+  if (adminAlbumVideoMatch) {
+    return { kind: "adminSessionAlbumVideo", sessionId: Number(adminAlbumVideoMatch[1]) };
+  }
+
   throw forbidden("upload object key is not allowed");
 }
 
@@ -533,6 +915,10 @@ async function authorizeCosDirectUpload({ body, user }) {
   }
   if (directUpload.kind === "adminSessionAlbumPhoto") {
     await assertAdminOwnSessionAlbumAllowed(user, directUpload.sessionId);
+  }
+  if (directUpload.kind === "adminSessionAlbumVideo") {
+    requireRole(user, "system_admin");
+    await assertSessionAlbumUploadAllowed(user, directUpload.sessionId);
   }
   const headers = normalizeCosHeaders(body.headers || body.Headers);
   headers.host = headers.host || cosHost(config.cos);
@@ -683,6 +1069,29 @@ async function saveUploadedSessionAlbumPhoto(request, userId, sessionId, options
   });
 }
 
+async function saveUploadedSessionAlbumVideo(request, userId, sessionId) {
+  const contentType = request.headers["content-type"] || "";
+  if (!contentType.includes("multipart/form-data")) {
+    throw badRequest("album video upload must be multipart/form-data");
+  }
+
+  const body = await readRawBody(request, SESSION_ALBUM_VIDEO_MULTIPART_MAX_BYTES);
+  const { file, mimeType } = parseMultipartVideoUpload(contentType, body, {
+    fieldName: "video",
+    maxBytes: SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES,
+    label: "album video"
+  });
+  const videoFilename = `${uploadFilenameBase(`admin-video-${sessionId}`, userId)}.mp4`;
+  const key = `uploads/session-album/videos/source/${videoFilename}`;
+  return saveUploadedObject({
+    key,
+    filename: videoFilename,
+    file,
+    contentType: mimeType || "video/mp4",
+    localDir: sessionAlbumVideoSourceUploadDir
+  });
+}
+
 function sessionAlbumMediaSignature(photoId, expires) {
   return crypto
     .createHmac("sha256", config.sessionSecret)
@@ -697,6 +1106,135 @@ function sessionAlbumMediaPath(photoId, variant = "preview") {
     expires
   )}&signature=${encodeURIComponent(signature)}`;
   return variant === "thumbnail" ? `${path}&variant=thumbnail` : path;
+}
+
+function sessionAlbumVideoUrlPath(mediaId) {
+  return `/api/session-album/media/${mediaId}/video-url`;
+}
+
+function sessionAlbumVideoCoverPath(mediaId) {
+  const expires = Math.floor(Date.now() / 1000) + SESSION_ALBUM_MEDIA_TOKEN_SECONDS;
+  const signature = sessionAlbumMediaSignature(mediaId, expires);
+  return `/api/session-album/media/${mediaId}/cover?expires=${encodeURIComponent(
+    expires
+  )}&signature=${encodeURIComponent(signature)}`;
+}
+
+function sessionAlbumVideoFilePath(media, userId) {
+  const token = signSignedPayload("session-album-video-file", {
+    sessionId: tokenPositiveInteger(media.session_id, "sessionId"),
+    userId: tokenPositiveInteger(userId, "userId"),
+    mediaId: tokenPositiveInteger(media.id, "mediaId"),
+    exp: Math.floor(Date.now() / 1000) + SESSION_ALBUM_MEDIA_TOKEN_SECONDS
+  });
+  return `/api/session-album/media/${media.id}/video-file?token=${encodeURIComponent(token)}`;
+}
+
+function verifySessionAlbumVideoFileQuery(mediaId, query) {
+  const payload = verifySignedPayload(
+    "session-album-video-file",
+    query.get("token") || "",
+    "album video token"
+  );
+  const tokenMediaId = tokenPositiveInteger(payload.mediaId, "mediaId");
+  if (tokenMediaId !== Number(mediaId)) {
+    throw forbidden("album video token is invalid");
+  }
+  const exp = tokenPositiveInteger(payload.exp, "exp");
+  if (exp < Math.floor(Date.now() / 1000)) {
+    throw forbidden("album video token expired");
+  }
+  return {
+    sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
+    userId: tokenPositiveInteger(payload.userId, "userId"),
+    mediaId: tokenMediaId,
+    exp
+  };
+}
+
+function encodeCosObjectKey(key) {
+  return String(key || "").split("/").map(encodeURIComponent).join("/");
+}
+
+function albumVideoObjectKey(uploadPath) {
+  const pathText = String(uploadPath || "");
+  const prefixes = [
+    "/uploads/session-album/videos/display/",
+    "/uploads/session-album/videos/source/"
+  ];
+  const prefix = prefixes.find((candidate) => pathText.startsWith(candidate));
+  if (!prefix) {
+    throw notFound("Album video file not found");
+  }
+  return cosObjectKeyFromUploadPath(pathText, prefix);
+}
+
+function signedAlbumVideoUrl(media, userId) {
+  if (!isCosUploadStorageEnabled()) {
+    return sessionAlbumVideoFilePath(media, userId);
+  }
+  const key = albumVideoObjectKey(media.display_url || media.source_url);
+  const host = cosHost(config.cos);
+  const authorization = buildCosAuthorization({
+    method: "GET",
+    key,
+    headers: { host },
+    config: config.cos
+  });
+  return `https://${host}/${encodeCosObjectKey(key)}?${authorization}`;
+}
+
+function albumVideoSnapshotObjectKey(media) {
+  return albumVideoObjectKey(media.video_cover_source_url || media.display_url || media.source_url);
+}
+
+function snapshotQueryString() {
+  return new URLSearchParams(SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS).toString();
+}
+
+function signedAlbumVideoSnapshotUrl(media, userId) {
+  if (!media.video_cover_source_url && !media.display_url && !media.source_url) {
+    return "";
+  }
+  const snapshotQuery = snapshotQueryString();
+  if (!isCosUploadStorageEnabled()) {
+    return `${sessionAlbumVideoFilePath(media, userId)}&${snapshotQuery}`;
+  }
+  const key = albumVideoSnapshotObjectKey(media);
+  const host = cosHost(config.cos);
+  const authorization = buildCosAuthorization({
+    method: "GET",
+    key,
+    headers: { host },
+    urlParams: SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS,
+    config: config.cos
+  });
+  return `https://${host}/${encodeCosObjectKey(key)}?${snapshotQuery}&${authorization}`;
+}
+
+function signedPublicAlbumVideoSnapshotUrl(media, claims, albumShareToken) {
+  if (!media.video_cover_source_url && !media.display_url && !media.source_url) {
+    return "";
+  }
+  const snapshotQuery = snapshotQueryString();
+  if (!isCosUploadStorageEnabled()) {
+    return `${sessionAlbumPublicVideoCoverPath(media.id, claims, albumShareToken)}&${snapshotQuery}`;
+  }
+  const key = albumVideoSnapshotObjectKey(media);
+  const host = cosHost(config.cos);
+  const authorization = buildCosAuthorization({
+    method: "GET",
+    key,
+    headers: { host },
+    urlParams: SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS,
+    config: config.cos
+  });
+  return `https://${host}/${encodeCosObjectKey(key)}?${snapshotQuery}&${authorization}`;
+}
+
+function stripAlbumVideoInternalFields(photo) {
+  const { video_cover_source_url, ...safePhoto } = photo;
+  return safePhoto;
 }
 
 function mediaVariant(query) {
@@ -787,14 +1325,42 @@ function mediaVariantName(variant) {
 function attachSessionAlbumMediaUrls(album, userId) {
   return {
     ...album,
-    photos: album.photos.map((photo) => ({
-      ...photo,
-      image_url: sessionAlbumMediaPath(photo.id),
-      preview_url: sessionAlbumMediaPath(photo.id, "preview"),
-      thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail"),
-      preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview"),
-      thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")
-    }))
+    photos: album.photos.map((photo) => {
+      if (photo.media_type === "video") {
+        const safePhoto = stripAlbumVideoInternalFields(photo);
+        return {
+          ...safePhoto,
+          cover_url: photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
+          video_url: photo.processing_status === "ready" ? sessionAlbumVideoUrlPath(photo.id) : ""
+        };
+      }
+      return {
+        ...photo,
+        image_url: sessionAlbumMediaPath(photo.id),
+        preview_url: sessionAlbumMediaPath(photo.id, "preview"),
+        thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail"),
+        preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview"),
+        thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")
+      };
+    }),
+    media: album.photos.map((photo) => {
+      if (photo.media_type === "video") {
+        const safePhoto = stripAlbumVideoInternalFields(photo);
+        return {
+          ...safePhoto,
+          cover_url: photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
+          video_url: photo.processing_status === "ready" ? sessionAlbumVideoUrlPath(photo.id) : ""
+        };
+      }
+      return {
+        ...photo,
+        image_url: sessionAlbumMediaPath(photo.id),
+        preview_url: sessionAlbumMediaPath(photo.id, "preview"),
+        thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail"),
+        preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview"),
+        thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")
+      };
+    })
   };
 }
 
@@ -908,6 +1474,17 @@ function sessionAlbumPublicMediaPath(
   return variant === "thumbnail" ? `${path}&variant=thumbnail` : path;
 }
 
+function sessionAlbumPublicVideoCoverPath(mediaId, claims, albumShareToken) {
+  const token = signSessionAlbumPublicMediaToken({
+    ...claims,
+    photoId: mediaId,
+    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
+  });
+  return `/api/session-album/public-share/media/${mediaId}/cover?token=${encodeURIComponent(
+    token
+  )}`;
+}
+
 function verifySessionAlbumPublicMediaQuery(photoId, query) {
   const payload = verifySignedPayload(
     "session-album-public-media",
@@ -927,22 +1504,60 @@ function verifySessionAlbumPublicMediaQuery(photoId, query) {
 function attachPublicSessionAlbumMediaUrls(album, claims, albumShareToken) {
   return {
     ...album,
-    photos: album.photos.map((photo) => ({
-      ...photo,
-      image_url: sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken),
-      preview_url: sessionAlbumPublicMediaPath(
-        photo.id,
-        claims,
-        albumShareToken,
-        "preview"
-      ),
-      thumbnail_url: sessionAlbumPublicMediaPath(
-        photo.id,
-        claims,
-        albumShareToken,
-        "thumbnail"
-      )
-    }))
+    photos: album.photos.map((photo) => {
+      if (photo.media_type === "video") {
+        const safePhoto = stripAlbumVideoInternalFields(photo);
+        return {
+          ...safePhoto,
+          cover_url: photo.has_cover
+            ? signedPublicAlbumVideoSnapshotUrl(photo, claims, albumShareToken)
+            : ""
+        };
+      }
+      return {
+        ...photo,
+        image_url: sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken),
+        preview_url: sessionAlbumPublicMediaPath(
+          photo.id,
+          claims,
+          albumShareToken,
+          "preview"
+        ),
+        thumbnail_url: sessionAlbumPublicMediaPath(
+          photo.id,
+          claims,
+          albumShareToken,
+          "thumbnail"
+        )
+      };
+    }),
+    media: album.photos.map((photo) => {
+      if (photo.media_type === "video") {
+        const safePhoto = stripAlbumVideoInternalFields(photo);
+        return {
+          ...safePhoto,
+          cover_url: photo.has_cover
+            ? signedPublicAlbumVideoSnapshotUrl(photo, claims, albumShareToken)
+            : ""
+        };
+      }
+      return {
+        ...photo,
+        image_url: sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken),
+        preview_url: sessionAlbumPublicMediaPath(
+          photo.id,
+          claims,
+          albumShareToken,
+          "preview"
+        ),
+        thumbnail_url: sessionAlbumPublicMediaPath(
+          photo.id,
+          claims,
+          albumShareToken,
+          "thumbnail"
+        )
+      };
+    })
   };
 }
 
@@ -1085,6 +1700,30 @@ async function readUploadedObject({ url, prefix, localDir }) {
 
 async function deleteUploadedSessionAlbumPhotoObject(photoUrl) {
   const url = new URL(photoUrl, "http://localhost");
+  if (url.pathname.startsWith("/uploads/session-album/videos/source/")) {
+    await deleteUploadedObject({
+      url,
+      prefix: "/uploads/session-album/videos/source/",
+      localDir: sessionAlbumVideoSourceUploadDir
+    });
+    return;
+  }
+  if (url.pathname.startsWith("/uploads/session-album/videos/display/")) {
+    await deleteUploadedObject({
+      url,
+      prefix: "/uploads/session-album/videos/display/",
+      localDir: sessionAlbumVideoDisplayUploadDir
+    });
+    return;
+  }
+  if (url.pathname.startsWith("/uploads/session-album/videos/cover/")) {
+    await deleteUploadedObject({
+      url,
+      prefix: "/uploads/session-album/videos/cover/",
+      localDir: sessionAlbumVideoCoverUploadDir
+    });
+    return;
+  }
   if (url.pathname.startsWith("/uploads/session-album/display/")) {
     await deleteUploadedObject({
       url,
@@ -1103,6 +1742,9 @@ async function deleteUploadedSessionAlbumPhotoObject(photoUrl) {
 }
 
 async function cleanupUploadedSessionAlbumPhotoObject(photoUrl) {
+  if (!photoUrl) {
+    return;
+  }
   try {
     await deleteUploadedSessionAlbumPhotoObject(photoUrl);
   } catch (error) {
@@ -1112,6 +1754,12 @@ async function cleanupUploadedSessionAlbumPhotoObject(photoUrl) {
       message: error?.message || String(error),
       path: new URL(photoUrl, "http://localhost").pathname
     });
+  }
+}
+
+async function cleanupUploadedSessionAlbumMediaObjects(urls = []) {
+  for (const url of urls) {
+    await cleanupUploadedSessionAlbumPhotoObject(url);
   }
 }
 
@@ -1178,6 +1826,58 @@ async function serveUploadedSessionAlbumPhoto(photo, response, options = {}) {
     }
     throw notFound();
   }
+}
+
+async function serveUploadedSessionAlbumVideoCover(media, response) {
+  if (!media.cover_url) {
+    throw notFound("Album video cover not found");
+  }
+  const cacheControl = "private, no-store";
+  try {
+    const coverUrl = new URL(media.cover_url, "http://localhost");
+    await serveUploadedObject({
+      url: coverUrl,
+      prefix: "/uploads/session-album/videos/cover/",
+      localDir: sessionAlbumVideoCoverUploadDir,
+      response,
+      cacheControl
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+    throw notFound();
+  }
+}
+
+async function serveUploadedSessionAlbumVideoFile(media, response) {
+  const videoPath = media.display_url || media.source_url;
+  if (!videoPath) {
+    throw notFound("Album video file not found");
+  }
+  const videoUrl = new URL(videoPath, "http://localhost");
+  const cacheControl = "private, no-store";
+  if (videoUrl.pathname.startsWith("/uploads/session-album/videos/display/")) {
+    await serveUploadedObject({
+      url: videoUrl,
+      prefix: "/uploads/session-album/videos/display/",
+      localDir: sessionAlbumVideoDisplayUploadDir,
+      response,
+      cacheControl
+    });
+    return;
+  }
+  if (videoUrl.pathname.startsWith("/uploads/session-album/videos/source/")) {
+    await serveUploadedObject({
+      url: videoUrl,
+      prefix: "/uploads/session-album/videos/source/",
+      localDir: sessionAlbumVideoSourceUploadDir,
+      response,
+      cacheControl
+    });
+    return;
+  }
+  throw notFound("Album video file not found");
 }
 
 async function getSessionAlbumDisplayMetadata(photoUrl) {
@@ -1273,6 +1973,23 @@ async function route(request, response) {
     return;
   }
 
+  const publicSessionAlbumVideoCoverId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/public-share\/media\/(\d+)\/cover$/
+  );
+  if (request.method === "GET" && publicSessionAlbumVideoCoverId) {
+    const claims = verifySessionAlbumPublicMediaQuery(
+      publicSessionAlbumVideoCoverId,
+      url.searchParams
+    );
+    const media = await getPublicSessionAlbumVideoCoverForMedia(
+      claims,
+      publicSessionAlbumVideoCoverId
+    );
+    await serveUploadedSessionAlbumVideoCover(media, response);
+    return;
+  }
+
   const sessionAlbumMediaPhotoId = idMatch(
     url.pathname,
     /^\/api\/session-album\/photos\/(\d+)\/image$/
@@ -1305,6 +2022,61 @@ async function route(request, response) {
       sessionAlbumMediaPhotoId
     );
     await serveUploadedSessionAlbumPhoto(photo, response, { variant });
+    return;
+  }
+
+  const sessionAlbumMediaVideoCoverId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/media\/(\d+)\/cover$/
+  );
+  if (request.method === "GET" && sessionAlbumMediaVideoCoverId) {
+    const user = await getAuthUser(request);
+    verifySessionAlbumMediaQuery(sessionAlbumMediaVideoCoverId, url.searchParams);
+    const media = await getVisibleSessionAlbumVideoForPlayback(
+      user,
+      sessionAlbumMediaVideoCoverId
+    );
+    await serveUploadedSessionAlbumVideoCover(media, response);
+    return;
+  }
+
+  const sessionAlbumMediaVideoFileId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/media\/(\d+)\/video-file$/
+  );
+  if (request.method === "GET" && sessionAlbumMediaVideoFileId) {
+    const claims = verifySessionAlbumVideoFileQuery(
+      sessionAlbumMediaVideoFileId,
+      url.searchParams
+    );
+    const media = await getVisibleSessionAlbumVideoForPlayback(
+      { user: { id: claims.userId }, roles: [] },
+      sessionAlbumMediaVideoFileId
+    );
+    if (Number(media.session_id) !== claims.sessionId) {
+      throw forbidden("album video token is invalid");
+    }
+    await serveUploadedSessionAlbumVideoFile(media, response);
+    return;
+  }
+
+  const sessionAlbumMediaVideoUrlId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/media\/(\d+)\/video-url$/
+  );
+  if (request.method === "GET" && sessionAlbumMediaVideoUrlId) {
+    const user = await getAuthUser(request);
+    const media = await getVisibleSessionAlbumVideoForPlayback(
+      user,
+      sessionAlbumMediaVideoUrlId
+    );
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        url: signedAlbumVideoUrl(media, user.user.id),
+        expiresInSeconds: SESSION_ALBUM_MEDIA_TOKEN_SECONDS
+      }
+    });
     return;
   }
 
@@ -1363,6 +2135,35 @@ async function route(request, response) {
     jsonResponse(response, 201, {
       ok: true,
       data: { photoUrl }
+    });
+    return;
+  }
+
+  const adminSessionAlbumVideoUploadId = idMatch(
+    url.pathname,
+    /^\/api\/admin\/sessions\/(\d+)\/album\/videos\/uploads$/
+  );
+  if (request.method === "POST" && adminSessionAlbumVideoUploadId) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideoUploadId);
+    const sourceUrl = await saveUploadedSessionAlbumVideo(
+      request,
+      user.user.id,
+      adminSessionAlbumVideoUploadId
+    );
+    jsonResponse(response, 201, {
+      ok: true,
+      data: { sourceUrl }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/cos/ci/session-album-video-callback") {
+    const callbackResult = await handleSessionAlbumVideoProcessingCallback(url, request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: callbackResult
     });
     return;
   }
@@ -1505,17 +2306,63 @@ async function route(request, response) {
   }
 
   if (request.method === "GET" && url.pathname === "/api/stores") {
+    const user = await optionalAuthUser(request);
     jsonResponse(response, 200, {
       ok: true,
-      data: await listActiveStores(Object.fromEntries(url.searchParams))
+      data: await listActiveStores(Object.fromEntries(url.searchParams), user)
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/stores") {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 201, {
+      ok: true,
+      data: await createPrivateStore(user, body)
     });
     return;
   }
 
   if (request.method === "GET" && url.pathname === "/api/scripts") {
+    const user = await optionalAuthUser(request);
     jsonResponse(response, 200, {
       ok: true,
-      data: await listActiveScripts(Object.fromEntries(url.searchParams))
+      data: await listActiveScripts(Object.fromEntries(url.searchParams), user)
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/scripts") {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 201, {
+      ok: true,
+      data: await createPrivateScript(user, body)
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/catalog-review-items/mine") {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listMyCatalogReviewItems(user, Object.fromEntries(url.searchParams))
+    });
+    return;
+  }
+
+  const myCatalogReviewItemMatch = url.pathname.match(
+    /^\/api\/catalog-review-items\/(store|script)\/(\d+)$/
+  );
+  if (request.method === "PATCH" && myCatalogReviewItemMatch) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await updateMyCatalogReviewItem(
+        user,
+        myCatalogReviewItemMatch[1],
+        Number(myCatalogReviewItemMatch[2]),
+        body
+      )
     });
     return;
   }
@@ -1607,6 +2454,106 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await deleteScript(adminScriptId)
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/admin/catalog-review-items") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listAdminCatalogReviewItems(Object.fromEntries(url.searchParams))
+    });
+    return;
+  }
+
+  const adminCatalogReviewItemMatch = url.pathname.match(
+    /^\/api\/admin\/catalog-review-items\/(store|script)\/(\d+)$/
+  );
+  if (request.method === "PATCH" && adminCatalogReviewItemMatch) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await updateAdminCatalogReviewItem(
+        user,
+        adminCatalogReviewItemMatch[1],
+        Number(adminCatalogReviewItemMatch[2]),
+        body
+      )
+    });
+    return;
+  }
+
+  const adminCatalogReviewApproveMatch = url.pathname.match(
+    /^\/api\/admin\/catalog-review-items\/(store|script)\/(\d+)\/approve$/
+  );
+  if (request.method === "POST" && adminCatalogReviewApproveMatch) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await approveCatalogReviewItem(
+        user,
+        adminCatalogReviewApproveMatch[1],
+        Number(adminCatalogReviewApproveMatch[2]),
+        body
+      )
+    });
+    return;
+  }
+
+  const adminCatalogReviewNeedsChangesMatch = url.pathname.match(
+    /^\/api\/admin\/catalog-review-items\/(store|script)\/(\d+)\/needs-changes$/
+  );
+  if (request.method === "POST" && adminCatalogReviewNeedsChangesMatch) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await markCatalogReviewItemNeedsChanges(
+        user,
+        adminCatalogReviewNeedsChangesMatch[1],
+        Number(adminCatalogReviewNeedsChangesMatch[2]),
+        body
+      )
+    });
+    return;
+  }
+
+  const adminCatalogReviewRejectMatch = url.pathname.match(
+    /^\/api\/admin\/catalog-review-items\/(store|script)\/(\d+)\/reject$/
+  );
+  if (request.method === "POST" && adminCatalogReviewRejectMatch) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await rejectCatalogReviewItem(
+        user,
+        adminCatalogReviewRejectMatch[1],
+        Number(adminCatalogReviewRejectMatch[2]),
+        body
+      )
+    });
+    return;
+  }
+
+  const adminCatalogReviewMergeMatch = url.pathname.match(
+    /^\/api\/admin\/catalog-review-items\/(store|script)\/(\d+)\/merge$/
+  );
+  if (request.method === "POST" && adminCatalogReviewMergeMatch) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await mergeCatalogReviewItem(
+        user,
+        adminCatalogReviewMergeMatch[1],
+        Number(adminCatalogReviewMergeMatch[2]),
+        body
+      )
     });
     return;
   }
@@ -1950,6 +2897,28 @@ async function route(request, response) {
     return;
   }
 
+  const adminSessionAlbumVideosId = idMatch(
+    url.pathname,
+    /^\/api\/admin\/sessions\/(\d+)\/album\/videos$/
+  );
+  if (request.method === "POST" && adminSessionAlbumVideosId) {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideosId);
+    const video = await createSessionAlbumVideo(user, adminSessionAlbumVideosId, body, {
+      localFallbackReady: !isCosUploadStorageEnabled()
+    });
+    jsonResponse(response, 201, {
+      ok: true,
+      data: {
+        ...video,
+        cover_url: "",
+        video_url: video.processing_status === "ready" ? sessionAlbumVideoUrlPath(video.id) : ""
+      }
+    });
+    return;
+  }
+
   const sessionAlbumPhotoId = idMatch(
     url.pathname,
     /^\/api\/session-album\/photos\/(\d+)$/
@@ -1958,6 +2927,9 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     const deletedPhoto = await deleteSessionAlbumPhoto(user, sessionAlbumPhotoId);
     await cleanupUploadedSessionAlbumPhotoObject(deletedPhoto.photo_url);
+    await cleanupUploadedSessionAlbumMediaObjects(
+      (deletedPhoto.object_urls || []).filter((url) => url !== deletedPhoto.photo_url)
+    );
     jsonResponse(response, 200, {
       ok: true,
       data: {

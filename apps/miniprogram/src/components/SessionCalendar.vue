@@ -1,20 +1,21 @@
 <template>
   <view class="session-calendar">
     <view class="calendar-shell">
-      <view class="calendar-hero">
-        <t-image class="hero-art" src="/static/art/bamboo-corner.png" mode="aspectFit" />
-        <view class="hero-main">
-          <view>
-            <view class="title">{{ title }}</view>
-            <view class="hero-subtitle">{{ totalCount }} 场车局 · {{ calendarUpdatedText }}</view>
+      <view v-if="showCalendarActions" class="calendar-action-bar">
+        <t-button v-if="showCreateButton" class="primary-quiet-button" @tap="$emit('create')">
+          <view class="primary-action-inner">
+            <t-image class="primary-action-icon" src="/static/icons/user-plus-white.png" mode="aspectFit" />
+            <text>{{ createButtonLabel }}</text>
           </view>
-        </view>
-        <view class="hero-actions">
-          <t-button v-if="showCreateButton" class="primary-quiet-button" @tap="$emit('create')">
-            {{ createButtonLabel }}
-          </t-button>
-          <t-button v-if="showAdminButton" class="quiet-button" @tap="$emit('admin')">管理员</t-button>
-          <t-button v-if="showLogoutButton" class="quiet-button" @tap="$emit('logout')">退出</t-button>
+        </t-button>
+        <view
+          v-if="showAdminButton"
+          class="admin-icon-button"
+          aria-label="管理"
+          hover-class="admin-icon-button--active"
+          @tap="$emit('admin')"
+        >
+          <t-image class="admin-action-icon" src="/static/icons/toolbox-light.svg" mode="aspectFit" />
         </view>
       </view>
 
@@ -24,7 +25,7 @@
           t-class-item="calendar-segmented-item"
           t-class-thumb="calendar-segmented-thumb"
           block
-          custom-style="width: 100%; --td-segmented-bg-color: rgba(239, 234, 224, 0.66); --td-segmented-item-active-bg: #ffffff; --td-segmented-item-color: #34443e; --td-segmented-item-active-color: #1f6f5b; --td-segmented-item-label-font: 500 20rpx / 38rpx sans-serif; --td-spacer-1: 16rpx;"
+          custom-style="width: 100%; height: 64rpx; box-sizing: border-box; --td-segmented-bg-color: rgba(239, 234, 224, 0.62); --td-segmented-item-active-bg: #ffffff; --td-segmented-item-color: #34443e; --td-segmented-item-active-color: #1f6f5b; --td-segmented-item-label-font: 600 23rpx / 52rpx sans-serif; --td-spacer: 24rpx; --td-spacer-1: 0rpx;"
           :value="activeCalendarFilter"
           :options="safeVisibleFilterSegmentOptions"
           @change="setFilter($event.detail.value)"
@@ -201,10 +202,6 @@ const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "�
 const CALENDAR_PAGE_SIZE = 6;
 
 const props = defineProps({
-  title: {
-    type: String,
-    default: "我的拼车日程"
-  },
   sessions: {
     type: Array,
     default: () => []
@@ -221,10 +218,6 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
-  updatedAt: {
-    type: [Date, String, Number],
-    default: null
-  },
   statusText: {
     type: String,
     default: ""
@@ -240,14 +233,10 @@ const props = defineProps({
   showAdminButton: {
     type: Boolean,
     default: false
-  },
-  showLogoutButton: {
-    type: Boolean,
-    default: false
   }
 });
 
-const emit = defineEmits(["refresh", "create", "admin", "logout", "auth-expired"]);
+const emit = defineEmits(["refresh", "create", "admin", "auth-expired"]);
 
 const sessionStatusText = ref("");
 const signupStatusText = ref("");
@@ -266,15 +255,7 @@ const pendingCount = computed(
   () => calendarItems.value.filter((item) => item.isPending).length
 );
 const isCalendarLoading = computed(() => props.loading);
-const calendarUpdatedText = computed(() => {
-  if (isCalendarLoading.value) {
-    return "正在整理";
-  }
-  if (props.updatedAt) {
-    return "最近更新刚刚";
-  }
-  return "等待同步";
-});
+const showCalendarActions = computed(() => props.showCreateButton || props.showAdminButton);
 const calendarStatusText = computed(() => {
   if (isCalendarLoading.value) {
     return "正在整理你的车局...";
@@ -1054,81 +1035,76 @@ function signupStatusLabel(status) {
 .calendar-shell {
   display: flex;
   flex-direction: column;
-  gap: 22rpx;
+  gap: 18rpx;
 }
 
-.calendar-hero {
-  position: relative;
-  overflow: hidden;
-  padding: 34rpx 28rpx 26rpx;
-  border: 1rpx solid rgba(222, 215, 202, 0.94);
-  border-radius: 18rpx;
-  background: rgba(255, 255, 252, 0.96);
-  box-shadow: 0 18rpx 48rpx rgba(51, 69, 59, 0.06);
-}
-
-.hero-art {
-  position: absolute;
-  right: -24rpx;
-  bottom: -28rpx;
-  width: 178rpx;
-  height: 178rpx;
-  opacity: 0.2;
-  transform: rotate(10deg);
-}
-
-.hero-main {
-  position: relative;
-  z-index: 1;
-}
-
-.hero-subtitle {
-  margin-top: 16rpx;
-  color: #667985;
-  font-size: 25rpx;
-  line-height: 1.45;
-}
-
-.hero-actions {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  gap: 14rpx;
-  margin-top: 24rpx;
-}
-
-.quiet-button {
-  flex: 0 0 136rpx;
-  height: 56rpx;
-  margin: 0;
-  padding: 0 18rpx;
-  border: 1rpx solid rgba(210, 199, 181, 0.96);
-  border-radius: 10rpx;
-  background: rgba(255, 255, 255, 0.72);
-  color: #415766;
-  font-size: 24rpx;
-  line-height: 56rpx;
+.calendar-action-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12rpx;
+  align-items: center;
 }
 
 .primary-quiet-button {
-  flex: 0 0 148rpx;
-  height: 60rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 92rpx;
   margin: 0;
-  padding: 0 22rpx;
-  border-radius: 12rpx;
-  background: #24745f;
+  padding: 0 34rpx;
+  box-sizing: border-box;
+  border-radius: 18rpx;
+  background: linear-gradient(145deg, #1a5d4d 0%, #2c775f 100%);
   color: #ffffff;
-  font-size: 25rpx;
+  font-size: 32rpx;
   font-weight: 600;
-  line-height: 60rpx;
-  box-shadow: 0 14rpx 28rpx rgba(36, 116, 95, 0.18);
+  line-height: 1.2;
+  text-align: center;
+  box-shadow: 0 18rpx 42rpx rgba(31, 111, 91, 0.24);
+}
+
+.admin-icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 92rpx;
+  height: 92rpx;
+  box-sizing: border-box;
+  border: 1rpx solid rgba(255, 255, 255, 0.28);
+  border-radius: 18rpx;
+  background: linear-gradient(145deg, #2d8069 0%, #1f6f5b 100%);
+  box-shadow: 0 18rpx 42rpx rgba(31, 111, 91, 0.2);
+}
+
+.admin-icon-button--active {
+  background: #1b5f4f;
+}
+
+.admin-action-icon {
+  width: 46rpx;
+  height: 46rpx;
+}
+
+.primary-action-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18rpx;
+  width: 100%;
+  height: 100%;
+}
+
+.primary-action-icon {
+  width: 42rpx;
+  height: 42rpx;
 }
 
 .calendar-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 220rpx;
-  gap: 14rpx;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) 216rpx;
+  gap: 12rpx;
+  align-items: stretch;
 }
 
 .filter-tabs {
@@ -1146,7 +1122,7 @@ function signupStatusLabel(status) {
   margin: 0;
   padding: 0 8rpx;
   border: 1rpx solid rgba(199, 179, 144, 0.86);
-  border-radius: 999rpx;
+  border-radius: 10rpx;
   background: rgba(255, 255, 252, 0.82);
   color: #6d604f;
   font-size: 24rpx;
@@ -1171,24 +1147,24 @@ function signupStatusLabel(status) {
 .calendar-tools {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10rpx;
+  gap: 12rpx;
 }
 
 .today-reset-button,
 .date-picker-button {
-  height: 62rpx;
+  height: 64rpx;
   margin: 0;
   padding: 0;
-  border: 1rpx solid rgba(36, 116, 95, 0.36);
-  border-radius: 999rpx;
-  background: rgba(255, 255, 252, 0.9);
+  border: 1rpx solid rgba(36, 116, 95, 0.42);
+  border-radius: 12rpx;
+  background: rgba(255, 255, 252, 0.94);
   color: #24745f;
   font-size: 24rpx;
   font-weight: 600;
-  line-height: 62rpx;
+  line-height: 64rpx;
   text-align: center;
   box-sizing: border-box;
-  box-shadow: 0 10rpx 24rpx rgba(36, 116, 95, 0.1);
+  box-shadow: 0 10rpx 22rpx rgba(36, 116, 95, 0.08);
 }
 
 .today-reset-button:active,
@@ -1201,8 +1177,8 @@ function signupStatusLabel(status) {
 }
 
 .calendar-scroll {
-  height: calc(100vh - 466rpx);
-  min-height: 560rpx;
+  height: calc(100vh - 356rpx);
+  min-height: 640rpx;
 }
 
 .load-more {

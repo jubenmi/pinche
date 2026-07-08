@@ -117,15 +117,22 @@ page {
 }
 
 .calendar-segmented-item {
-  padding: 4rpx 14rpx !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 52rpx !important;
+  padding: 0 14rpx !important;
+  box-sizing: border-box !important;
   color: #34443e !important;
-  font-size: 20rpx !important;
-  font-weight: 500 !important;
-  line-height: 38rpx !important;
+  font-size: 23rpx !important;
+  font-weight: 600 !important;
+  line-height: 52rpx !important;
 }
 
 .calendar-segmented-thumb {
   background: #ffffff !important;
+  border-radius: 10rpx !important;
+  box-shadow: 0 8rpx 20rpx rgba(44, 61, 51, 0.08) !important;
 }
 
 .bottom-action {
