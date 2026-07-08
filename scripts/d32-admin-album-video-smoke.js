@@ -242,8 +242,9 @@ async function main() {
   );
   assert(
     fallbackVideo.data.processing_status === "ready",
-    "local fallback video should become ready immediately when COS is disabled"
+    "created video should become ready immediately from the locally compressed source MP4"
   );
+  assert(fallbackVideo.data.video_url, "created ready video should include video-url path");
 
   const sourceUrl = fakeVideoSourceUrl(session.id, admin.user.id, 3);
   const processingVideoId = await insertProcessingVideo({
@@ -290,6 +291,15 @@ async function main() {
     { tagKeys: [`seat:${memberSeat.id}`] },
     admin.token
   );
+  const memberAlbum = await request("GET", `/api/sessions/${session.id}/album`, undefined, member.token);
+  const memberVideo = memberAlbum.data.media.find(
+    (item) => Number(item.id) === Number(processingVideoId)
+  );
+  assert(memberVideo?.media_type === "video", "non-admin member should see tagged ready video");
+  assert(memberVideo.video_url, "non-admin member should receive video-url path");
+  const memberSigned = await request("GET", memberVideo.video_url, undefined, member.token);
+  assert(memberSigned.data.url, "non-admin member should receive a playback URL");
+
   const shareToken = await request(
     "POST",
     `/api/sessions/${session.id}/album/share-token`,

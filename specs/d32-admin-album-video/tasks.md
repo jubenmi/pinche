@@ -30,21 +30,23 @@
   - [x] `authorizeCosDirectUpload` 再次校验 bucket、region、method、key、上传者和权限。
   - [x] 添加静态检查或后端烟测，确认非管理员不能获得视频 intent。
 
-- [ ] D32.4 实现视频媒体记录创建和处理任务。
-  - 进度：2026-07-08 已调整为更低云端配置通路：COS source 上传后由腾讯云数据工作流只触发展示版 MP4 转码；封面由后端按需生成短期签名 `ci-process=snapshot&time=1&format=jpg` URL。生产回调 token、代码发布、启用转码触发和真实云端文件验证仍需完成。
+- [x] D32.4 实现视频媒体记录创建和处理任务。
+  - 进度：2026-07-08 用户确认最终低成本通路：视频上传前本地压缩，COS source 即展示 MP4，不再使用云端转码；封面继续由后端按需生成短期签名 `ci-process=snapshot&time=1&format=jpg` URL。后端创建状态已从等待 workflow 回调调整为直接 ready，腾讯云 workflow 上传触发已关闭以避免转码费用。
   - [x] 新增 `POST /api/admin/sessions/:id/album/videos`。
   - [x] 新增服务函数 `createSessionAlbumVideo(user, sessionId, body)`。
   - [x] 校验 `system_admin`、相册已开放、成员上传边界和 source URL 前缀。
   - [x] 后端再次校验 `durationSeconds <= 60`。
-  - [x] 写入 `media_type=video`、`processing_status=processing`。
-  - [ ] 在腾讯云控制台配置数据工作流，生成 display MP4；封面使用 URL 截帧。
-    - 2026-07-08：已创建 `pinche_album_short_video_transcode` workflow，输入 `uploads/session-album/videos/source/`，输出 `uploads/session-album/videos/display/${InputName}.${ext}`，使用系统 `H264-MP4-标清` 模版；当前未启用上传触发、未配置回调。
-    - 2026-07-08：`pinche_album_short_video_cover` workflow 已删除；封面改为后端生成短期签名 URL 截帧。
-  - [x] 回调到达时记录 `ci_job_id`。
+  - [x] 写入 `media_type=video`、`processing_status=ready`、`display_url=source_url`，不再等待云端转码回调。
+  - [x] 在腾讯云控制台关闭 `pinche_album_short_video_transcode` 上传触发，避免本地已压缩 MP4 再产生云端转码费用；封面继续使用 URL 截帧。
+    - 2026-07-08：曾创建 `pinche_album_short_video_transcode` workflow，输入 `uploads/session-album/videos/source/`，输出 `uploads/session-album/videos/display/${InputName}.${ext}`，使用系统 `H264-MP4-标清` 模版。
+    - 2026-07-08：真实生产测试显示 source 上传成功、workflow 实例执行成功，但 API 记录仍停在 `processing`，用户确认云端不用再压缩，改为本地压缩直出。
+    - 2026-07-08：`pinche_album_short_video_cover` workflow 已删除；封面保留后端生成短期签名 URL 截帧。
+    - 2026-07-08：腾讯云控制台已暂停 `pinche_album_short_video_transcode` 的上传触发执行，开关显示灰色关闭态。
+  - [x] 历史回调到达时记录 `ci_job_id`。
   - [x] 本地无 COS 时提供可测的 fallback，不引入本地 ffmpeg。
 
 - [x] D32.5 实现数据万象回调或轮询更新。
-  - 进度：2026-07-08 已新增 `POST /api/cos/ci/session-album-video-callback`，支持 JSON/XML 回调、token 校验、按 mediaId/source/jobId 幂等更新同一个媒体项；转码成功写入 `display_url` 后即 ready，封面不再作为 ready 前置条件。
+  - 进度：2026-07-08 已新增 `POST /api/cos/ci/session-album-video-callback`，支持 JSON/XML 回调、token 校验、按 mediaId/source/jobId 幂等更新同一个媒体项；当前作为历史兼容能力保留，不再作为 D32 第一阶段主链路。
   - [x] 新增处理成功更新逻辑：写入 `display_url` 和视频元数据；历史 snapshot 回调可兼容写入 `cover_url`，但第一阶段不依赖。
   - [x] 新增处理失败更新逻辑：写入 `processing_status=failed` 和 `processing_error`。
   - [x] 重复回调必须幂等，不创建重复媒体项。
@@ -77,7 +79,7 @@
   - [x] 选择压缩后更小的文件上传，否则在限制内上传原文件。
   - [x] 上传前确认展示时长、预计大小和“按相册隐私展示”。
   - [x] 直传 COS source 对象。
-  - [x] 创建视频媒体记录后显示 `processing` 卡片。
+  - [x] 创建视频媒体记录后直接显示 ready 视频卡片。
 
 - [x] D32.9 改造小程序相册视频展示和播放。
   - [x] 在当前相册页内增加视频卡片、状态和播放，不新增独立视频相册页。
@@ -130,7 +132,7 @@
 - [x] 超过 60 秒视频不压缩、不上传、不创建 intent。
 - [x] 小程序上传前使用 `wx.compressVideo`。
 - [x] 视频源文件直传 COS source 前缀。
-- [ ] 数据万象生成单一 display MP4，封面使用短期签名 URL 截帧。
+- [x] 本地压缩 MP4 直出播放，封面使用短期签名 URL 截帧。
 - [x] API 只返回短期签名 URL，不代理视频字节流。
 - [x] 视频不参与全部下载和多选下载。
 - [x] 朋友圈公开只读不返回视频播放 URL。
@@ -146,13 +148,17 @@
 - 2026-07-08：`npm run check` 通过。
 - 2026-07-08：`npm run build:mp-weixin` 通过，存在 Sass legacy/import deprecation warning。
 - 2026-07-08：`npm run build:admin-web` 通过。
-- 2026-07-08：真实数据万象视频处理改为腾讯云 COS 数据工作流触发展示版 MP4 转码；封面改为 URL 截帧；后端已接入 `POST /api/cos/ci/session-album-video-callback` 回调更新，控制台 workflow 启用和真实云端验证待完成。
+- 2026-07-08：历史方案曾改为腾讯云 COS 数据工作流触发展示版 MP4 转码、封面 URL 截帧；后端保留 `POST /api/cos/ci/session-album-video-callback` 作为兼容回调。
 - 2026-07-08：`env MYSQL_HOST=127.0.0.1 MYSQL_PORT=3307 MYSQL_DATABASE=pinche MYSQL_USER=pinche MYSQL_PASSWORD=pinche_dev_password npm run d32:smoke` 通过。
 - 2026-07-08：`npm run check` 通过。
 - 2026-07-08：`npm run build:mp-weixin` 通过，存在 Sass legacy/import deprecation warning。
 - 2026-07-08：`npm run build:admin-web` 通过。
 - 2026-07-08：微信开发者工具内真实 `wx.chooseMedia` / `wx.compressVideo` 交互仍需手工验证；当前自动验证覆盖源码检查和构建。
-- 2026-07-08：腾讯云 COS 数据工作流已收口为一个未启用 workflow：`pinche_album_short_video_transcode` 负责 source -> display MP4；`pinche_album_short_video_cover` 已删除。因生产代码和 `COS_CI_CALLBACK_TOKEN` 尚未落地，未启用上传触发且未做真实云端上传回调测试。
+- 2026-07-08：腾讯云 COS 数据工作流曾收口为一个 workflow：`pinche_album_short_video_transcode` 负责 source -> display MP4；`pinche_album_short_video_cover` 已删除。最终路线确认云端不用再压缩，该 workflow 不再作为主链路。
 - 2026-07-08：腾讯云 workflow 创建后复跑 `env MYSQL_HOST=127.0.0.1 MYSQL_PORT=3307 MYSQL_DATABASE=pinche MYSQL_USER=pinche MYSQL_PASSWORD=pinche_dev_password npm run d32:smoke` 通过；该历史验证覆盖本地 API、视频媒体创建、本地 fallback 和模拟数据万象转码/截帧回调。
 - 2026-07-08：按最终低配置路线改为 URL 截帧封面；`env MYSQL_HOST=127.0.0.1 MYSQL_PORT=3307 MYSQL_DATABASE=pinche MYSQL_USER=pinche MYSQL_PASSWORD=pinche_dev_password npm run d32:smoke` 通过，覆盖转码回调即 ready、列表和公开分享返回 `ci-process=snapshot` 封面 URL。
-- 2026-07-08：腾讯云控制台确认只剩 `pinche_album_short_video_transcode`，上传触发执行开关仍关闭；真实云端触发需等生产代码、`COS_CI_CALLBACK_TOKEN` 和回调 URL 配置完成后再开启。
+- 2026-07-08：真实生产测试显示 source 上传成功、workflow 实例执行成功，但 API 记录仍停在 `processing`；随后按用户确认改为本地压缩直出、云端不转码，只保留 URL 截帧封面。
+- 2026-07-08：按最终路线更新后复跑 `node --check apps/api/src/server.js`、`node --check apps/api/src/modules/core/service.js`、`node scripts/d32-admin-album-video-check.js` 和 `git diff --check` 通过。
+- 2026-07-08：启动本地 API 后复跑 `BASE_URL=http://127.0.0.1:3032 MYSQL_HOST=127.0.0.1 MYSQL_PORT=3307 MYSQL_DATABASE=pinche MYSQL_USER=pinche MYSQL_PASSWORD=pinche_dev_password npm run d32:smoke` 通过，覆盖管理员创建视频后直接 ready、URL 截帧封面和签名播放 URL。
+- 2026-07-08：`npm run build:mp-weixin` 通过，存在 Sass legacy/import deprecation warning；`npm run check` 单独复跑通过；`npm run build:admin-web` 通过。
+- 2026-07-08：腾讯云控制台已暂停 `pinche_album_short_video_transcode` 的上传触发执行；后续 source MP4 上传不再自动触发云端转码，封面仍由短期签名 URL 截帧按需生成。

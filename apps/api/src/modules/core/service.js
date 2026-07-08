@@ -5545,11 +5545,11 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   const videoContentType = albumVideoContentType(
     body.videoContentType || body.video_content_type
   );
-  const localFallbackReady = options.localFallbackReady === true;
-  const processingStatus = localFallbackReady ? "ready" : "processing";
-  const displayUrl = options.displayUrl || (localFallbackReady ? sourceUrl : null);
+  const readyOnCreate = options.readyOnCreate === true || options.localFallbackReady === true;
+  const processingStatus = readyOnCreate ? "ready" : "processing";
+  const displayUrl = options.displayUrl || (readyOnCreate ? sourceUrl : null);
   const coverUrl = options.coverUrl || null;
-  const ciJobId = options.ciJobId || (localFallbackReady ? "local-fallback" : null);
+  const ciJobId = options.ciJobId || null;
 
   return withTransaction(async (connection) => {
     const session = await requireSessionAlbumOpen(connection, id);
