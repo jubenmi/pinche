@@ -106,16 +106,29 @@
       </div>
 
       <div v-if="isCatalogEntityTab && selectedCount > 0" class="bulk-actions">
-        <span>已选 {{ selectedCount }} 项</span>
-        <button type="button" :disabled="operationPending" @click="batchUpdateStatus('active')">
+        <span class="bulk-selection-count">
+          <span class="bulk-selection-dot" aria-hidden="true"></span>
+          已选 {{ selectedCount }} 项
+        </span>
+        <button
+          class="bulk-action-button bulk-action-button--publish"
+          type="button"
+          :disabled="operationPending"
+          @click="batchUpdateStatus('active')"
+        >
           批量上架
         </button>
-        <button type="button" :disabled="operationPending" @click="batchUpdateStatus('inactive')">
+        <button
+          class="bulk-action-button bulk-action-button--archive"
+          type="button"
+          :disabled="operationPending"
+          @click="batchUpdateStatus('inactive')"
+        >
           批量下架
         </button>
         <button
           type="button"
-          class="danger"
+          class="bulk-action-button bulk-action-button--danger"
           :disabled="operationPending"
           @click="batchDeleteSelected"
         >
@@ -123,10 +136,13 @@
         </button>
       </div>
       <div v-if="tab === 'sessions' && selectedSessionCount > 0" class="bulk-actions">
-        <span>已选 {{ selectedSessionCount }} 个车局</span>
+        <span class="bulk-selection-count">
+          <span class="bulk-selection-dot" aria-hidden="true"></span>
+          已选 {{ selectedSessionCount }} 个车局
+        </span>
         <button
           type="button"
-          class="danger"
+          class="bulk-action-button bulk-action-button--danger"
           :disabled="operationPending"
           @click="batchForceDeleteSessions"
         >
