@@ -81,13 +81,14 @@ assertNotIncludes(
 assertBefore(
   chooseRoleBody,
   "refreshAfterFreshLogin: true",
-  "this.pendingRole = targetRole",
+  "const targetRole =",
   "Seat role selection must refresh login/session state before continuing with the originally selected role"
 );
 assert(
   chooseRoleBody.includes("const selectedRoleKey = this.roleKey(role)") &&
     chooseRoleBody.includes("this.roleCards.find") &&
-    chooseRoleBody.includes("targetRole"),
+    chooseRoleBody.includes("targetRole") &&
+    chooseRoleBody.includes("await this.confirmRole(targetRole"),
   "Seat role selection must re-resolve the originally selected role after login refresh"
 );
 assertBefore(
@@ -99,13 +100,13 @@ assertBefore(
 assertBefore(
   chooseNpcRoleBody,
   "refreshAfterFreshLogin: true",
-  "if (npcRole.mine)",
+  "if (targetRole.mine)",
   "NPC role mine shortcut must require login before entering the album"
 );
 assertBefore(
   chooseNpcRoleBody,
   "refreshAfterFreshLogin: true",
-  'url: `/api/session-npc-roles/${npcRole.id}/claim`',
+  'url: `/api/session-npc-roles/${targetRole.id}/claim`',
   "NPC role selection must require login before claiming the NPC role"
 );
 assert(

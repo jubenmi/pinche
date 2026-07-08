@@ -41,7 +41,8 @@ assert(
 );
 assert(
   ((calendar.includes('v-for="filter in visibleFilterTabs"') ||
-    (calendar.includes(':options="visibleFilterSegmentOptions"') &&
+    ((calendar.includes(':options="visibleFilterSegmentOptions"') ||
+      calendar.includes(':options="safeVisibleFilterSegmentOptions"')) &&
       calendar.includes("const visibleFilterSegmentOptions = computed") &&
       calendar.includes("visibleFilterTabs.value.map"))) &&
     calendar.includes("const visibleFilterTabs = computed") &&
@@ -60,7 +61,9 @@ assert(
   "Mine calendar cards must use the whole card as the primary action instead of rendering a Manage button"
 );
 assert(
-  !calendar.includes('key: "joined", label: "参与"') && !calendar.includes(".type-badge.joined"),
+  !calendar.includes('value: "joined", label: "参与"') &&
+    !calendar.includes('activeCalendarFilter.value === "joined"') &&
+    !calendar.includes(".type-badge.joined"),
   "Mine calendar cards must not duplicate participation when a role name already identifies the user"
 );
 assert(

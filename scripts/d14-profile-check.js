@@ -54,6 +54,24 @@ assert(
   "PATCH /api/users/me must use profile update"
 );
 
+const coreService = read("apps/api/src/modules/core/service.js");
+assert(
+  coreService.includes("bound_user_avatar_url") &&
+    coreService.includes("user.avatar_url AS bound_user_avatar_url") &&
+    coreService.includes("bound_user_gender") &&
+    coreService.includes("user.gender AS bound_user_gender"),
+  "session NPC roles must expose bound user avatar and gender for role cards"
+);
+assert(
+  coreService.includes("confirmed_user_avatar_url") &&
+    coreService.includes("user.avatar_url AS confirmed_user_avatar_url") &&
+    coreService.includes("confirmed_user_nickname") &&
+    coreService.includes("confirmed_user_open_id") &&
+    coreService.includes("confirmed_user_gender") &&
+    coreService.includes("user.gender AS confirmed_user_gender"),
+  "session seats must expose confirmed user name, avatar, and gender for role cards"
+);
+
 const api = read("apps/miniprogram/src/utils/api.js");
 assert(api.includes("export function assetUrl"), "miniprogram API must expose assetUrl");
 assert(api.includes("export async function uploadUserAvatar"), "miniprogram API must upload avatars");

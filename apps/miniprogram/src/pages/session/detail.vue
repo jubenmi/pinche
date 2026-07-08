@@ -249,6 +249,9 @@ export default {
           name: seat.name,
           note: seat.role_name || this.seatTypeLabel(seat.seat_type),
           roleGender: seat.role_gender || "unlimited",
+          avatarUrl: seat.confirmed_user_avatar_url || "",
+          avatarGender: seat.confirmed_user_gender || seat.role_gender || "unlimited",
+          confirmedUserId: seat.confirmed_user_id || "",
           stateKind: canApply ? "available" : this.seatStateKind(seat),
           stateLabel: canApply ? "可选" : this.seatStatusLabel(seat.status),
           focused: this.isFocusedSeat(seat),
@@ -283,6 +286,9 @@ export default {
           name: role.name || "NPC角色",
           note: role.bound_user_name || role.description || "NPC工作人员",
           roleGender: role.role_gender || "unlimited",
+          avatarUrl: role.bound_user_avatar_url || "",
+          avatarGender: role.bound_user_gender || role.role_gender || "unlimited",
+          boundUserId: role.bound_user_id || "",
           showGenderSymbol: true,
           stateKind,
           stateLabel: canApply ? "可选" : this.npcRoleStatusLabel(role),
@@ -608,7 +614,7 @@ export default {
     npcRoleStatusLabel(role) {
       const stateKind = this.npcRoleStateKind(role);
       if (stateKind === "mine") {
-        return "我选";
+        return "";
       }
       if (stateKind === "taken") {
         return "已安排";

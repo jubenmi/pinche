@@ -108,6 +108,22 @@ assert(
   "getSession must expose npc_join_enabled as a boolean-compatible value"
 );
 
+const cleanupSessionExclusiveRoleSelectionsBody = functionBody(
+  service,
+  "cleanupSessionExclusiveRoleSelections"
+);
+assert(
+  cleanupSessionExclusiveRoleSelectionsBody.includes("releaseUserOtherSessionNpcRoles(") &&
+    cleanupSessionExclusiveRoleSelectionsBody.includes("duplicate_npc_roles") &&
+    cleanupSessionExclusiveRoleSelectionsBody.includes("MIN(id) AS keep_id") &&
+    cleanupSessionExclusiveRoleSelectionsBody.includes("bound_user_id = NULL"),
+  "cleanupSessionExclusiveRoleSelections must repair legacy duplicate ordinary/NPC role bindings"
+);
+assert(
+  getSessionBody.includes("cleanupSessionExclusiveRoleSelections(connection, id)"),
+  "getSession must clean legacy duplicate role bindings before returning session seats and NPC roles"
+);
+
 const claimSessionNpcRoleBody = functionBody(service, "claimSessionNpcRole");
 assert(
   claimSessionNpcRoleBody.includes("requireJoinPhoneIfNeeded") &&
@@ -126,6 +142,39 @@ assert(
     claimSessionNpcRoleBody.includes("status = 'pending'") &&
     claimSessionNpcRoleBody.includes("session_npc_role"),
   "claimSessionNpcRole review branch must create pending NPC signup"
+);
+
+const releaseUserOtherSessionNpcRolesBody = functionBody(service, "releaseUserOtherSessionNpcRoles");
+assert(
+  releaseUserOtherSessionNpcRolesBody.includes("UPDATE signups") &&
+    releaseUserOtherSessionNpcRolesBody.includes("session_npc_role_id") &&
+    releaseUserOtherSessionNpcRolesBody.includes("status IN ('pending', 'approved')") &&
+    releaseUserOtherSessionNpcRolesBody.includes("UPDATE session_npc_roles") &&
+    releaseUserOtherSessionNpcRolesBody.includes("bound_user_id = NULL"),
+  "releaseUserOtherSessionNpcRoles must cancel old NPC signups and unbind old NPC roles"
+);
+
+const cancelUserOtherPendingSignupsBody = functionBody(service, "cancelUserOtherPendingSignups");
+assert(
+  cancelUserOtherPendingSignupsBody.includes("UPDATE signups") &&
+    cancelUserOtherPendingSignupsBody.includes("status = 'cancelled'") &&
+    cancelUserOtherPendingSignupsBody.includes("COALESCE(seat_id, 0)") &&
+    cancelUserOtherPendingSignupsBody.includes("COALESCE(session_npc_role_id, 0)") &&
+    cancelUserOtherPendingSignupsBody.includes("clearAppliedSeatsWithoutPending"),
+  "cancelUserOtherPendingSignups must keep only one pending ordinary/NPC role selection per session"
+);
+
+const claimSessionSeatBody = functionBody(service, "claimSessionSeat");
+assert(
+  claimSessionSeatBody.includes("releaseUserOtherSessionNpcRoles(") &&
+    claimSessionSeatBody.includes("cancelUserOtherPendingSignups("),
+  "claimSessionSeat must release NPC roles and pending NPC applications before claiming an ordinary role"
+);
+assert(
+  claimSessionNpcRoleBody.includes("releaseUserOtherConfirmedSeats(") &&
+    claimSessionNpcRoleBody.includes("releaseUserOtherSessionNpcRoles(") &&
+    claimSessionNpcRoleBody.includes("cancelUserOtherPendingSignups("),
+  "claimSessionNpcRole must release ordinary roles, old NPC roles, and other pending applications"
 );
 
 const listSessionSignupsBody = functionBody(service, "listSessionSignups");
@@ -149,6 +198,12 @@ assert(
     approveSignupBody.includes("bound_user_id") &&
     approveSignupBody.includes("session_npc_role_id"),
   "approveSignup must support NPC role signup approval"
+);
+assert(
+  approveSignupBody.includes("releaseUserOtherConfirmedSeats(") &&
+    approveSignupBody.includes("releaseUserOtherSessionNpcRoles(") &&
+    approveSignupBody.includes("cancelUserOtherPendingSignups("),
+  "approveSignup must enforce one selected ordinary-or-NPC role when approving signups"
 );
 
 const rejectSignupBody = functionBody(service, "rejectSignup");
