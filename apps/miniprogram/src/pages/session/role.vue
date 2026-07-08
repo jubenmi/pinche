@@ -63,7 +63,7 @@ export default {
           selected,
           crossCast: this.isSelectedCrossCast(role),
           stateKind: selected ? "mine" : "available",
-          stateLabel: selected ? "我选" : "可选"
+          stateLabel: selected ? "" : "可选"
         };
       });
     }

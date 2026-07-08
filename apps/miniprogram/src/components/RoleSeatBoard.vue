@@ -34,12 +34,14 @@
           class="role-choice"
           :class="[
             roleToneClass(item),
+            roleSelectionToneClass(item),
             {
               selected: item.selected || item.checked,
               focused: item.focused,
+              'with-avatar': shouldShowRoleAvatar(item),
               mine: item.stateKind === 'mine' || item.mine,
               switching: item.stateKind === 'switching',
-              pending: item.stateKind === 'pendingReview' || item.pending,
+              pending: item.pending,
               taken: item.stateKind === 'taken' || item.taken,
               unavailable: item.stateKind === 'unavailable' || item.unavailable
             }
@@ -47,21 +49,32 @@
           @tap="handleItemTap(item, section)"
         >
           <view class="role-choice-top">
+            <view
+              v-if="shouldShowRoleAvatar(item)"
+              class="role-avatar"
+              :class="roleAvatarClass(item)"
+            >
+              <image
+                class="role-avatar-image"
+                :src="roleAvatarSrc(item)"
+                mode="aspectFill"
+              />
+            </view>
             <view class="role-choice-name">
               <text class="role-choice-title">{{ item.name }}</text>
               <text v-if="roleSymbol(item)" class="role-gender-symbol">
                 {{ roleSymbol(item) }}
               </text>
-              <t-tag v-if="item.crossCast" class="cross-cast-tag" theme="warning" variant="light" size="small">
-                （反串）
-              </t-tag>
             </view>
             <t-tag v-if="item.stateLabel" class="role-state" theme="primary" variant="light" size="small">
               {{ item.stateLabel }}
             </t-tag>
           </view>
 
-          <view v-if="item.note" class="role-choice-note">{{ item.note }}</view>
+          <view v-if="item.note || item.crossCast" class="role-choice-note">
+            <text v-if="item.note" class="role-choice-note-text">{{ item.note }}</text>
+            <text v-if="item.crossCast" class="cross-cast-tag">反串</text>
+          </view>
           <view v-if="itemMeta(item).length" class="role-meta">
             <view
               v-for="meta in itemMeta(item)"
@@ -108,7 +121,14 @@
 </template>
 
 <script>
+import { assetUrl } from "../utils/api";
 import { normalizeRoleGender, roleGenderSymbol } from "../utils/createFlow";
+
+const DEFAULT_AVATARS = {
+  male: "/static/avatars/default-male.jpg",
+  female: "/static/avatars/default-female.jpg",
+  unknown: "/static/icons/user.png"
+};
 
 export default {
   props: {
@@ -174,6 +194,27 @@ export default {
       const gender = normalizeRoleGender(item.roleGender || item.role_gender || item.gender);
       return ["male", "female"].includes(gender) || item.showGenderSymbol ? gender : "";
     },
+    roleSelectionToneClass(item) {
+      const selectedByCurrentUser =
+        item.mine ||
+        item.pending ||
+        item.selected ||
+        item.checked ||
+        item.focused ||
+        ["mine", "switching"].includes(item.stateKind);
+      if (!selectedByCurrentUser) {
+        return "";
+      }
+      const gender = normalizeRoleGender(
+        item.ownerGender ||
+          item.selectionGender ||
+          item.userGender ||
+          item.avatarGender ||
+          item.confirmedUserGender ||
+          item.boundUserGender
+      );
+      return ["male", "female"].includes(gender) ? `owner-${gender}` : "";
+    },
     roleSymbol(item) {
       if (item.genderSymbol) {
         return item.genderSymbol;
@@ -183,6 +224,44 @@ export default {
         return "不限";
       }
       return roleGenderSymbol(gender);
+    },
+    roleAvatarGender(item) {
+      return normalizeRoleGender(
+        item.avatarGender ||
+          item.userGender ||
+          item.confirmedUserGender ||
+          item.boundUserGender ||
+          item.roleGender ||
+          item.role_gender ||
+          item.gender
+      );
+    },
+    roleAvatarSrc(item) {
+      const avatarUrl = item.avatarUrl || item.userAvatarUrl || item.confirmedUserAvatarUrl || item.boundUserAvatarUrl;
+      if (avatarUrl) {
+        return assetUrl(avatarUrl);
+      }
+      const gender = this.roleAvatarGender(item);
+      return DEFAULT_AVATARS[gender] || DEFAULT_AVATARS.unknown;
+    },
+    roleAvatarClass(item) {
+      const gender = this.roleAvatarGender(item);
+      return ["male", "female"].includes(gender) ? gender : "unknown";
+    },
+    shouldShowRoleAvatar(item) {
+      return Boolean(
+        item.avatarUrl ||
+          item.userAvatarUrl ||
+          item.confirmedUserAvatarUrl ||
+          item.boundUserAvatarUrl ||
+          item.mine ||
+          item.taken ||
+          item.pending ||
+          item.boundUserId ||
+          item.confirmedUserId ||
+          item.pendingUserId ||
+          ["mine", "taken", "switching", "pendingReview"].includes(item.stateKind)
+      );
     },
     itemActions(item) {
       return Array.isArray(item.actions) ? item.actions.filter(Boolean) : [];
@@ -277,18 +356,25 @@ export default {
 
 .role-board {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16rpx;
 }
 
 .role-choice {
   position: relative;
+  width: 100%;
+  min-width: 0;
   min-height: 132rpx;
   padding: 22rpx 18rpx;
+  overflow: hidden;
   border: 1rpx solid rgba(223, 216, 204, 0.92);
   border-radius: 16rpx;
   background: rgba(255, 255, 252, 0.96);
   box-sizing: border-box;
+}
+
+.role-choice.with-avatar {
+  min-height: 140rpx;
 }
 
 .role-choice.male {
@@ -311,9 +397,45 @@ export default {
 .role-choice.switching,
 .role-choice.selected,
 .role-choice.focused {
-  box-shadow:
-    0 0 0 3rpx rgba(216, 167, 61, 0.86),
-    inset 0 0 0 1rpx rgba(216, 167, 61, 0.26);
+  border-width: 9rpx;
+  padding: 14rpx 10rpx;
+  border-color: #1f6f5b;
+  box-shadow: 0 12rpx 30rpx rgba(51, 69, 59, 0.1);
+}
+
+.role-choice.mine.male,
+.role-choice.switching.male,
+.role-choice.selected.male,
+.role-choice.focused.male {
+  background: rgba(242, 248, 247, 0.98);
+}
+
+.role-choice.mine.female,
+.role-choice.switching.female,
+.role-choice.selected.female,
+.role-choice.focused.female {
+  background: rgba(255, 248, 245, 0.98);
+}
+
+.role-choice.mine.unlimited,
+.role-choice.switching.unlimited,
+.role-choice.selected.unlimited,
+.role-choice.focused.unlimited {
+  border-color: #1f6f5b;
+}
+
+.role-choice.mine.owner-male,
+.role-choice.switching.owner-male,
+.role-choice.selected.owner-male,
+.role-choice.focused.owner-male {
+  border-color: #2f6fed;
+}
+
+.role-choice.mine.owner-female,
+.role-choice.switching.owner-female,
+.role-choice.selected.owner-female,
+.role-choice.focused.owner-female {
+  border-color: #8f5bd6;
 }
 
 .role-choice.taken,
@@ -321,6 +443,16 @@ export default {
   border-color: rgba(214, 205, 188, 0.92);
   background: #f3f0e9;
   color: #8d8a82;
+}
+
+.role-choice.taken.male,
+.role-choice.unavailable.male {
+  background: rgba(242, 248, 247, 0.98);
+}
+
+.role-choice.taken.female,
+.role-choice.unavailable.female {
+  background: rgba(255, 248, 245, 0.98);
 }
 
 .role-choice-top {
@@ -331,9 +463,38 @@ export default {
   min-width: 0;
 }
 
+.role-avatar {
+  display: flex;
+  width: 46rpx;
+  height: 46rpx;
+  flex: 0 0 46rpx;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 2rpx solid rgba(196, 174, 119, 0.62);
+  border-radius: 50%;
+  background: #f4efe6;
+}
+
+.role-avatar.male {
+  border-color: #2f6fed;
+  background: #e8f0ff;
+}
+
+.role-avatar.female {
+  border-color: #8f5bd6;
+  background: #f0e8ff;
+}
+
+.role-avatar-image {
+  width: 46rpx;
+  height: 46rpx;
+  border-radius: 50%;
+}
+
 .role-choice-name {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-wrap: nowrap;
   align-items: center;
   gap: 6rpx;
@@ -347,7 +508,7 @@ export default {
 
 .role-choice-title {
   display: block;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -373,13 +534,6 @@ export default {
   color: #8d9189;
 }
 
-.cross-cast-tag {
-  flex-shrink: 0;
-  color: #b06b35;
-  font-size: 22rpx;
-  font-weight: 600;
-}
-
 .role-choice.taken .role-choice-name,
 .role-choice.unavailable .role-choice-name {
   color: #747066;
@@ -402,7 +556,7 @@ export default {
 .role-choice.switching .role-state {
   padding: 2rpx 8rpx;
   border-radius: 6rpx;
-  background: #b89458;
+  background: #2f6fed;
   color: #ffffff;
 }
 
@@ -412,9 +566,33 @@ export default {
 }
 
 .role-choice-note {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  width: 100%;
   margin-top: 14rpx;
+  max-width: 100%;
+  overflow: hidden;
   color: #7a857d;
   font-size: 23rpx;
+  line-height: 1.35;
+}
+
+.role-choice-note-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cross-cast-tag {
+  flex-shrink: 0;
+  padding: 2rpx 8rpx;
+  border-radius: 6rpx;
+  background: #fff1e8;
+  color: #d26819;
+  font-size: 22rpx;
+  font-weight: 600;
   line-height: 1.35;
 }
 

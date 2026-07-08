@@ -26,9 +26,9 @@ const devOutputReadyPollMs = 250;
 const devOutputReadyFiles = [
   "app.json",
   "project.config.json",
-  "miniprogram_npm/tdesign-miniprogram/image/image.json",
-  "miniprogram_npm/tdesign-miniprogram/image/image.wxml",
-  "miniprogram_npm/tdesign-miniprogram/image/image.js"
+  "wxcomponents/tdesign-miniprogram/image/image.json",
+  "wxcomponents/tdesign-miniprogram/image/image.wxml",
+  "wxcomponents/tdesign-miniprogram/image/image.js"
 ];
 
 const watchedPaths = [

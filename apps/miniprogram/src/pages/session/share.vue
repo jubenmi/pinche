@@ -11,7 +11,14 @@
 
     <view class="ticket-card">
       <t-image class="ticket-bamboo" src="/static/art/bamboo-corner.png" mode="widthFix" />
-      <t-image class="ticket-mountains" src="/static/art/ticket-landscape.jpg" mode="widthFix" />
+      <t-image
+        class="ticket-mountains"
+        src="/static/art/ticket-landscape.jpg"
+        mode="aspectFill"
+        width="100%"
+        height="72rpx"
+        custom-style="width: 100%; height: 72rpx;"
+      />
       <view class="ticket-title">{{ scriptName }}</view>
       <t-tag class="ticket-tags" theme="primary" variant="light" size="small">
         {{ scriptTags }} · {{ playerCountText }}
@@ -42,17 +49,30 @@
       </view>
     </view>
 
-    <RoleSeatBoard
-      class="share-role-board"
-      :sections="roleSeatSections"
-      empty-text="暂无可选角色。"
-      @itemtap="handleSharedRoleTap"
-    />
+    <view class="share-role-board">
+      <RoleSeatBoard
+        :sections="roleSeatSections"
+        empty-text="暂无可选角色。"
+        @itemtap="handleSharedRoleTap"
+      />
+    </view>
 
     <view class="share-actions">
-      <t-button class="button wechat-action" open-type="share" @tap="persistFlow">
+      <t-button
+        class="button wechat-action"
+        open-type="share"
+        custom-style="height: 88rpx; min-height: 88rpx; border-color: #1a5d4d; background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%); color: #ffffff; --td-button-default-bg-color: #1f6f5b; --td-button-default-color: #ffffff; --td-button-default-border-color: #1a5d4d;"
+        @tap="persistFlow"
+      >
         <view class="wechat-action-content">
-          <t-image class="button-icon" src="/static/icons/wechat.png" mode="aspectFit" />
+          <t-image
+            class="button-icon"
+            src="/static/icons/share-light.svg"
+            mode="aspectFit"
+            width="48rpx"
+            height="48rpx"
+            custom-style="width: 48rpx; height: 48rpx; opacity: 0.82;"
+          />
           <text>分享给好友或群聊</text>
         </view>
       </t-button>
@@ -106,6 +126,7 @@ export default {
       currentUserId: "",
       currentUserGender: "",
       confirmedCrossCastRoleKey: "",
+      roleSelectionSubmitting: false,
       statusText: "",
       startText: "",
       note: ""
@@ -157,8 +178,10 @@ export default {
         return this.roleDisplayText(this.role);
       }
       if (this.currentUserNpcRole) {
-        const symbol = roleGenderSymbol(this.currentUserNpcRole.role_gender || "unlimited") || "不限";
-        return `NPC：${this.currentUserNpcRole.name} ${symbol}`;
+        return `NPC：${this.roleDisplayText({
+          name: this.currentUserNpcRole.name,
+          roleGender: this.currentUserNpcRole.role_gender || "unlimited"
+        })}`;
       }
       return this.roleDisplayText(this.selectedRoles[0]);
     },
@@ -209,12 +232,16 @@ export default {
           pending,
           mine,
           crossCast,
+          note: this.roleOccupantDisplayName(role),
+          avatarUrl: this.roleOccupantAvatarUrl(role),
+          avatarGender: this.roleOccupantGender(role),
+          ownerGender: this.roleOccupantGender(role),
           boardType: "seat",
           stateKind,
           stateLabel: stateKind === "switching"
             ? "换选"
             : stateKind === "mine"
-              ? "我选"
+              ? ""
               : stateKind === "taken"
                 ? "已选"
                 : stateKind === "pendingReview"
@@ -248,15 +275,50 @@ export default {
         (role) => Number(role.bound_user_id || 0) === Number(this.currentUserId)
       ) || null;
     },
+    currentUserEffectiveNpcRole() {
+      if (!this.currentUserId || this.role) {
+        return null;
+      }
+      return (this.session.session_npc_roles || [])
+        .filter((role) => (role.status || "active") === "active")
+        .find((role) => {
+          const boundUserId = Number(role.bound_user_id || 0);
+          const pendingUserId = Number(role.pending_signup_user_id || 0);
+          return (
+            boundUserId === Number(this.currentUserId) ||
+            pendingUserId === Number(this.currentUserId)
+          );
+        }) || null;
+    },
     npcRoleCards() {
+      const effectiveCurrentNpcRole = this.currentUserEffectiveNpcRole;
       return (this.session.session_npc_roles || [])
         .filter((role) => (role.status || "active") === "active")
         .map((role) => {
           const boundUserId = Number(role.bound_user_id || 0);
           const pendingUserId = Number(role.pending_signup_user_id || 0);
-          const mine = this.currentUserId && boundUserId === Number(this.currentUserId);
-          const pendingMine = this.currentUserId && pendingUserId === Number(this.currentUserId);
-          const taken = boundUserId > 0 || pendingUserId > 0;
+          const boundByCurrentUser = this.currentUserId && boundUserId === Number(this.currentUserId);
+          const pendingByCurrentUser = this.currentUserId && pendingUserId === Number(this.currentUserId);
+          const effectiveRoleId = Number(effectiveCurrentNpcRole?.id || 0);
+          const mine = boundByCurrentUser && effectiveRoleId === Number(role.id);
+          const pendingMine = pendingByCurrentUser && effectiveRoleId === Number(role.id);
+          const duplicateCurrentUserNpcRole = boundByCurrentUser && !mine;
+          const duplicateCurrentUserPendingNpcRole = pendingByCurrentUser && !pendingMine;
+          const effectiveBoundUserId = duplicateCurrentUserNpcRole ? 0 : boundUserId;
+          const effectivePendingUserId = duplicateCurrentUserPendingNpcRole ? 0 : pendingUserId;
+          const taken = effectiveBoundUserId > 0 || effectivePendingUserId > 0;
+          const displayRole =
+            duplicateCurrentUserNpcRole || duplicateCurrentUserPendingNpcRole
+              ? {
+                  ...role,
+                  bound_user_name: "",
+                  bound_user_avatar_url: "",
+                  bound_user_gender: "",
+                  pending_signup_user_name: "",
+                  pending_signup_user_avatar_url: "",
+                  pending_signup_user_gender: ""
+                }
+              : role;
           let stateKind = "available";
           if (mine) {
             stateKind = "mine";
@@ -270,19 +332,23 @@ export default {
           return {
             id: role.id,
             name: role.name || "NPC角色",
-            note: role.bound_user_name || role.description || "",
+            note: this.npcRoleOccupantDisplayName(displayRole, mine, pendingMine),
             roleGender: role.role_gender || "unlimited",
             genderSymbol: roleGenderSymbol(role.role_gender || "unlimited") || "不限",
             showGenderSymbol: true,
-            pendingSignupId: role.pending_signup_id || null,
-            pendingUserId,
-            boundUserId,
+            avatarUrl: this.npcRoleOccupantAvatarUrl(displayRole, mine, pendingMine),
+            avatarGender: this.npcRoleOccupantGender(displayRole, mine, pendingMine),
+            ownerGender: this.npcRoleOccupantGender(displayRole, mine, pendingMine),
+            crossCast: (mine || pendingMine) && isCrossCast(this.currentUserGender, role.role_gender),
+            pendingSignupId: duplicateCurrentUserPendingNpcRole ? null : role.pending_signup_id || null,
+            pendingUserId: effectivePendingUserId,
+            boundUserId: effectiveBoundUserId,
             claimable: stateKind === "available",
             mine,
             boardType: "npc",
             stateKind,
             stateLabel: stateKind === "mine"
-              ? "我选"
+              ? ""
               : stateKind === "pendingReview"
                 ? "待审"
                 : stateKind === "taken"
@@ -469,6 +535,58 @@ export default {
       this.pendingRole = null;
       this.confirmedCrossCastRoleKey = "";
     },
+    roleOccupantAvatarUrl(role) {
+      const auth = getCurrentUser();
+      const currentUserSelected =
+        this.currentUserId &&
+        (Number(role.confirmedUserId || 0) === Number(this.currentUserId) ||
+          (this.pendingRole && isSameRole(role, this.pendingRole)));
+      if (currentUserSelected && auth.user?.avatarUrl) {
+        return auth.user.avatarUrl;
+      }
+      return role.confirmedUserAvatarUrl || "";
+    },
+    roleOccupantGender(role) {
+      const currentUserSelected =
+        this.currentUserId &&
+        (Number(role.confirmedUserId || 0) === Number(this.currentUserId) ||
+          (this.pendingRole && isSameRole(role, this.pendingRole)));
+      if (currentUserSelected && this.currentUserGender) {
+        return this.currentUserGender;
+      }
+      return role.confirmedUserGender || role.roleGender || "unlimited";
+    },
+    roleOccupantDisplayName(role) {
+      const auth = getCurrentUser();
+      const currentUserSelected =
+        this.currentUserId &&
+        (Number(role.confirmedUserId || 0) === Number(this.currentUserId) ||
+          (this.pendingRole && isSameRole(role, this.pendingRole)));
+      if (currentUserSelected) {
+        return auth.user?.nickname || auth.user?.open_id || auth.user?.openid || "";
+      }
+      return role.confirmedUserName || "";
+    },
+    npcRoleOccupantDisplayName(role, mine = false, pendingMine = false) {
+      const auth = getCurrentUser();
+      if (mine || pendingMine) {
+        return auth.user?.nickname || auth.user?.open_id || auth.user?.openid || "";
+      }
+      return role.bound_user_name || role.pending_signup_user_name || role.description || "";
+    },
+    npcRoleOccupantAvatarUrl(role, mine = false, pendingMine = false) {
+      const auth = getCurrentUser();
+      if ((mine || pendingMine) && auth.user?.avatarUrl) {
+        return auth.user.avatarUrl;
+      }
+      return role.bound_user_avatar_url || role.pending_signup_user_avatar_url || "";
+    },
+    npcRoleOccupantGender(role, mine = false, pendingMine = false) {
+      if ((mine || pendingMine) && this.currentUserGender) {
+        return this.currentUserGender;
+      }
+      return role.bound_user_gender || role.pending_signup_user_gender || role.role_gender || "unlimited";
+    },
     async ensureSeatSelectionLogin(options = {}) {
       const wasLoggedIn = this.hasSeatSelectionLogin();
       const auth = await ensureLoggedIn({
@@ -509,11 +627,14 @@ export default {
           id: String(seat.id),
           seatId: seat.id,
           name: seat.name,
-          note: seat.role_name || this.seatTypeLabel(seat.seat_type),
+          note: "",
           roleGender: seat.role_gender || "unlimited",
           seatType: seat.seat_type,
           status: seat.status,
-          confirmedUserId: seat.confirmed_user_id || ""
+          confirmedUserId: seat.confirmed_user_id || "",
+          confirmedUserName: seat.confirmed_user_nickname || seat.confirmed_user_open_id || "",
+          confirmedUserAvatarUrl: seat.confirmed_user_avatar_url || "",
+          confirmedUserGender: seat.confirmed_user_gender || ""
         }));
         this.selectedRoles = this.roleOptions.filter((role) =>
           ["confirmed", "locked"].includes(role.status)
@@ -583,11 +704,48 @@ export default {
         });
       });
     },
+    currentSelectionForSwitch(role) {
+      if (!this.sessionId) {
+        return null;
+      }
+      if (role.boardType === "npc") {
+        if (role.mine) {
+          return null;
+        }
+        if (this.role) {
+          return this.role;
+        }
+        const currentNpcRole = this.currentUserNpcRole;
+        if (currentNpcRole && Number(currentNpcRole.id) !== Number(role.id)) {
+          return {
+            boardType: "npc",
+            id: currentNpcRole.id,
+            name: `NPC：${currentNpcRole.name || "NPC角色"}`,
+            roleGender: currentNpcRole.role_gender || "unlimited"
+          };
+        }
+        return null;
+      }
+      if (this.role) {
+        return isSameRole(role, this.role) ? null : this.role;
+      }
+      const currentNpcRole = this.currentUserNpcRole;
+      if (!currentNpcRole) {
+        return null;
+      }
+      return {
+        boardType: "npc",
+        id: currentNpcRole.id,
+        name: `NPC：${currentNpcRole.name || "NPC角色"}`,
+        roleGender: currentNpcRole.role_gender || "unlimited"
+      };
+    },
     confirmSwitchRole(role) {
-      if (!this.sessionId || !this.role || isSameRole(role, this.role)) {
+      const currentRole = this.currentSelectionForSwitch(role);
+      if (!this.sessionId || !currentRole) {
         return Promise.resolve(true);
       }
-      const currentRoleName = this.role.name || "当前角色";
+      const currentRoleName = currentRole.name || "当前角色";
       const nextRoleName = role.name || "新角色";
       return new Promise((resolve) => {
         showModal({
@@ -605,6 +763,9 @@ export default {
       });
     },
     async chooseRole(role) {
+      if (this.roleSelectionSubmitting) {
+        return;
+      }
       const selectedRoleKey = this.roleKey(role);
       const auth = await this.ensureSeatSelectionLogin({
         refreshAfterFreshLogin: true
@@ -634,18 +795,23 @@ export default {
         showToast({ title: "这是你当前选择的角色", icon: "none" });
         return;
       }
-      const switchConfirmed = await this.confirmSwitchRole(targetRole);
-      if (!switchConfirmed) {
-        return;
+      this.roleSelectionSubmitting = true;
+      try {
+        const switchConfirmed = await this.confirmSwitchRole(targetRole);
+        if (!switchConfirmed) {
+          return;
+        }
+        const confirmed = await this.confirmCrossCastRole(targetRole);
+        if (!confirmed) {
+          return;
+        }
+        this.confirmedCrossCastRoleKey = this.roleKey(targetRole);
+        await this.confirmRole(targetRole, {
+          revealPending: !this.sessionId
+        });
+      } finally {
+        this.roleSelectionSubmitting = false;
       }
-      const confirmed = await this.confirmCrossCastRole(targetRole);
-      if (!confirmed) {
-        return;
-      }
-      this.confirmedCrossCastRoleKey = this.roleKey(targetRole);
-      this.statusText = "";
-      this.pendingRole = targetRole;
-      await this.confirmRole();
     },
     handleSharedRoleTap(payload) {
       const role = payload.item;
@@ -683,8 +849,10 @@ export default {
       const suffix = isCrossCast(this.currentUserGender, role.roleGender) ? "（反串）" : "";
       return `${role.name}${symbol ? ` ${symbol}` : ""}${suffix}`;
     },
-    async confirmRole() {
-      if (!this.pendingRole) {
+    async confirmRole(role = null, options = {}) {
+      const targetRole = role || this.pendingRole;
+      const revealPending = options.revealPending !== false;
+      if (!targetRole) {
         showToast({ title: "先选择一个可选角色", icon: "none" });
         return;
       }
@@ -695,35 +863,40 @@ export default {
         phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
       });
       if (!auth) {
-        this.pendingRole = null;
+        if (revealPending) {
+          this.pendingRole = null;
+        }
         return;
       }
-      const pendingRoleKey = this.roleKey(this.pendingRole);
+      const pendingRoleKey = this.roleKey(targetRole);
       if (
-        isCrossCast(this.currentUserGender, this.pendingRole.roleGender) &&
+        isCrossCast(this.currentUserGender, targetRole.roleGender) &&
         this.confirmedCrossCastRoleKey !== pendingRoleKey
       ) {
-        const confirmed = await this.confirmCrossCastRole(this.pendingRole);
+        const confirmed = await this.confirmCrossCastRole(targetRole);
         if (!confirmed) {
-          this.pendingRole = null;
+          if (revealPending) {
+            this.pendingRole = null;
+          }
           return;
         }
         this.confirmedCrossCastRoleKey = pendingRoleKey;
       }
       if (this.sessionId) {
-        await this.claimSeat(this.pendingRole);
+        await this.claimSeat(targetRole);
         return;
       }
       const previousRole = this.role;
       const rest = this.selectedRoles.filter((role) => !previousRole || !isSameRole(role, previousRole));
-      this.role = this.pendingRole;
-      this.selectedRoles = mergeSelectedRoles(rest, [this.pendingRole]);
-      this.pendingRole = null;
+      this.role = targetRole;
+      this.selectedRoles = mergeSelectedRoles(rest, [targetRole]);
+      if (revealPending) {
+        this.pendingRole = null;
+      }
       this.persistFlow();
       showToast({ title: "角色已选择", icon: "none" });
     },
     async claimSeat(role) {
-      this.statusText = "";
       try {
         const seatId = role.seatId || role.id;
         if (this.session.join_policy === "direct") {
@@ -777,8 +950,19 @@ export default {
       }
     },
     async chooseNpcRole(npcRole) {
-      if (!npcRole.mine) {
-        if (npcRole.stateKind === "pendingReview") {
+      if (this.roleSelectionSubmitting) {
+        return;
+      }
+      const selectedRoleKey = this.roleKey(npcRole);
+      const loginAuth = await this.ensureSeatSelectionLogin({
+        refreshAfterFreshLogin: true
+      });
+      if (!loginAuth) {
+        return;
+      }
+      const targetRole = this.npcRoleCards.find((item) => this.roleKey(item) === selectedRoleKey) || npcRole;
+      if (!targetRole.mine) {
+        if (targetRole.stateKind === "pendingReview") {
           this.statusText = "已提交NPC角色申请，等待车头审核。";
           return;
         }
@@ -786,20 +970,13 @@ export default {
           this.statusText = "本场NPC由车头安排。";
           return;
         }
-        if (!npcRole.claimable) {
+        if (!targetRole.claimable) {
           showToast({ title: "这个NPC角色已被选择", icon: "none" });
           return;
         }
       }
 
-      const loginAuth = await this.ensureSeatSelectionLogin({
-        refreshAfterFreshLogin: true
-      });
-      if (!loginAuth) {
-        return;
-      }
-
-      if (npcRole.mine) {
+      if (targetRole.mine) {
         if (this.isAlbumEntry) {
           uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
         } else {
@@ -808,19 +985,28 @@ export default {
         return;
       }
 
-      const auth = await this.ensureSeatSelectionLogin({
-        refreshAfterFreshLogin: true,
-        requirePhone: this.joinRequiresPhone,
-        phoneRequiredTitle: "授权手机号后上车",
-        phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
-      });
-      if (!auth) {
-        return;
-      }
-
+      this.roleSelectionSubmitting = true;
       try {
+        const switchConfirmed = await this.confirmSwitchRole(targetRole);
+        if (!switchConfirmed) {
+          return;
+        }
+        const confirmed = await this.confirmCrossCastRole(targetRole);
+        if (!confirmed) {
+          return;
+        }
+        this.confirmedCrossCastRoleKey = this.roleKey(targetRole);
+        const auth = await this.ensureSeatSelectionLogin({
+          refreshAfterFreshLogin: true,
+          requirePhone: this.joinRequiresPhone,
+          phoneRequiredTitle: "授权手机号后上车",
+          phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
+        });
+        if (!auth) {
+          return;
+        }
         const response = await request({
-          url: `/api/session-npc-roles/${npcRole.id}/claim`,
+          url: `/api/session-npc-roles/${targetRole.id}/claim`,
           method: "POST",
           data: {
             note: this.isAlbumEntry ? "相册分享页选择NPC角色" : "分享页选择NPC角色"
@@ -852,6 +1038,8 @@ export default {
         } else {
           this.statusText = "NPC角色申请失败，请稍后重试。";
         }
+      } finally {
+        this.roleSelectionSubmitting = false;
       }
     },
     showShareMenus() {
@@ -891,10 +1079,10 @@ export default {
 .ticket-card {
   position: relative;
   overflow: hidden;
-  min-height: 588rpx;
-  padding: 54rpx 42rpx 154rpx;
+  min-height: 0;
+  padding: 42rpx 42rpx 48rpx;
   border: 1rpx solid rgba(229, 220, 201, 0.92);
-  border-radius: 24rpx;
+  border-radius: 22rpx;
   background: rgba(255, 254, 250, 0.96);
   box-shadow: 0 28rpx 70rpx rgba(48, 61, 53, 0.12);
 }
@@ -911,19 +1099,20 @@ export default {
 .ticket-mountains {
   position: absolute;
   right: 0;
-  bottom: 0;
+  bottom: -12rpx;
   left: 0;
   z-index: 0;
   width: 100%;
+  height: 72rpx;
 }
 
 .ticket-title {
   position: relative;
   z-index: 1;
   color: #153f34;
-  font-size: 52rpx;
+  font-size: 48rpx;
   font-weight: 600;
-  line-height: 1.18;
+  line-height: 1.14;
   letter-spacing: 2rpx;
 }
 
@@ -931,8 +1120,8 @@ export default {
   position: relative;
   z-index: 1;
   display: inline-block;
-  margin-top: 18rpx;
-  margin-bottom: 44rpx;
+  margin-top: 14rpx;
+  margin-bottom: 30rpx;
   padding: 8rpx 18rpx;
   border-radius: 6rpx;
   background: rgba(231, 239, 232, 0.94);
@@ -943,7 +1132,7 @@ export default {
 .ticket-divider {
   position: relative;
   z-index: 1;
-  margin: 30rpx 0 24rpx;
+  margin: 22rpx 0 16rpx;
   border-top: 1rpx dashed rgba(216, 207, 189, 0.9);
 }
 
@@ -953,12 +1142,12 @@ export default {
   display: flex;
   align-items: center;
   gap: 18rpx;
-  padding: 18rpx 0;
+  padding: 12rpx 0;
 }
 
 .ticket-icon {
-  width: 34rpx;
-  height: 34rpx;
+  width: 32rpx;
+  height: 32rpx;
 }
 
 .ticket-label {
@@ -977,7 +1166,7 @@ export default {
 }
 
 .share-role-board {
-  margin-top: 28rpx;
+  margin-top: 24rpx;
 }
 
 .share-actions {
@@ -986,6 +1175,11 @@ export default {
 
 .wechat-action {
   width: 100%;
+  border: 1rpx solid #1a5d4d;
+  background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%);
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 16rpx 34rpx rgba(31, 111, 91, 0.22);
 }
 
 .wechat-action-content {
@@ -994,5 +1188,12 @@ export default {
   justify-content: center;
   gap: 14rpx;
   min-width: 0;
+  color: #ffffff;
+}
+
+.wechat-action .button-icon {
+  width: 48rpx;
+  height: 48rpx;
+  opacity: 0.82;
 }
 </style>

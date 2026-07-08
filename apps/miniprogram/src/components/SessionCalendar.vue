@@ -26,7 +26,7 @@
           block
           custom-style="width: 100%; --td-segmented-bg-color: rgba(239, 234, 224, 0.66); --td-segmented-item-active-bg: #ffffff; --td-segmented-item-color: #34443e; --td-segmented-item-active-color: #1f6f5b; --td-segmented-item-label-font: 500 20rpx / 38rpx sans-serif; --td-spacer-1: 16rpx;"
           :value="activeCalendarFilter"
-          :options="visibleFilterSegmentOptions"
+          :options="safeVisibleFilterSegmentOptions"
           @change="setFilter($event.detail.value)"
         />
         <view class="calendar-tools">
@@ -71,7 +71,7 @@
         <t-empty
           v-if="filteredCalendarItems.length === 0 && !isCalendarLoading"
           class="calendar-empty"
-          description="暂无符合条件的车局。发起和参与的拼车会按日期汇总在这里。"
+          description="暂无符合条件的车局。你的拼车会按日期汇总在这里。"
         />
 
         <view class="day-list">
@@ -184,7 +184,7 @@
           @tap="loadMoreDates"
         >
           <t-image class="load-more-art" src="/static/art/ink-home-landscape.jpg" mode="aspectFill" />
-          <text>{{ calendarMoreHintText }}</text>
+          <text class="load-more-label">{{ calendarMoreHintText }}</text>
         </view>
       </scroll-view>
     </view>
@@ -261,9 +261,6 @@ const calendarDatePickerVisible = ref(false);
 const organizedCount = computed(
   () => calendarItems.value.filter((item) => item.isOrganized).length
 );
-const joinedCount = computed(
-  () => calendarItems.value.filter((item) => item.isJoined).length
-);
 const totalCount = computed(() => calendarItems.value.length);
 const pendingCount = computed(
   () => calendarItems.value.filter((item) => item.isPending).length
@@ -287,7 +284,6 @@ const calendarStatusText = computed(() => {
 const filterTabs = computed(() => [
   { value: "all", label: "全部", count: totalCount.value },
   { value: "organized", label: "发起", count: organizedCount.value },
-  { value: "joined", label: "参与", count: joinedCount.value },
   { value: "pending", label: "待处理", count: pendingCount.value }
 ]);
 const visibleFilterTabs = computed(() =>
@@ -299,6 +295,9 @@ const visibleFilterSegmentOptions = computed(() =>
     label: `${tab.label} ${tab.count}`
   }))
 );
+const safeVisibleFilterSegmentOptions = computed(() =>
+  Array.isArray(visibleFilterSegmentOptions.value) ? visibleFilterSegmentOptions.value : []
+);
 const activeCalendarFilter = computed(() =>
   visibleFilterTabs.value.some((tab) => tab.value === activeFilter.value) ? activeFilter.value : "all"
 );
@@ -306,9 +305,6 @@ const calendarItems = computed(() => mergeCalendarItems(props.sessions, props.si
 const filteredCalendarItems = computed(() => {
   if (activeCalendarFilter.value === "organized") {
     return calendarItems.value.filter((item) => item.isOrganized);
-  }
-  if (activeCalendarFilter.value === "joined") {
-    return calendarItems.value.filter((item) => item.isJoined);
   }
   if (activeCalendarFilter.value === "pending") {
     return calendarItems.value.filter((item) => item.isPending);
@@ -477,23 +473,11 @@ function handleCalendarCardTap(item) {
 }
 
 function handleCalendarAction(item) {
-  if (item.albumFirst) {
-    goAlbum(item.sessionId);
-    return;
-  }
-  if (item.isOrganized) {
-    goManage(item.sessionId);
-    return;
-  }
   if (isCalendarItemPostStart(item)) {
     goAlbum(item.sessionId);
     return;
   }
-  if (item.canReview) {
-    goReview(item.sessionId);
-    return;
-  }
-  goDetail(item.sessionId);
+  goShare(item.sessionId);
 }
 
 function hideCalendarItem(item) {
@@ -520,12 +504,8 @@ function goManage(id) {
   uni.navigateTo({ url: `/pages/session/manage?id=${id}` });
 }
 
-function goDetail(id) {
-  uni.navigateTo({ url: `/pages/session/detail?id=${id}` });
-}
-
-function goReview(id) {
-  uni.navigateTo({ url: `/pages/session/review?id=${id}` });
+function goShare(id) {
+  uni.navigateTo({ url: `/pages/session/share?id=${id}` });
 }
 
 function goAlbum(id) {
@@ -1705,7 +1685,7 @@ function signupStatusLabel(status) {
   opacity: 0.13;
 }
 
-.load-more text {
+.load-more-label {
   position: relative;
   z-index: 1;
 }
@@ -1748,7 +1728,4 @@ function signupStatusLabel(status) {
   color: #64748b;
 }
 
-button::after {
-  border: none;
-}
 </style>
