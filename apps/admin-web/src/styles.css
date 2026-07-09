@@ -655,6 +655,101 @@ nav {
   background: #ffffff;
 }
 
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 18px 18px;
+}
+
+.bulk-selection-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(15, 123, 103, 0.18);
+  border-radius: 8px;
+  background: #f4faf7;
+  color: var(--admin-accent-strong);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.bulk-selection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--admin-accent);
+  box-shadow: 0 0 0 3px rgba(15, 123, 103, 0.12);
+}
+
+.bulk-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 92px;
+  height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--admin-muted-strong);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.bulk-action-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(23, 33, 31, 0.08);
+}
+
+.bulk-action-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--admin-focus);
+}
+
+.bulk-action-button--publish {
+  border-color: rgba(15, 123, 103, 0.24);
+  background: #eef8f3;
+  color: var(--admin-accent-strong);
+}
+
+.bulk-action-button--publish:hover:not(:disabled) {
+  border-color: rgba(15, 123, 103, 0.34);
+  background: #e1f3ed;
+}
+
+.bulk-action-button--archive {
+  border-color: #d7e0dc;
+  background: #f8faf9;
+}
+
+.bulk-action-button--archive:hover:not(:disabled) {
+  border-color: #c6d2ce;
+  background: #eef3f1;
+}
+
+.bulk-action-button--danger {
+  border-color: #f0c5bf;
+  background: var(--admin-danger-soft);
+  color: var(--admin-danger);
+}
+
+.bulk-action-button--danger:hover:not(:disabled) {
+  border-color: #e7aaa2;
+  background: #ffe8e4;
+}
+
 .table-card {
   overflow: hidden;
   background: var(--admin-surface);
@@ -2644,6 +2739,18 @@ td {
   .toolbar button,
   .primary {
     width: 100%;
+  }
+
+  .bulk-actions {
+    align-items: stretch;
+  }
+
+  .bulk-selection-count {
+    width: 100%;
+  }
+
+  .bulk-action-button {
+    flex: 1 1 116px;
   }
 
   .table-card {
