@@ -9,6 +9,15 @@
 - 历史产品边界：`specs/d32-admin-album-video/`
 - 当前 viewer 方向：`.kiro/specs/album-video-viewer-integration/`
 
+## 当前进度
+
+- 更新于：2026-07-10
+- 顶层任务：2/11 完成（Task 1–2）；细分任务：9/55 完成。
+- 已完成：spec 审阅、逐文件实施计划、49 个 D42 行为 RED 契约、9 个架构 RED 断言、隔离 smoke 写入前门禁，并完成规格与代码质量复核。
+- 待实现：Task 3–10 的生产代码；当前这些项均未勾选，不把测试契约误记为功能完成。
+- 待验证：Task 11 的完整 D42、相册回归、两端生产构建和微信开发者工具手工场景。
+- 当前实现基线提交：`d0e9c84`（`test: define album video hardening coverage`）。
+
 ## 执行任务
 
 - [x] 1. 建立并审查 spec 三件套
