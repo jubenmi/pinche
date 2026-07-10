@@ -181,7 +181,7 @@ function assertPublicCardShape(row) {
 async function main() {
   await request("GET", "/api/sessions/public/upcoming?limit=20");
 
-  const admin = await authorizePhone(await login("dev-admin-openid"), "d40-admin-phone");
+  const admin = await login("dev-admin-openid");
   const organizer = await authorizePhone(
     await login(`dev-d40-organizer-${suffix}`),
     "d40-organizer-phone"
@@ -190,10 +190,7 @@ async function main() {
     await login(`dev-d40-member-${suffix}`),
     "d40-member-phone"
   );
-  const outsider = await authorizePhone(
-    await login(`dev-d40-outsider-${suffix}`),
-    "d40-outsider-phone"
-  );
+  const outsider = await login(`dev-d40-outsider-${suffix}`);
   assert(admin.roles.includes("system_admin"), "D40 smoke requires system admin");
 
   const store = await createStore(admin);
@@ -241,6 +238,13 @@ async function main() {
   assert(!JSON.stringify(publicDetail).includes("confirmed_user_open_id"), "preview hides open_id");
 
   await request("GET", `/api/sessions/${started.session.id}`, undefined, undefined, 404);
+  await request(
+    "GET",
+    `/api/sessions/${started.session.id}/reviews`,
+    undefined,
+    undefined,
+    404
+  );
   await request("GET", `/api/sessions/${started.session.id}`, undefined, outsider.token, 404);
   const ownerDetail = (
     await request("GET", `/api/sessions/${started.session.id}`, undefined, organizer.token)
@@ -273,7 +277,10 @@ async function main() {
       )}`
     )
   ).data;
-  assert(publicAlbum.session?.id, "D23 album token must still return its authorized album shell");
+  assert(
+    Number(publicAlbum.session_id) === Number(started.session.id),
+    "D23 album token must still return its authorized album shell"
+  );
 
   await request(
     "GET",
@@ -300,6 +307,14 @@ async function main() {
   ).data;
   assert(inviteDetail.access_scope === "invite_preview", "valid invite grants invite preview");
   assert(!("active_album_photo_count" in inviteDetail), "invite preview must not grant album data");
+  const tamperedInvite = `${invite.token.slice(0, -1)}${invite.token.endsWith("a") ? "b" : "a"}`;
+  await request(
+    "GET",
+    `/api/sessions/${started.session.id}?inviteToken=${encodeURIComponent(tamperedInvite)}`,
+    undefined,
+    undefined,
+    403
+  );
 
   console.log("D40 guest calendar home smoke passed");
 }

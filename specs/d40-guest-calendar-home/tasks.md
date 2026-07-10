@@ -43,26 +43,27 @@
   - [x] 新增 `GET /api/sessions/public/upcoming` 匿名路由。
   - [x] 确保静态 public route 在动态 session id route 之前匹配。
 
-- [ ] D40.5 收紧普通车局详情权限。
-  - [ ] 将详情 GET 改为可选身份访问。
-  - [ ] 增加 `public_preview | member | invite_preview` 服务端访问范围。
-  - [ ] 公开预览只允许 public、recruiting、future 车局。
-  - [ ] 公开预览使用最小字段序列化，移除 open_id、联系方式、内部备注和完整成员身份。
-  - [ ] 发车后普通链接对游客和非成员返回不可枚举 404。
-  - [ ] 发车后车头、确认/锁定座位成员、绑定 NPC 成员和管理员保持访问。
-  - [ ] 发车后的相册接口继续复用成员权限检查。
-  - [ ] 客户端 `entry` 不参与后端授权。
+- [x] D40.5 收紧普通车局详情权限。
+  - [x] 将详情 GET 改为可选身份访问。
+  - [x] 增加 `public_preview | member | invite_preview` 服务端访问范围。
+  - [x] 公开预览只允许 public、recruiting、future 车局。
+  - [x] 公开预览使用最小字段序列化，移除 open_id、联系方式、内部备注和完整成员身份。
+  - [x] 发车后普通链接对游客和非成员返回不可枚举 404。
+  - [x] 发车后车头、确认/锁定座位成员、绑定 NPC 成员和管理员保持访问。
+  - [x] 发车后的相册接口继续复用成员权限检查。
+  - [x] 客户端 `entry` 不参与后端授权。
 
 - [ ] D40.6 为 D23 好友或群聊分享补充签名邀请凭证。
-  - [ ] 复用现有 token 签名基础设施增加 `session_join_invite` purpose。
-  - [ ] 仅允许车头或确认车内成员签发。
-  - [ ] token 绑定 session、inviter、purpose 和 expiresAt。
-  - [ ] 分享路径保留分析 `shareCode` 并增加 `inviteToken`。
-  - [ ] 分享页使用邀请 token 请求 `invite_preview`。
-  - [ ] 邀请 token 不直接授予完整相册权限。
-  - [ ] 上车成功后继续由成员关系授予完整相册权限。
+  - 状态：实现完成，等待最终烟测覆盖篡改 token 与小程序构建后关闭父任务。
+  - [x] 复用现有 token 签名基础设施增加 `session_join_invite` purpose。
+  - [x] 仅允许车头或确认车内成员签发。
+  - [x] token 绑定 session、inviter、purpose 和 expiresAt。
+  - [x] 分享路径保留分析 `shareCode` 并增加 `inviteToken`。
+  - [x] 分享页使用邀请 token 请求 `invite_preview`。
+  - [x] 邀请 token 不直接授予完整相册权限。
+  - [x] 上车成功后继续由成员关系授予完整相册权限。
   - [ ] 无效或过期 token 显示分享失效，不回退到普通公开详情。
-  - [ ] 保持朋友圈相册 token 和 D39 同城不可分享规则不变。
+  - [x] 保持朋友圈相册 token 和 D39 同城不可分享规则不变。
 
 - [ ] D40.7 重构首页为始终显示日历。
   - [ ] 删除 `first-session` 模板、状态、样式和 `startFirstSession()`。
@@ -144,3 +145,4 @@
 - 2026-07-10：D40 spec 三件套建立。设计确认首页删除“发起第一辆车”分支，游客和已登录用户共用现有日历布局；游客仅浏览真实、公开、未发车、仍招募的近期车局，纯读取不登录，写入或身份能力点击后登录；发车后普通详情转为成员私密，相册继续遵循 D23 授权范围。实现待用户审阅 spec 后开始。
 - 2026-07-10：D40 RED 已建立并实际运行。静态检查 exit 1，首个失败为 `D40 home must remove the first-session entry screen`；隔离 API 烟测语法通过，匿名探针请求 `GET /api/sessions/public/upcoming?limit=20` 返回预期 404 `Route not found`。失败均由目标功能尚未实现造成。
 - 2026-07-10：D40 公共近期接口 GREEN。隔离烟测以匿名请求通过 public/recruiting/future/open 资格、share_only/cancelled/locked/past 排除、排序、20 条上限和敏感字段检查；随后按预期在详情 `access_scope !== public_preview` 处 RED。
+- 2026-07-10：D40 详情与邀请后端 GREEN。完整隔离烟测通过发车前 `public_preview`、发车后游客/非成员 404、评论 404、车头/成员 `member`、D23 相册 token、分析 `shareCode` 不授权和签名 `invite_preview`；D23 与 D39 静态检查通过。篡改 token 补充断言等待最终烟测重跑。

@@ -30,6 +30,7 @@ import {
 } from "./storage/cos.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
+  assertSessionJoinInviteAllowed,
   assertSessionAlbumUploadAllowed,
   approveSignup,
   cancelSession,
@@ -55,7 +56,7 @@ import {
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
   getPublicSessionAlbumVideoCoverForMedia,
-  getSession,
+  getSessionForViewer,
   getSessionAlbumShareSubject,
   getSessionShareStats,
   getMySessionAlbumPrivacy,
@@ -130,6 +131,7 @@ const SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 const SESSION_ALBUM_VIDEO_MULTIPART_MAX_BYTES = SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES + 256 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
+const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   "ci-process": "snapshot",
@@ -1441,6 +1443,36 @@ function verifySessionAlbumShareToken(token) {
   );
 }
 
+function normalizeSessionJoinInviteClaims(payload) {
+  if (payload.purpose !== "session_join_invite") {
+    throw forbidden("session join invite token is invalid");
+  }
+  return {
+    purpose: "session_join_invite",
+    sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
+    inviterUserId: tokenPositiveInteger(payload.inviterUserId, "inviterUserId"),
+    exp: tokenPositiveInteger(payload.exp, "exp")
+  };
+}
+
+function signSessionJoinInviteToken(payload) {
+  const exp = payload.exp || Math.floor(Date.now() / 1000) + SESSION_JOIN_INVITE_TOKEN_SECONDS;
+  return signSignedPayload(
+    "session-join-invite",
+    normalizeSessionJoinInviteClaims({
+      ...payload,
+      purpose: "session_join_invite",
+      exp
+    })
+  );
+}
+
+function verifySessionJoinInviteToken(token) {
+  return normalizeSessionJoinInviteClaims(
+    verifySignedPayload("session-join-invite", token, "session join invite token")
+  );
+}
+
 function sessionAlbumTokenDigest(token) {
   return crypto
     .createHash("sha256")
@@ -2734,7 +2766,16 @@ async function route(request, response) {
 
   const sessionId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)$/);
   if (request.method === "GET" && sessionId) {
-    jsonResponse(response, 200, { ok: true, data: await getSession(sessionId) });
+    const viewer = await optionalAuthUser(request);
+    const inviteToken = url.searchParams.get("inviteToken") || "";
+    const inviteClaims = inviteToken ? verifySessionJoinInviteToken(inviteToken) : null;
+    if (inviteClaims && Number(inviteClaims.sessionId) !== Number(sessionId)) {
+      throw forbidden("session join invite token is invalid");
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await getSessionForViewer(sessionId, { viewer, inviteClaims })
+    });
     return;
   }
   if (request.method === "PATCH" && sessionId) {
@@ -2819,6 +2860,28 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await leaveSessionOrganizer(user, leaveOrganizerSessionId)
+    });
+    return;
+  }
+
+  const sessionJoinInviteTokenId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/join-invite-token$/
+  );
+  if (request.method === "POST" && sessionJoinInviteTokenId) {
+    const user = await getAuthUser(request);
+    await assertSessionJoinInviteAllowed(user, sessionJoinInviteTokenId);
+    const exp = Math.floor(Date.now() / 1000) + SESSION_JOIN_INVITE_TOKEN_SECONDS;
+    jsonResponse(response, 201, {
+      ok: true,
+      data: {
+        token: signSessionJoinInviteToken({
+          sessionId: Number(sessionJoinInviteTokenId),
+          inviterUserId: Number(user.user.id),
+          exp
+        }),
+        expires_at: new Date(exp * 1000).toISOString()
+      }
     });
     return;
   }
@@ -3051,9 +3114,13 @@ async function route(request, response) {
 
   const sessionReviewsId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/reviews$/);
   if (request.method === "GET" && sessionReviewsId) {
+    const viewer = await optionalAuthUser(request);
+    const inviteToken = url.searchParams.get("inviteToken") || "";
+    const inviteClaims = inviteToken ? verifySessionJoinInviteToken(inviteToken) : null;
+    const access = await getSessionForViewer(sessionReviewsId, { viewer, inviteClaims });
     jsonResponse(response, 200, {
       ok: true,
-      data: await listSessionReviews(sessionReviewsId)
+      data: access.access_scope === "member" ? await listSessionReviews(sessionReviewsId) : []
     });
     return;
   }

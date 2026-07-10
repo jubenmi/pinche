@@ -3354,46 +3354,184 @@ export async function createSession(user, body) {
   });
 }
 
+function publicSessionAvailable(session) {
+  const startAt = new Date(session.start_at).getTime();
+  return (
+    session.visibility === "public" &&
+    session.status === "recruiting" &&
+    Number.isFinite(startAt) &&
+    startAt > Date.now()
+  );
+}
+
+function publicSeatResponse(row = {}) {
+  const {
+    confirmed_user_id: _confirmedUserId,
+    confirmed_user_nickname: _confirmedUserNickname,
+    confirmed_user_open_id: _confirmedUserOpenId,
+    confirmed_user_avatar_url: _confirmedUserAvatarUrl,
+    confirmed_user_gender: _confirmedUserGender,
+    ...seat
+  } = row;
+  return {
+    ...seat,
+    id: Number(seat.id),
+    session_id: Number(seat.session_id)
+  };
+}
+
+function publicSessionNpcRoleResponse(row = {}) {
+  const {
+    bound_user_id: boundUserId,
+    bound_user_name: _boundUserName,
+    bound_user_avatar_url: _boundUserAvatarUrl,
+    bound_user_gender: _boundUserGender,
+    pending_signup_id: pendingSignupId,
+    pending_signup_user_id: _pendingSignupUserId,
+    pending_signup_user_name: _pendingSignupUserName,
+    pending_signup_user_avatar_url: _pendingSignupUserAvatarUrl,
+    pending_signup_user_gender: _pendingSignupUserGender,
+    ...role
+  } = row;
+  return {
+    ...role,
+    is_bound: Boolean(boundUserId),
+    has_pending_signup: Boolean(pendingSignupId)
+  };
+}
+
+async function memberSessionDetail(connection, session) {
+  const id = Number(session.id);
+  await cleanupSessionExclusiveRoleSelections(connection, id);
+  const [seats] = await connection.query(
+    `
+      SELECT
+        seat.*,
+        user.nickname AS confirmed_user_nickname,
+        user.open_id AS confirmed_user_open_id,
+        user.avatar_url AS confirmed_user_avatar_url,
+        user.gender AS confirmed_user_gender
+      FROM session_seats seat
+      LEFT JOIN users user ON user.id = seat.confirmed_user_id
+      WHERE seat.session_id = ?
+      ORDER BY seat.id
+    `,
+    [id]
+  );
+  const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
+  const activeAlbumPhotoCount = await activeSessionAlbumPhotoCount(connection, id);
+  const storeLocation = session.store_id
+    ? await findById(connection, "stores", session.store_id)
+    : null;
+  const { note: _note, cancelled_by_user_id: _cancelledByUserId, ...safeSession } = session;
+  return {
+    ...safeSession,
+    store_address: storeLocation?.address || null,
+    store_latitude: storeLocation?.latitude ?? null,
+    store_longitude: storeLocation?.longitude ?? null,
+    join_policy: safeSession.join_policy || "review_required",
+    join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
+    npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
+    active_album_photo_count: activeAlbumPhotoCount,
+    photo_count: activeAlbumPhotoCount,
+    seats,
+    session_npc_roles: sessionNpcRoles
+  };
+}
+
+async function publicSessionPreview(connection, session, accessScope = "public_preview") {
+  const id = Number(session.id);
+  const [seats] = await connection.query(
+    `
+      SELECT seat.*
+      FROM session_seats seat
+      WHERE seat.session_id = ?
+      ORDER BY seat.id
+    `,
+    [id]
+  );
+  const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
+  const storeLocation = session.store_id
+    ? await findById(connection, "stores", session.store_id)
+    : null;
+  const {
+    note: _note,
+    cancelled_by_user_id: _cancelledByUserId,
+    organizer_user_id: _organizerUserId,
+    organizer_hidden_at: _organizerHiddenAt,
+    dm_user_id: _dmUserId,
+    npc_user_id: _npcUserId,
+    ...safeSession
+  } = session;
+  return {
+    ...safeSession,
+    access_scope: accessScope,
+    store_address: storeLocation?.address || null,
+    store_latitude: storeLocation?.latitude ?? null,
+    store_longitude: storeLocation?.longitude ?? null,
+    join_policy: safeSession.join_policy || "review_required",
+    join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
+    npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
+    seats: seats.map(publicSeatResponse),
+    session_npc_roles: sessionNpcRoles.map(publicSessionNpcRoleResponse)
+  };
+}
+
 export async function getSession(id) {
+  const sessionId = positiveId(id, "sessionId");
   return withTransaction(async (connection) => {
+    const session = await findById(connection, "sessions", sessionId);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    return memberSessionDetail(connection, session);
+  });
+}
+
+export async function getSessionForViewer(id, options = {}) {
+  const sessionId = positiveId(id, "sessionId");
+  const viewer = options.viewer || null;
+  const inviteClaims = options.inviteClaims || null;
+  return withTransaction(async (connection) => {
+    const session = await findById(connection, "sessions", sessionId);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    const memberAllowed = Boolean(
+      viewer &&
+        (isAdmin(viewer) || (await isSessionAlbumMember(connection, session, viewer.user.id)))
+    );
+    if (memberAllowed) {
+      return {
+        ...(await memberSessionDetail(connection, session)),
+        access_scope: "member"
+      };
+    }
+    if (publicSessionAvailable(session)) {
+      return publicSessionPreview(connection, session);
+    }
+    if (
+      inviteClaims &&
+      Number(inviteClaims.sessionId) === sessionId &&
+      session.status !== "cancelled"
+    ) {
+      return publicSessionPreview(connection, session, "invite_preview");
+    }
+    throw notFound("Session not found");
+  });
+}
+
+export async function assertSessionJoinInviteAllowed(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
     const session = await findById(connection, "sessions", id);
     if (!session) {
       throw notFound("Session not found");
     }
-    await cleanupSessionExclusiveRoleSelections(connection, id);
-
-    const [seats] = await connection.query(
-      `
-        SELECT
-          seat.*,
-          user.nickname AS confirmed_user_nickname,
-          user.open_id AS confirmed_user_open_id,
-          user.avatar_url AS confirmed_user_avatar_url,
-          user.gender AS confirmed_user_gender
-        FROM session_seats seat
-        LEFT JOIN users user ON user.id = seat.confirmed_user_id
-        WHERE seat.session_id = ?
-        ORDER BY seat.id
-      `,
-      [id]
-    );
-    const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
-    const activeAlbumPhotoCount = await activeSessionAlbumPhotoCount(connection, id);
-    const storeLocation = session.store_id ? await findById(connection, "stores", session.store_id) : null;
-    const { note, cancelled_by_user_id: _cancelledByUserId, ...publicSession } = session;
-    return {
-      ...publicSession,
-      store_address: storeLocation?.address || null,
-      store_latitude: storeLocation?.latitude ?? null,
-      store_longitude: storeLocation?.longitude ?? null,
-      join_policy: publicSession.join_policy || "review_required",
-      join_phone_required: Boolean(Number(publicSession.join_phone_required ?? 1)),
-      npc_join_enabled: Boolean(Number(publicSession.npc_join_enabled ?? 1)),
-      active_album_photo_count: activeAlbumPhotoCount,
-      photo_count: activeAlbumPhotoCount,
-      seats,
-      session_npc_roles: sessionNpcRoles
-    };
+    if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
+      throw forbidden("Only session members can share a join invitation");
+    }
+    return { session_id: id };
   });
 }
 
