@@ -1292,8 +1292,11 @@ function assertMessageTextSafe(label, value) {
   }
 }
 
-async function findById(connection, table, id) {
-  const [rows] = await connection.query(`SELECT * FROM ${table} WHERE id = ?`, [id]);
+async function findById(connection, table, id, options = {}) {
+  const [rows] = await connection.query(
+    `SELECT * FROM ${table} WHERE id = ?${options.forUpdate ? " FOR UPDATE" : ""}`,
+    [id]
+  );
   return rows[0] || null;
 }
 
@@ -3835,6 +3838,12 @@ export async function listPublicUpcomingSessions(filters = {}) {
             WHERE available_npc.session_id = session.id
               AND available_npc.status = 'active'
               AND available_npc.bound_user_id IS NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM signups pending_npc_signup
+                WHERE pending_npc_signup.session_npc_role_id = available_npc.id
+                  AND pending_npc_signup.status = 'pending'
+              )
           ) AS available_npc_count
         FROM sessions session
         JOIN stores store ON store.id = session.store_id
@@ -3854,6 +3863,12 @@ export async function listPublicUpcomingSessions(filters = {}) {
               WHERE open_npc.session_id = session.id
                 AND open_npc.status = 'active'
                 AND open_npc.bound_user_id IS NULL
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM signups pending_npc_signup
+                  WHERE pending_npc_signup.session_npc_role_id = open_npc.id
+                    AND pending_npc_signup.status = 'pending'
+                )
             )
           )
         ORDER BY session.start_at ASC, session.id ASC
@@ -6280,6 +6295,40 @@ export async function deleteSessionAlbumPhoto(user, photoId) {
       ].filter(Boolean),
       deleted: true
     };
+  });
+}
+
+export async function prepareSessionAlbumPhotoDeletion(user, photoId) {
+  const id = positiveId(photoId, "photoId");
+  return withDatabaseConnection(async (connection) => {
+    const photo = await findById(connection, "session_album_photos", id);
+    if (!photo || photo.status !== "active") throw notFound("Album photo not found");
+    if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the photo uploader can delete this photo");
+    }
+    return {
+      id,
+      media_type: albumMediaType(photo),
+      object_urls: [photo.photo_url, photo.source_url, photo.display_url, photo.cover_url].filter(Boolean)
+    };
+  });
+}
+
+export async function finalizeSessionAlbumPhotoDeletion(user, photoId, snapshot) {
+  const id = positiveId(photoId, "photoId");
+  const canonicalUrls = (urls) => [...new Set((urls || []).filter(Boolean))].sort();
+  const expected = JSON.stringify(canonicalUrls(snapshot?.object_urls));
+  return withTransaction(async (connection) => {
+    const photo = await findById(connection, "session_album_photos", id, { forUpdate: true });
+    if (!photo || photo.status !== "active") throw notFound("Album photo not found");
+    if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the photo uploader can delete this photo");
+    }
+    const current = JSON.stringify(canonicalUrls([photo.photo_url, photo.source_url, photo.display_url, photo.cover_url]));
+    if (current !== expected) return { deleted: false, reason: "snapshot_changed" };
+    await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [id]);
+    await connection.query("DELETE FROM session_album_photos WHERE id = ?", [id]);
+    return { id, deleted: true };
   });
 }
 

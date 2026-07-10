@@ -129,6 +129,7 @@
 
         <view class="album-filter-panel album-toolbar-filter-panel">
           <t-segmented
+            v-if="albumFilterSegmentOptions.length > 0"
             class="filter-row"
             block
             custom-style="width: 100%; --td-segmented-bg-color: rgba(239, 234, 224, 0.78); --td-segmented-item-active-bg: #ffffff; --td-segmented-item-color: #202124; --td-segmented-item-active-color: #0f57d0; --td-segmented-item-label-font: 700 22rpx / 42rpx PingFang SC, Microsoft YaHei, sans-serif;"
@@ -248,7 +249,7 @@
                 <view v-else class="photo-loading-dot"></view>
               </view>
               <view v-if="photo.media_type === 'video'" class="video-overlay">
-                <view v-if="videoReady(photo)" class="video-play-badge">▶</view>
+                <view v-if="!timelineMode && videoReady(photo)" class="video-play-badge">▶</view>
                 <view class="video-state-badge">
                   {{ videoReady(photo) ? formatVideoDuration(photo.duration_seconds) : videoStateText(photo) }}
                 </view>
@@ -277,7 +278,7 @@
               <view
                 v-if="!selectionMode"
                 class="photo-actions-row"
-                :class="{ 'has-danger': photo.is_mine }"
+                :class="{ 'has-danger': photo.can_delete }"
               >
                 <view class="photo-status-slot">
                   <t-tag class="photo-source-badge" theme="primary" variant="light" size="small">
@@ -308,7 +309,7 @@
                   </t-button>
                 </view>
                 <t-button
-                  v-if="photo.is_mine"
+                  v-if="photo.can_delete"
                   class="photo-action-text danger photo-danger-action"
                   :disabled="albumBusy"
                   @tap.stop="deletePhoto(photo)"
@@ -374,7 +375,7 @@
                 <view v-else class="photo-loading-dot"></view>
               </view>
               <view v-if="photo.media_type === 'video'" class="video-overlay">
-                <view v-if="videoReady(photo)" class="video-play-badge">▶</view>
+                <view v-if="!timelineMode && videoReady(photo)" class="video-play-badge">▶</view>
                 <view class="video-state-badge">
                   {{ videoReady(photo) ? formatVideoDuration(photo.duration_seconds) : videoStateText(photo) }}
                 </view>
@@ -403,7 +404,7 @@
               <view
                 v-if="!selectionMode"
                 class="photo-actions-row"
-                :class="{ 'has-danger': photo.is_mine }"
+                :class="{ 'has-danger': photo.can_delete }"
               >
                 <view class="photo-status-slot">
                   <t-tag class="photo-source-badge" theme="primary" variant="light" size="small">
@@ -434,7 +435,7 @@
                   </t-button>
                 </view>
                 <t-button
-                  v-if="photo.is_mine"
+                  v-if="photo.can_delete"
                   class="photo-action-text danger photo-danger-action"
                   :disabled="albumBusy"
                   @tap.stop="deletePhoto(photo)"
@@ -481,31 +482,10 @@
       :media-progress="mediaProgressById"
       @close="closePhotoPreview"
       @change="handlePreviewChange"
+      @video-error="handlePreviewVideoError"
+      @need-video="handlePreviewVideoRequest"
       @download="handlePreviewDownload"
     />
-
-    <t-popup
-      class="video-player-popup"
-      :visible="videoPlayerVisible"
-      placement="center"
-      :close-on-overlay-click="true"
-      @visible-change="handleVideoPlayerVisibleChange"
-    >
-      <view class="video-player-sheet" @tap.stop>
-        <view class="video-player-head">
-          <text>{{ videoPlayerTitle || "短视频" }}</text>
-          <text class="video-player-close" @tap="closeVideoPlayer">关闭</text>
-        </view>
-        <video
-          v-if="videoPlayerUrl"
-          class="album-video-player"
-          :src="videoPlayerUrl"
-          :controls="true"
-          :autoplay="false"
-          object-fit="contain"
-        />
-      </view>
-    </t-popup>
 
     <t-popup
       :visible="tagSheetVisible"
@@ -591,6 +571,7 @@ import {
   dataOf,
   ensureLoggedIn,
   getCurrentUser,
+  getApiBaseUrl,
   getToken,
   queryString,
   request,
@@ -598,6 +579,14 @@ import {
   uploadSessionAlbumVideo,
   uploadSessionAlbumPhoto
 } from "../../utils/api";
+import {
+  canOpenAlbumMediaPreview,
+  canReuseVideoUrl,
+  compressVideoSizeBytes,
+  shouldAttachApiAuthorization,
+  transitionAlbumVideoViewerFailure,
+  videoUrlExpiresAt
+} from "../../utils/albumVideo";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
@@ -611,7 +600,12 @@ function albumMediaCachePath(photoId, variant = "preview") {
 }
 
 // D32 admin album video keeps short video upload scoped to system_admin testing.
+const MAX_ALBUM_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024;
+const ALBUM_PHOTO_COMPRESS_QUALITY = 85;
+const ALBUM_PHOTO_COMPRESS_WIDTH = 2048;
+const ALBUM_PHOTO_COMPRESS_HEIGHT = 2048;
 const MAX_ALBUM_VIDEO_DURATION_SECONDS = 60;
+const MIN_ALBUM_VIDEO_COMPRESS_BYTES = 20 * 1024 * 1024;
 const MAX_ALBUM_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export default {
@@ -662,9 +656,7 @@ export default {
       previewCurrentIndex: 0,
       previewInitialIndex: 0,
       previewMediaUrlRefreshRequest: null,
-      videoPlayerVisible: false,
-      videoPlayerUrl: "",
-      videoPlayerTitle: "",
+      previewVideoUrlRequests: {},
       filters: [
         { value: "all", label: "全部" },
         { value: "mine", label: "上传" },
@@ -1392,6 +1384,12 @@ export default {
       if (!path) {
         return "";
       }
+      if (/^https?:\/\//i.test(path)) {
+        return path;
+      }
+      if (/^https?\/\//i.test(path)) {
+        return path.replace(/^(https?)\/\//i, "$1://");
+      }
       return apiUrl(path);
     },
     normalizePhotoMedia(photo) {
@@ -1404,6 +1402,8 @@ export default {
           tags: photo.tags || [],
           cover_url: this.normalizeAlbumMediaUrl(photo.cover_url || ""),
           video_url: this.normalizeAlbumMediaUrl(photo.video_url || ""),
+          video_display_url: photo.video_display_url || "",
+          video_load_failed: Boolean(photo.video_load_failed),
           duration_seconds: Number(photo.duration_seconds || 0),
           display_url: ""
         };
@@ -1502,6 +1502,8 @@ export default {
         return {
           cover_url: normalized.cover_url,
           video_url: normalized.video_url,
+          video_display_url: normalized.video_display_url,
+          video_load_failed: normalized.video_load_failed,
           processing_status: normalized.processing_status
         };
       }
@@ -1607,7 +1609,10 @@ export default {
         filePath,
         imageUrl,
         mediaRequestError,
-        header: token ? { Authorization: `Bearer ${token}` } : {}
+        header:
+          token && shouldAttachApiAuthorization(imageUrl, getApiBaseUrl())
+            ? { Authorization: `Bearer ${token}` }
+            : {}
       };
     },
     writeAlbumMediaFile(filePath, data) {
@@ -1926,8 +1931,17 @@ export default {
       this.setListThumbnailState(photo, { loaded: false, failed: true });
     },
     canOpenPhotoPreview(photo) {
+      if (
+        !canOpenAlbumMediaPreview({
+          timelineMode: this.timelineMode,
+          mediaType: photo?.media_type,
+          processingStatus: photo?.processing_status
+        })
+      ) {
+        return false;
+      }
       if (photo?.media_type === "video") {
-        return this.videoReady(photo);
+        return true;
       }
       const key = this.listThumbnailStateKey(photo);
       return Boolean(key && this.visiblePhotoMedia[key]?.thumbnail && this.listThumbnailLoaded(photo));
@@ -2311,10 +2325,11 @@ export default {
       }
       uni.chooseImage({
         count: 9,
-        sizeType: ["compressed"],
+        sizeType: ["original"],
         sourceType: ["album", "camera"],
         success: async (result) => {
-          await this.uploadChosenPhotos(result.tempFilePaths || []);
+          const photoItems = result.tempFiles || [];
+          await this.uploadChosenPhotos(photoItems.length ? photoItems : result.tempFilePaths || []);
         }
       });
     },
@@ -2337,21 +2352,204 @@ export default {
         }
       });
     },
-    getVideoFileInfo(filePath) {
+    getPhotoFileStat(filePath) {
       return new Promise((resolve) => {
-        if (typeof wx === "undefined") {
+        const fileSystemApi =
+          typeof uni !== "undefined" && typeof uni.getFileSystemManager === "function"
+            ? uni
+            : typeof wx !== "undefined" && typeof wx.getFileSystemManager === "function"
+              ? wx
+              : null;
+        if (!fileSystemApi || !filePath) {
           resolve({});
           return;
         }
+        fileSystemApi.getFileSystemManager().stat({
+          path: filePath,
+          success: (result) => {
+            const stats = result.stats || result.stat || result;
+            resolve({ size: Number(stats?.size || 0) });
+          },
+          fail: () => resolve({})
+        });
+      });
+    },
+    getPhotoFileInfo(filePath) {
+      return new Promise((resolve) => {
+        if (!filePath) {
+          resolve({});
+          return;
+        }
+        const imageInfoApi =
+          typeof uni !== "undefined" && typeof uni.getImageInfo === "function"
+            ? uni
+            : typeof wx !== "undefined" && typeof wx.getImageInfo === "function"
+              ? wx
+              : null;
+        const info = {};
+        const resolveWithFileSize = () => {
+          const getFileInfoApi =
+            typeof uni !== "undefined" && typeof uni.getFileInfo === "function"
+              ? uni
+              : typeof wx !== "undefined" && typeof wx.getFileInfo === "function"
+                ? wx
+                : null;
+          if (!getFileInfoApi) {
+            this.getPhotoFileStat(filePath).then((statInfo) => {
+              resolve({ ...info, size: Number(statInfo.size || 0) });
+            });
+            return;
+          }
+          getFileInfoApi.getFileInfo({
+            filePath,
+            success: (result) => resolve({ ...info, size: Number(result.size || 0) }),
+            fail: async () => {
+              const statInfo = await this.getPhotoFileStat(filePath);
+              resolve({ ...info, size: Number(statInfo.size || 0) });
+            }
+          });
+        };
+        if (!imageInfoApi) {
+          resolveWithFileSize();
+          return;
+        }
+        imageInfoApi.getImageInfo({
+          src: filePath,
+          success: (result) => {
+            info.width = Number(result.width || 0);
+            info.height = Number(result.height || 0);
+            resolveWithFileSize();
+          },
+          fail: resolveWithFileSize
+        });
+      });
+    },
+    normalizePhotoUploadItem(item) {
+      if (typeof item === "string") {
+        return { filePath: item, size: 0 };
+      }
+      return {
+        filePath: item?.tempFilePath || item?.path || item?.filePath || "",
+        size: Number(item?.size || 0)
+      };
+    },
+    photoCompressTargetSize(info = {}) {
+      const width = Number(info.width || 0);
+      const height = Number(info.height || 0);
+      if (width > 0 && height > 0) {
+        const scale = Math.min(
+          1,
+          ALBUM_PHOTO_COMPRESS_WIDTH / width,
+          ALBUM_PHOTO_COMPRESS_HEIGHT / height
+        );
+        return {
+          compressedWidth: Math.max(1, Math.round(width * scale)),
+          compressedHeight: Math.max(1, Math.round(height * scale))
+        };
+      }
+      return {
+        compressedWidth: ALBUM_PHOTO_COMPRESS_WIDTH,
+        compressedHeight: ALBUM_PHOTO_COMPRESS_HEIGHT
+      };
+    },
+    async compressPhotoBeforeUpload(filePath, originalInfo = {}) {
+      if (typeof uni === "undefined" || typeof uni.compressImage !== "function") {
+        return { filePath, ...originalInfo };
+      }
+      const targetSize = this.photoCompressTargetSize(originalInfo);
+      return new Promise((resolve) => {
+        uni.compressImage({
+          src: filePath,
+          quality: ALBUM_PHOTO_COMPRESS_QUALITY,
+          compressedWidth: targetSize.compressedWidth,
+          compressedHeight: targetSize.compressedHeight,
+          success: async (result) => {
+            const compressedPath = result.tempFilePath || filePath;
+            const compressedInfo = await this.getPhotoFileInfo(compressedPath);
+            resolve({
+              filePath: compressedPath,
+              size: Number(result.size || compressedInfo.size || 0),
+              width: compressedInfo.width || targetSize.compressedWidth || originalInfo.width || null,
+              height: compressedInfo.height || targetSize.compressedHeight || originalInfo.height || null
+            });
+          },
+          fail: () => resolve({ filePath, ...originalInfo })
+        });
+      });
+    },
+    async preparePhotoForUpload(item) {
+      const normalized = this.normalizePhotoUploadItem(item);
+      const { filePath } = normalized;
+      const originalInfo = await this.getPhotoFileInfo(filePath);
+      const pickerSize = Number(normalized.size || 0);
+      const originalSize = pickerSize || Number(originalInfo.size || 0);
+      if (originalSize > 0 && originalSize <= MAX_ALBUM_PHOTO_UPLOAD_BYTES) {
+        return {
+          filePath,
+          size: originalSize,
+          width: originalInfo.width || null,
+          height: originalInfo.height || null
+        };
+      }
+      if (!originalSize) {
+        this.statusText = "无法读取图片大小，正在尝试压缩照片...";
+      }
+      if (originalSize) {
+        this.statusText = "正在压缩照片...";
+      }
+      const compressed = await this.compressPhotoBeforeUpload(filePath, {
+        filePath,
+        size: originalSize,
+        width: originalInfo.width || null,
+        height: originalInfo.height || null
+      });
+      const uploadPath = compressed.filePath || filePath;
+      let uploadSize = Number(compressed.size || 0);
+      if (!uploadSize) {
+        const uploadInfo = await this.getPhotoFileInfo(uploadPath);
+        uploadSize = Number(uploadInfo.size || 0);
+      }
+      if (!uploadSize && uploadPath === filePath) {
+        uploadSize = originalSize;
+      }
+      if (!uploadSize) {
+        this.statusText = "无法读取压缩后图片大小，请换一张或先压缩后再上传。";
+        showToast({ title: "无法确认图片大小", icon: "none" });
+        return null;
+      }
+      if (uploadSize > MAX_ALBUM_PHOTO_UPLOAD_BYTES) {
+        this.statusText = `图片超过 4MB，压缩后仍有 ${this.formatFileSize(uploadSize)}，请换一张或先压缩后再上传。`;
+        showToast({ title: "图片超过 4MB", icon: "none" });
+        return null;
+      }
+      return {
+        filePath: uploadPath,
+        size: uploadSize,
+        width: compressed.width || originalInfo.width || null,
+        height: compressed.height || originalInfo.height || null
+      };
+    },
+    getVideoFileInfo(filePath) {
+      return new Promise((resolve) => {
+        if (typeof wx === "undefined" || !filePath) {
+          resolve({});
+          return;
+        }
+        const info = {};
         const resolveWithFileSize = () => {
           if (typeof wx.getFileInfo !== "function") {
-            resolve({});
+            this.getPhotoFileStat(filePath).then((statInfo) => {
+              resolve({ ...info, size: Number(statInfo.size || 0) });
+            });
             return;
           }
           wx.getFileInfo({
             filePath,
-            success: (result) => resolve({ size: Number(result.size || 0) }),
-            fail: () => resolve({})
+            success: (result) => resolve({ ...info, size: Number(result.size || 0) }),
+            fail: async () => {
+              const statInfo = await this.getPhotoFileStat(filePath);
+              resolve({ ...info, size: Number(statInfo.size || 0) });
+            }
           });
         };
         if (typeof wx.getVideoInfo !== "function") {
@@ -2360,7 +2558,10 @@ export default {
         }
         wx.getVideoInfo({
           src: filePath,
-          success: (result) => resolve(result || {}),
+          success: (result) => {
+            Object.assign(info, result || {});
+            resolveWithFileSize();
+          },
           fail: resolveWithFileSize
         });
       });
@@ -2376,16 +2577,35 @@ export default {
           success: async (result) => {
             const compressedPath = result.tempFilePath || filePath;
             const compressedInfo = await this.getVideoFileInfo(compressedPath);
+            const reportedSizeBytes = compressVideoSizeBytes(result.size);
             resolve({
               filePath: compressedPath,
-              size: Number(result.size || compressedInfo.size || 0),
+              size: Number(compressedInfo.size || reportedSizeBytes || 0),
               width: compressedInfo.width || originalInfo.width || null,
-              height: compressedInfo.height || originalInfo.height || null
+              height: compressedInfo.height || originalInfo.height || null,
+              duration: compressedInfo.duration || originalInfo.duration || null
             });
           },
           fail: () => resolve({ filePath, ...originalInfo })
         });
       });
+    },
+    shouldCompressVideoBeforeUpload(originalSize) {
+      return !(originalSize > 0 && originalSize <= MIN_ALBUM_VIDEO_COMPRESS_BYTES);
+    },
+    isSuspiciousCompressedVideo(compressed = {}, originalInfo = {}) {
+      const compressedSize = Number(compressed.size || 0);
+      const originalSize = Number(originalInfo.size || 0);
+      const durationSeconds = Number(originalInfo.duration || compressed.duration || 0);
+      if (!compressedSize) {
+        return true;
+      }
+      return (
+        durationSeconds >= 5 &&
+        originalSize > MIN_ALBUM_VIDEO_COMPRESS_BYTES &&
+        compressedSize < originalSize * 0.01 &&
+        compressedSize < 512 * 1024
+      );
     },
     confirmVideoUpload({ durationSeconds, uploadSize }) {
       return new Promise((resolve) => {
@@ -2422,19 +2642,48 @@ export default {
         return;
       }
       const originalSize = Number(file.size || originalInfo.size || 0);
-      this.statusText = "正在压缩视频...";
-      const compressed = await this.compressVideoBeforeUpload(originalPath, {
+      let uploadPath = originalPath;
+      let uploadSize = originalSize;
+      let uploadInfo = {
         filePath: originalPath,
         size: originalSize,
         width: originalInfo.width || null,
-        height: originalInfo.height || null
-      });
-      const compressedSize = Number(compressed.size || 0);
-      const useCompressed = compressed.filePath !== originalPath &&
-        compressedSize > 0 &&
-        (!originalSize || compressedSize < originalSize);
-      const uploadPath = useCompressed ? compressed.filePath : originalPath;
-      const uploadSize = Math.max(1, useCompressed ? compressedSize : originalSize);
+        height: originalInfo.height || null,
+        duration: durationSeconds
+      };
+      const shouldCompressVideo = this.shouldCompressVideoBeforeUpload(originalSize);
+      if (shouldCompressVideo) {
+        this.statusText = "正在压缩视频...";
+        const compressed = await this.compressVideoBeforeUpload(originalPath, uploadInfo);
+        const compressedSize = Number(compressed.size || 0);
+        const compressedUsable =
+          compressed.filePath !== originalPath &&
+          compressedSize > 0 &&
+          !this.isSuspiciousCompressedVideo(compressed, uploadInfo);
+        const useCompressed = compressedUsable && (!originalSize || compressedSize < originalSize);
+        if (useCompressed) {
+          uploadPath = compressed.filePath;
+          uploadSize = compressedSize;
+          uploadInfo = compressed;
+        } else if (originalSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
+          showToast({ title: "压缩后视频异常，请先剪辑或压缩后再上传", icon: "none" });
+          this.statusText = "压缩后视频异常，请先剪辑或压缩后再上传。";
+          return;
+        }
+      }
+      const finalUploadInfo = await this.getVideoFileInfo(uploadPath);
+      uploadSize = Number(finalUploadInfo.size || uploadSize || 0);
+      if (!uploadSize) {
+        showToast({ title: "无法确认视频大小", icon: "none" });
+        this.statusText = "无法读取最终视频大小，请换一个视频或先压缩后再上传。";
+        return;
+      }
+      uploadInfo = {
+        ...uploadInfo,
+        ...finalUploadInfo,
+        filePath: uploadPath,
+        size: uploadSize
+      };
       if (uploadSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
         showToast({ title: "视频文件过大，请压缩或剪辑后再上传", icon: "none" });
         this.statusText = "";
@@ -2452,8 +2701,8 @@ export default {
         await createSessionAlbumVideo(this.sessionId, {
           sourceUrl,
           durationSeconds,
-          videoWidth: compressed.width || originalInfo.width || null,
-          videoHeight: compressed.height || originalInfo.height || null,
+          videoWidth: uploadInfo.width || originalInfo.width || null,
+          videoHeight: uploadInfo.height || originalInfo.height || null,
           videoByteSize: uploadSize,
           videoContentType: "video/mp4"
         });
@@ -2470,18 +2719,30 @@ export default {
         return;
       }
       this.uploading = true;
-      this.statusText = "正在上传照片...";
+      let uploadedCount = 0;
+      let skippedCount = 0;
       try {
         for (const filePath of paths) {
-          const photoUrl = await uploadSessionAlbumPhoto(this.sessionId, filePath);
+          const prepared = await this.preparePhotoForUpload(filePath);
+          if (!prepared) {
+            skippedCount += 1;
+            continue;
+          }
+          this.statusText = "正在上传照片...";
+          const photoUrl = await uploadSessionAlbumPhoto(this.sessionId, prepared.filePath);
           await request({
             url: `/api/sessions/${this.sessionId}/album/photos`,
             method: "POST",
             data: { photoUrl }
           });
+          uploadedCount += 1;
         }
-        this.statusText = "";
-        await this.loadAlbum();
+        if (uploadedCount > 0) {
+          this.statusText = "";
+          await this.loadAlbum();
+        } else if (!skippedCount) {
+          this.statusText = "";
+        }
       } catch (error) {
         this.statusText = error?.userMessage || "相册照片上传失败，请稍后重试。";
       } finally {
@@ -2489,7 +2750,7 @@ export default {
       }
     },
     deletePhoto(photo) {
-      if (this.timelineMode || this.albumBusy || !photo.is_mine) {
+      if (this.timelineMode || this.albumBusy || !photo.can_delete) {
         return;
       }
       const mediaLabel = photo.media_type === "video" ? "视频" : "照片";
@@ -2506,7 +2767,7 @@ export default {
             return;
           }
           this.deletingPhotoId = photo.id;
-          this.statusText = "正在删除照片...";
+          this.statusText = `正在删除${mediaLabel}...`;
           try {
             await request({
               url: `/api/session-album/photos/${photo.id}`,
@@ -2526,17 +2787,26 @@ export default {
       if (this.deletingPhotoId) {
         return;
       }
-      if (photo?.media_type === "video") {
-        this.openVideoPlayer(photo);
-        return;
-      }
       if (!this.canOpenPhotoPreview(photo)) {
-        return;
+        if (this.timelineMode && photo?.media_type === "video") {
+          showToast({ title: "打开小程序查看视频", icon: "none" });
+        }
+        return false;
       }
       this.openPhotoPreview(photo);
+      return true;
     },
     viewerPhotoWithCachedMedia(photo) {
       const visibleMedia = this.visiblePhotoMedia[String(photo.id)] || {};
+      if (photo?.media_type === "video") {
+        return {
+          ...photo,
+          thumbnail_display_url: visibleMedia.thumbnail || photo.thumbnail_display_url || photo.cover_url || "",
+          preview_display_url: visibleMedia.thumbnail || photo.preview_display_url || "",
+          video_display_url: visibleMedia.video || photo.video_display_url || "",
+          video_load_failed: Boolean(photo.video_load_failed || visibleMedia.videoFailed)
+        };
+      }
       return {
         ...photo,
         thumbnail_display_url: visibleMedia.thumbnail || photo.thumbnail_display_url || "",
@@ -2551,6 +2821,12 @@ export default {
           return;
         }
         const visibleMedia = this.visiblePhotoMedia[String(photo.id)] || {};
+        if (photo.media_type === "video") {
+          if (!visibleMedia.thumbnail && photo.cover_url) {
+            this.loadVisiblePhotoMedia(photo, "thumbnail");
+          }
+          return;
+        }
         if (!visibleMedia.thumbnail) {
           this.loadVisiblePhotoMedia(photo, "thumbnail");
         }
@@ -2560,8 +2836,12 @@ export default {
       });
     },
     openPhotoPreview(photo) {
-      const previewPhotos = this.filteredPhotos.map((item) => this.viewerPhotoWithCachedMedia(item))
-        .filter((item) => item.media_type === "image");
+      this.resetPreviewVideoViewerState();
+      const previewPhotos = this.filteredPhotos.map((item) => this.viewerPhotoWithCachedMedia(item)).filter(
+        (item) =>
+          (!this.timelineMode || item.media_type !== "video") &&
+          (item.media_type !== "video" || this.videoReady(item))
+      );
       if (!previewPhotos.some((item) => String(item.id) === String(photo.id))) {
         previewPhotos.unshift(this.viewerPhotoWithCachedMedia(photo));
       }
@@ -2580,45 +2860,158 @@ export default {
       this.previewPhotos = [];
       this.previewCurrentIndex = 0;
       this.previewInitialIndex = 0;
+      this.resetPreviewVideoViewerState();
       this.skipNextAlbumRefreshOnShow = false;
     },
-    async openVideoPlayer(photo) {
-      if (this.timelineMode) {
-        showToast({ title: "打开小程序查看视频", icon: "none" });
-        return;
-      }
-      if (!this.videoReady(photo)) {
-        showToast({ title: this.videoStateText(photo) || "视频暂不可播放", icon: "none" });
-        return;
-      }
-      try {
-        const response = await request({ url: photo.video_url || `/api/session-album/media/${photo.id}/video-url` });
-        const data = dataOf(response) || {};
-        if (!data.url) {
-          throw new Error("video url missing");
-        }
-        this.videoPlayerUrl = apiUrl(data.url);
-        this.videoPlayerTitle = this.tagSummary(photo);
-        this.videoPlayerVisible = true;
-      } catch (error) {
-        showToast({ title: "视频播放地址获取失败", icon: "none" });
-      }
-    },
-    closeVideoPlayer() {
-      this.videoPlayerVisible = false;
-      this.videoPlayerUrl = "";
-      this.videoPlayerTitle = "";
-    },
-    handleVideoPlayerVisibleChange(event = {}) {
-      if (event.detail?.visible === false) {
-        this.closeVideoPlayer();
-      }
+    resetPreviewVideoViewerState() {
+      this.visiblePhotoMedia = Object.fromEntries(
+        Object.entries(this.visiblePhotoMedia || {}).map(([key, media]) => [
+          key,
+          {
+            ...media,
+            videoFailed: false,
+            videoAutoRefreshUsed: false
+          }
+        ])
+      );
     },
     handlePreviewChange(event) {
       const payload = event?.detail || event || {};
       const index = Number(payload.index || 0);
       this.previewCurrentIndex = index;
       this.ensurePreviewMediaAround(index);
+    },
+    handlePreviewVideoRequest(event) {
+      const payload = event?.detail || event || {};
+      if (!payload.photo || this.timelineMode) {
+        return;
+      }
+      if (payload.retry) {
+        const key = String(payload.photo.id);
+        const visibleMedia = this.visiblePhotoMedia[key] || {};
+        const transition = transitionAlbumVideoViewerFailure(
+          {
+            videoUrl: visibleMedia.video || "",
+            autoRefreshUsed: Boolean(visibleMedia.videoAutoRefreshUsed),
+            videoLoadFailed: Boolean(visibleMedia.videoFailed)
+          },
+          "retry"
+        );
+        this.applyPreviewVideoTransition(payload.photo, transition);
+        if (transition.requestVideoUrl) {
+          this.loadPreviewVideoUrl(payload.photo, { forceRefresh: true });
+        }
+        return;
+      }
+      this.loadPreviewVideoUrl(payload.photo);
+    },
+    handlePreviewVideoError(event) {
+      const payload = event?.detail || event || {};
+      const photo = payload.photo;
+      if (!photo || this.timelineMode) {
+        return;
+      }
+      const key = String(photo.id);
+      const visibleMedia = this.visiblePhotoMedia[key] || {};
+      const transition = transitionAlbumVideoViewerFailure(
+        {
+          videoUrl: visibleMedia.video || photo.video_display_url || "",
+          autoRefreshUsed: Boolean(visibleMedia.videoAutoRefreshUsed),
+          videoLoadFailed: Boolean(visibleMedia.videoFailed)
+        },
+        "video-error"
+      );
+      this.applyPreviewVideoTransition(photo, transition);
+      if (transition.requestVideoUrl) {
+        this.loadPreviewVideoUrl(photo, { forceRefresh: true });
+      }
+    },
+    applyPreviewVideoTransition(photo, transition) {
+      this.setVisiblePhotoMedia(photo.id, {
+        video: transition.videoUrl,
+        videoExpiresAt: null,
+        videoFailed: transition.videoLoadFailed,
+        videoAutoRefreshUsed: transition.autoRefreshUsed
+      });
+      this.updatePreviewPhotoDisplayMedia(photo.id, {
+        video_display_url: transition.videoUrl,
+        video_url_expires_at: null,
+        video_load_failed: transition.videoLoadFailed
+      });
+    },
+    loadPreviewVideoUrl(photo, options = {}) {
+      if (
+        this.timelineMode ||
+        !photo ||
+        photo.id === undefined ||
+        photo.id === null ||
+        !this.videoReady(photo)
+      ) {
+        return Promise.resolve("");
+      }
+      const key = String(photo.id);
+      const cachedPhoto =
+        this.previewPhotos.find((item) => String(item.id) === key) ||
+        this.photos.find((item) => String(item.id) === key) ||
+        photo;
+      const visibleMedia = this.visiblePhotoMedia[key] || {};
+      const cachedUrl = visibleMedia.video || cachedPhoto.video_display_url || "";
+      const cachedExpiresAt =
+        visibleMedia.videoExpiresAt || cachedPhoto.video_url_expires_at || null;
+      if (!options.forceRefresh && canReuseVideoUrl(cachedUrl, cachedExpiresAt)) {
+        return Promise.resolve(cachedUrl);
+      }
+      if (cachedUrl) {
+        this.setVisiblePhotoMedia(photo.id, { video: "", videoExpiresAt: null });
+        this.updatePreviewPhotoDisplayMedia(photo.id, {
+          video_display_url: "",
+          video_url_expires_at: null
+        });
+      }
+      if (this.previewVideoUrlRequests[key]) {
+        return this.previewVideoUrlRequests[key];
+      }
+      this.updatePreviewPhotoDisplayMedia(photo.id, { video_load_failed: false });
+      this.setVisiblePhotoMedia(photo.id, { videoFailed: false });
+      const videoUrlEndpoint = `/api/session-album/media/${photo.id}/video-url`;
+      const loadRequest = request({ url: videoUrlEndpoint })
+        .then((response) => {
+          const data = dataOf(response) || {};
+          if (!data.url) {
+            throw new Error("video url missing");
+          }
+          const videoUrl = this.normalizeAlbumMediaUrl(data.url);
+          const expiresAt = videoUrlExpiresAt(data.expiresInSeconds, Date.now());
+          if (!expiresAt) {
+            throw new Error("video url expiry missing");
+          }
+          this.setVisiblePhotoMedia(photo.id, {
+            video: videoUrl,
+            videoExpiresAt: expiresAt,
+            videoFailed: false
+          });
+          this.updatePreviewPhotoDisplayMedia(photo.id, {
+            video_display_url: videoUrl,
+            video_url_expires_at: expiresAt,
+            video_load_failed: false
+          });
+          return videoUrl;
+        })
+        .catch(() => {
+          this.setVisiblePhotoMedia(photo.id, { videoFailed: true });
+          this.updatePreviewPhotoDisplayMedia(photo.id, { video_load_failed: true });
+          return "";
+        })
+        .finally(() => {
+          const requests = { ...this.previewVideoUrlRequests };
+          delete requests[key];
+          this.previewVideoUrlRequests = requests;
+        });
+      this.previewVideoUrlRequests = {
+        ...this.previewVideoUrlRequests,
+        [key]: loadRequest
+      };
+      return loadRequest;
     },
     handlePreviewDownload(event) {
       if (this.timelineMode) {
@@ -3443,40 +3836,6 @@ export default {
   justify-content: flex-end;
   gap: 12rpx;
   min-width: 0;
-}
-
-.video-player-sheet {
-  box-sizing: border-box;
-  width: 690rpx;
-  max-width: 92vw;
-  border-radius: 16rpx;
-  background: #101816;
-  padding: 18rpx;
-}
-
-.video-player-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
-  color: #ffffff;
-  font-size: 26rpx;
-  font-weight: 700;
-  line-height: 42rpx;
-  margin-bottom: 14rpx;
-}
-
-.video-player-close {
-  flex: 0 0 auto;
-  color: #bde5d8;
-  font-size: 24rpx;
-}
-
-.album-video-player {
-  display: block;
-  width: 100%;
-  height: 388rpx;
-  background: #000000;
 }
 
 .photo-action-text {

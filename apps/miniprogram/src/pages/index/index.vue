@@ -25,74 +25,20 @@
     </view>
 
     <view v-else class="home-normal">
-      <t-image
-        v-if="homeState !== 'calendar'"
-        class="home-landscape"
-        src="/static/art/ink-home-landscape.jpg"
-        mode="widthFix"
-      />
-
-      <view v-if="homeState === 'first-session'" class="home-main first-session">
-        <view class="home-copy">
-          <view class="hero-title">发起第一辆车</view>
-          <view class="hero-subtitle">先选店家和剧本，几步就能生成分享卡片。</view>
-        </view>
-
-        <view class="home-panel">
-          <t-button class="primary-action" @tap="startFirstSession">
-            <view class="primary-action-content">
-              <t-image class="action-icon create-icon" src="/static/icons/user-plus-white.png" mode="aspectFit" />
-              <text class="action-title">开始发车</text>
-            </view>
-          </t-button>
-        </view>
-
-        <view class="quiet-line">之后你的发车、报名和相册都会自动汇总到首页。</view>
-        <t-notice-bar
-          v-if="homeStatusText"
-          class="home-status"
-          theme="warning"
-          :visible="true"
-          :content="homeStatusText"
-        />
-        <view class="build-version">{{ buildVersion }}</view>
-      </view>
-
-      <view v-else-if="homeState === 'loading'" class="home-main">
-        <view class="home-copy">
-          <view class="hero-title">我的车局</view>
-          <view class="hero-subtitle">正在整理你的车局...</view>
-        </view>
-        <view class="build-version">{{ buildVersion }}</view>
-      </view>
-
-      <view v-else-if="homeState === 'error'" class="home-main">
-        <view class="home-copy">
-          <view class="hero-title">我的车局</view>
-          <view class="hero-subtitle">{{ homeStatusText || "车局加载失败，请稍后重试。" }}</view>
-        </view>
-        <view class="home-panel">
-          <t-button class="primary-action" @tap="loadHomeCalendar">
-            <view class="primary-action-content">
-              <text class="action-title">重试</text>
-            </view>
-          </t-button>
-        </view>
-        <view class="build-version">{{ buildVersion }}</view>
-      </view>
-
       <SessionCalendar
-        v-else
         :sessions="sessions"
         :signups="signups"
+        :guest-sessions="guestSessions"
+        :calendar-mode="calendarMode"
         :loading="isCalendarLoading"
         :refreshing="isRefreshingCalendar"
         :status-text="homeStatusText"
         show-create-button
-        create-button-label="我的车局（点击发车）"
-        :show-admin-button="isAdmin"
-        @create="goCreate"
-        @admin="goAdmin"
+        :create-button-label="createButtonLabel"
+        :show-admin-button="showAdminAction"
+        @create="handleCreateAction"
+        @admin="handleAdminAction"
+        @identity-required="loginFromIdentityAction"
         @refresh="refreshCalendar"
         @auth-expired="handleAuthExpired"
       />
@@ -107,12 +53,12 @@ import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import SessionCalendar from "../../components/SessionCalendar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import {
+  AUTH_CHANGE_EVENT,
   BACKEND_STATUS_CHANGE_EVENT,
   clearAuth,
   dataOf,
   ensureLoggedIn,
   checkBackendHealth,
-  goHomeAfterLogout,
   getBackendStatus,
   getCurrentUser,
   getToken,
@@ -128,13 +74,15 @@ const HOME_SHARE_TIMELINE_TITLE = "剧本迷·拼车，一起玩好本";
 const HOME_SHARE_PATH = "/pages/index/index";
 const HOME_SHARE_IMAGE = "/static/art/ink-home-landscape.jpg";
 const backendStatus = reactive(getBackendStatus());
-const homeState = ref("first-session");
 const homeStatusText = ref("");
 const roles = ref([]);
 const sessions = ref([]);
 const signups = ref([]);
+const guestSessions = ref([]);
+const isAuthenticated = ref(false);
 const loadingSessions = ref(false);
 const loadingSignups = ref(false);
+const loadingGuestSessions = ref(false);
 const isRefreshingCalendar = ref(false);
 const lastLoadedAt = ref(null);
 let maintenanceTimer = null;
@@ -142,13 +90,21 @@ let authExpiredToastActive = false;
 
 const retryButtonText = computed(() => (backendStatus.checking ? "检查中..." : "重试"));
 const isAdmin = computed(() => roles.value.includes("system_admin"));
-const isCalendarLoading = computed(() => loadingSessions.value || loadingSignups.value);
+const calendarMode = computed(() => (isAuthenticated.value ? "member" : "guest"));
+const createButtonLabel = computed(() =>
+  isAuthenticated.value ? "我的车局（点击创建）" : "我的车局（点击登录）"
+);
+const showAdminAction = computed(() => isAdmin.value);
+const isCalendarLoading = computed(() =>
+  isAuthenticated.value
+    ? loadingSessions.value || loadingSignups.value
+    : loadingGuestSessions.value
+);
 
 function syncBackendStatus(status = getBackendStatus()) {
   Object.assign(backendStatus, status);
   if (backendStatus.maintenance) {
     startMaintenancePolling();
-    homeState.value = "first-session";
     return;
   }
   stopMaintenancePolling();
@@ -195,6 +151,7 @@ onLoad(() => {
   showHomeShareMenus();
   if (typeof uni.$on === "function") {
     uni.$on(BACKEND_STATUS_CHANGE_EVENT, syncBackendStatus);
+    uni.$on(AUTH_CHANGE_EVENT, routeHomeEntry);
   }
   refreshBackendStatus();
 });
@@ -213,6 +170,7 @@ onUnload(() => {
   stopMaintenancePolling();
   if (typeof uni.$off === "function") {
     uni.$off(BACKEND_STATUS_CHANGE_EVENT, syncBackendStatus);
+    uni.$off(AUTH_CHANGE_EVENT, routeHomeEntry);
   }
 });
 
@@ -224,86 +182,102 @@ function routeHomeEntry() {
   const token = getToken();
   if (auth.user && !token) {
     clearAuth();
-    resetHomeCalendar();
-    homeState.value = "first-session";
-    return;
   }
-  roles.value = auth.roles || [];
-  if (!auth.user || !token) {
-    resetHomeCalendar();
-    homeState.value = "first-session";
-    return;
+  const currentAuth = getCurrentUser();
+  const currentToken = getToken();
+  isAuthenticated.value = Boolean(currentAuth.user && currentToken);
+  roles.value = isAuthenticated.value ? currentAuth.roles || [] : [];
+  if (isAuthenticated.value) {
+    guestSessions.value = [];
+  } else {
+    sessions.value = [];
+    signups.value = [];
   }
-  loadHomeCalendar();
-}
-
-async function startFirstSession() {
-  const auth = getCurrentUser();
-  const token = getToken();
-  if (!auth.user || !token) {
-    const loggedInAuth = await ensureLoggedIn({
-      devCode: "dev-admin-openid",
-      content: "登录后开始发车，并同步你的车局日历。"
-    });
-    if (!loggedInAuth) {
-      homeStatusText.value = "登录取消后仍可留在这里。";
-      return;
-    }
-    roles.value = loggedInAuth.roles || [];
-    const loaded = await loadHomeCalendar();
-    if (!loaded) {
-      return;
-    }
-    if (hasCalendarItems()) {
-      homeState.value = "calendar";
-      return;
-    }
-  }
-  goCreate();
+  void loadHomeCalendar();
 }
 
 async function loginFromGuestBar() {
+  await loginFromIdentityAction("登录后查看你的车局日历。");
+}
+
+async function loginFromIdentityAction(content = "登录后继续使用此功能。") {
   if (backendStatus.maintenance) {
-    return;
+    return null;
   }
   const auth = getCurrentUser();
   const token = getToken();
   if (auth.user && token) {
     routeHomeEntry();
-    return;
+    return auth;
   }
 
   const loggedInAuth = await ensureLoggedIn({
     devCode: "dev-admin-openid",
-    content: "登录后查看你的车局日历。"
+    content
   });
   if (!loggedInAuth) {
-    homeStatusText.value = "登录取消后仍可留在这里。";
-    return;
+    homeStatusText.value = "登录取消后仍可继续浏览。";
+    return null;
   }
 
+  isAuthenticated.value = true;
   roles.value = loggedInAuth.roles || [];
   await loadHomeCalendar();
+  return loggedInAuth;
+}
+
+async function handleCreateAction() {
+  if (!isAuthenticated.value) {
+    await loginFromIdentityAction("登录后可创建车局。");
+    return;
+  }
+  goCreate();
+}
+
+async function handleAdminAction() {
+  if (!isAuthenticated.value) {
+    await loginFromIdentityAction("登录后可进入车包。");
+    return;
+  }
+  if (isAdmin.value) {
+    goAdmin();
+  }
 }
 
 async function loadHomeCalendar() {
   if (backendStatus.maintenance) {
     return false;
   }
-  homeState.value = "loading";
   homeStatusText.value = "";
   try {
-    await Promise.all([loadMySessions(), loadMySignups()]);
+    if (isAuthenticated.value) {
+      await Promise.all([loadMySessions(), loadMySignups()]);
+    } else {
+      await loadGuestSessions();
+    }
     lastLoadedAt.value = new Date();
-    homeState.value = hasCalendarItems() ? "calendar" : "first-session";
     return true;
   } catch (error) {
     if (handleAuthExpired(error)) {
       return false;
     }
-    homeStatusText.value = error?.userMessage || "车局加载失败，请稍后重试。";
-    homeState.value = "error";
+    homeStatusText.value =
+      error?.userMessage ||
+      (isAuthenticated.value
+        ? "车局加载失败，请稍后重试。"
+        : "近期车局加载失败，请稍后重试。");
     return false;
+  }
+}
+
+async function loadGuestSessions() {
+  loadingGuestSessions.value = true;
+  try {
+    const response = await request({ url: "/api/sessions/public/upcoming?limit=20" });
+    const payload = dataOf(response) || {};
+    guestSessions.value = Array.isArray(payload.sessions) ? payload.sessions : [];
+  } finally {
+    loadingGuestSessions.value = false;
   }
 }
 
@@ -327,21 +301,6 @@ async function loadMySignups() {
   }
 }
 
-function hasCalendarItems() {
-  const sessionIds = new Set();
-  sessions.value.forEach((session) => {
-    if (session?.id) {
-      sessionIds.add(String(session.id));
-    }
-  });
-  signups.value.forEach((signup) => {
-    if (signup?.session_id) {
-      sessionIds.add(String(signup.session_id));
-    }
-  });
-  return sessionIds.size > 0;
-}
-
 async function refreshCalendar() {
   if (isRefreshingCalendar.value) {
     return;
@@ -358,6 +317,7 @@ function resetHomeCalendar() {
   roles.value = [];
   sessions.value = [];
   signups.value = [];
+  guestSessions.value = [];
   homeStatusText.value = "";
   lastLoadedAt.value = null;
 }
@@ -368,17 +328,18 @@ function handleAuthExpired(error = {}) {
   }
   clearAuth();
   resetHomeCalendar();
-  homeState.value = "first-session";
+  isAuthenticated.value = false;
   if (!authExpiredToastActive) {
     authExpiredToastActive = true;
     showToast({
-      title: error?.userMessage || "登录已过期，请重新登录。",
+      title: error?.userMessage || "登录已过期，可继续游客浏览。",
       icon: "none"
     });
     setTimeout(() => {
       authExpiredToastActive = false;
     }, 1000);
   }
+  void loadHomeCalendar();
   return true;
 }
 
@@ -389,13 +350,6 @@ function goCreate() {
 
 function goAdmin() {
   uni.navigateTo({ url: "/pages/admin/catalog" });
-}
-
-function logout() {
-  clearAuth();
-  resetHomeCalendar();
-  homeState.value = "first-session";
-  goHomeAfterLogout();
 }
 
 onShareAppMessage(() => ({
@@ -427,122 +381,6 @@ onShareTimeline(() => ({
   display: flex;
   flex: 1;
   flex-direction: column;
-}
-
-.home-main {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.home-landscape {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 0;
-  width: 100%;
-  opacity: 0.9;
-}
-
-.home-copy {
-  position: relative;
-  z-index: 1;
-  padding: 28rpx 6rpx 70rpx;
-  text-align: center;
-}
-
-.hero-title {
-  color: #153f34;
-  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
-  font-size: 58rpx;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.hero-subtitle {
-  width: 520rpx;
-  max-width: 100%;
-  margin: 22rpx auto 0;
-  color: #6f7b73;
-  font-size: 28rpx;
-  line-height: 1.65;
-}
-
-.home-panel {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 24rpx;
-  width: 420rpx;
-  max-width: 100%;
-  margin: 0 auto;
-}
-
-.primary-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 18rpx;
-  width: 100%;
-  min-height: 92rpx;
-  margin: 0;
-  padding: 0 34rpx;
-  box-sizing: border-box;
-  border-radius: 18rpx;
-  background: linear-gradient(145deg, #1a5d4d 0%, #2c775f 100%);
-  color: #ffffff;
-  text-align: center;
-  box-shadow: 0 18rpx 42rpx rgba(31, 111, 91, 0.24);
-}
-
-.primary-action-content {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 18rpx;
-  min-width: 0;
-}
-
-.action-icon {
-  display: block;
-  flex-shrink: 0;
-  width: 38rpx;
-  height: 38rpx;
-}
-
-.create-icon {
-  width: 42rpx;
-  height: 42rpx;
-}
-
-.action-title {
-  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
-  font-size: 34rpx;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.quiet-line,
-.home-status {
-  position: relative;
-  z-index: 1;
-  width: 560rpx;
-  max-width: 100%;
-  margin: 56rpx auto 0;
-  color: #8f968f;
-  font-size: 24rpx;
-  line-height: 1.55;
-  text-align: center;
-}
-
-.home-status {
-  margin-top: 20rpx;
-  color: #7b6d58;
 }
 
 .build-version {

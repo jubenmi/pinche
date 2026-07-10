@@ -131,10 +131,17 @@ assertIncludes("apps/miniprogram/src/pages/session/album.vue", "MAX_ALBUM_VIDEO_
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "wx.chooseMedia");
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "wx.compressVideo");
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "chooseVideo");
-assertIncludes("apps/miniprogram/src/pages/session/album.vue", "openVideoPlayer");
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "media_type === \"video\"");
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "media_type === \"image\"");
-assertIncludes("apps/miniprogram/src/pages/session/album.vue", "video-player-popup");
+assertNotIncludes("apps/miniprogram/src/pages/session/album.vue", "openVideoPlayer");
+assertNotIncludes("apps/miniprogram/src/pages/session/album.vue", "video-player-popup");
+assertIncludes("apps/miniprogram/src/pages/session/album.vue", "@need-video=\"handlePreviewVideoRequest\"");
+assertIncludes("apps/miniprogram/src/pages/session/album.vue", "loadPreviewVideoUrl");
+assertIncludes("apps/miniprogram/src/pages/session/album.vue", "video_display_url");
+assertIncludes("apps/miniprogram/src/pages/session/album.vue", "video_load_failed");
+assertIncludes("apps/miniprogram/src/components/AlbumImageViewer.vue", "<video");
+assertIncludes("apps/miniprogram/src/components/AlbumImageViewer.vue", "need-video");
+assertIncludes("apps/miniprogram/src/components/AlbumImageViewer.vue", "pauseAllVideos");
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "打开小程序查看视频");
 
 assertIncludes("apps/admin-web/src/api.js", "uploadSessionAlbumVideo");

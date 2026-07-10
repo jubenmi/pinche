@@ -195,6 +195,14 @@ export const config = {
     signupCreatedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_CREATED || "",
     signupReviewedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED || ""
   },
+  map: {
+    tencentKey:
+      process.env.TENCENT_MAP_SERVICE_KEY ||
+      process.env.TENCENT_MAP_KEY ||
+      process.env.VITE_TENCENT_MAP_KEY ||
+      "",
+    amapKey: process.env.AMAP_WEB_SERVICE_KEY || process.env.GAODE_MAP_KEY || ""
+  },
   sessionSecret:
     process.env.SESSION_SECRET ||
     "local-development-session-secret-change-before-production",

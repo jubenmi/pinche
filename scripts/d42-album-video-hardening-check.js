@@ -50,6 +50,7 @@ const viewer = read("apps/miniprogram/src/components/AlbumImageViewer.vue");
 const adminApi = read("apps/admin-web/src/api.js");
 const adminMedia = read("apps/admin-web/src/albumMedia.js");
 const adminWorkspace = read("apps/admin-web/src/components/SessionAlbumWorkspace.vue");
+const adminLazyImage = read("apps/admin-web/src/components/AuthorizedLazyImage.vue");
 const futureModules = {
   apiMedia: fs.existsSync(path.join(root, "apps/api/src/modules/album-video/media.js")),
   miniAlbumVideo: fs.existsSync(path.join(root, "apps/miniprogram/src/utils/albumVideo.js")),
@@ -117,6 +118,22 @@ contract(
 const previewVideo = block(adminWorkspace, "async function previewVideo(photo)", "async function previewPhoto(photo)");
 const previewPhoto = block(adminWorkspace, "async function previewPhoto(photo)", "function resetBulkSelection");
 const openTagDrawer = block(adminWorkspace, "async function openTagDrawer(photo)", "function toggleBulkSelectionMode");
+const uploadFiles = block(adminWorkspace, "async function uploadFiles(files)", "function previewMedia(photo)");
+const saveTags = block(adminWorkspace, "async function saveTags()", "async function openPrivacyDrawer()");
+const openPrivacyDrawer = block(adminWorkspace, "async function openPrivacyDrawer()", "function closePrivacyDrawer()");
+const savePrivacy = block(adminWorkspace, "async function savePrivacy()", "async function deletePhoto(photo)");
+const deletePhoto = block(adminWorkspace, "async function deletePhoto(photo)", "function albumCommandStickyTop()");
+const loadSelectedSession = block(adminWorkspace, "async function loadSelectedSession()", "async function loadAlbum(options = {})");
+const loadAlbum = block(adminWorkspace, "async function loadAlbum(options = {})", "function revokeAlbumMedia()");
+const closeTagDrawer = block(adminWorkspace, "function closeTagDrawer()", "function toggleTag(key)");
+const unmountHandler = block(adminWorkspace, "onBeforeUnmount(() => {", "});\n</script>");
+const refreshAlbumMedia = block(
+  adminWorkspace,
+  "async function refreshAlbumMedia(photo, failedUrl)",
+  "async function fetchAdminMediaWithRetry(photo, url)"
+);
+const mediaRetry = block(adminWorkspace, "async function fetchAdminMediaWithRetry(photo, url)", "async function handleVideoCoverError");
+const coverFailure = block(adminWorkspace, "async function handleVideoCoverError(photo, event)", "function rerenderAlbumWaterfall()");
 contract(
   "single-media preview and tag failures stay out of albumError",
   Boolean(previewVideo && previewPhoto && openTagDrawer) &&
@@ -143,6 +160,39 @@ contract(
         : "";
     return /\.next\(\)/.test(beforeAwait) && /\.isCurrent\(/.test(afterAwaitBeforeCommit);
   })()
+);
+
+contract(
+  "admin cover errors report status and refresh one fresh media URL",
+  /defineEmits\(\["loaded", "error"\]\)/.test(adminLazyImage) &&
+    /emit\(\s*["']error["']\s*,\s*\{\s*status:/.test(adminLazyImage) &&
+    /@error="handleVideoCoverError\(photo, \$event\)"/.test(adminWorkspace) &&
+    /\[401, 403\]/.test(coverFailure) &&
+    /refreshAlbumMedia\(photo,/.test(coverFailure) &&
+    /getSessionAlbum\(/.test(refreshAlbumMedia) &&
+    /mediaRefreshAttempts/.test(refreshAlbumMedia) &&
+    /fetchAuthorizedMediaObjectUrl\(url\)/.test(mediaRetry) &&
+    /fetchAuthorizedMediaObjectUrl\(refreshedUrl\)/.test(mediaRetry) &&
+    !/for\s*\(/.test(mediaRetry)
+);
+
+contract(
+  "tag request serial is invalidated on close, reload, session switch, and unmount",
+  /tagPreviewSerial\.invalidate\(\)/.test(closeTagDrawer) &&
+    /tagPreviewSerial\.invalidate\(\)/.test(loadSelectedSession) &&
+    /tagPreviewSerial\.invalidate\(\)/.test(loadAlbum) &&
+    /tagPreviewSerial\.invalidate\(\)/.test(unmountHandler)
+);
+
+contract(
+  "operation failures remain local while only the main album load uses albumError",
+  [uploadFiles, saveTags, openPrivacyDrawer, savePrivacy, deletePhoto].every(
+    (source) => Boolean(source) && !/albumError\.value/.test(source)
+  ) &&
+    /fatal/.test(loadAlbum) &&
+    /loadAlbum\(\{ fatal: false \}\)/.test(uploadFiles) &&
+    /loadAlbum\(\{ fatal: false \}\)/.test(savePrivacy) &&
+    /loadAlbum\(\{ fatal: false \}\)/.test(deletePhoto)
 );
 
 if (failures.length > 0) {

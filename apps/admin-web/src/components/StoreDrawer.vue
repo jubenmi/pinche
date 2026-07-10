@@ -61,7 +61,7 @@
                 />
               </label>
             </div>
-            <div v-if="hasTencentMapKey" class="poi-search">
+            <div class="poi-search">
               <label class="poi-search-field">
                 <span>地点搜索</span>
                 <div class="poi-search-row">
@@ -77,10 +77,13 @@
                     :disabled="saving || poiSearchLoading || !poiSearchKeyword"
                     @click="searchPoiByKeyword"
                   >
-                    {{ poiSearchLoading ? "搜索中..." : "搜索" }}
+                    {{ poiSearchLoading ? "搜索中..." : hasTencentMapKey ? "搜索" : "解析坐标" }}
                   </button>
                 </div>
               </label>
+              <p class="location-hint">
+                优先腾讯 POI；无候选或没额度时会地址解析兜底，只回填坐标。
+              </p>
               <div v-if="poiSearchResults.length > 0" class="poi-result-list">
                 <button
                   v-for="poi in poiSearchResults"
@@ -96,7 +99,7 @@
               <p v-if="poiSearchMessage" class="location-hint">{{ poiSearchMessage }}</p>
             </div>
             <p v-if="!hasTencentMapKey" class="location-hint">
-              未配置腾讯位置服务 Key，可手填 GCJ-02 坐标。
+              未配置前端腾讯位置服务 Key，将直接使用服务端地址解析或手填坐标。
             </p>
             <div v-if="mapVisible" class="map-picker-shell">
               <div ref="mapContainer" class="tencent-map-picker"></div>
@@ -176,6 +179,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { geocodeStoreLocation } from "../api.js";
 import { getTencentMapKey } from "../runtimeConfig.js";
 
 const props = defineProps({
@@ -192,6 +196,8 @@ const emit = defineEmits(["save", "close"]);
 const model = reactive({});
 const scriptKeyword = ref("");
 const tencentMapKey = getTencentMapKey();
+const POI_SEARCH_CACHE_PREFIX = "pinche:admin:poi-search:";
+const POI_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const mapContainer = ref(null);
 const mapVisible = ref(false);
 const mapLoading = ref(false);
@@ -352,6 +358,79 @@ function normalizePoiResult(item, index) {
   };
 }
 
+function normalizedPoiKeyword(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function poiSearchCity() {
+  return String(model.city || "北京").trim() || "北京";
+}
+
+function poiSearchDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function poiSearchStorage() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function poiSearchCacheKey(keyword) {
+  return `${POI_SEARCH_CACHE_PREFIX}${poiSearchDateKey()}:${poiSearchCity()}:${keyword}`;
+}
+
+function readCachedPoiSearch(keyword) {
+  const storage = poiSearchStorage();
+  const key = poiSearchCacheKey(keyword);
+  if (!storage) {
+    return null;
+  }
+  try {
+    const cached = JSON.parse(storage.getItem(key) || "");
+    if (
+      !cached ||
+      !Array.isArray(cached.results) ||
+      Number(cached.createdAt || 0) + POI_SEARCH_CACHE_TTL_MS < Date.now()
+    ) {
+      storage.removeItem(key);
+      return null;
+    }
+    return cached.results;
+  } catch (error) {
+    storage.removeItem(key);
+    return null;
+  }
+}
+
+function writeCachedPoiSearch(keyword, results) {
+  const storage = poiSearchStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    storage.setItem(
+      poiSearchCacheKey(keyword),
+      JSON.stringify({
+        createdAt: Date.now(),
+        results
+      })
+    );
+  } catch (error) {
+    // Storage quota or privacy mode should not block manual coordinate entry.
+  }
+}
+
 function tencentPoiErrorMessage(error) {
   if (error?.status === 199) {
     return "POI 搜索需要在腾讯位置服务 key 开启 WebServiceAPI。";
@@ -363,6 +442,55 @@ function tencentPoiErrorMessage(error) {
     return "腾讯位置服务 POI 搜索今日调用量已达到上限，可继续地图点选或手填坐标。";
   }
   return "地点搜索失败，可继续地图点选或手填坐标。";
+}
+
+function geocodeProviderName(provider) {
+  return provider === "amap" ? "高德地址解析" : "腾讯地址解析";
+}
+
+function geocodeFallbackErrorMessage(reason) {
+  return `${reason}；地址解析也失败，可继续地图点选或手填坐标。`;
+}
+
+function geocodeRequestBody(keyword) {
+  return {
+    keyword,
+    name: model.name,
+    city: model.city,
+    district: model.district,
+    address: model.address
+  };
+}
+
+async function syncFallbackMapPoint(latitude, longitude) {
+  if (!hasTencentMapKey.value) {
+    return;
+  }
+  if (!mapVisible.value) {
+    mapVisible.value = true;
+  }
+  await ensureMapPicker();
+  if (mapInstance && window.TMap) {
+    const point = new window.TMap.LatLng(latitude, longitude);
+    mapInstance.setCenter(point);
+    syncMapMarker(window.TMap, point);
+  }
+}
+
+async function geocodeAddressFallback(keyword, reason = "POI 无候选") {
+  poiSearchMessage.value = `${reason}，正在尝试腾讯地址解析，不行再高德。`;
+  const result = await geocodeStoreLocation(geocodeRequestBody(keyword));
+  const latitude = coordinateNumber(result?.latitude, -90, 90);
+  const longitude = coordinateNumber(result?.longitude, -180, 180);
+  if (latitude === null || longitude === null) {
+    throw new Error("Address geocode returned invalid coordinate");
+  }
+  model.latitude = fixedCoordinate(latitude);
+  model.longitude = fixedCoordinate(longitude);
+  const providerName = geocodeProviderName(result.provider);
+  poiSearchMessage.value = `${reason}，已通过${providerName}只回填坐标，请在地图确认后保存。`;
+  mapStatus.value = `已通过${providerName}只回填坐标`;
+  await syncFallbackMapPoint(latitude, longitude);
 }
 
 function requestTencentPoiSearch(keyword) {
@@ -389,10 +517,9 @@ function requestTencentPoiSearch(keyword) {
       reject(new Error("Tencent POI search script failed"));
     };
 
-    const city = String(model.city || "北京").trim() || "北京";
     const params = new URLSearchParams({
       keyword,
-      boundary: `region(${city},0)`,
+      boundary: `region(${poiSearchCity()},0)`,
       page_size: "8",
       page_index: "1",
       output: "jsonp",
@@ -405,23 +532,61 @@ function requestTencentPoiSearch(keyword) {
 }
 
 async function searchPoiByKeyword() {
-  const keyword = poiSearchKeyword.value.trim();
+  const keyword = normalizedPoiKeyword(poiSearchKeyword.value);
+  poiSearchKeyword.value = keyword;
   if (!keyword || poiSearchLoading.value) {
     return;
   }
-  poiSearchLoading.value = true;
-  poiSearchMessage.value = "地点搜索中...";
   poiSearchResults.value = [];
   mapError.value = "";
+  if (Array.from(keyword).length < 2) {
+    poiSearchMessage.value = "至少输入 2 个字再搜索，或直接地图点选/手填坐标。";
+    return;
+  }
+
+  const cachedResults = readCachedPoiSearch(keyword);
+  if (cachedResults) {
+    if (cachedResults.length > 0) {
+      poiSearchResults.value = cachedResults;
+      poiSearchMessage.value = "已使用本地缓存结果，未消耗今日搜索额度";
+      return;
+    }
+    poiSearchLoading.value = true;
+    poiSearchMessage.value = "本地缓存中没有匹配地点，未消耗今日搜索额度";
+    await geocodeAddressFallback(keyword, "POI 无候选（本地缓存）").catch(() => {
+      poiSearchMessage.value = geocodeFallbackErrorMessage("POI 无候选（本地缓存）");
+    });
+    poiSearchLoading.value = false;
+    return;
+  }
+
+  poiSearchLoading.value = true;
+  poiSearchMessage.value = hasTencentMapKey.value ? "地点搜索中..." : "地址解析中...";
   try {
+    if (!hasTencentMapKey.value) {
+      await geocodeAddressFallback(keyword, "未配置前端腾讯 POI Key").catch(() => {
+        poiSearchMessage.value = geocodeFallbackErrorMessage("未配置前端腾讯 POI Key");
+      });
+      return;
+    }
     const results = await requestTencentPoiSearch(keyword);
-    poiSearchResults.value = results
+    const normalizedResults = results
       .map((item, index) => normalizePoiResult(item, index))
       .filter(Boolean);
-    poiSearchMessage.value =
-      poiSearchResults.value.length > 0 ? "选择一个搜索结果回填地址和坐标" : "没有找到匹配地点";
+    poiSearchResults.value = normalizedResults;
+    writeCachedPoiSearch(keyword, normalizedResults);
+    if (normalizedResults.length > 0) {
+      poiSearchMessage.value = "选择一个搜索结果回填地址和坐标";
+      return;
+    }
+    await geocodeAddressFallback(keyword, "POI 无候选").catch(() => {
+      poiSearchMessage.value = geocodeFallbackErrorMessage("POI 无候选");
+    });
   } catch (error) {
-    poiSearchMessage.value = tencentPoiErrorMessage(error);
+    const poiMessage = tencentPoiErrorMessage(error);
+    await geocodeAddressFallback(keyword, poiMessage).catch(() => {
+      poiSearchMessage.value = geocodeFallbackErrorMessage(poiMessage);
+    });
   } finally {
     poiSearchLoading.value = false;
   }

@@ -224,6 +224,7 @@
                       :src="photo.cover_url"
                       :ratio="photoAspectRatio(photo)"
                       @loaded="rerenderAlbumWaterfall"
+                      @error="handleVideoCoverError(photo, $event)"
                     />
                     <div v-else class="admin-video-placeholder">
                       {{ videoStateText(photo) }}
@@ -265,7 +266,7 @@
                   标注
                 </button>
                 <button
-                  v-if="photo.is_mine"
+                  v-if="photo.can_delete"
                   type="button"
                   class="action-button danger"
                   :disabled="albumActionBusy"
@@ -454,6 +455,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { Waterfall } from "vue-waterfall-plugin-next";
 import "vue-waterfall-plugin-next/dist/style.css";
 import AuthorizedLazyImage from "./AuthorizedLazyImage.vue";
+import { RequestSerial } from "../albumMedia";
 import {
   createSessionAlbumPhoto,
   deleteSessionAlbumPhoto,
@@ -506,6 +508,8 @@ const privacyForm = ref({
   allowTaggedVisible: true
 });
 const mediaObjectUrls = new Set();
+const tagPreviewSerial = new RequestSerial();
+const mediaRefreshAttempts = new Set();
 const albumWaterfallBreakpoints = {
   1280: { rowPerView: 4 },
   960: { rowPerView: 3 },
@@ -944,6 +948,69 @@ function updatePhotoDisplayUrl(photoId, displayUrl) {
   };
 }
 
+function revokeTrackedMediaObjectUrl(url) {
+  if (!url || !mediaObjectUrls.has(url)) {
+    return;
+  }
+  URL.revokeObjectURL(url);
+  mediaObjectUrls.delete(url);
+}
+
+function replaceAlbumPhoto(photoId, refreshedPhoto) {
+  if (!album.value?.photos) {
+    return null;
+  }
+  let nextPhoto = null;
+  let previousDisplayUrl = "";
+  album.value = {
+    ...album.value,
+    photos: album.value.photos.map((photo) => {
+      if (Number(photo.id) !== Number(photoId)) {
+        return photo;
+      }
+      previousDisplayUrl = photo.display_url || "";
+      nextPhoto = {
+        ...photo,
+        ...refreshedPhoto,
+        display_url: ""
+      };
+      return nextPhoto;
+    })
+  };
+  revokeTrackedMediaObjectUrl(previousDisplayUrl);
+  return nextPhoto;
+}
+
+function refreshedMediaUrl(photo, refreshedPhoto) {
+  if (!refreshedPhoto) {
+    return "";
+  }
+  if (photo.media_type === "video") {
+    return refreshedPhoto.cover_url || "";
+  }
+  return refreshedPhoto.preview_url || refreshedPhoto.image_url || "";
+}
+
+async function refreshAlbumMedia(photo, failedUrl) {
+  const photoId = Number(photo?.id || 0);
+  const sessionId = Number(selectedSession.value?.id || 0);
+  if (!photoId || !sessionId || !failedUrl || mediaRefreshAttempts.has(photoId)) {
+    return null;
+  }
+  mediaRefreshAttempts.add(photoId);
+  const albumData = await getSessionAlbum(sessionId, albumRequestOptions());
+  if (Number(selectedSession.value?.id || 0) !== sessionId) {
+    return null;
+  }
+  const refreshedPhoto = normalizeAlbumMedia(albumData || { photos: [] }).photos.find(
+    (item) => Number(item.id) === photoId
+  );
+  if (!refreshedPhoto) {
+    return null;
+  }
+  return replaceAlbumPhoto(photoId, refreshedPhoto);
+}
+
 async function ensurePreviewMedia(photo) {
   if (photo.display_url) {
     return photo.display_url;
@@ -952,15 +1019,48 @@ async function ensurePreviewMedia(photo) {
     if (!photo.cover_url) {
       return "";
     }
-    const displayUrl = await fetchAuthorizedMediaObjectUrl(photo.cover_url);
+    const displayUrl = await fetchAdminMediaWithRetry(photo, photo.cover_url);
     mediaObjectUrls.add(displayUrl);
     updatePhotoDisplayUrl(photo.id, displayUrl);
     return displayUrl;
   }
-  const displayUrl = await fetchAuthorizedMediaObjectUrl(photo.preview_url || photo.image_url);
+  const displayUrl = await fetchAdminMediaWithRetry(photo, photo.preview_url || photo.image_url);
   mediaObjectUrls.add(displayUrl);
   updatePhotoDisplayUrl(photo.id, displayUrl);
   return displayUrl;
+}
+
+async function fetchAdminMediaWithRetry(photo, url) {
+  try {
+    return await fetchAuthorizedMediaObjectUrl(url);
+  } catch (error) {
+    if (![401, 403].includes(Number(error?.status))) {
+      throw error;
+    }
+    const refreshedPhoto = await refreshAlbumMedia(photo, url);
+    const refreshedUrl = refreshedMediaUrl(photo, refreshedPhoto);
+    if (!refreshedUrl || refreshedUrl === url) {
+      throw error;
+    }
+    return fetchAuthorizedMediaObjectUrl(refreshedUrl);
+  }
+}
+
+async function handleVideoCoverError(photo, event) {
+  const failedUrl = event?.src || photo.cover_url || "";
+  if (![401, 403].includes(Number(event?.status))) {
+    albumStatus.value = "视频封面加载失败，请重试。";
+    return;
+  }
+  try {
+    const refreshedPhoto = await refreshAlbumMedia(photo, failedUrl);
+    const refreshedUrl = refreshedMediaUrl(photo, refreshedPhoto);
+    if (!refreshedUrl || refreshedUrl === failedUrl) {
+      albumStatus.value = "视频封面加载失败，请重试。";
+    }
+  } catch (error) {
+    albumStatus.value = "视频封面加载失败，请重试。";
+  }
 }
 
 function rerenderAlbumWaterfall() {
@@ -990,6 +1090,8 @@ async function loadSelectedSession() {
   error.value = "";
   albumError.value = "";
   albumStatus.value = "";
+  tagPreviewSerial.invalidate();
+  mediaRefreshAttempts.clear();
   revokeAlbumMedia();
   album.value = null;
   people.value = [];
@@ -1007,17 +1109,22 @@ async function loadSelectedSession() {
   }
 }
 
-async function loadAlbum() {
+async function loadAlbum(options = {}) {
   if (!selectedSession.value) {
     return;
   }
+  const fatal = options.fatal !== false;
   albumLoading.value = true;
-  albumError.value = "";
+  tagPreviewSerial.invalidate();
+  mediaRefreshAttempts.clear();
   albumStatus.value = "";
-  revokeAlbumMedia();
-  album.value = null;
-  people.value = [];
-  resetBulkSelection();
+  if (fatal) {
+    albumError.value = "";
+    revokeAlbumMedia();
+    album.value = null;
+    people.value = [];
+    resetBulkSelection();
+  }
   try {
     const options = albumRequestOptions();
     const [albumData, peopleData] = await Promise.all([
@@ -1029,10 +1136,15 @@ async function loadAlbum() {
     activeAlbumFilter.value = "all";
     selectedAlbumRoleFilter.value = "";
   } catch (err) {
-    albumError.value =
+    const message =
       err.status === 403
         ? "车局相册会在发车后开放。请确认这辆车已经到开始时间，且当前账号是车头或同车成员。"
         : err.message;
+    if (fatal) {
+      albumError.value = message;
+    } else {
+      albumStatus.value = message || "相册刷新失败，请重试。";
+    }
   } finally {
     albumLoading.value = false;
   }
@@ -1085,7 +1197,6 @@ async function uploadFiles(files) {
   }
 
   uploading.value = true;
-  albumError.value = "";
   try {
     for (const [index, file] of validFiles.entries()) {
       albumStatus.value = `正在上传 ${index + 1}/${validFiles.length}：${file.name}`;
@@ -1096,9 +1207,9 @@ async function uploadFiles(files) {
     albumStatus.value = skippedCount > 0
       ? `上传完成，已跳过 ${skippedCount} 个不符合要求的文件。`
       : "上传完成。";
-    await loadAlbum();
+    await loadAlbum({ fatal: false });
   } catch (err) {
-    albumError.value = err.message;
+    albumStatus.value = err.message || "上传失败，请重试。";
   } finally {
     uploading.value = false;
   }
@@ -1118,13 +1229,21 @@ async function previewVideo(photo) {
     return;
   }
   try {
-    const data = await getSessionAlbumVideoUrl(photo.id);
+    let data;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        data = await getSessionAlbumVideoUrl(photo.id);
+        break;
+      } catch (err) {
+        if (attempt === 1 || ![401, 403].includes(Number(err.status))) throw err;
+      }
+    }
     if (!data?.url) {
       throw new Error("video url missing");
     }
     window.open(data.url, "_blank", "noopener,noreferrer");
   } catch (err) {
-    albumError.value = "视频播放地址获取失败，请刷新后重试。";
+    albumStatus.value = "视频播放地址获取失败，请重试。";
   }
 }
 
@@ -1133,11 +1252,11 @@ async function previewPhoto(photo) {
   try {
     displayUrl = await ensurePreviewMedia(photo);
   } catch (err) {
-    albumError.value = "照片加载失败，请刷新后重试。";
+    albumStatus.value = "照片加载失败，请重试。";
     return;
   }
   if (!displayUrl) {
-    albumError.value = "照片加载失败，请刷新后重试。";
+    albumStatus.value = "照片加载失败，请重试。";
     return;
   }
   window.open(displayUrl, "_blank", "noopener,noreferrer");
@@ -1153,16 +1272,19 @@ async function openTagDrawer(photo) {
   if (albumActionBusy.value || !photo.can_tag) {
     return;
   }
+  const requestId = tagPreviewSerial.next();
   try {
     const displayUrl = await ensurePreviewMedia(photo);
+    if (!tagPreviewSerial.isCurrent(requestId)) return;
     taggingPhoto.value = {
       ...photo,
       display_url: displayUrl
     };
   } catch (err) {
-    albumError.value = "照片加载失败，请刷新后重试。";
+    if (tagPreviewSerial.isCurrent(requestId)) albumStatus.value = "照片加载失败，请重试。";
     return;
   }
+  if (!tagPreviewSerial.isCurrent(requestId)) return;
   selectedTagKeys.value = (photo.tags || []).map((tag) => tag.key);
 }
 
@@ -1226,6 +1348,7 @@ function closeTagDrawer() {
   if (savingTags.value) {
     return;
   }
+  tagPreviewSerial.invalidate();
   taggingPhoto.value = null;
   selectedTagKeys.value = [];
   bulkTagging.value = false;
@@ -1270,7 +1393,7 @@ async function saveTags() {
     bulkSelectionMode.value = false;
     selectedAlbumPhotoIds.value = [];
     if (allFailed) {
-      albumError.value = "标注保存失败";
+      albumStatus.value = "标注保存失败，请重试。";
       return;
     }
     if (failedCount > 0) {
@@ -1285,7 +1408,6 @@ async function openPrivacyDrawer() {
   if (albumActionBusy.value || !selectedSession.value) {
     return;
   }
-  albumError.value = "";
   privacyDrawerOpen.value = true;
   loadingPrivacy.value = true;
   try {
@@ -1295,7 +1417,7 @@ async function openPrivacyDrawer() {
       allowTaggedVisible: privacy?.allow_tagged_visible !== false
     };
   } catch (err) {
-    albumError.value = err.message;
+    albumStatus.value = err.message || "隐私设置加载失败，请重试。";
   } finally {
     loadingPrivacy.value = false;
   }
@@ -1314,16 +1436,16 @@ async function savePrivacy() {
     await updateMySessionAlbumPrivacy(selectedSession.value.id, privacyForm.value);
     albumStatus.value = "隐私设置已保存。";
     closePrivacyDrawer();
-    await loadAlbum();
+    await loadAlbum({ fatal: false });
   } catch (err) {
-    albumError.value = err.message;
+    albumStatus.value = err.message || "隐私设置保存失败，请重试。";
   } finally {
     savingPrivacy.value = false;
   }
 }
 
 async function deletePhoto(photo) {
-  if (albumActionBusy.value || !photo.is_mine) {
+  if (albumActionBusy.value || !photo.can_delete) {
     return;
   }
   const mediaLabel = photo.media_type === "video" ? "视频" : "照片";
@@ -1333,9 +1455,9 @@ async function deletePhoto(photo) {
   deletingPhotoId.value = photo.id;
   try {
     await deleteSessionAlbumPhoto(photo.id);
-    await loadAlbum();
+    await loadAlbum({ fatal: false });
   } catch (err) {
-    albumError.value = err.message;
+    albumStatus.value = err.message || "删除失败，请重试。";
   } finally {
     deletingPhotoId.value = "";
   }
@@ -1371,6 +1493,8 @@ watch(() => props.sessionId, loadSelectedSession);
 watch(activeAlbumFilter, resetBulkSelection);
 watch(selectedSession, () => nextTick(updateAlbumCommandFloating));
 onBeforeUnmount(() => {
+  tagPreviewSerial.invalidate();
+  mediaRefreshAttempts.clear();
   window.removeEventListener("scroll", queueAlbumCommandFloatingUpdate);
   window.removeEventListener("resize", queueAlbumCommandFloatingUpdate);
   revokeAlbumMedia();

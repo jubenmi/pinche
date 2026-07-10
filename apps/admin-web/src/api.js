@@ -1,6 +1,7 @@
 const TOKEN_KEY = "pinche_admin_web_token";
 const USER_KEY = "pinche_admin_web_user";
 const ROLES_KEY = "pinche_admin_web_roles";
+import { shouldAttachAdminAuthorization } from "./albumMedia";
 let cosClient = null;
 let cosSdkConstructor = null;
 
@@ -73,10 +74,11 @@ export function assetUrl(path) {
 
 export async function fetchAuthorizedMediaObjectUrl(path) {
   const auth = getStoredAuth();
+  const headers = shouldAttachAdminAuthorization(path)
+    ? (auth.token ? { authorization: `Bearer ${auth.token}` } : {})
+    : {};
   const response = await fetch(path, {
-    headers: {
-      ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {})
-    }
+    headers
   });
   if (!response.ok) {
     const error = new Error(`Media request failed: ${response.status}`);
@@ -227,6 +229,13 @@ export function saveStore(store) {
   const method = store.id ? "PATCH" : "POST";
   const path = store.id ? `/api/admin/stores/${store.id}` : "/api/admin/stores";
   return apiRequest(path, { method, body: store });
+}
+
+export function geocodeStoreLocation(body) {
+  return apiRequest("/api/admin/location/geocode", {
+    method: "POST",
+    body
+  });
 }
 
 export function deleteStore(storeId) {

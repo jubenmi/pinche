@@ -187,6 +187,7 @@ for (const token of [
   "thumbnail_url",
   "preview_url",
   "photo.can_tag",
+  "photo.can_delete",
   "photo.is_mine",
   "隐私设置",
   "allowUploadedVisible",
@@ -230,6 +231,7 @@ for (const token of [
   "uploadSessionAlbumPhoto",
   "标注",
   "tagKeys",
+  "photo.can_delete",
   "mediaUrlForPhoto(photo, variant",
   "photo.thumbnail_url",
   "photo.preview_url"
@@ -272,6 +274,10 @@ assert(
   /export async function listSessionAlbum[\s\S]*?^}/m.test(service) &&
     /export async function listSessionAlbum[\s\S]*?script_name_snapshot:\s*session\.script_name_snapshot[\s\S]*?^}/m.test(service),
   "album API must expose session script name for the member album title"
+);
+assert(
+  /function albumMediaResponse[\s\S]*?can_delete:\s*Number\(media\.uploader_user_id\)\s*===\s*Number\(options\.userId\)/.test(service),
+  "album API must expose can_delete when the current user uploaded the media"
 );
 
 for (const token of [
@@ -321,6 +327,8 @@ for (const token of [
   "unbound legacy NPC-only photo should stay visible to unrelated same-session members",
   "bound NPC role user should see their NPC-only photo",
   "admin must not bypass tagged player privacy",
+  "uploader should be allowed to delete own uploaded photo",
+  "visible non-uploader should not be allowed to delete another member's photo",
   "future.session.id"
 ]) {
   assert(smoke.includes(token), `album smoke must cover ${token}`);

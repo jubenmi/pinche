@@ -92,9 +92,11 @@ if (service.includes("function catalogReviewPatch")) {
   );
 }
 
-const getSessionBody = exportedFunctionBody(service, "getSession");
+const memberSessionDetailBody = functionBody(service, "memberSessionDetail");
+const publicSessionPreviewBody = functionBody(service, "publicSessionPreview");
 for (const token of ["store_address", "store_latitude", "store_longitude"]) {
-  assert(getSessionBody.includes(token), `getSession should return ${token}`);
+  assert(memberSessionDetailBody.includes(token), `member session detail should return ${token}`);
+  assert(publicSessionPreviewBody.includes(token), `public session preview should return ${token}`);
 }
 
 const storeDrawer = read("apps/admin-web/src/components/StoreDrawer.vue");
@@ -115,6 +117,12 @@ for (const token of [
   "error?.status === 121",
   "授权当前 admin 域名",
   "今日调用量已达到上限",
+  "POI_SEARCH_CACHE_PREFIX",
+  "poiSearchCacheKey",
+  "readCachedPoiSearch",
+  "writeCachedPoiSearch",
+  "至少输入 2 个字再搜索",
+  "已使用本地缓存结果，未消耗今日搜索额度",
   "store.latitude",
   "store.longitude"
 ]) {
@@ -124,6 +132,28 @@ assert(
   storeDrawer.includes("latitude: model.latitude") &&
     storeDrawer.includes("longitude: model.longitude"),
   "StoreDrawer save payload should include latitude and longitude"
+);
+const poiSearchBody = functionBody(storeDrawer, "searchPoiByKeyword");
+assert(
+  poiSearchBody.includes("normalizedPoiKeyword(poiSearchKeyword.value)"),
+  "POI search should normalize keyword before using quota"
+);
+assert(
+  poiSearchBody.includes("Array.from(keyword).length < 2"),
+  "POI search should reject too-short keywords before requesting Tencent"
+);
+assert(
+  poiSearchBody.includes("readCachedPoiSearch(keyword)"),
+  "POI search should read local cache before requesting Tencent"
+);
+assert(
+  poiSearchBody.indexOf("readCachedPoiSearch(keyword)") <
+    poiSearchBody.indexOf("requestTencentPoiSearch(keyword)"),
+  "POI search cache should be checked before Tencent request"
+);
+assert(
+  poiSearchBody.includes("writeCachedPoiSearch(keyword, normalizedResults)"),
+  "POI search should cache normalized successful Tencent results"
 );
 
 const miniprogramCreate = read("apps/miniprogram/src/pages/session/create.vue");
@@ -165,8 +195,9 @@ for (const token of [
 const manifest = JSON.parse(read("apps/miniprogram/src/manifest.json"));
 const mpWeixin = manifest["mp-weixin"] || {};
 assert(
-  mpWeixin.permission?.["scope.userLocation"]?.desc?.includes("剧本店位置"),
-  "Mini-program manifest should declare why chooseLocation needs location access"
+  mpWeixin.permission?.["scope.userLocation"]?.desc?.includes("剧本店位置") &&
+    mpWeixin.permission?.["scope.userLocation"]?.desc?.includes("同城"),
+  "Mini-program manifest should declare chooseLocation and city discovery location purposes"
 );
 assert(
   Array.isArray(mpWeixin.requiredPrivateInfos) &&
@@ -174,8 +205,8 @@ assert(
   "Mini-program manifest should declare chooseLocation as a required private API"
 );
 assert(
-  !mpWeixin.requiredPrivateInfos?.includes("getLocation"),
-  "Mini-program manifest should not declare getLocation"
+  mpWeixin.requiredPrivateInfos?.includes("getLocation"),
+  "Mini-program manifest should declare getLocation for D38 city discovery"
 );
 
 const smoke = read("scripts/d34-store-location-smoke.js");

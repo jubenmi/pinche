@@ -179,6 +179,11 @@ function assertPublicCardShape(row) {
 }
 
 async function main() {
+  const smokeTarget = await request("GET", "/api/testing/d40-smoke-target");
+  assert(
+    smokeTarget.data?.isolated === true && smokeTarget.data?.database === "pinche_d40_test",
+    "D40 smoke must run against the dedicated local pinche_d40_test database"
+  );
   await request("GET", "/api/sessions/public/upcoming?limit=20");
 
   const admin = await login("dev-admin-openid");
@@ -190,7 +195,10 @@ async function main() {
     await login(`dev-d40-member-${suffix}`),
     "d40-member-phone"
   );
-  const outsider = await login(`dev-d40-outsider-${suffix}`);
+  const outsider = await authorizePhone(
+    await login(`dev-d40-outsider-${suffix}`),
+    "d40-outsider-phone"
+  );
   assert(admin.roles.includes("system_admin"), "D40 smoke requires system admin");
 
   const store = await createStore(admin);
@@ -213,6 +221,43 @@ async function main() {
     startAt: startAt(15),
     status: "locked"
   });
+  const pendingNpcOnly = await createSession(organizer, store, script, "pending-npc-only", {
+    startAt: startAt(16),
+    joinPolicy: "direct"
+  });
+  const pendingNpcRole = (
+    await request(
+      "POST",
+      `/api/sessions/${pendingNpcOnly.session.id}/npc-roles`,
+      { name: "D40待审核NPC", description: "已有待审核报名，不应继续公开为可申请" },
+      organizer.token,
+      201
+    )
+  ).data;
+  await request(
+    "POST",
+    `/api/session-seats/${pendingNpcOnly.seat.id}/claim`,
+    { note: "占满普通座位" },
+    member.token
+  );
+  await request(
+    "PATCH",
+    `/api/sessions/${pendingNpcOnly.session.id}`,
+    { joinPolicy: "review_required" },
+    organizer.token
+  );
+  const pendingNpcJoin = (
+    await request(
+      "POST",
+      `/api/session-npc-roles/${pendingNpcRole.id}/claim`,
+      { note: "D40待审核NPC报名" },
+      outsider.token
+    )
+  ).data;
+  assert(
+    pendingNpcJoin.join_result === "pending_review",
+    "pending NPC fixture must create a review-required signup"
+  );
   const started = await createSession(organizer, store, script, "started", {
     startAt: startAt(-2)
   });
@@ -226,6 +271,10 @@ async function main() {
   assert(!visibleIds.has(shareOnly.session.id), "share-only session must be hidden");
   assert(!visibleIds.has(cancelled.session.id), "cancelled session must be hidden");
   assert(!visibleIds.has(locked.session.id), "locked session must be hidden");
+  assert(
+    !visibleIds.has(pendingNpcOnly.session.id),
+    "session with no open seat and only a pending NPC role must be hidden"
+  );
   assert(!visibleIds.has(started.session.id), "started session must be hidden");
   assert(rows.length <= 20, "public upcoming response must clamp limit to 20");
   assert(sortedByStartAt(rows), "public upcoming response must sort by start_at then id");

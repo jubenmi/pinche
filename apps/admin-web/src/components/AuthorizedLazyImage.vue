@@ -1,6 +1,6 @@
 <template>
   <div ref="root" class="authorized-lazy-image" :style="ratioStyle">
-    <img v-if="objectUrl" :src="objectUrl" :alt="alt" @load="$emit('loaded')" />
+    <img v-if="objectUrl" :src="objectUrl" :alt="alt" @load="emit('loaded')" />
     <span v-else-if="failed" class="lazy-image-state">加载失败</span>
     <span v-else class="lazy-image-state loading"></span>
   </div>
@@ -16,13 +16,14 @@ const props = defineProps({
   ratio: { type: Number, default: 1 }
 });
 
-defineEmits(["loaded"]);
+const emit = defineEmits(["loaded", "error"]);
 
 const root = ref(null);
 const objectUrl = ref("");
 const failed = ref(false);
 const loading = ref(false);
 let observer = null;
+let sourceSerial = 0;
 
 const ratioStyle = computed(() => ({
   aspectRatio: Number.isFinite(props.ratio) && props.ratio > 0 ? String(props.ratio) : "1"
@@ -43,17 +44,33 @@ function disconnectObserver() {
 }
 
 async function loadImage() {
-  if (!props.src || loading.value || objectUrl.value) {
+  const source = props.src;
+  if (!source || loading.value || objectUrl.value) {
     return;
   }
+  const requestId = ++sourceSerial;
   loading.value = true;
   failed.value = false;
   try {
-    objectUrl.value = await fetchAuthorizedMediaObjectUrl(props.src);
+    const nextObjectUrl = await fetchAuthorizedMediaObjectUrl(source);
+    if (requestId !== sourceSerial || source !== props.src) {
+      URL.revokeObjectURL(nextObjectUrl);
+      return;
+    }
+    objectUrl.value = nextObjectUrl;
   } catch (error) {
+    if (requestId !== sourceSerial || source !== props.src) {
+      return;
+    }
     failed.value = true;
+    emit("error", {
+      status: Number(error?.status || 0),
+      src: source
+    });
   } finally {
-    loading.value = false;
+    if (requestId === sourceSerial) {
+      loading.value = false;
+    }
   }
 }
 
@@ -81,6 +98,8 @@ function observeImage() {
 watch(
   () => props.src,
   () => {
+    sourceSerial += 1;
+    loading.value = false;
     revokeObjectUrl();
     failed.value = false;
     observeImage();

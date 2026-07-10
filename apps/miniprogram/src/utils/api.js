@@ -13,7 +13,7 @@ export const AUTH_PHONE_ACK_EVENT = "pinche-auth-phone-ack";
 export const AUTH_PHONE_RESPONSE_EVENT = "pinche-auth-phone-response";
 export const BACKEND_STATUS_CHANGE_EVENT = "pinche-backend-status-change";
 
-const BACKEND_HEALTH_TIMEOUT = 3000;
+const BACKEND_HEALTH_TIMEOUT = 10000;
 const MAINTENANCE_USER_MESSAGE = "服务正在上线维护中，请稍后再试。";
 let cosClient = null;
 let cosSdkConstructor = null;
@@ -78,19 +78,17 @@ export function getApiBaseUrl() {
 
 function isLocalApiBaseUrl() {
   const value = getApiBaseUrl();
-  try {
-    const { hostname } = new URL(value);
-    return (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "0.0.0.0" ||
-      hostname.startsWith("192.168.") ||
-      hostname.startsWith("10.") ||
-      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
-    );
-  } catch (error) {
-    return false;
-  }
+  const normalizedValue = String(value || "").trim();
+  const match = normalizedValue.match(/^https?:\/\/([^/:?#]+)/i);
+  const hostname = match?.[1] || "";
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname.startsWith("192.168.") ||
+    hostname.startsWith("10.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+  );
 }
 
 export function assetUrl(path) {
@@ -533,6 +531,63 @@ async function requestCosUploadIntent(kind, filePath, data = {}) {
   return dataOf(response)?.upload || { direct: false };
 }
 
+function getLocalFileSize(filePath) {
+  if (!filePath || typeof uni === "undefined") {
+    return Promise.resolve(0);
+  }
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      const size = Number(value || 0);
+      resolve(Number.isFinite(size) && size > 0 ? size : 0);
+    };
+    const statFile = () => {
+      if (typeof uni.getFileSystemManager !== "function") {
+        finish(0);
+        return;
+      }
+      try {
+        const fileSystem = uni.getFileSystemManager();
+        if (!fileSystem || typeof fileSystem.stat !== "function") {
+          finish(0);
+          return;
+        }
+        fileSystem.stat({
+          path: filePath,
+          success(result) {
+            const stats = result.stats || result.stat || result;
+            finish(stats?.size);
+          },
+          fail() {
+            finish(0);
+          }
+        });
+      } catch (error) {
+        finish(0);
+      }
+    };
+    if (typeof uni.getFileInfo !== "function") {
+      statFile();
+      return;
+    }
+    try {
+      uni.getFileInfo({
+        filePath,
+        success(result) {
+          const size = Number(result?.size || 0);
+          if (Number.isFinite(size) && size > 0) {
+            finish(size);
+            return;
+          }
+          statFile();
+        },
+        fail: statFile
+      });
+    } catch (error) {
+      statFile();
+    }
+  });
+}
+
 async function uploadCosObject(upload, filePath) {
   const client = await getCosClient();
   return new Promise((resolve, reject) => {
@@ -543,6 +598,7 @@ async function uploadCosObject(upload, filePath) {
         Key: upload.key,
         FilePath: filePath,
         ContentType: upload.contentType,
+        Headers: upload.headers || {},
         PicOperations: upload.picOperations,
         onProgress() {}
       },
@@ -563,7 +619,19 @@ async function uploadCosObject(upload, filePath) {
 
 async function uploadCosBackedFile({ kind, filePath, fallbackUpload, intentData = {} }) {
   const upload = await requestCosUploadIntent(kind, filePath, intentData);
+  const localFileSize = await getLocalFileSize(filePath);
+  const maxBytes = Number(upload.maxBytes || 0);
+  if (localFileSize > 0 && maxBytes > 0 && localFileSize > maxBytes) {
+    throw {
+      statusCode: 413,
+      errMsg: "upload file exceeds maxBytes",
+      userMessage: "文件过大，请压缩后重试。"
+    };
+  }
   if (!upload.direct) {
+    return fallbackUpload(filePath);
+  }
+  if (!localFileSize) {
     return fallbackUpload(filePath);
   }
   try {
@@ -983,40 +1051,47 @@ export async function ensureUserPhone(auth, options = {}) {
 }
 
 export function loginWithWechat(options = {}) {
+  const loginWithCode = (code) => {
+    if (!code) {
+      const error = new Error("WeChat login code is missing");
+      error.userMessage = "微信登录凭证获取失败，请重试";
+      return Promise.reject(error);
+    }
+    return request({
+      url: "/api/auth/wechat/login",
+      method: "POST",
+      data: {
+        code
+      }
+    }).then((response) => {
+      const data = dataOf(response);
+      if (data) {
+        setAuth(data);
+      }
+      return data;
+    });
+  };
+
   return new Promise((resolve, reject) => {
     uni.login({
       provider: "weixin",
       success(loginResult) {
-        const code = resolveWechatLoginCode(loginResult, options);
-        if (!code) {
-          const error = new Error("WeChat login code is missing");
-          error.userMessage = "微信登录凭证获取失败，请重试";
-          reject(error);
+        loginWithCode(resolveWechatLoginCode(loginResult, options)).then(resolve).catch(reject);
+      },
+      fail(loginError) {
+        const fallbackCode = resolveWechatLoginCode({}, options);
+        if (!fallbackCode) {
+          reject(loginError);
           return;
         }
-        request({
-          url: "/api/auth/wechat/login",
-          method: "POST",
-          data: {
-            code
-          }
-        })
-          .then((response) => {
-            const data = dataOf(response);
-            if (data) {
-              setAuth(data);
-            }
-            resolve(data);
-          })
-          .catch(reject);
-      },
-      fail: reject
+        loginWithCode(fallbackCode).then(resolve).catch(reject);
+      }
     });
   });
 }
 
 function resolveWechatLoginCode(loginResult, options = {}) {
-  if (import.meta.env.DEV && options.devCode && isLocalApiBaseUrl()) {
+  if (options.devCode && isLocalApiBaseUrl()) {
     return options.devCode;
   }
   if (loginResult.code) {

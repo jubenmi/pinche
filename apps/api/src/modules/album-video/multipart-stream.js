@@ -25,6 +25,87 @@ function multipartBoundary(contentType) {
   return boundary;
 }
 
+function isDispositionTokenCharacter(char) {
+  return /^[!#$%&'*+\-.^_`|~0-9A-Za-z]$/.test(char);
+}
+
+function skipDispositionWhitespace(text, index) {
+  let cursor = index;
+  while (cursor < text.length && /[ \t]/.test(text[cursor])) cursor += 1;
+  return cursor;
+}
+
+function parseQuotedDispositionValue(text, index) {
+  if (text[index] !== '"') return null;
+  let cursor = index + 1;
+  let value = "";
+  while (cursor < text.length) {
+    const char = text[cursor];
+    cursor += 1;
+    if (char === '"') return { value, index: cursor };
+    if (char === "\\") {
+      if (cursor >= text.length || /[\r\n]/.test(text[cursor])) return null;
+      value += text[cursor];
+      cursor += 1;
+      continue;
+    }
+    if (/[\r\n]/.test(char)) return null;
+    value += char;
+  }
+  return null;
+}
+
+function parseVideoContentDisposition(value) {
+  const text = String(value || "");
+  let cursor = skipDispositionWhitespace(text, 0);
+  const typeStart = cursor;
+  while (cursor < text.length && isDispositionTokenCharacter(text[cursor])) cursor += 1;
+  if (text.slice(typeStart, cursor).toLowerCase() !== "form-data") {
+    throw badRequest("album video multipart disposition is invalid");
+  }
+
+  const parameters = new Map();
+  while (true) {
+    cursor = skipDispositionWhitespace(text, cursor);
+    if (cursor === text.length) break;
+    if (text[cursor] !== ";") {
+      throw badRequest("album video multipart disposition is invalid");
+    }
+    cursor = skipDispositionWhitespace(text, cursor + 1);
+    const nameStart = cursor;
+    while (cursor < text.length && isDispositionTokenCharacter(text[cursor])) cursor += 1;
+    const name = text.slice(nameStart, cursor).toLowerCase();
+    if (!name) throw badRequest("album video multipart disposition is invalid");
+    cursor = skipDispositionWhitespace(text, cursor);
+    if (text[cursor] !== "=") {
+      throw badRequest("album video multipart disposition is invalid");
+    }
+    cursor = skipDispositionWhitespace(text, cursor + 1);
+    const parsedValue = parseQuotedDispositionValue(text, cursor);
+    if (!parsedValue) {
+      throw badRequest("album video multipart disposition parameters must be quoted");
+    }
+    cursor = skipDispositionWhitespace(text, parsedValue.index);
+    if (cursor < text.length && text[cursor] !== ";") {
+      throw badRequest("album video multipart disposition is invalid");
+    }
+    if (parameters.has(name)) {
+      throw badRequest("album video multipart disposition has duplicate parameters");
+    }
+    if (name !== "name" && name !== "filename") {
+      throw badRequest("album video multipart disposition has unsupported parameters");
+    }
+    parameters.set(name, parsedValue.value);
+  }
+
+  const partName = parameters.get("name");
+  const filename = parameters.get("filename");
+  if (partName !== "video" || !filename) {
+    throw badRequest("album video upload accepts exactly one video file part");
+  }
+  return { filename };
+}
+
 function parseVideoPartHeaders(bytes, boundary) {
   const expectedPrefix = `--${boundary}\r\n`;
   const text = bytes.toString("utf8");
@@ -45,15 +126,7 @@ function parseVideoPartHeaders(bytes, boundary) {
     headers[name] = value;
   }
 
-  const disposition = headers["content-disposition"] || "";
-  if (!/^form-data(?:;|$)/i.test(disposition)) {
-    throw badRequest("album video multipart disposition is invalid");
-  }
-  const name = disposition.match(/(?:^|;)\s*name="([^"]*)"/i)?.[1];
-  const filenameMatch = disposition.match(/(?:^|;)\s*filename="([^"]*)"/i);
-  if (name !== "video" || !filenameMatch) {
-    throw badRequest("album video upload accepts exactly one video file part");
-  }
+  const disposition = parseVideoContentDisposition(headers["content-disposition"]);
   const allowedHeaders = new Set(["content-disposition", "content-type"]);
   for (const headerName of Object.keys(headers)) {
     if (!allowedHeaders.has(headerName)) {
@@ -61,7 +134,7 @@ function parseVideoPartHeaders(bytes, boundary) {
     }
   }
   return {
-    filename: filenameMatch[1],
+    filename: disposition.filename,
     contentType: headers["content-type"] || ""
   };
 }
@@ -145,8 +218,8 @@ export async function parseMultipartAlbumVideoStream({
   let cleaned = false;
   const cleanup = async () => {
     if (cleaned) return;
-    cleaned = true;
     if (tempCreated) await unlinkIfPresent(tempPath, unlinkFile);
+    cleaned = true;
   };
 
   try {
@@ -182,15 +255,16 @@ export async function parseMultipartAlbumVideoStream({
         if (!match.closing) {
           throw badRequest("album video upload accepts exactly one video file part");
         }
-        state = "closed";
-        trailing = combined.subarray(match.afterOffset);
+        const trailingLength = combined.length - match.afterOffset;
         if (
-          trailing.length > 2 ||
-          (trailing.length >= 1 && trailing[0] !== 13) ||
-          (trailing.length === 2 && trailing[1] !== 10)
+          trailingLength > 2 ||
+          (trailingLength >= 1 && combined[match.afterOffset] !== 13) ||
+          (trailingLength === 2 && combined[match.afterOffset + 1] !== 10)
         ) {
           throw badRequest("album video multipart closing boundary is invalid");
         }
+        state = "closed";
+        trailing = Buffer.from(combined.subarray(match.afterOffset, match.afterOffset + trailingLength));
         tail = Buffer.alloc(0);
         return;
       }
@@ -200,43 +274,61 @@ export async function parseMultipartAlbumVideoStream({
         : Math.min(combined.length, delimiter.length + 1);
       const writeEnd = combined.length - retainBytes;
       await writePayload(combined.subarray(0, writeEnd));
-      tail = combined.subarray(writeEnd);
+      // Do not keep a view onto a potentially multi-megabyte request chunk just
+      // to retain the small suffix that may be the next boundary.
+      tail = Buffer.from(combined.subarray(writeEnd));
       onProgress?.({ pendingBytes: tail.length, fileBytes, totalBytes });
     };
 
     for await (const rawChunk of request) {
-      const chunk = Buffer.from(rawChunk);
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
       totalBytes += chunk.length;
       if (totalBytes > maxRequestBytes) {
         throw badRequest("album video multipart request is too large");
       }
 
       if (state === "closed") {
+        if (trailing.length + chunk.length > 2) {
+          throw badRequest("album video multipart contains data after the closing boundary");
+        }
         trailing = Buffer.concat([trailing, chunk]);
-        if (trailing.length > 2 || !Buffer.from("\r\n").subarray(0, trailing.length).equals(trailing)) {
+        if (!Buffer.from("\r\n").subarray(0, trailing.length).equals(trailing)) {
           throw badRequest("album video multipart contains data after the closing boundary");
         }
         continue;
       }
 
       if (state === "headers") {
-        headerBuffer = Buffer.concat([headerBuffer, chunk]);
-        const separatorIndex = headerBuffer.indexOf(headerSeparator);
+        // Probe only enough bytes to establish whether the header separator
+        // occurs within the configured header limit. The rest of a large first
+        // chunk is file payload, not header state, and must be passed through.
+        const headerCapacity = maxHeaderBytes + headerSeparator.length;
+        const probeLength = Math.max(0, headerCapacity - headerBuffer.length);
+        const probe = chunk.subarray(0, probeLength);
+        const candidate = headerBuffer.length === 0
+          ? probe
+          : Buffer.concat([headerBuffer, probe]);
+        const separatorIndex = candidate.indexOf(headerSeparator);
         if (separatorIndex === -1) {
-          if (headerBuffer.length > maxHeaderBytes) {
+          if (candidate.length >= headerCapacity) {
             throw badRequest("album video multipart headers are too large");
           }
+          // Copy the bounded prefix rather than retaining a view of the full
+          // incoming chunk in headerBuffer.
+          headerBuffer = Buffer.from(candidate);
           continue;
         }
         if (separatorIndex > maxHeaderBytes) {
           throw badRequest("album video multipart headers are too large");
         }
-        partMetadata = parseVideoPartHeaders(headerBuffer.subarray(0, separatorIndex), boundary);
-        const fileStart = separatorIndex + headerSeparator.length;
-        const initialFileBytes = headerBuffer.subarray(fileStart);
+        partMetadata = parseVideoPartHeaders(candidate.subarray(0, separatorIndex), boundary);
+        const fileStartInChunk = separatorIndex + headerSeparator.length - headerBuffer.length;
+        if (fileStartInChunk < 0 || fileStartInChunk > chunk.length) {
+          throw badRequest("album video multipart header boundary is invalid");
+        }
         headerBuffer = Buffer.alloc(0);
         state = "file";
-        await consumeFileBytes(initialFileBytes);
+        await consumeFileBytes(chunk.subarray(fileStartInChunk));
         continue;
       }
 
@@ -264,7 +356,11 @@ export async function parseMultipartAlbumVideoStream({
     };
   } catch (error) {
     if (fileHandle) await fileHandle.close().catch(() => {});
-    await cleanup().catch(() => {});
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      error.cleanupError = cleanupError;
+    }
     throw error;
   }
 }
@@ -275,11 +371,20 @@ export async function finalizeLocalAlbumVideoUpload({
   linkFile = link,
   unlinkFile = unlink
 } = {}) {
+  let primaryError;
   try {
     await linkFile(tempPath, destinationPath);
     return destinationPath;
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    await unlinkIfPresent(tempPath, unlinkFile);
+    try {
+      await unlinkIfPresent(tempPath, unlinkFile);
+    } catch (cleanupError) {
+      if (primaryError) primaryError.cleanupError = cleanupError;
+      else throw cleanupError;
+    }
   }
 }
 
@@ -294,6 +399,7 @@ export async function uploadTempAlbumVideoToCos({
   unlinkFile = unlink
 } = {}) {
   const body = createStream(tempPath);
+  let primaryError;
   try {
     return await putObject({
       key,
@@ -303,8 +409,16 @@ export async function uploadTempAlbumVideoToCos({
       forbidOverwrite: true,
       config
     });
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
     body.destroy?.();
-    await unlinkIfPresent(tempPath, unlinkFile);
+    try {
+      await unlinkIfPresent(tempPath, unlinkFile);
+    } catch (cleanupError) {
+      if (primaryError) primaryError.cleanupError = cleanupError;
+      else throw cleanupError;
+    }
   }
 }

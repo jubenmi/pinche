@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createReadStream } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -85,6 +85,27 @@ await withTempDir(async (tempDir) => {
 console.log("PASS multipart stream preserves multi-MB boundary-like video bytes with bounded tail state");
 
 await withTempDir(async (tempDir) => {
+  const boundary = "d42-first-chunk-payload";
+  const payload = Buffer.concat([
+    MP4_HEADER,
+    Buffer.alloc(2 * 1024 * 1024, 0x41)
+  ]);
+  const result = await parseMultipartAlbumVideoStream({
+    request: Readable.from([multipart(boundary, payload)]),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    tempDir,
+    maxHeaderBytes: 1024,
+    maxFileBytes: payload.length + 1,
+    maxRequestBytes: payload.length + 4096
+  });
+  assert.equal(result.byteSize, payload.length);
+  assert.deepEqual(await readFile(result.tempPath), payload);
+  await result.cleanup();
+  await assertDirectoryEmpty(tempDir);
+});
+console.log("PASS multipart stream preserves a large payload delivered with its first header chunk");
+
+await withTempDir(async (tempDir) => {
   const boundary = "d42-cleanup-boundary";
   const cases = [
     {
@@ -143,6 +164,38 @@ await withTempDir(async (tempDir) => {
         Buffer.from(`\r\n--${boundary}--\r\n`)
       ]),
       options: { maxHeaderBytes: 1024 }
+    },
+    {
+      name: "duplicate disposition filename",
+      body: Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="video"; filename="a.mp4"; filename="b.mp4"\r\nContent-Type: video/mp4\r\n\r\n`),
+        MP4_HEADER,
+        Buffer.from(`\r\n--${boundary}--\r\n`)
+      ]),
+      options: {}
+    },
+    {
+      name: "empty disposition filename",
+      body: multipart(boundary, MP4_HEADER, { filename: "" }),
+      options: {}
+    },
+    {
+      name: "ambiguous unquoted disposition parameters",
+      body: Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name=video; name="video"; filename=shadow.mp4; filename="video.mp4"\r\nContent-Type: video/mp4\r\n\r\n`),
+        MP4_HEADER,
+        Buffer.from(`\r\n--${boundary}--\r\n`)
+      ]),
+      options: {}
+    },
+    {
+      name: "ambiguous disposition filename star",
+      body: Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="video"; filename="video.mp4"; filename*="UTF-8''video.mp4"\r\nContent-Type: video/mp4\r\n\r\n`),
+        MP4_HEADER,
+        Buffer.from(`\r\n--${boundary}--\r\n`)
+      ]),
+      options: {}
     }
   ];
   for (const testCase of cases) {
@@ -162,6 +215,90 @@ await withTempDir(async (tempDir) => {
 console.log("PASS multipart stream rejects spoofing/extra parts and cleans every failed temp file");
 
 await withTempDir(async (tempDir) => {
+  const boundary = "d42-huge-header-chunk";
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="video"; filename="video.mp4"\r\nX-Padding: ${"x".repeat(2048)}\r\n\r\n`),
+    MP4_HEADER,
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ]);
+  await assert.rejects(parseMultipartAlbumVideoStream({
+    request: Readable.from([body]),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    tempDir,
+    maxHeaderBytes: 1024,
+    maxRequestBytes: body.length + 1
+  }));
+  await assertDirectoryEmpty(tempDir);
+});
+console.log("PASS multipart stream enforces header cap on oversized first chunks");
+
+await withTempDir(async (tempDir) => {
+  const boundary = "d42-post-close-tail";
+  const body = multipart(boundary, MP4_HEADER);
+  const originalConcat = Buffer.concat;
+  let blockedLargeConcat = false;
+  Buffer.concat = (buffers, ...rest) => {
+    const totalBytes = buffers.reduce((total, buffer) => total + buffer.length, 0);
+    if (totalBytes > 4096) {
+      blockedLargeConcat = true;
+      throw new Error("multipart parser attempted an unbounded boundary-tail concat");
+    }
+    return originalConcat(buffers, ...rest);
+  };
+  try {
+    await assert.rejects(
+      parseMultipartAlbumVideoStream({
+        request: Readable.from([body, Buffer.alloc(2 * 1024 * 1024, 0x42)]),
+        contentType: `multipart/form-data; boundary=${boundary}`,
+        tempDir,
+        maxFileBytes: 2 * 1024 * 1024,
+        maxRequestBytes: 3 * 1024 * 1024
+      }),
+      (error) => error?.code === "BAD_REQUEST"
+    );
+  } finally {
+    Buffer.concat = originalConcat;
+  }
+  assert.equal(blockedLargeConcat, false);
+  await assertDirectoryEmpty(tempDir);
+});
+console.log("PASS multipart stream rejects a huge post-closing tail without concatenating it");
+
+await withTempDir(async (tempDir) => {
+  const boundary = "d42-inline-close-tail";
+  const body = Buffer.concat([
+    multipart(boundary, MP4_HEADER),
+    Buffer.alloc(2 * 1024 * 1024, 0x43)
+  ]);
+  const originalFrom = Buffer.from;
+  let blockedLargeCopy = false;
+  Buffer.from = (value, ...rest) => {
+    if (Buffer.isBuffer(value) && value.length > 4096) {
+      blockedLargeCopy = true;
+      throw new Error("multipart parser attempted an unbounded boundary-tail copy");
+    }
+    return originalFrom(value, ...rest);
+  };
+  try {
+    await assert.rejects(
+      parseMultipartAlbumVideoStream({
+        request: Readable.from([body]),
+        contentType: `multipart/form-data; boundary=${boundary}`,
+        tempDir,
+        maxFileBytes: 2 * 1024 * 1024,
+        maxRequestBytes: 3 * 1024 * 1024
+      }),
+      (error) => error?.code === "BAD_REQUEST"
+    );
+  } finally {
+    Buffer.from = originalFrom;
+  }
+  assert.equal(blockedLargeCopy, false);
+  await assertDirectoryEmpty(tempDir);
+});
+console.log("PASS multipart stream rejects an inline huge post-closing tail without copying it");
+
+await withTempDir(async (tempDir) => {
   const tempPath = path.join(tempDir, "pending.tmp");
   const destinationPath = path.join(tempDir, "video.mp4");
   await writeFile(tempPath, MP4_HEADER);
@@ -174,6 +311,26 @@ await withTempDir(async (tempDir) => {
   assert.deepEqual(await readdir(tempDir), ["video.mp4"]);
 });
 console.log("PASS local multipart finalization is atomic no-overwrite and cleans collision temp files");
+
+await withTempDir(async (tempDir) => {
+  const tempPath = path.join(tempDir, "retry.tmp");
+  let attempts = 0;
+  await writeFile(tempPath, MP4_HEADER);
+  const result = await parseMultipartAlbumVideoStream({
+    request: Readable.from([multipart("d42-retry", MP4_HEADER)]),
+    contentType: "multipart/form-data; boundary=d42-retry",
+    tempDir,
+    unlinkFile: async (filePath) => {
+      attempts += 1;
+      if (attempts === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      await unlink(filePath);
+    }
+  });
+  await assert.rejects(result.cleanup);
+  await result.cleanup();
+  assert.equal(attempts, 2);
+});
+console.log("PASS multipart cleanup can be retried after unlink failure");
 
 await withTempDir(async (tempDir) => {
   const tempPath = path.join(tempDir, "pending.tmp");
@@ -239,4 +396,4 @@ await withTempDir(async (tempDir) => {
 });
 console.log("PASS COS request pipes Readable bodies with an explicit signed content length");
 
-console.log("D42 album video stream checks passed: 5/5");
+console.log("D42 album video stream checks passed: 10/10");

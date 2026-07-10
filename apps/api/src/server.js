@@ -43,6 +43,7 @@ import {
   parseMultipartAlbumVideoStream,
   uploadTempAlbumVideoToCos
 } from "./modules/album-video/multipart-stream.js";
+import { cleanupAlbumVideoBeforeDelete } from "./modules/album-video/lifecycle.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
   assertSessionJoinInviteAllowed,
@@ -67,6 +68,8 @@ import {
   createSubscriptionRequest,
   deleteAdminSession,
   deleteSessionAlbumPhoto,
+  prepareSessionAlbumPhotoDeletion,
+  finalizeSessionAlbumPhotoDeletion,
   deleteScript,
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
@@ -1802,7 +1805,21 @@ async function serveUploadedObject({ url, prefix, localDir, response, cacheContr
   });
 }
 
-async function deleteUploadedObject({ url, prefix, localDir }) {
+function hasObjectNotFoundStatus(error) {
+  return [error?.statusCode, error?.status, error?.httpStatus]
+    .some((value) => Number(value) === 404);
+}
+
+export async function deleteUploadedObject({
+  url,
+  prefix,
+  localDir,
+  cosEnabled = isCosUploadStorageEnabled(),
+  cosConfig = config.cos,
+  deleteCos = deleteCosObject,
+  unlinkFile = fs.unlink,
+  strictCosErrors = false
+}) {
   const requestedName = decodeURIComponent(url.pathname.slice(prefix.length));
   const filename = path.basename(requestedName);
   if (!filename || filename !== requestedName || !/^[A-Za-z0-9._-]+$/.test(filename)) {
@@ -1810,11 +1827,26 @@ async function deleteUploadedObject({ url, prefix, localDir }) {
   }
 
   const key = cosObjectKeyFromUploadPath(`${prefix}${filename}`, prefix);
-  if (isCosUploadStorageEnabled()) {
+  if (cosEnabled) {
     try {
-      await deleteCosObject({ key, config: config.cos });
+      await deleteCos({ key, config: cosConfig });
       return;
     } catch (error) {
+      if (strictCosErrors) {
+        // COS can make an already-cleaned object idempotent only when the 404
+        // originated from our signed storage client. Every other COS failure
+        // remains retryable and must keep the video row as the cleanup anchor.
+        if (isTrustedCosStorageError(error) && Number(error.statusCode) === 404) return;
+        // cleanupAlbumVideoBeforeDelete intentionally treats generic 404s as
+        // idempotent for injected/local adapters. Do not let an untrusted COS
+        // 404 reach that generic boundary and finalize the video row.
+        if (hasObjectNotFoundStatus(error)) {
+          throw new AppError(502, "COS_STORAGE_ERROR", "COS storage request failed");
+        }
+        throw error;
+      }
+      // Preserve the established image cleanup behavior: known COS failures
+      // are reported, while legacy/unknown failures may still try local files.
       if (error.statusCode && error.statusCode !== 404) {
         throw new AppError(502, "COS_STORAGE_ERROR", "COS storage request failed", error.body);
       }
@@ -1822,7 +1854,7 @@ async function deleteUploadedObject({ url, prefix, localDir }) {
   }
 
   try {
-    await fs.unlink(path.join(localDir, filename));
+    await unlinkFile(path.join(localDir, filename));
   } catch (error) {
     if (error?.code !== "ENOENT") {
       throw error;
@@ -1868,7 +1900,8 @@ async function deleteUploadedSessionAlbumPhotoObject(photoUrl) {
     await deleteUploadedObject({
       url,
       prefix: "/uploads/session-album/videos/source/",
-      localDir: sessionAlbumVideoSourceUploadDir
+      localDir: sessionAlbumVideoSourceUploadDir,
+      strictCosErrors: true
     });
     return;
   }
@@ -1876,7 +1909,8 @@ async function deleteUploadedSessionAlbumPhotoObject(photoUrl) {
     await deleteUploadedObject({
       url,
       prefix: "/uploads/session-album/videos/display/",
-      localDir: sessionAlbumVideoDisplayUploadDir
+      localDir: sessionAlbumVideoDisplayUploadDir,
+      strictCosErrors: true
     });
     return;
   }
@@ -1884,7 +1918,8 @@ async function deleteUploadedSessionAlbumPhotoObject(photoUrl) {
     await deleteUploadedObject({
       url,
       prefix: "/uploads/session-album/videos/cover/",
-      localDir: sessionAlbumVideoCoverUploadDir
+      localDir: sessionAlbumVideoCoverUploadDir,
+      strictCosErrors: true
     });
     return;
   }
@@ -2132,6 +2167,18 @@ function requireRole(user, role) {
   if (!user.roles.includes(role)) {
     throw forbidden(`${role} role required`);
   }
+}
+
+function d40SmokeDatabaseIsIsolated() {
+  const host = String(config.mysql.host || "").trim().toLowerCase();
+  const localHost = ["127.0.0.1", "localhost", "::1"].includes(host);
+  return (
+    config.nodeEnv !== "production" &&
+    config.wechat.mockLogin === true &&
+    process.env.D40_SMOKE_ISOLATED === "1" &&
+    localHost &&
+    config.mysql.database === "pinche_d40_test"
+  );
 }
 
 async function route(request, response) {
@@ -2415,6 +2462,25 @@ async function route(request, response) {
       schemaReady: database.schemaReady,
       missingTables: database.missingTables,
       ...(database.error ? { error: database.error } : {})
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/testing/d40-smoke-target") {
+    if (!d40SmokeDatabaseIsIsolated()) {
+      throw new AppError(
+        409,
+        "SMOKE_DATABASE_NOT_ISOLATED",
+        "D40 smoke requires the dedicated local pinche_d40_test database"
+      );
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        mode: "d40",
+        isolated: true,
+        database: config.mysql.database
+      }
     });
     return;
   }
@@ -3216,6 +3282,20 @@ async function route(request, response) {
   );
   if (request.method === "DELETE" && sessionAlbumPhotoId) {
     const user = await getAuthUser(request);
+    const deletionSnapshot = await prepareSessionAlbumPhotoDeletion(user, sessionAlbumPhotoId);
+    if (deletionSnapshot.media_type === "video") {
+      const deletedVideo = await cleanupAlbumVideoBeforeDelete({
+        urls: deletionSnapshot.object_urls,
+        deleteObject: deleteUploadedSessionAlbumPhotoObject,
+        finalizeSnapshot: (snapshot) => finalizeSessionAlbumPhotoDeletion(
+          user,
+          sessionAlbumPhotoId,
+          { object_urls: snapshot }
+        )
+      });
+      jsonResponse(response, 200, { ok: true, data: { id: deletedVideo.id, deleted: true } });
+      return;
+    }
     const deletedPhoto = await deleteSessionAlbumPhoto(user, sessionAlbumPhotoId);
     await cleanupUploadedSessionAlbumPhotoObject(deletedPhoto.photo_url);
     await cleanupUploadedSessionAlbumMediaObjects(
