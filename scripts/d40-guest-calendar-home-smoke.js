@@ -2,6 +2,8 @@ const baseUrl = process.env.BASE_URL || "http://localhost:3018";
 const suffix = Date.now();
 
 async function request(method, path, body, token, expectedStatus = 200) {
+  const startedAt = Date.now();
+  console.log(`[D40 smoke] -> ${method} ${path}`);
   const response = await fetch(`${baseUrl}${path}`, {
     method,
     signal: AbortSignal.timeout(30_000),
@@ -16,6 +18,7 @@ async function request(method, path, body, token, expectedStatus = 200) {
   if (response.status !== expectedStatus) {
     throw new Error(`${method} ${path} expected ${expectedStatus}, got ${response.status}: ${text}`);
   }
+  console.log(`[D40 smoke] <- ${response.status} ${method} ${path} (${Date.now() - startedAt}ms)`);
   return payload;
 }
 

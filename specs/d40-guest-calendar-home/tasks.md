@@ -34,14 +34,14 @@
   - [x] 验证 D23 相册 token 仍受原隐私规则限制。
   - [x] 运行烟测并记录目标功能缺失造成的 RED 结果。
 
-- [ ] D40.4 实现公共近期车局后端。
-  - [ ] 新增 `listPublicUpcomingSessions(filters)`。
-  - [ ] 查询只保留 public、recruiting、future 且有开放座位或 NPC 的车局。
-  - [ ] 按 `start_at ASC, id ASC` 排序。
-  - [ ] limit 默认 20 且上限 20，不补齐最小数量。
-  - [ ] 只序列化卡片所需公开字段。
-  - [ ] 新增 `GET /api/sessions/public/upcoming` 匿名路由。
-  - [ ] 确保静态 public route 在动态 session id route 之前匹配。
+- [x] D40.4 实现公共近期车局后端。
+  - [x] 新增 `listPublicUpcomingSessions(filters)`。
+  - [x] 查询只保留 public、recruiting、future 且有开放座位或 NPC 的车局。
+  - [x] 按 `start_at ASC, id ASC` 排序。
+  - [x] limit 默认 20 且上限 20，不补齐最小数量。
+  - [x] 只序列化卡片所需公开字段。
+  - [x] 新增 `GET /api/sessions/public/upcoming` 匿名路由。
+  - [x] 确保静态 public route 在动态 session id route 之前匹配。
 
 - [ ] D40.5 收紧普通车局详情权限。
   - [ ] 将详情 GET 改为可选身份访问。
@@ -143,3 +143,4 @@
 
 - 2026-07-10：D40 spec 三件套建立。设计确认首页删除“发起第一辆车”分支，游客和已登录用户共用现有日历布局；游客仅浏览真实、公开、未发车、仍招募的近期车局，纯读取不登录，写入或身份能力点击后登录；发车后普通详情转为成员私密，相册继续遵循 D23 授权范围。实现待用户审阅 spec 后开始。
 - 2026-07-10：D40 RED 已建立并实际运行。静态检查 exit 1，首个失败为 `D40 home must remove the first-session entry screen`；隔离 API 烟测语法通过，匿名探针请求 `GET /api/sessions/public/upcoming?limit=20` 返回预期 404 `Route not found`。失败均由目标功能尚未实现造成。
+- 2026-07-10：D40 公共近期接口 GREEN。隔离烟测以匿名请求通过 public/recruiting/future/open 资格、share_only/cancelled/locked/past 排除、排序、20 条上限和敏感字段检查；随后按预期在详情 `access_scope !== public_preview` 处 RED。

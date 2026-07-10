@@ -18,6 +18,7 @@ import {
   verifyBusinessToken
 } from "./modules/auth/wechat.js";
 import { routeExtensions } from "./modules/extensions/registry.js";
+import { geocodeStoreLocation, reverseGeocodeCity } from "./modules/location/geocoding.js";
 import {
   buildCosAuthorization,
   cosHost,
@@ -73,6 +74,8 @@ import {
   listActiveStores,
   listCatalogRequests,
   listMyCatalogReviewItems,
+  listDiscoverableSessions,
+  listPublicUpcomingSessions,
   listPublicSessionAlbumShare,
   listSessionAlbum,
   listSessionAlbumPeople,
@@ -1169,19 +1172,20 @@ function albumVideoObjectKey(uploadPath) {
   return cosObjectKeyFromUploadPath(pathText, prefix);
 }
 
-function signedAlbumVideoUrl(media, userId) {
-  if (!isCosUploadStorageEnabled()) {
-    return sessionAlbumVideoFilePath(media, userId);
-  }
+function signedCosAlbumVideoUrl(media, method = "GET") {
   const key = albumVideoObjectKey(media.display_url || media.source_url);
   const host = cosHost(config.cos);
   const authorization = buildCosAuthorization({
-    method: "GET",
+    method,
     key,
     headers: { host },
     config: config.cos
   });
   return `https://${host}/${encodeCosObjectKey(key)}?${authorization}`;
+}
+
+function signedAlbumVideoUrl(media, userId) {
+  return sessionAlbumVideoFilePath(media, userId);
 }
 
 function albumVideoSnapshotObjectKey(media) {
@@ -1850,13 +1854,44 @@ async function serveUploadedSessionAlbumVideoCover(media, response) {
   }
 }
 
-async function serveUploadedSessionAlbumVideoFile(media, response) {
+function albumVideoFileHeaders(media, filename) {
+  const contentType =
+    media.video_content_type || uploadedObjectContentType(filename, "video/mp4");
+  const byteSize = Number(media.video_byte_size || 0);
+  return {
+    "cache-control": "private, no-store",
+    "content-type": contentType || "video/mp4",
+    "accept-ranges": "bytes",
+    ...(Number.isFinite(byteSize) && byteSize > 0 ? { "content-length": byteSize } : {})
+  };
+}
+
+function writeAlbumVideoHead(media, filename, response) {
+  response.writeHead(200, albumVideoFileHeaders(media, filename));
+  response.end();
+}
+
+async function serveUploadedSessionAlbumVideoFile(media, response, options = {}) {
   const videoPath = media.display_url || media.source_url;
   if (!videoPath) {
     throw notFound("Album video file not found");
   }
   const videoUrl = new URL(videoPath, "http://localhost");
+  const filename = path.basename(videoUrl.pathname);
   const cacheControl = "private, no-store";
+  const method = options.method || "GET";
+  if (isCosUploadStorageEnabled()) {
+    response.writeHead(302, {
+      "cache-control": cacheControl,
+      location: signedCosAlbumVideoUrl(media, method)
+    });
+    response.end();
+    return;
+  }
+  if (method === "HEAD") {
+    writeAlbumVideoHead(media, filename, response);
+    return;
+  }
   if (videoUrl.pathname.startsWith("/uploads/session-album/videos/display/")) {
     await serveUploadedObject({
       url: videoUrl,
@@ -2044,7 +2079,7 @@ async function route(request, response) {
     url.pathname,
     /^\/api\/session-album\/media\/(\d+)\/video-file$/
   );
-  if (request.method === "GET" && sessionAlbumMediaVideoFileId) {
+  if ((request.method === "GET" || request.method === "HEAD") && sessionAlbumMediaVideoFileId) {
     const claims = verifySessionAlbumVideoFileQuery(
       sessionAlbumMediaVideoFileId,
       url.searchParams
@@ -2056,7 +2091,7 @@ async function route(request, response) {
     if (Number(media.session_id) !== claims.sessionId) {
       throw forbidden("album video token is invalid");
     }
-    await serveUploadedSessionAlbumVideoFile(media, response);
+    await serveUploadedSessionAlbumVideoFile(media, response, { method: request.method });
     return;
   }
 
@@ -2384,6 +2419,13 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/admin/location/geocode") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, { ok: true, data: await geocodeStoreLocation(body) });
+    return;
+  }
+
   const adminStoreScriptsId = idMatch(url.pathname, /^\/api\/admin\/stores\/(\d+)\/scripts$/);
   if (request.method === "GET" && adminStoreScriptsId) {
     const user = await getAuthUser(request);
@@ -2626,6 +2668,60 @@ async function route(request, response) {
     jsonResponse(response, 201, {
       ok: true,
       data: await createEntityClaim(user, body)
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/sessions/public/upcoming") {
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        sessions: await listPublicUpcomingSessions(Object.fromEntries(url.searchParams))
+      }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/sessions/discovery") {
+    const user = await getAuthUser(request);
+    const hasLatitude = body.latitude !== undefined && body.latitude !== null && body.latitude !== "";
+    const hasLongitude =
+      body.longitude !== undefined && body.longitude !== null && body.longitude !== "";
+    if (hasLatitude !== hasLongitude) {
+      throw badRequest("latitude and longitude must be provided together");
+    }
+
+    let city = String(body.city || "").trim();
+    let locationProvider = city ? "cache" : null;
+    let discoveryFilters = city ? { ...body, city } : { limit: body.limit };
+    if (!city && hasLatitude && hasLongitude) {
+      try {
+        const location = await reverseGeocodeCity({
+          latitude: body.latitude,
+          longitude: body.longitude
+        });
+        city = location.city;
+        locationProvider = location.provider;
+        discoveryFilters = {
+          ...body,
+          city
+        };
+      } catch (error) {
+        if (error?.code !== "LOCATION_REVERSE_GEOCODE_FAILED") {
+          throw error;
+        }
+        discoveryFilters = { limit: body.limit };
+      }
+    }
+
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        mode: city ? "city" : "time_fallback",
+        city: city || null,
+        location_provider: locationProvider,
+        sessions: await listDiscoverableSessions(user, discoveryFilters)
+      }
     });
     return;
   }
