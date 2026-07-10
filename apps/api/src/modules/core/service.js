@@ -151,6 +151,34 @@ function normalizeCatalogVisibility(value = "public") {
   return visibility;
 }
 
+function normalizeSessionVisibility(value = "share_only") {
+  const visibility = String(value).trim();
+  if (!["public", "share_only"].includes(visibility)) {
+    throw badRequest("visibility must be public or share_only");
+  }
+  return visibility;
+}
+
+function normalizeDiscoveryCity(value) {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  const city = String(value).trim().replace(/\s+/g, " ");
+  if (!city || Array.from(city).length > 64) {
+    throw badRequest("city must be between 1 and 64 characters");
+  }
+  assertPublicTextSafe("city", city);
+  return city;
+}
+
+function discoveryCityVariants(city) {
+  if (!city) {
+    return [];
+  }
+  const withoutCitySuffix = city.endsWith("市") ? city.slice(0, -1) : city;
+  return [...new Set([city, withoutCitySuffix, `${withoutCitySuffix}市`])].filter(Boolean);
+}
+
 function normalizeCatalogReviewStatus(value = "approved") {
   const status = String(value || "approved").trim();
   if (!["pending", "needs_changes", "approved", "rejected", "merged"].includes(status)) {
@@ -816,6 +844,7 @@ function albumMediaResponse(media, tags = [], options = {}) {
     uploader_user_id: Number(media.uploader_user_id),
     uploader_name: media.uploader_nickname || media.uploader_open_id || "车友",
     is_mine: Number(media.uploader_user_id) === Number(options.userId),
+    can_delete: Number(media.uploader_user_id) === Number(options.userId),
     can_tag: Number(media.uploader_user_id) === Number(options.userId)
   };
 
@@ -3300,7 +3329,7 @@ export async function createSession(user, body) {
         body.npcUserId || null,
         optionalText(body.npcNameSnapshot),
         intValue(body.depositAmount, 0),
-        body.visibility || "share_only",
+        normalizeSessionVisibility(body.visibility),
         normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
         normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
         normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
@@ -3325,46 +3354,184 @@ export async function createSession(user, body) {
   });
 }
 
+function publicSessionAvailable(session) {
+  const startAt = new Date(session.start_at).getTime();
+  return (
+    session.visibility === "public" &&
+    session.status === "recruiting" &&
+    Number.isFinite(startAt) &&
+    startAt > Date.now()
+  );
+}
+
+function publicSeatResponse(row = {}) {
+  const {
+    confirmed_user_id: _confirmedUserId,
+    confirmed_user_nickname: _confirmedUserNickname,
+    confirmed_user_open_id: _confirmedUserOpenId,
+    confirmed_user_avatar_url: _confirmedUserAvatarUrl,
+    confirmed_user_gender: _confirmedUserGender,
+    ...seat
+  } = row;
+  return {
+    ...seat,
+    id: Number(seat.id),
+    session_id: Number(seat.session_id)
+  };
+}
+
+function publicSessionNpcRoleResponse(row = {}) {
+  const {
+    bound_user_id: boundUserId,
+    bound_user_name: _boundUserName,
+    bound_user_avatar_url: _boundUserAvatarUrl,
+    bound_user_gender: _boundUserGender,
+    pending_signup_id: pendingSignupId,
+    pending_signup_user_id: _pendingSignupUserId,
+    pending_signup_user_name: _pendingSignupUserName,
+    pending_signup_user_avatar_url: _pendingSignupUserAvatarUrl,
+    pending_signup_user_gender: _pendingSignupUserGender,
+    ...role
+  } = row;
+  return {
+    ...role,
+    is_bound: Boolean(boundUserId),
+    has_pending_signup: Boolean(pendingSignupId)
+  };
+}
+
+async function memberSessionDetail(connection, session) {
+  const id = Number(session.id);
+  await cleanupSessionExclusiveRoleSelections(connection, id);
+  const [seats] = await connection.query(
+    `
+      SELECT
+        seat.*,
+        user.nickname AS confirmed_user_nickname,
+        user.open_id AS confirmed_user_open_id,
+        user.avatar_url AS confirmed_user_avatar_url,
+        user.gender AS confirmed_user_gender
+      FROM session_seats seat
+      LEFT JOIN users user ON user.id = seat.confirmed_user_id
+      WHERE seat.session_id = ?
+      ORDER BY seat.id
+    `,
+    [id]
+  );
+  const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
+  const activeAlbumPhotoCount = await activeSessionAlbumPhotoCount(connection, id);
+  const storeLocation = session.store_id
+    ? await findById(connection, "stores", session.store_id)
+    : null;
+  const { note: _note, cancelled_by_user_id: _cancelledByUserId, ...safeSession } = session;
+  return {
+    ...safeSession,
+    store_address: storeLocation?.address || null,
+    store_latitude: storeLocation?.latitude ?? null,
+    store_longitude: storeLocation?.longitude ?? null,
+    join_policy: safeSession.join_policy || "review_required",
+    join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
+    npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
+    active_album_photo_count: activeAlbumPhotoCount,
+    photo_count: activeAlbumPhotoCount,
+    seats,
+    session_npc_roles: sessionNpcRoles
+  };
+}
+
+async function publicSessionPreview(connection, session, accessScope = "public_preview") {
+  const id = Number(session.id);
+  const [seats] = await connection.query(
+    `
+      SELECT seat.*
+      FROM session_seats seat
+      WHERE seat.session_id = ?
+      ORDER BY seat.id
+    `,
+    [id]
+  );
+  const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
+  const storeLocation = session.store_id
+    ? await findById(connection, "stores", session.store_id)
+    : null;
+  const {
+    note: _note,
+    cancelled_by_user_id: _cancelledByUserId,
+    organizer_user_id: _organizerUserId,
+    organizer_hidden_at: _organizerHiddenAt,
+    dm_user_id: _dmUserId,
+    npc_user_id: _npcUserId,
+    ...safeSession
+  } = session;
+  return {
+    ...safeSession,
+    access_scope: accessScope,
+    store_address: storeLocation?.address || null,
+    store_latitude: storeLocation?.latitude ?? null,
+    store_longitude: storeLocation?.longitude ?? null,
+    join_policy: safeSession.join_policy || "review_required",
+    join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
+    npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
+    seats: seats.map(publicSeatResponse),
+    session_npc_roles: sessionNpcRoles.map(publicSessionNpcRoleResponse)
+  };
+}
+
 export async function getSession(id) {
+  const sessionId = positiveId(id, "sessionId");
   return withTransaction(async (connection) => {
+    const session = await findById(connection, "sessions", sessionId);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    return memberSessionDetail(connection, session);
+  });
+}
+
+export async function getSessionForViewer(id, options = {}) {
+  const sessionId = positiveId(id, "sessionId");
+  const viewer = options.viewer || null;
+  const inviteClaims = options.inviteClaims || null;
+  return withTransaction(async (connection) => {
+    const session = await findById(connection, "sessions", sessionId);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    const memberAllowed = Boolean(
+      viewer &&
+        (isAdmin(viewer) || (await isSessionAlbumMember(connection, session, viewer.user.id)))
+    );
+    if (memberAllowed) {
+      return {
+        ...(await memberSessionDetail(connection, session)),
+        access_scope: "member"
+      };
+    }
+    if (publicSessionAvailable(session)) {
+      return publicSessionPreview(connection, session);
+    }
+    if (
+      inviteClaims &&
+      Number(inviteClaims.sessionId) === sessionId &&
+      session.status !== "cancelled"
+    ) {
+      return publicSessionPreview(connection, session, "invite_preview");
+    }
+    throw notFound("Session not found");
+  });
+}
+
+export async function assertSessionJoinInviteAllowed(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
     const session = await findById(connection, "sessions", id);
     if (!session) {
       throw notFound("Session not found");
     }
-    await cleanupSessionExclusiveRoleSelections(connection, id);
-
-    const [seats] = await connection.query(
-      `
-        SELECT
-          seat.*,
-          user.nickname AS confirmed_user_nickname,
-          user.open_id AS confirmed_user_open_id,
-          user.avatar_url AS confirmed_user_avatar_url,
-          user.gender AS confirmed_user_gender
-        FROM session_seats seat
-        LEFT JOIN users user ON user.id = seat.confirmed_user_id
-        WHERE seat.session_id = ?
-        ORDER BY seat.id
-      `,
-      [id]
-    );
-    const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
-    const activeAlbumPhotoCount = await activeSessionAlbumPhotoCount(connection, id);
-    const storeLocation = session.store_id ? await findById(connection, "stores", session.store_id) : null;
-    const { note, cancelled_by_user_id: _cancelledByUserId, ...publicSession } = session;
-    return {
-      ...publicSession,
-      store_address: storeLocation?.address || null,
-      store_latitude: storeLocation?.latitude ?? null,
-      store_longitude: storeLocation?.longitude ?? null,
-      join_policy: publicSession.join_policy || "review_required",
-      join_phone_required: Boolean(Number(publicSession.join_phone_required ?? 1)),
-      npc_join_enabled: Boolean(Number(publicSession.npc_join_enabled ?? 1)),
-      active_album_photo_count: activeAlbumPhotoCount,
-      photo_count: activeAlbumPhotoCount,
-      seats,
-      session_npc_roles: sessionNpcRoles
-    };
+    if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
+      throw forbidden("Only session members can share a join invitation");
+    }
+    return { session_id: id };
   });
 }
 
@@ -3494,6 +3661,201 @@ export async function listMySessions(user, filters = {}) {
       values
     );
     return rows;
+  });
+}
+
+export async function listDiscoverableSessions(user, filters = {}) {
+  const latitude = optionalLatitude(filters.latitude);
+  const longitude = optionalLongitude(filters.longitude);
+  if ((latitude === null) !== (longitude === null)) {
+    throw badRequest("latitude and longitude must be provided together");
+  }
+
+  const city = normalizeDiscoveryCity(filters.city);
+  const cityVariants = discoveryCityVariants(city);
+  const hasCoordinates = latitude !== null && longitude !== null;
+  const distanceSql = hasCoordinates
+    ? `
+        6371 * 2 * ASIN(
+          SQRT(
+            POWER(SIN(RADIANS(store.latitude - ?) / 2), 2)
+            + COS(RADIANS(?)) * COS(RADIANS(store.latitude))
+              * POWER(SIN(RADIANS(store.longitude - ?) / 2), 2)
+          )
+        )
+      `
+    : "NULL";
+  const where = [
+    "session.status = 'recruiting'",
+    "session.start_at > CURRENT_TIMESTAMP",
+    "session.visibility = 'public'",
+    "session.organizer_user_id <> ?",
+    `
+      EXISTS (
+        SELECT 1
+        FROM session_seats open_seat
+        WHERE open_seat.session_id = session.id
+          AND open_seat.status = 'open'
+      )
+    `,
+    `
+      NOT EXISTS (
+        SELECT 1
+        FROM signups mine
+        WHERE mine.session_id = session.id
+          AND mine.user_id = ?
+          AND mine.status IN ('pending', 'approved')
+      )
+    `
+  ];
+  const values = hasCoordinates ? [latitude, latitude, longitude] : [];
+  values.push(user.user.id, user.user.id);
+  if (cityVariants.length > 0) {
+    where.push(`TRIM(store.city) IN (${cityVariants.map(() => "?").join(", ")})`);
+    values.push(...cityVariants);
+  }
+
+  const orderSql = city
+    ? `
+        DATE(session.start_at) ASC,
+        CASE WHEN distance_km IS NULL THEN 1 ELSE 0 END ASC,
+        distance_km ASC,
+        session.start_at ASC,
+        session.id ASC
+      `
+    : "session.start_at ASC, session.id ASC";
+  const rowLimit = city ? limitValue(filters.limit, 50) : 5;
+
+  return withDatabaseConnection(async (connection) => {
+    const [rows] = await connection.query(
+      `
+        SELECT
+          session.id,
+          session.script_name_snapshot,
+          session.store_name_snapshot,
+          session.start_at,
+          session.status,
+          store.city AS store_city,
+          store.district AS store_district,
+          (
+            SELECT COUNT(*)
+            FROM session_seats all_seat
+            WHERE all_seat.session_id = session.id
+          ) AS seat_count,
+          (
+            SELECT COUNT(*)
+            FROM session_seats available_seat
+            WHERE available_seat.session_id = session.id
+              AND available_seat.status = 'open'
+          ) AS available_seat_count,
+          ${distanceSql} AS distance_km
+        FROM sessions session
+        JOIN stores store ON store.id = session.store_id
+        WHERE ${where.join(" AND ")}
+        ORDER BY ${orderSql}
+        LIMIT ${rowLimit}
+      `,
+      values
+    );
+
+    return rows.map((row) => ({
+      id: Number(row.id),
+      script_name_snapshot: row.script_name_snapshot,
+      store_name_snapshot: row.store_name_snapshot,
+      store_city: row.store_city || null,
+      store_district: row.store_district || null,
+      start_at: row.start_at,
+      status: row.status,
+      seat_count: Number(row.seat_count || 0),
+      available_seat_count: Number(row.available_seat_count || 0),
+      distance_km:
+        row.distance_km === null || row.distance_km === undefined
+          ? null
+          : Number(Number(row.distance_km).toFixed(1))
+    }));
+  });
+}
+
+export async function listPublicUpcomingSessions(filters = {}) {
+  const rowLimit = Math.min(limitValue(filters.limit, 20), 20);
+  return withDatabaseConnection(async (connection) => {
+    const [rows] = await connection.query(
+      `
+        SELECT
+          session.id,
+          session.script_name_snapshot,
+          session.store_name_snapshot,
+          session.start_at,
+          session.status,
+          store.city AS store_city,
+          store.district AS store_district,
+          (
+            SELECT COUNT(*)
+            FROM session_seats all_seat
+            WHERE all_seat.session_id = session.id
+          ) AS seat_count,
+          (
+            SELECT COUNT(*)
+            FROM session_seats available_seat
+            WHERE available_seat.session_id = session.id
+              AND available_seat.status = 'open'
+          ) AS available_seat_count,
+          (
+            SELECT COUNT(*)
+            FROM session_npc_roles available_npc
+            WHERE available_npc.session_id = session.id
+              AND available_npc.status = 'active'
+              AND available_npc.bound_user_id IS NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM signups pending_npc_signup
+                WHERE pending_npc_signup.session_npc_role_id = available_npc.id
+                  AND pending_npc_signup.status = 'pending'
+              )
+          ) AS available_npc_count
+        FROM sessions session
+        JOIN stores store ON store.id = session.store_id
+        WHERE session.visibility = 'public'
+          AND session.status = 'recruiting'
+          AND session.start_at > CURRENT_TIMESTAMP
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM session_seats open_seat
+              WHERE open_seat.session_id = session.id
+                AND open_seat.status = 'open'
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM session_npc_roles open_npc
+              WHERE open_npc.session_id = session.id
+                AND open_npc.status = 'active'
+                AND open_npc.bound_user_id IS NULL
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM signups pending_npc_signup
+                  WHERE pending_npc_signup.session_npc_role_id = open_npc.id
+                    AND pending_npc_signup.status = 'pending'
+                )
+            )
+          )
+        ORDER BY session.start_at ASC, session.id ASC
+        LIMIT ${rowLimit}
+      `
+    );
+
+    return rows.map((row) => ({
+      id: Number(row.id),
+      script_name_snapshot: row.script_name_snapshot,
+      store_name_snapshot: row.store_name_snapshot,
+      store_city: row.store_city || null,
+      store_district: row.store_district || null,
+      start_at: row.start_at,
+      status: row.status,
+      seat_count: Number(row.seat_count || 0),
+      available_seat_count: Number(row.available_seat_count || 0),
+      available_npc_count: Number(row.available_npc_count || 0)
+    }));
   });
 }
 
@@ -3820,6 +4182,10 @@ export async function updateSession(user, id, body) {
     assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
     const normalized = {
       ...body,
+      visibility:
+        body.visibility === undefined
+          ? undefined
+          : normalizeSessionVisibility(body.visibility),
       joinPolicy:
         body.joinPolicy === undefined && body.join_policy === undefined
           ? undefined
@@ -5512,6 +5878,7 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
       processing_status: "ready",
       uploader_user_id: Number(photo.uploader_user_id),
       is_mine: true,
+      can_delete: true,
       can_tag: true,
       image_width: photo.image_width ? Number(photo.image_width) : null,
       image_height: photo.image_height ? Number(photo.image_height) : null,
@@ -5599,6 +5966,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
       processing_status: media.processing_status || processingStatus,
       uploader_user_id: Number(media.uploader_user_id),
       is_mine: true,
+      can_delete: true,
       can_tag: true,
       duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
       video_width: media.video_width ? Number(media.video_width) : null,

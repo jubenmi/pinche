@@ -82,12 +82,18 @@ assert(
 );
 
 const getSessionBody = functionBody(service, "getSession");
+const memberSessionDetailBody = functionBody(service, "memberSessionDetail");
+const publicSessionPreviewBody = functionBody(service, "publicSessionPreview");
 assert(
-  getSessionBody.includes("join_phone_required") &&
-    getSessionBody.includes("Boolean") &&
-    getSessionBody.includes("?? 1"),
-  "getSession must expose join_phone_required with true fallback"
+  memberSessionDetailBody.includes("join_phone_required") &&
+    memberSessionDetailBody.includes("Boolean") &&
+    memberSessionDetailBody.includes("?? 1") &&
+    publicSessionPreviewBody.includes("join_phone_required") &&
+    publicSessionPreviewBody.includes("Boolean") &&
+    publicSessionPreviewBody.includes("?? 1"),
+  "member and public session detail must expose join_phone_required with true fallback"
 );
+assert(getSessionBody.includes("memberSessionDetail"), "getSession must use the member detail serializer");
 
 const requirePhoneBody = functionBody(service, "requireJoinPhoneIfNeeded");
 assert(

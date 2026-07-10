@@ -103,10 +103,16 @@ assert(
 );
 
 const getSessionBody = functionBody(service, "getSession");
+const memberSessionDetailBody = functionBody(service, "memberSessionDetail");
+const publicSessionPreviewBody = functionBody(service, "publicSessionPreview");
 assert(
-  getSessionBody.includes("npc_join_enabled") && getSessionBody.includes("Boolean"),
-  "getSession must expose npc_join_enabled as a boolean-compatible value"
+  memberSessionDetailBody.includes("npc_join_enabled") &&
+    memberSessionDetailBody.includes("Boolean") &&
+    publicSessionPreviewBody.includes("npc_join_enabled") &&
+    publicSessionPreviewBody.includes("Boolean"),
+  "member and public session detail must expose npc_join_enabled as a boolean-compatible value"
 );
+assert(getSessionBody.includes("memberSessionDetail"), "getSession must use the member detail serializer");
 
 const cleanupSessionExclusiveRoleSelectionsBody = functionBody(
   service,
@@ -120,8 +126,8 @@ assert(
   "cleanupSessionExclusiveRoleSelections must repair legacy duplicate ordinary/NPC role bindings"
 );
 assert(
-  getSessionBody.includes("cleanupSessionExclusiveRoleSelections(connection, id)"),
-  "getSession must clean legacy duplicate role bindings before returning session seats and NPC roles"
+  memberSessionDetailBody.includes("cleanupSessionExclusiveRoleSelections(connection, id)"),
+  "member session detail must clean legacy duplicate role bindings before returning seats and NPC roles"
 );
 
 const claimSessionNpcRoleBody = functionBody(service, "claimSessionNpcRole");

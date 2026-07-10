@@ -130,11 +130,16 @@ assert(
 );
 
 const getSessionBody = functionBody(service, "getSession");
+const memberSessionDetailBody = functionBody(service, "memberSessionDetail");
+const publicSessionPreviewBody = functionBody(service, "publicSessionPreview");
 assert(
-  getSessionBody.includes("join_phone_required") &&
-    getSessionBody.includes("Boolean"),
-  "getSession must expose join_phone_required as a boolean-compatible value"
+  memberSessionDetailBody.includes("join_phone_required") &&
+    memberSessionDetailBody.includes("Boolean") &&
+    publicSessionPreviewBody.includes("join_phone_required") &&
+    publicSessionPreviewBody.includes("Boolean"),
+  "member and public session detail must expose join_phone_required as a boolean-compatible value"
 );
+assert(getSessionBody.includes("memberSessionDetail"), "getSession must use the member detail serializer");
 
 const createSignupBody = functionBody(service, "createSignup");
 assert(
