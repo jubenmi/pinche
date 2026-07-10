@@ -10,6 +10,7 @@
   - [x] `tasks.md` 描述 TDD 实现顺序、验收项和验证记录。
 
 - [ ] D40.2 新增先失败的 D40 检查。
+  - 状态：进行中。已进入实施阶段，当前按 TDD 先建立静态 RED 检查。
   - [ ] 新增 `scripts/d40-guest-calendar-home-check.js`。
   - [ ] 检查首页删除 `first-session` 和“发起第一辆车”。
   - [ ] 检查游客和已登录主按钮文案。
