@@ -1,0 +1,160 @@
+import fs from "node:fs";
+import path from "node:path";
+
+const root = process.cwd();
+const failures = [];
+let contractCount = 0;
+
+function read(relativePath) {
+  const target = path.join(root, relativePath);
+  return fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
+}
+
+function contract(label, condition) {
+  contractCount += 1;
+  if (condition) {
+    console.log(`PASS ${label}`);
+  } else {
+    failures.push(label);
+    console.error(`FAIL ${label}`);
+  }
+}
+
+export function canAllowD42Red(moduleExists) {
+  return !moduleExists.apiMedia && !moduleExists.miniAlbumVideo && !moduleExists.adminAlbumMedia;
+}
+
+function verifyAllowRedPolicy() {
+  const absent = { apiMedia: false, miniAlbumVideo: false, adminAlbumMedia: false };
+  if (!canAllowD42Red(absent)) throw new Error("D42 --allow-red must work while all future modules are absent");
+  for (const moduleName of Object.keys(absent)) {
+    if (canAllowD42Red({ ...absent, [moduleName]: true })) {
+      throw new Error(`D42 --allow-red must stop once ${moduleName} exists`);
+    }
+  }
+}
+
+verifyAllowRedPolicy();
+
+function block(source, start, end) {
+  const from = source.indexOf(start);
+  if (from < 0) return "";
+  const to = end ? source.indexOf(end, from + start.length) : -1;
+  return source.slice(from, to < 0 ? source.length : to);
+}
+
+const server = read("apps/api/src/server.js");
+const apiMedia = read("apps/api/src/modules/album-video/media.js");
+const albumPage = read("apps/miniprogram/src/pages/session/album.vue");
+const viewer = read("apps/miniprogram/src/components/AlbumImageViewer.vue");
+const adminApi = read("apps/admin-web/src/api.js");
+const adminMedia = read("apps/admin-web/src/albumMedia.js");
+const adminWorkspace = read("apps/admin-web/src/components/SessionAlbumWorkspace.vue");
+const futureModules = {
+  apiMedia: fs.existsSync(path.join(root, "apps/api/src/modules/album-video/media.js")),
+  miniAlbumVideo: fs.existsSync(path.join(root, "apps/miniprogram/src/utils/albumVideo.js")),
+  adminAlbumMedia: fs.existsSync(path.join(root, "apps/admin-web/src/albumMedia.js"))
+};
+
+contract(
+  "viewer explicitly disables autoplay",
+  viewer.includes(':autoplay="false"')
+);
+
+const viewerVideoTemplate = block(viewer, '<view v-if="isVideo(photo)"', "</swiper-item>");
+const viewerVideoErrorHandler = block(viewer, "handleVideoError(photo) {", "showVideoLoading(photo) {");
+const viewerVideoRetryHandler =
+  block(viewer, "retryVideo(photo) {", "requestCurrentVideoIfNeeded() {") ||
+  block(viewer, "handleVideoRetry(photo) {", "requestCurrentVideoIfNeeded() {");
+const viewerBinding = block(albumPage, "<AlbumImageViewer", "/>");
+const pageVideoErrorHandler = block(albumPage, "handlePreviewVideoError(event) {", "handlePreviewVideoRequest(event) {");
+contract(
+  "viewer emits video-error and the album page owns refresh/retry",
+  /\$emit\(\s*["']video-error["']/.test(viewerVideoErrorHandler) &&
+    /@video-error\s*=\s*["']handlePreviewVideoError["']/.test(viewerBinding) &&
+    /video_display_url|videoUrl/.test(pageVideoErrorHandler) &&
+    /loadPreviewVideoUrl|handlePreviewVideoRequest/.test(pageVideoErrorHandler) &&
+    /@tap(?:\.stop)?\s*=\s*["'](?:retryVideo|handleVideoRetry)\(photo\)["']/.test(viewerVideoTemplate) &&
+    /\$emit\(\s*["']need-video["']/.test(viewerVideoRetryHandler)
+);
+
+const timelinePreview = block(albumPage, "canOpenPhotoPreview(photo) {", "async loadVisiblePhotoMedia");
+contract(
+  "timeline preview guard denies video before opening the viewer",
+  /timelineMode/.test(timelinePreview) &&
+    /media_type\s*===\s*["']video["']/.test(timelinePreview) &&
+    /false/.test(timelinePreview) &&
+    /打开小程序查看视频/.test(albumPage)
+);
+
+const videoRoute = block(server, "const adminSessionAlbumVideosId", "const sessionAlbumPhotoId");
+const inspectMatch = videoRoute.match(/inspect(?:Session)?AlbumVideoObject/);
+const createIndex = videoRoute.search(/createSessionAlbumVideo/);
+contract(
+  "server inspects the uploaded object before creating a video record",
+  Boolean(inspectMatch) && inspectMatch.index < createIndex
+);
+
+const localResponder = block(server, "async function serveUploadedSessionAlbumVideoFile", "async function getSessionAlbumDisplayMetadata");
+contract(
+  "local video responder has explicit Range 206 and 416 paths",
+  /parseSingleByteRange|parseAlbumVideoByteRange/.test(localResponder) &&
+    /206/.test(localResponder) &&
+    /416/.test(localResponder) &&
+    /content-range/i.test(localResponder) &&
+    /statusCode:\s*206/.test(apiMedia) &&
+    /statusCode:\s*416/.test(apiMedia)
+);
+
+const snapshotFunctions = block(server, "function signedAlbumVideoSnapshotUrl", "function stripAlbumVideoInternalFields");
+contract(
+  "local mode does not use a snapshot query as a video cover",
+  !snapshotFunctions ||
+    (!snapshotFunctions.includes("!isCosUploadStorageEnabled()") &&
+      !/sessionAlbum(?:Public)?Video(?:Cover|File)Path[\s\S]{0,180}&\$\{snapshotQuery\}/.test(snapshotFunctions))
+);
+
+const previewVideo = block(adminWorkspace, "async function previewVideo(photo)", "async function previewPhoto(photo)");
+const previewPhoto = block(adminWorkspace, "async function previewPhoto(photo)", "function resetBulkSelection");
+const openTagDrawer = block(adminWorkspace, "async function openTagDrawer(photo)", "function toggleBulkSelectionMode");
+contract(
+  "single-media preview and tag failures stay out of albumError",
+  Boolean(previewVideo && previewPhoto && openTagDrawer) &&
+    !/albumError\.value/.test(previewVideo) &&
+    !/albumError\.value/.test(previewPhoto) &&
+    !/albumError\.value/.test(openTagDrawer)
+);
+
+contract(
+  "admin media authorization is selected by exact origin",
+  /shouldAttachAdminAuthorization|adminAlbumMediaRequestHeaders/.test(adminMedia) &&
+    /fetchAuthorizedMediaObjectUrl/.test(adminApi)
+);
+
+contract(
+  "tag preview uses a request serial and rejects stale responses",
+  (() => {
+    const awaitIndex = openTagDrawer.indexOf("await ensurePreviewMedia(photo)");
+    const taggingIndex = openTagDrawer.indexOf("taggingPhoto.value", awaitIndex);
+    const beforeAwait = awaitIndex >= 0 ? openTagDrawer.slice(0, awaitIndex) : "";
+    const afterAwaitBeforeCommit =
+      awaitIndex >= 0 && taggingIndex > awaitIndex
+        ? openTagDrawer.slice(awaitIndex, taggingIndex)
+        : "";
+    return /\.next\(\)/.test(beforeAwait) && /\.isCurrent\(/.test(afterAwaitBeforeCommit);
+  })()
+);
+
+if (failures.length > 0) {
+  console.error(`D42 static RED checks failed: ${failures.length}/${contractCount}`);
+  if (process.argv.includes("--allow-red") && canAllowD42Red(futureModules)) {
+    console.log("D42 static RED is allowed during the implementation phase");
+  } else {
+    if (process.argv.includes("--allow-red") && !canAllowD42Red(futureModules)) {
+      console.error("D42 --allow-red is disabled once any future implementation module exists");
+    }
+    process.exitCode = 1;
+  }
+} else {
+  console.log(`D42 static checks passed: ${contractCount}/${contractCount}`);
+}

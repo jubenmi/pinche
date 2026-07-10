@@ -17,12 +17,12 @@
   - [x] 1.3 创建 `requirements.md`、`design.md`、`tasks.md`。
   - [x] 1.4 用户审阅书面 spec 并确认进入实现计划。
 
-- [ ] 2. 编写详细实施计划和 RED 测试
+- [x] 2. 编写详细实施计划和 RED 测试
   - [x] 2.1 使用 writing-plans 生成逐文件实施计划。
-  - [ ] 2.2 新增 D42 静态/纯函数检查并确认在旧实现上失败。
-  - [ ] 2.3 新增隔离 smoke 门禁，确认未使用 `pinche_d42_test` 时写入前失败。
-  - [ ] 2.4 为对象校验、本地 Range、幂等和删除重试增加失败测试。
-  - [ ] 2.5 为大小单位、Bearer 边界、公开分享、viewer 重试和后台竞态增加失败测试。
+  - [x] 2.2 新增 D42 静态/纯函数检查并确认在旧实现上失败。
+  - [x] 2.3 新增隔离 smoke 门禁，确认未使用 `pinche_d42_test` 时写入前失败。
+  - [x] 2.4 为对象校验、本地 Range、幂等和删除重试增加失败测试。
+  - [x] 2.5 为大小单位、Bearer 边界、公开分享、viewer 重试和后台竞态增加失败测试。
 
 - [ ] 3. 加固视频对象验证和数据库幂等
   - [ ] 3.1 新增迁移 `0022_session_album_video_hardening.sql` 和 `source_url` 唯一索引。
@@ -94,3 +94,5 @@
 - 2026-07-10：旧 `d32:smoke` 默认写入 `pinche` 且不清理，因此本轮在建立隔离门禁前不执行持久化 smoke。
 - 2026-07-10：用户确认书面三件套符合预期，批准进入实施计划和实现。
 - 2026-07-10：实施计划已写入 `docs/superpowers/plans/2026-07-10-album-video-pipeline-hardening.md`；因当前工作区包含本链路的权威未提交实现，计划在当前工作区窄范围执行，不创建会遗漏这些改动的新 worktree。
+- 2026-07-10：D42 RED 观察结果：`node scripts/d42-album-video-hardening-unit-check.js` 以退出码 1 结束（49/49 个独立行为契约因 future helper 模块尚未创建而 `ERR_MODULE_NOT_FOUND`，覆盖权威对象 metadata、可注入 COS HEAD/最小 Range 与本地 stat/12-byte read、本地 HEAD/GET/Range/404、multipart、COS 全量/部分/缺失可见 header、幂等创建、删除重试、viewer 失败状态机及既有 admin RequestSerial）；`node scripts/d42-album-video-hardening-check.js` 以退出码 1 结束（旧实现 9/9 架构断言失败）；`--allow-red` 仅在 API media、小程序 albumVideo 和后台 albumMedia 三个 future 模块全部缺失时返回 0，任一模块存在即恢复非零退出。
+- 2026-07-10：D42 隔离门禁观察结果：未设置隔离变量时 `env -u NODE_ENV -u WECHAT_MOCK_LOGIN -u D42_SMOKE_ISOLATED -u MYSQL_HOST -u MYSQL_DATABASE node scripts/d42-album-video-hardening-smoke.js --run` 在任何 API/数据库导入或写入前退出码 1；`NODE_ENV=test WECHAT_MOCK_LOGIN=true D42_SMOKE_ISOLATED=1 MYSQL_HOST=127.0.0.1 MYSQL_DATABASE=pinche_d42_test node scripts/d42-album-video-hardening-smoke.js --run` 退出码 0；无参数运行退出码 0 并打印 skip。未连接或写入默认 `pinche` 数据库。
