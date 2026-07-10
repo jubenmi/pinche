@@ -77,9 +77,15 @@ assert(
 );
 
 const getSessionBody = functionBody(service, "getSession");
+const memberSessionDetailBody = functionBody(service, "memberSessionDetail");
+const publicSessionPreviewBody = functionBody(service, "publicSessionPreview");
 assert(
-  getSessionBody.includes("join_policy") && getSessionBody.includes("review_required"),
-  "getSession must expose join_policy with review_required fallback"
+  (getSessionBody.includes("join_policy") && getSessionBody.includes("review_required")) ||
+    (memberSessionDetailBody.includes("join_policy") &&
+      memberSessionDetailBody.includes("review_required") &&
+      publicSessionPreviewBody.includes("join_policy") &&
+      publicSessionPreviewBody.includes("review_required")),
+  "session detail serializers must expose join_policy with review_required fallback"
 );
 
 const forbidPlayerDirectClaimBody = functionBody(service, "forbidPlayerDirectClaim");
