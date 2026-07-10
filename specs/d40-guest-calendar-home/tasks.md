@@ -9,31 +9,30 @@
   - [x] `design.md` 描述共享日历、公共接口、详情访问范围、邀请 token、错误处理和测试策略。
   - [x] `tasks.md` 描述 TDD 实现顺序、验收项和验证记录。
 
-- [ ] D40.2 新增先失败的 D40 检查。
-  - 状态：进行中。已进入实施阶段，当前按 TDD 先建立静态 RED 检查。
-  - [ ] 新增 `scripts/d40-guest-calendar-home-check.js`。
-  - [ ] 检查首页删除 `first-session` 和“发起第一辆车”。
-  - [ ] 检查游客和已登录主按钮文案。
-  - [ ] 检查游客筛选为“近期车局”。
-  - [ ] 检查游客首页调用公共近期接口且不调用登录。
-  - [ ] 检查游客车卡使用 `entry=guest`。
-  - [ ] 检查详情公开读取和受限动作登录边界。
-  - [ ] 检查发车后详情服务端权限分支。
-  - [ ] 检查 D39 同城只读和 D23 相册分享规则未被移除。
-  - [ ] 将 D40 检查接入 `npm run check`。
-  - [ ] 运行检查并记录目标功能缺失造成的 RED 结果。
+- [x] D40.2 新增先失败的 D40 检查。
+  - [x] 新增 `scripts/d40-guest-calendar-home-check.js`。
+  - [x] 检查首页删除 `first-session` 和“发起第一辆车”。
+  - [x] 检查游客和已登录主按钮文案。
+  - [x] 检查游客筛选为“近期车局”。
+  - [x] 检查游客首页调用公共近期接口且不调用登录。
+  - [x] 检查游客车卡使用 `entry=guest`。
+  - [x] 检查详情公开读取和受限动作登录边界。
+  - [x] 检查发车后详情服务端权限分支。
+  - [x] 检查 D39 同城只读和 D23 相册分享规则未被移除。
+  - [x] 将 D40 检查接入 `npm run check`。
+  - [x] 运行检查并记录目标功能缺失造成的 RED 结果。
 
-- [ ] D40.3 新增先失败的后端烟测。
-  - [ ] 新增 `scripts/d40-guest-calendar-home-smoke.js`。
-  - [ ] 使用隔离数据库创建 public、share_only、cancelled、full、started、past 和 eligible fixtures。
-  - [ ] 验证匿名公共近期接口不返回 401。
-  - [ ] 验证资格排除、排序和 20 条上限。
-  - [ ] 验证公开响应不含敏感字段。
-  - [ ] 验证发车前 public preview 和发车后普通链接 404。
-  - [ ] 验证车头、成员、管理员和非成员权限。
-  - [ ] 验证 `shareCode` 不授权、有效邀请 token 只授权邀请预览。
-  - [ ] 验证 D23 相册 token 仍受原隐私规则限制。
-  - [ ] 运行烟测并记录目标功能缺失造成的 RED 结果。
+- [x] D40.3 新增先失败的后端烟测。
+  - [x] 新增 `scripts/d40-guest-calendar-home-smoke.js`。
+  - [x] 使用隔离数据库创建 public、share_only、cancelled、full、started、past 和 eligible fixtures。
+  - [x] 验证匿名公共近期接口不返回 401。
+  - [x] 验证资格排除、排序和 20 条上限。
+  - [x] 验证公开响应不含敏感字段。
+  - [x] 验证发车前 public preview 和发车后普通链接 404。
+  - [x] 验证车头、成员、管理员和非成员权限。
+  - [x] 验证 `shareCode` 不授权、有效邀请 token 只授权邀请预览。
+  - [x] 验证 D23 相册 token 仍受原隐私规则限制。
+  - [x] 运行烟测并记录目标功能缺失造成的 RED 结果。
 
 - [ ] D40.4 实现公共近期车局后端。
   - [ ] 新增 `listPublicUpcomingSessions(filters)`。
@@ -143,3 +142,4 @@
 ## 验证记录
 
 - 2026-07-10：D40 spec 三件套建立。设计确认首页删除“发起第一辆车”分支，游客和已登录用户共用现有日历布局；游客仅浏览真实、公开、未发车、仍招募的近期车局，纯读取不登录，写入或身份能力点击后登录；发车后普通详情转为成员私密，相册继续遵循 D23 授权范围。实现待用户审阅 spec 后开始。
+- 2026-07-10：D40 RED 已建立并实际运行。静态检查 exit 1，首个失败为 `D40 home must remove the first-session entry screen`；隔离 API 烟测语法通过，匿名探针请求 `GET /api/sessions/public/upcoming?limit=20` 返回预期 404 `Route not found`。失败均由目标功能尚未实现造成。
