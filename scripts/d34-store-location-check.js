@@ -92,9 +92,11 @@ if (service.includes("function catalogReviewPatch")) {
   );
 }
 
-const getSessionBody = exportedFunctionBody(service, "getSession");
+const memberSessionDetailBody = functionBody(service, "memberSessionDetail");
+const publicSessionPreviewBody = functionBody(service, "publicSessionPreview");
 for (const token of ["store_address", "store_latitude", "store_longitude"]) {
-  assert(getSessionBody.includes(token), `getSession should return ${token}`);
+  assert(memberSessionDetailBody.includes(token), `member session detail should return ${token}`);
+  assert(publicSessionPreviewBody.includes(token), `public session preview should return ${token}`);
 }
 
 const storeDrawer = read("apps/admin-web/src/components/StoreDrawer.vue");

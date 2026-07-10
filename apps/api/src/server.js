@@ -18,6 +18,7 @@ import {
   verifyBusinessToken
 } from "./modules/auth/wechat.js";
 import { routeExtensions } from "./modules/extensions/registry.js";
+import { geocodeStoreLocation, reverseGeocodeCity } from "./modules/location/geocoding.js";
 import {
   buildCosAuthorization,
   cosHost,
@@ -29,6 +30,7 @@ import {
 } from "./storage/cos.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
+  assertSessionJoinInviteAllowed,
   assertSessionAlbumUploadAllowed,
   approveSignup,
   cancelSession,
@@ -54,7 +56,7 @@ import {
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
   getPublicSessionAlbumVideoCoverForMedia,
-  getSession,
+  getSessionForViewer,
   getSessionAlbumShareSubject,
   getSessionShareStats,
   getMySessionAlbumPrivacy,
@@ -73,6 +75,8 @@ import {
   listActiveStores,
   listCatalogRequests,
   listMyCatalogReviewItems,
+  listDiscoverableSessions,
+  listPublicUpcomingSessions,
   listPublicSessionAlbumShare,
   listSessionAlbum,
   listSessionAlbumPeople,
@@ -127,6 +131,7 @@ const SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 const SESSION_ALBUM_VIDEO_MULTIPART_MAX_BYTES = SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES + 256 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
+const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   "ci-process": "snapshot",
@@ -1169,19 +1174,20 @@ function albumVideoObjectKey(uploadPath) {
   return cosObjectKeyFromUploadPath(pathText, prefix);
 }
 
-function signedAlbumVideoUrl(media, userId) {
-  if (!isCosUploadStorageEnabled()) {
-    return sessionAlbumVideoFilePath(media, userId);
-  }
+function signedCosAlbumVideoUrl(media, method = "GET") {
   const key = albumVideoObjectKey(media.display_url || media.source_url);
   const host = cosHost(config.cos);
   const authorization = buildCosAuthorization({
-    method: "GET",
+    method,
     key,
     headers: { host },
     config: config.cos
   });
   return `https://${host}/${encodeCosObjectKey(key)}?${authorization}`;
+}
+
+function signedAlbumVideoUrl(media, userId) {
+  return sessionAlbumVideoFilePath(media, userId);
 }
 
 function albumVideoSnapshotObjectKey(media) {
@@ -1434,6 +1440,36 @@ function signSessionAlbumShareToken(payload) {
 function verifySessionAlbumShareToken(token) {
   return normalizeSessionAlbumShareClaims(
     verifySignedPayload("session-album-share", token, "album share token")
+  );
+}
+
+function normalizeSessionJoinInviteClaims(payload) {
+  if (payload.purpose !== "session_join_invite") {
+    throw forbidden("session join invite token is invalid");
+  }
+  return {
+    purpose: "session_join_invite",
+    sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
+    inviterUserId: tokenPositiveInteger(payload.inviterUserId, "inviterUserId"),
+    exp: tokenPositiveInteger(payload.exp, "exp")
+  };
+}
+
+function signSessionJoinInviteToken(payload) {
+  const exp = payload.exp || Math.floor(Date.now() / 1000) + SESSION_JOIN_INVITE_TOKEN_SECONDS;
+  return signSignedPayload(
+    "session-join-invite",
+    normalizeSessionJoinInviteClaims({
+      ...payload,
+      purpose: "session_join_invite",
+      exp
+    })
+  );
+}
+
+function verifySessionJoinInviteToken(token) {
+  return normalizeSessionJoinInviteClaims(
+    verifySignedPayload("session-join-invite", token, "session join invite token")
   );
 }
 
@@ -1850,13 +1886,44 @@ async function serveUploadedSessionAlbumVideoCover(media, response) {
   }
 }
 
-async function serveUploadedSessionAlbumVideoFile(media, response) {
+function albumVideoFileHeaders(media, filename) {
+  const contentType =
+    media.video_content_type || uploadedObjectContentType(filename, "video/mp4");
+  const byteSize = Number(media.video_byte_size || 0);
+  return {
+    "cache-control": "private, no-store",
+    "content-type": contentType || "video/mp4",
+    "accept-ranges": "bytes",
+    ...(Number.isFinite(byteSize) && byteSize > 0 ? { "content-length": byteSize } : {})
+  };
+}
+
+function writeAlbumVideoHead(media, filename, response) {
+  response.writeHead(200, albumVideoFileHeaders(media, filename));
+  response.end();
+}
+
+async function serveUploadedSessionAlbumVideoFile(media, response, options = {}) {
   const videoPath = media.display_url || media.source_url;
   if (!videoPath) {
     throw notFound("Album video file not found");
   }
   const videoUrl = new URL(videoPath, "http://localhost");
+  const filename = path.basename(videoUrl.pathname);
   const cacheControl = "private, no-store";
+  const method = options.method || "GET";
+  if (isCosUploadStorageEnabled()) {
+    response.writeHead(302, {
+      "cache-control": cacheControl,
+      location: signedCosAlbumVideoUrl(media, method)
+    });
+    response.end();
+    return;
+  }
+  if (method === "HEAD") {
+    writeAlbumVideoHead(media, filename, response);
+    return;
+  }
   if (videoUrl.pathname.startsWith("/uploads/session-album/videos/display/")) {
     await serveUploadedObject({
       url: videoUrl,
@@ -1940,6 +2007,18 @@ function requireRole(user, role) {
   if (!user.roles.includes(role)) {
     throw forbidden(`${role} role required`);
   }
+}
+
+function d40SmokeDatabaseIsIsolated() {
+  const host = String(config.mysql.host || "").trim().toLowerCase();
+  const localHost = ["127.0.0.1", "localhost", "::1"].includes(host);
+  return (
+    config.nodeEnv !== "production" &&
+    config.wechat.mockLogin === true &&
+    process.env.D40_SMOKE_ISOLATED === "1" &&
+    localHost &&
+    config.mysql.database === "pinche_d40_test"
+  );
 }
 
 async function route(request, response) {
@@ -2044,7 +2123,7 @@ async function route(request, response) {
     url.pathname,
     /^\/api\/session-album\/media\/(\d+)\/video-file$/
   );
-  if (request.method === "GET" && sessionAlbumMediaVideoFileId) {
+  if ((request.method === "GET" || request.method === "HEAD") && sessionAlbumMediaVideoFileId) {
     const claims = verifySessionAlbumVideoFileQuery(
       sessionAlbumMediaVideoFileId,
       url.searchParams
@@ -2056,7 +2135,7 @@ async function route(request, response) {
     if (Number(media.session_id) !== claims.sessionId) {
       throw forbidden("album video token is invalid");
     }
-    await serveUploadedSessionAlbumVideoFile(media, response);
+    await serveUploadedSessionAlbumVideoFile(media, response, { method: request.method });
     return;
   }
 
@@ -2224,6 +2303,25 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/testing/d40-smoke-target") {
+    if (!d40SmokeDatabaseIsIsolated()) {
+      throw new AppError(
+        409,
+        "SMOKE_DATABASE_NOT_ISOLATED",
+        "D40 smoke requires the dedicated local pinche_d40_test database"
+      );
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        mode: "d40",
+        isolated: true,
+        database: config.mysql.database
+      }
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/auth/wechat/login") {
     const result = await loginWithWechatCode(body.code);
     jsonResponse(response, 200, {
@@ -2381,6 +2479,13 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     jsonResponse(response, 201, { ok: true, data: await createStore(user, body) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/location/geocode") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, { ok: true, data: await geocodeStoreLocation(body) });
     return;
   }
 
@@ -2630,6 +2735,60 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/sessions/public/upcoming") {
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        sessions: await listPublicUpcomingSessions(Object.fromEntries(url.searchParams))
+      }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/sessions/discovery") {
+    const user = await getAuthUser(request);
+    const hasLatitude = body.latitude !== undefined && body.latitude !== null && body.latitude !== "";
+    const hasLongitude =
+      body.longitude !== undefined && body.longitude !== null && body.longitude !== "";
+    if (hasLatitude !== hasLongitude) {
+      throw badRequest("latitude and longitude must be provided together");
+    }
+
+    let city = String(body.city || "").trim();
+    let locationProvider = city ? "cache" : null;
+    let discoveryFilters = city ? { ...body, city } : { limit: body.limit };
+    if (!city && hasLatitude && hasLongitude) {
+      try {
+        const location = await reverseGeocodeCity({
+          latitude: body.latitude,
+          longitude: body.longitude
+        });
+        city = location.city;
+        locationProvider = location.provider;
+        discoveryFilters = {
+          ...body,
+          city
+        };
+      } catch (error) {
+        if (error?.code !== "LOCATION_REVERSE_GEOCODE_FAILED") {
+          throw error;
+        }
+        discoveryFilters = { limit: body.limit };
+      }
+    }
+
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        mode: city ? "city" : "time_fallback",
+        city: city || null,
+        location_provider: locationProvider,
+        sessions: await listDiscoverableSessions(user, discoveryFilters)
+      }
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/sessions") {
     const user = await getAuthUser(request);
     jsonResponse(response, 201, { ok: true, data: await createSession(user, body) });
@@ -2638,7 +2797,16 @@ async function route(request, response) {
 
   const sessionId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)$/);
   if (request.method === "GET" && sessionId) {
-    jsonResponse(response, 200, { ok: true, data: await getSession(sessionId) });
+    const viewer = await optionalAuthUser(request);
+    const inviteToken = url.searchParams.get("inviteToken") || "";
+    const inviteClaims = inviteToken ? verifySessionJoinInviteToken(inviteToken) : null;
+    if (inviteClaims && Number(inviteClaims.sessionId) !== Number(sessionId)) {
+      throw forbidden("session join invite token is invalid");
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await getSessionForViewer(sessionId, { viewer, inviteClaims })
+    });
     return;
   }
   if (request.method === "PATCH" && sessionId) {
@@ -2723,6 +2891,28 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: await leaveSessionOrganizer(user, leaveOrganizerSessionId)
+    });
+    return;
+  }
+
+  const sessionJoinInviteTokenId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/join-invite-token$/
+  );
+  if (request.method === "POST" && sessionJoinInviteTokenId) {
+    const user = await getAuthUser(request);
+    await assertSessionJoinInviteAllowed(user, sessionJoinInviteTokenId);
+    const exp = Math.floor(Date.now() / 1000) + SESSION_JOIN_INVITE_TOKEN_SECONDS;
+    jsonResponse(response, 201, {
+      ok: true,
+      data: {
+        token: signSessionJoinInviteToken({
+          sessionId: Number(sessionJoinInviteTokenId),
+          inviterUserId: Number(user.user.id),
+          exp
+        }),
+        expires_at: new Date(exp * 1000).toISOString()
+      }
     });
     return;
   }
@@ -2955,9 +3145,13 @@ async function route(request, response) {
 
   const sessionReviewsId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/reviews$/);
   if (request.method === "GET" && sessionReviewsId) {
+    const viewer = await optionalAuthUser(request);
+    const inviteToken = url.searchParams.get("inviteToken") || "";
+    const inviteClaims = inviteToken ? verifySessionJoinInviteToken(inviteToken) : null;
+    const access = await getSessionForViewer(sessionReviewsId, { viewer, inviteClaims });
     jsonResponse(response, 200, {
       ok: true,
-      data: await listSessionReviews(sessionReviewsId)
+      data: access.access_scope === "member" ? await listSessionReviews(sessionReviewsId) : []
     });
     return;
   }
