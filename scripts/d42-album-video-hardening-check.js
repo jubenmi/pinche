@@ -89,7 +89,7 @@ contract(
 
 const videoRoute = block(server, "const adminSessionAlbumVideosId", "const sessionAlbumPhotoId");
 const inspectMatch = videoRoute.match(/inspect(?:Session)?AlbumVideoObject/);
-const createIndex = videoRoute.search(/createSessionAlbumVideo/);
+const createIndex = videoRoute.search(/const video\s*=\s*await createSessionAlbumVideo/);
 contract(
   "server inspects the uploaded object before creating a video record",
   Boolean(inspectMatch) && inspectMatch.index < createIndex
@@ -98,20 +98,20 @@ contract(
 const localResponder = block(server, "async function serveUploadedSessionAlbumVideoFile", "async function getSessionAlbumDisplayMetadata");
 contract(
   "local video responder has explicit Range 206 and 416 paths",
-  /parseSingleByteRange|parseAlbumVideoByteRange/.test(localResponder) &&
-    /206/.test(localResponder) &&
-    /416/.test(localResponder) &&
-    /content-range/i.test(localResponder) &&
+  /createLocalAlbumVideoResponse/.test(localResponder) &&
+    /range/.test(localResponder) &&
     /statusCode:\s*206/.test(apiMedia) &&
-    /statusCode:\s*416/.test(apiMedia)
+    /statusCode:\s*416/.test(apiMedia) &&
+    /content-range/i.test(apiMedia)
 );
 
 const snapshotFunctions = block(server, "function signedAlbumVideoSnapshotUrl", "function stripAlbumVideoInternalFields");
 contract(
   "local mode does not use a snapshot query as a video cover",
-  !snapshotFunctions ||
-    (!snapshotFunctions.includes("!isCosUploadStorageEnabled()") &&
-      !/sessionAlbum(?:Public)?Video(?:Cover|File)Path[\s\S]{0,180}&\$\{snapshotQuery\}/.test(snapshotFunctions))
+  Boolean(snapshotFunctions) &&
+    (snapshotFunctions.match(/if \(!isCosUploadStorageEnabled\(\)\)\s*\{\s*return "";/g) || [])
+      .length === 2 &&
+    !/sessionAlbum(?:Public)?Video(?:Cover|File)Path/.test(snapshotFunctions)
 );
 
 const previewVideo = block(adminWorkspace, "async function previewVideo(photo)", "async function previewPhoto(photo)");

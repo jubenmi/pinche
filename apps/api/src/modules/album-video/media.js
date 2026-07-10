@@ -1,5 +1,4 @@
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
 
 import { AppError, badRequest, notFound } from "../../http/errors.js";
 
@@ -130,6 +129,9 @@ export async function inspectSessionAlbumVideoObject({
 } = {}) {
   void suppliedByteSize;
   void suppliedContentType;
+  if (typeof storageAdapter?.inspectObject === "function") {
+    return storageAdapter.inspectObject(sourceUrl);
+  }
   const metadata = await storageAdapter.getMetadata(sourceUrl);
   const authoritativeMetadata = validateAlbumVideoMetadata({
     byteSize: metadata?.byteSize,
@@ -143,17 +145,59 @@ export async function inspectSessionAlbumVideoObject({
   return authoritativeMetadata;
 }
 
-export async function createLocalAlbumVideoResponse({ filePath, method = "GET", range } = {}) {
-  let fileStats;
+function localFileNotFound(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+}
+
+async function openLocalAlbumVideo(filePath, openFile) {
+  let fileHandle;
   try {
-    fileStats = await stat(filePath);
+    fileHandle = await openFile(filePath, "r");
+    const fileStats = await fileHandle.stat();
+    if (!fileStats.isFile()) {
+      await fileHandle.close();
+      throw notFound("Album video file not found");
+    }
+    return { fileHandle, fileStats };
   } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+    if (fileHandle) {
+      await fileHandle.close().catch(() => {});
+    }
+    if (localFileNotFound(error)) {
       throw notFound("Album video file not found");
     }
     throw error;
   }
-  if (!fileStats.isFile()) throw notFound("Album video file not found");
+}
+
+export async function inspectLocalAlbumVideoObject({
+  filePath,
+  sourceUrl,
+  contentType,
+  openFile = open
+} = {}) {
+  const { fileHandle, fileStats } = await openLocalAlbumVideo(filePath, openFile);
+  try {
+    const headerBytes = Buffer.alloc(12);
+    const { bytesRead } = await fileHandle.read(headerBytes, 0, headerBytes.length, 0);
+    return validateAlbumVideoObject({
+      byteSize: fileStats.size,
+      contentType,
+      sourceUrl,
+      headerBytes: headerBytes.subarray(0, bytesRead)
+    });
+  } finally {
+    await fileHandle.close();
+  }
+}
+
+export async function createLocalAlbumVideoResponse({
+  filePath,
+  method = "GET",
+  range,
+  openFile = open
+} = {}) {
+  const { fileHandle, fileStats } = await openLocalAlbumVideo(filePath, openFile);
 
   const size = fileStats.size;
   const baseHeaders = {
@@ -161,6 +205,7 @@ export async function createLocalAlbumVideoResponse({ filePath, method = "GET", 
     "accept-ranges": "bytes"
   };
   if (String(method).toUpperCase() === "HEAD") {
+    await fileHandle.close();
     return {
       statusCode: 200,
       headers: { ...baseHeaders, "content-length": size },
@@ -173,7 +218,11 @@ export async function createLocalAlbumVideoResponse({ filePath, method = "GET", 
     try {
       parsedRange = parseSingleByteRange(range, size);
     } catch (error) {
-      if (Number(error?.statusCode) !== 416) throw error;
+      if (Number(error?.statusCode) !== 416) {
+        await fileHandle.close();
+        throw error;
+      }
+      await fileHandle.close();
       return {
         statusCode: 416,
         headers: {
@@ -185,22 +234,32 @@ export async function createLocalAlbumVideoResponse({ filePath, method = "GET", 
       };
     }
     const contentLength = parsedRange.end - parsedRange.start + 1;
-    return {
-      statusCode: 206,
-      headers: {
-        ...baseHeaders,
-        "content-range": `bytes ${parsedRange.start}-${parsedRange.end}/${size}`,
-        "content-length": contentLength
-      },
-      body: createReadStream(filePath, parsedRange)
-    };
+    try {
+      return {
+        statusCode: 206,
+        headers: {
+          ...baseHeaders,
+          "content-range": `bytes ${parsedRange.start}-${parsedRange.end}/${size}`,
+          "content-length": contentLength
+        },
+        body: fileHandle.createReadStream({ ...parsedRange, autoClose: true })
+      };
+    } catch (error) {
+      await fileHandle.close();
+      throw error;
+    }
   }
 
-  return {
-    statusCode: 200,
-    headers: { ...baseHeaders, "content-length": size },
-    body: createReadStream(filePath)
-  };
+  try {
+    return {
+      statusCode: 200,
+      headers: { ...baseHeaders, "content-length": size },
+      body: fileHandle.createReadStream({ autoClose: true })
+    };
+  } catch (error) {
+    await fileHandle.close();
+    throw error;
+  }
 }
 
 export function validateMultipartAlbumVideo({ bytes, byteSize, contentType, filename } = {}) {
@@ -210,7 +269,22 @@ export function validateMultipartAlbumVideo({ bytes, byteSize, contentType, file
   if (actualByteSize !== normalizedByteSize) {
     throw badRequest("album video byte size does not match uploaded bytes");
   }
-  if (!isMp4FileHeader(bytes)) {
+  return validateMultipartAlbumVideoMetadata({
+    byteSize: normalizedByteSize,
+    contentType,
+    filename,
+    headerBytes: bytes
+  });
+}
+
+export function validateMultipartAlbumVideoMetadata({
+  byteSize,
+  contentType,
+  filename,
+  headerBytes
+} = {}) {
+  const normalizedByteSize = normalizeByteSize(byteSize);
+  if (!isMp4FileHeader(headerBytes)) {
     throw badRequest("album video must contain an MP4 ftyp header");
   }
 

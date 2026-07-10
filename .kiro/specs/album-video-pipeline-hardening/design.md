@@ -188,6 +188,8 @@ multipart fallback 的 MP4 判断改为：
 
 不能再使用“MIME、扩展名、文件头任一匹配即可放行”。
 
+fallback 解析只接受一个名为 `video` 的文件 part；额外 part、非 `video` part 和不支持的 part header 直接拒绝。请求体按流写入同目录临时文件，内存中只保留不超过 64KB 的 part header、边界识别尾部和前 12 字节文件头；本地用硬链接原子 no-overwrite 落盘，COS 用带精确 `content-length` 的 Readable PUT，所有成功和错误路径都清理临时文件。
+
 COS authorization 在 header 可见时检查：
 
 - `content-length <= 100MB`。

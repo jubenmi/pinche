@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { config, publicConfig } from "./config/env.js";
@@ -26,8 +27,22 @@ import {
   cosStorageEnabled,
   deleteCosObject,
   getCosObject,
+  headCosObject,
+  isTrustedCosStorageError,
+  readCosObjectRange,
   putCosObject
 } from "./storage/cos.js";
+import {
+  createLocalAlbumVideoResponse,
+  inspectLocalAlbumVideoObject,
+  inspectSessionAlbumVideoObject,
+  validateCosAlbumVideoHeaders
+} from "./modules/album-video/media.js";
+import {
+  finalizeLocalAlbumVideoUpload,
+  parseMultipartAlbumVideoStream,
+  uploadTempAlbumVideoToCos
+} from "./modules/album-video/multipart-stream.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
   assertSessionJoinInviteAllowed,
@@ -168,9 +183,28 @@ function errorResponse(response, statusCode, code, message, details) {
   });
 }
 
-function normalizeError(error) {
+export function normalizeError(error) {
   if (error instanceof AppError) {
     return error;
+  }
+
+  if (isTrustedCosStorageError(error)) {
+    const safeMessages = {
+      COS_OBJECT_NOT_FOUND: "Album video source object was not found",
+      COS_PRECONDITION_FAILED: "Album video source object changed during validation",
+      COS_UPSTREAM_ERROR: "Object storage request failed",
+      COS_NETWORK_ERROR: "Object storage network request failed",
+      COS_REQUEST_TIMEOUT: "Object storage request timed out",
+      COS_RESPONSE_ABORTED: "Object storage response was interrupted",
+      COS_RESPONSE_TOO_LARGE: "Object storage returned an invalid response",
+      COS_INVALID_CONTENT_LENGTH: "Object storage returned invalid metadata",
+      COS_INVALID_RANGE_RESPONSE: "Object storage returned an invalid byte range"
+    };
+    return new AppError(
+      Number(error.statusCode),
+      error.code,
+      safeMessages[error.code] || "Object storage request failed"
+    );
   }
 
   if (error?.code === "WECHAT_CONFIG_MISSING") {
@@ -189,7 +223,7 @@ function normalizeError(error) {
     return new AppError(409, "CONFLICT", "Duplicate resource", error.sqlMessage);
   }
 
-  return new AppError(500, "INTERNAL_ERROR", error.message);
+  return new AppError(500, "INTERNAL_ERROR", "Internal server error");
 }
 
 async function readRawBody(request, maxBytes = Infinity) {
@@ -584,70 +618,6 @@ function parseMultipartImageUpload(contentType, body, options = {}) {
   throw badRequest(`${label} file is required`);
 }
 
-function isMp4FileBytes(file) {
-  return (
-    file.length >= 12 &&
-    file[4] === 0x66 &&
-    file[5] === 0x74 &&
-    file[6] === 0x79 &&
-    file[7] === 0x70
-  );
-}
-
-function parseMultipartVideoUpload(contentType, body, options = {}) {
-  const fieldName = options.fieldName || "video";
-  const maxBytes = options.maxBytes || SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES;
-  const label = options.label || fieldName;
-  const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[1] ||
-    contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[2];
-  if (!boundary) {
-    throw badRequest("multipart boundary is required");
-  }
-
-  const boundaryBuffer = Buffer.from(`--${boundary}`);
-  for (const rawPart of splitBuffer(body, boundaryBuffer)) {
-    let part = rawPart;
-    if (part.length >= 2 && part[0] === 13 && part[1] === 10) {
-      part = part.subarray(2);
-    }
-    if (part.length === 0 || part.subarray(0, 2).toString() === "--") {
-      continue;
-    }
-
-    const headerEnd = part.indexOf(Buffer.from("\r\n\r\n"));
-    if (headerEnd === -1) {
-      continue;
-    }
-
-    const headersText = part.subarray(0, headerEnd).toString("utf8");
-    const disposition = headersText.match(/^content-disposition:\s*(.+)$/im)?.[1] || "";
-    if (!disposition.includes(`name="${fieldName}"`) || !/filename="/.test(disposition)) {
-      continue;
-    }
-
-    const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "";
-    const mimeType = headersText.match(/^content-type:\s*([^\r\n;]+)/im)?.[1]?.trim() || "";
-    const file = trimMultipartPayload(part.subarray(headerEnd + 4));
-    if (file.length === 0) {
-      throw badRequest(`${label} file is required`);
-    }
-    if (file.length > maxBytes) {
-      throw badRequest(`${label} file is too large`);
-    }
-    if (
-      mimeType.toLowerCase() !== "video/mp4" &&
-      !/\.mp4$/i.test(filename) &&
-      !isMp4FileBytes(file)
-    ) {
-      throw badRequest(`${label} must be an MP4 video`);
-    }
-
-    return { extension: ".mp4", file, mimeType: "video/mp4" };
-  }
-
-  throw badRequest(`${label} file is required`);
-}
-
 function parseMultipartAvatarUpload(contentType, body) {
   return parseMultipartImageUpload(contentType, body, {
     fieldName: "avatar",
@@ -778,7 +748,8 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
       key,
       uploadPath: `/${key}`,
       maxBytes: SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES,
-      contentType: "video/mp4"
+      contentType: "video/mp4",
+      headers: { "x-cos-forbid-overwrite": "true" }
     };
   }
 
@@ -847,6 +818,65 @@ function normalizeCosHeaders(headers = {}) {
   );
 }
 
+export function validateAlbumVideoCosUploadHeaders(headers = {}) {
+  const normalized = normalizeCosHeaders(headers);
+  if (normalized["x-cos-forbid-overwrite"] !== "true") {
+    throw forbidden("album video upload must forbid object overwrite");
+  }
+  validateCosAlbumVideoHeaders({
+    contentLength: normalized["content-length"],
+    contentType: normalized["content-type"]
+  });
+  return normalized;
+}
+
+export function sanitizeCosDirectUploadHeaders({
+  directUpload,
+  key,
+  headers = {},
+  cosConfig = config.cos
+} = {}) {
+  const normalized = normalizeCosHeaders(headers);
+  const allowed = new Set(["host", "content-type", "content-length"]);
+  if (
+    directUpload?.kind === "avatar" ||
+    directUpload?.kind === "sessionAlbumPhoto" ||
+    directUpload?.kind === "adminSessionAlbumPhoto"
+  ) {
+    allowed.add("pic-operations");
+  }
+  if (directUpload?.kind === "adminSessionAlbumVideo") {
+    allowed.add("x-cos-forbid-overwrite");
+  }
+  for (const name of Object.keys(normalized)) {
+    if (!allowed.has(name)) {
+      throw forbidden(`unsupported COS upload header: ${name}`);
+    }
+  }
+
+  const safeHeaders = Object.fromEntries(
+    Object.entries(normalized).filter(([name]) => name !== "host")
+  );
+  safeHeaders.host = cosHost(cosConfig);
+  if (directUpload?.kind === "adminSessionAlbumVideo") {
+    validateAlbumVideoCosUploadHeaders(safeHeaders);
+  }
+  if (
+    directUpload?.kind === "avatar" &&
+    safeHeaders["pic-operations"] !== avatarWebpPicOperations(key)
+  ) {
+    throw forbidden("avatar upload must include the server-issued WebP processing rule");
+  }
+  if (
+    (directUpload?.kind === "sessionAlbumPhoto" ||
+      directUpload?.kind === "adminSessionAlbumPhoto") &&
+    safeHeaders["pic-operations"] !== sessionAlbumDisplayJpgPicOperations(key)
+  ) {
+    throw forbidden("album upload must include the server-issued JPG processing rule");
+  }
+  return safeHeaders;
+}
+
 function directUploadKindForKey(key, userId) {
   const userIdText = String(userId);
   const avatarPattern = new RegExp(
@@ -912,6 +942,12 @@ async function authorizeCosDirectUpload({ body, user }) {
   }
 
   const directUpload = directUploadKindForKey(key, userId);
+  const headers = sanitizeCosDirectUploadHeaders({
+    directUpload,
+    key,
+    headers: body.headers || body.Headers,
+    cosConfig: config.cos
+  });
   if (directUpload.kind === "sessionAlbumPhoto") {
     await assertSessionAlbumUploadAllowed(
       { user: { id: userId }, roles: [] },
@@ -925,20 +961,6 @@ async function authorizeCosDirectUpload({ body, user }) {
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, directUpload.sessionId);
   }
-  const headers = normalizeCosHeaders(body.headers || body.Headers);
-  headers.host = headers.host || cosHost(config.cos);
-
-  if (directUpload.kind === "avatar" && headers["pic-operations"] !== avatarWebpPicOperations(key)) {
-    throw forbidden("avatar upload must include the server-issued WebP processing rule");
-  }
-  if (
-    (directUpload.kind === "sessionAlbumPhoto" ||
-      directUpload.kind === "adminSessionAlbumPhoto") &&
-    headers["pic-operations"] !== sessionAlbumDisplayJpgPicOperations(key)
-  ) {
-    throw forbidden("album upload must include the server-issued JPG processing rule");
-  }
-
   return {
     authorization: buildCosAuthorization({
       method,
@@ -949,13 +971,22 @@ async function authorizeCosDirectUpload({ body, user }) {
   };
 }
 
-async function saveUploadedObject({ key, filename, file, contentType, localDir, picOperations }) {
+async function saveUploadedObject({
+  key,
+  filename,
+  file,
+  contentType,
+  localDir,
+  picOperations,
+  forbidOverwrite = false
+}) {
   if (isCosUploadStorageEnabled()) {
     await putCosObject({
       key,
       body: file,
       contentType,
       picOperations,
+      forbidOverwrite,
       config: config.cos
     });
     return `/${key}`;
@@ -1080,21 +1111,34 @@ async function saveUploadedSessionAlbumVideo(request, userId, sessionId) {
     throw badRequest("album video upload must be multipart/form-data");
   }
 
-  const body = await readRawBody(request, SESSION_ALBUM_VIDEO_MULTIPART_MAX_BYTES);
-  const { file, mimeType } = parseMultipartVideoUpload(contentType, body, {
-    fieldName: "video",
-    maxBytes: SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES,
-    label: "album video"
+  const upload = await parseMultipartAlbumVideoStream({
+    request,
+    contentType,
+    tempDir: sessionAlbumVideoSourceUploadDir,
+    maxFileBytes: SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES,
+    maxRequestBytes: SESSION_ALBUM_VIDEO_MULTIPART_MAX_BYTES
   });
-  const videoFilename = `${uploadFilenameBase(`admin-video-${sessionId}`, userId)}.mp4`;
-  const key = `uploads/session-album/videos/source/${videoFilename}`;
-  return saveUploadedObject({
-    key,
-    filename: videoFilename,
-    file,
-    contentType: mimeType || "video/mp4",
-    localDir: sessionAlbumVideoSourceUploadDir
-  });
+  try {
+    const videoFilename = `${uploadFilenameBase(`admin-video-${sessionId}`, userId)}.mp4`;
+    const key = `uploads/session-album/videos/source/${videoFilename}`;
+    if (isCosUploadStorageEnabled()) {
+      await uploadTempAlbumVideoToCos({
+        tempPath: upload.tempPath,
+        key,
+        byteSize: upload.byteSize,
+        contentType: upload.contentType,
+        config: config.cos
+      });
+    } else {
+      await finalizeLocalAlbumVideoUpload({
+        tempPath: upload.tempPath,
+        destinationPath: path.join(sessionAlbumVideoSourceUploadDir, videoFilename)
+      });
+    }
+    return `/${key}`;
+  } finally {
+    await upload.cleanup();
+  }
 }
 
 function sessionAlbumMediaSignature(photoId, expires) {
@@ -1161,6 +1205,83 @@ function encodeCosObjectKey(key) {
   return String(key || "").split("/").map(encodeURIComponent).join("/");
 }
 
+const SESSION_ALBUM_VIDEO_SOURCE_PREFIX = "/uploads/session-album/videos/source/";
+
+function albumVideoSourceObjectKey(sourceUrl) {
+  try {
+    return cosObjectKeyFromUploadPath(sourceUrl, SESSION_ALBUM_VIDEO_SOURCE_PREFIX);
+  } catch {
+    throw badRequest("sourceUrl must contain an uploaded session album video");
+  }
+}
+
+export function createSessionAlbumVideoStorageAdapter(options = {}) {
+  const cosEnabled = options.cosEnabled ?? isCosUploadStorageEnabled();
+  const cosConfig = options.cosConfig || config.cos;
+  const headObject = options.headObject || headCosObject;
+  const readObjectRange = options.readObjectRange || readCosObjectRange;
+  const openFile = options.openFile || fs.open;
+  const sourceDir = options.sourceDir || sessionAlbumVideoSourceUploadDir;
+
+  if (!cosEnabled) {
+    return {
+      inspectObject: async (sourceUrl) => {
+        const key = albumVideoSourceObjectKey(sourceUrl);
+        const filename = key.slice(SESSION_ALBUM_VIDEO_SOURCE_PREFIX.length - 1);
+        return inspectLocalAlbumVideoObject({
+          filePath: path.join(sourceDir, filename),
+          sourceUrl,
+          openFile
+        });
+      }
+    };
+  }
+
+  let inspectedKey = "";
+  let inspectedEtag = "";
+  let inspectedByteSize;
+  return {
+    getMetadata: async (sourceUrl) => {
+      const key = albumVideoSourceObjectKey(sourceUrl);
+      const object = await headObject({ key, config: cosConfig });
+      const etag = String(object.headers?.etag || "").trim();
+      if (!etag) {
+        throw new AppError(
+          502,
+          "COS_OBJECT_VERSION_MISSING",
+          "COS album video HEAD response did not include an ETag"
+        );
+      }
+      const metadata = validateCosAlbumVideoHeaders({
+        contentLength: object.headers?.["content-length"],
+        contentType: object.headers?.["content-type"]
+      });
+      inspectedKey = key;
+      inspectedEtag = etag;
+      inspectedByteSize = metadata.byteSize;
+      return metadata;
+    },
+    readRange: async (sourceUrl, start, end) => {
+      const key = albumVideoSourceObjectKey(sourceUrl);
+      if (!inspectedEtag || key !== inspectedKey) {
+        throw new AppError(
+          502,
+          "COS_OBJECT_VERSION_MISSING",
+          "COS album video object version was not established before reading"
+        );
+      }
+      return readObjectRange({
+        key,
+        start,
+        end,
+        ifMatch: inspectedEtag,
+        expectedByteSize: inspectedByteSize,
+        config: cosConfig
+      });
+    }
+  };
+}
+
 function albumVideoObjectKey(uploadPath) {
   const pathText = String(uploadPath || "");
   const prefixes = [
@@ -1174,13 +1295,17 @@ function albumVideoObjectKey(uploadPath) {
   return cosObjectKeyFromUploadPath(pathText, prefix);
 }
 
-function signedCosAlbumVideoUrl(media, method = "GET") {
+function signedCosAlbumVideoUrl(media, method = "GET", range = "") {
   const key = albumVideoObjectKey(media.display_url || media.source_url);
   const host = cosHost(config.cos);
+  const headers = {
+    host,
+    ...(range ? { range: String(range) } : {})
+  };
   const authorization = buildCosAuthorization({
     method,
     key,
-    headers: { host },
+    headers,
     config: config.cos
   });
   return `https://${host}/${encodeCosObjectKey(key)}?${authorization}`;
@@ -1199,13 +1324,14 @@ function snapshotQueryString() {
 }
 
 function signedAlbumVideoSnapshotUrl(media, userId) {
+  void userId;
+  if (!isCosUploadStorageEnabled()) {
+    return "";
+  }
   if (!media.video_cover_source_url && !media.display_url && !media.source_url) {
     return "";
   }
   const snapshotQuery = snapshotQueryString();
-  if (!isCosUploadStorageEnabled()) {
-    return `${sessionAlbumVideoFilePath(media, userId)}&${snapshotQuery}`;
-  }
   const key = albumVideoSnapshotObjectKey(media);
   const host = cosHost(config.cos);
   const authorization = buildCosAuthorization({
@@ -1219,13 +1345,15 @@ function signedAlbumVideoSnapshotUrl(media, userId) {
 }
 
 function signedPublicAlbumVideoSnapshotUrl(media, claims, albumShareToken) {
+  void claims;
+  void albumShareToken;
+  if (!isCosUploadStorageEnabled()) {
+    return "";
+  }
   if (!media.video_cover_source_url && !media.display_url && !media.source_url) {
     return "";
   }
   const snapshotQuery = snapshotQueryString();
-  if (!isCosUploadStorageEnabled()) {
-    return `${sessionAlbumPublicVideoCoverPath(media.id, claims, albumShareToken)}&${snapshotQuery}`;
-  }
   const key = albumVideoSnapshotObjectKey(media);
   const host = cosHost(config.cos);
   const authorization = buildCosAuthorization({
@@ -1886,65 +2014,62 @@ async function serveUploadedSessionAlbumVideoCover(media, response) {
   }
 }
 
-function albumVideoFileHeaders(media, filename) {
-  const contentType =
-    media.video_content_type || uploadedObjectContentType(filename, "video/mp4");
-  const byteSize = Number(media.video_byte_size || 0);
-  return {
-    "cache-control": "private, no-store",
-    "content-type": contentType || "video/mp4",
-    "accept-ranges": "bytes",
-    ...(Number.isFinite(byteSize) && byteSize > 0 ? { "content-length": byteSize } : {})
-  };
+function localAlbumVideoFilePath(videoPath, options = {}) {
+  const prefixes = [
+    [
+      "/uploads/session-album/videos/display/",
+      options.displayDir || sessionAlbumVideoDisplayUploadDir
+    ],
+    [SESSION_ALBUM_VIDEO_SOURCE_PREFIX, options.sourceDir || sessionAlbumVideoSourceUploadDir]
+  ];
+  for (const [prefix, localDir] of prefixes) {
+    if (!String(videoPath).startsWith(prefix)) continue;
+    try {
+      const key = cosObjectKeyFromUploadPath(videoPath, prefix);
+      const filename = key.slice(prefix.length - 1);
+      return path.join(localDir, filename);
+    } catch {
+      throw notFound("Album video file not found");
+    }
+  }
+  throw notFound("Album video file not found");
 }
 
-function writeAlbumVideoHead(media, filename, response) {
-  response.writeHead(200, albumVideoFileHeaders(media, filename));
-  response.end();
-}
-
-async function serveUploadedSessionAlbumVideoFile(media, response, options = {}) {
+export async function serveUploadedSessionAlbumVideoFile(media, response, options = {}) {
   const videoPath = media.display_url || media.source_url;
   if (!videoPath) {
     throw notFound("Album video file not found");
   }
-  const videoUrl = new URL(videoPath, "http://localhost");
-  const filename = path.basename(videoUrl.pathname);
   const cacheControl = "private, no-store";
-  const method = options.method || "GET";
-  if (isCosUploadStorageEnabled()) {
+  const method = String(options.method || "GET").toUpperCase();
+  const range = options.range;
+  const cosEnabled = options.cosEnabled ?? isCosUploadStorageEnabled();
+  if (cosEnabled) {
     response.writeHead(302, {
       "cache-control": cacheControl,
-      location: signedCosAlbumVideoUrl(media, method)
+      location: signedCosAlbumVideoUrl(media, method, range)
     });
     response.end();
     return;
   }
-  if (method === "HEAD") {
-    writeAlbumVideoHead(media, filename, response);
+  const localResponse = await createLocalAlbumVideoResponse({
+    filePath: localAlbumVideoFilePath(videoPath, options),
+    method,
+    range
+  });
+  response.writeHead(localResponse.statusCode, {
+    ...localResponse.headers,
+    "cache-control": cacheControl
+  });
+  if (!localResponse.body) {
+    response.end();
     return;
   }
-  if (videoUrl.pathname.startsWith("/uploads/session-album/videos/display/")) {
-    await serveUploadedObject({
-      url: videoUrl,
-      prefix: "/uploads/session-album/videos/display/",
-      localDir: sessionAlbumVideoDisplayUploadDir,
-      response,
-      cacheControl
-    });
-    return;
+  try {
+    await pipeline(localResponse.body, response);
+  } catch (error) {
+    response.destroy(error);
   }
-  if (videoUrl.pathname.startsWith("/uploads/session-album/videos/source/")) {
-    await serveUploadedObject({
-      url: videoUrl,
-      prefix: "/uploads/session-album/videos/source/",
-      localDir: sessionAlbumVideoSourceUploadDir,
-      response,
-      cacheControl
-    });
-    return;
-  }
-  throw notFound("Album video file not found");
 }
 
 async function getSessionAlbumDisplayMetadata(photoUrl) {
@@ -2123,7 +2248,10 @@ async function route(request, response) {
     if (Number(media.session_id) !== claims.sessionId) {
       throw forbidden("album video token is invalid");
     }
-    await serveUploadedSessionAlbumVideoFile(media, response, { method: request.method });
+    await serveUploadedSessionAlbumVideoFile(media, response, {
+      method: request.method,
+      range: request.headers.range
+    });
     return;
   }
 
@@ -3064,7 +3192,11 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideosId);
+    const storageAdapter = createSessionAlbumVideoStorageAdapter();
+    const inspectObject = (sourceUrl) =>
+      inspectSessionAlbumVideoObject({ sourceUrl, storageAdapter });
     const video = await createSessionAlbumVideo(user, adminSessionAlbumVideosId, body, {
+      inspectObject,
       readyOnCreate: true
     });
     jsonResponse(response, 201, {

@@ -90,10 +90,30 @@ assertIncludes("apps/api/src/modules/core/service.js", "readyOnCreate");
 assertIncludes("apps/api/src/modules/core/service.js", "readyOnCreate ? sourceUrl : null");
 
 const server = read("apps/api/src/server.js");
-const videoRouteStart = server.indexOf("const sessionAlbumMediaVideoUrlId");
+const videoRouteStart = server.indexOf("const sessionAlbumMediaVideoFileId");
 const videoRouteEnd = server.indexOf("if (request.method === \"POST\" && url.pathname === \"/api/users/me/avatar\")", videoRouteStart);
 const videoRouteSnippet = server.slice(videoRouteStart, videoRouteEnd);
-assert(videoRouteSnippet.includes("signedAlbumVideoUrl"), "video route should sign a direct playback URL");
+assert(videoRouteSnippet.includes("signedAlbumVideoUrl"), "video route should sign a playback URL");
+assert(
+  server.includes("return sessionAlbumVideoFilePath(media, userId);"),
+  "video playback URL should use the backend token route so mini-program video HEAD probes do not hit a GET-only COS signature"
+);
+assert(
+  /request\.method === "GET"\s*\|\|\s*request\.method === "HEAD"/.test(videoRouteSnippet),
+  "video file route should accept HEAD for mini-program media probes"
+);
+assert(
+  /serveUploadedSessionAlbumVideoFile\(media, response, \{[\s\S]*method: request\.method,[\s\S]*range: request\.headers\.range/.test(
+    videoRouteSnippet
+  ),
+  "video file route should pass the request method and Range header to the video file responder"
+);
+assert(
+  server.includes('function signedCosAlbumVideoUrl(media, method = "GET", range = "")') &&
+    server.includes("location: signedCosAlbumVideoUrl(media, method, range)") &&
+    server.includes("response.writeHead(302"),
+  "COS-backed video HEAD and GET requests should redirect to freshly signed method-specific COS URLs instead of proxying video bytes"
+);
 assert(!videoRouteSnippet.includes("getCosObject"), "video route must not proxy COS video bytes");
 
 assertIncludes("apps/api/src/storage/cos.js", "uploads\\/session-album\\/videos\\/(source|display|cover)");

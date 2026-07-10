@@ -8,7 +8,7 @@ import path from "node:path";
 // These imports intentionally point at the helpers introduced by later D42
 // implementation tasks. Dynamic imports let every future contract report RED
 // independently while the modules do not exist yet.
-const TEST_SCOPES = new Set(["api-media", "api-lifecycle", "mini", "admin"]);
+const TEST_SCOPES = new Set(["api-media", "api-lifecycle", "api-creation", "mini", "admin"]);
 const requestedScopeArgument = process.argv.find((argument) => argument.startsWith("--scope="));
 const requestedScope = requestedScopeArgument?.slice("--scope=".length) || null;
 if (requestedScope && !TEST_SCOPES.has(requestedScope)) {
@@ -25,6 +25,7 @@ function test(name, run) {
 const apiMediaHelpers = () => import("../apps/api/src/modules/album-video/media.js");
 const apiCosHelpers = () => import("../apps/api/src/storage/cos.js");
 const apiLifecycleHelpers = () => import("../apps/api/src/modules/album-video/lifecycle.js");
+const apiCoreService = () => import("../apps/api/src/modules/core/service.js");
 const apiMigrationHelpers = () => import("../apps/api/src/modules/album-video/migration.js");
 const apiMigrationRunner = () => import("../apps/api/src/db/migrate.js");
 const miniProgramHelpers = () => import("../apps/miniprogram/src/utils/albumVideo.js");
@@ -661,25 +662,29 @@ test("COS range helper rejects ignored and oversized range responses without buf
   }
 });
 
-test("COS metadata and range helpers preserve storage and network failures", async () => {
+test("COS metadata and range helpers classify storage and network failures", async () => {
   const { headCosObject, readCosObjectRange } = await apiCosHelpers();
   const missing = createFakeHttpsRequest({ statusCode: 404, body: Buffer.from("missing") });
   await assert.rejects(
     headCosObject({ key: "missing.mp4", config: COS_CONFIG, request: missing.request }),
-    hasStatus(404)
+    (error) => error?.statusCode === 404 && error?.code === "COS_OBJECT_NOT_FOUND"
   );
 
   const unavailable = createFakeHttpsRequest({ statusCode: 503, body: Buffer.from("unavailable") });
   await assert.rejects(
     readCosObjectRange({ key: "video.mp4", config: COS_CONFIG, request: unavailable.request }),
-    hasStatus(503)
+    (error) => error?.statusCode === 502 && error?.code === "COS_UPSTREAM_ERROR"
   );
 
   const networkError = Object.assign(new Error("network unavailable"), { code: "ECONNRESET" });
   const network = createFakeHttpsRequest({ requestError: networkError });
   await assert.rejects(
     headCosObject({ key: "video.mp4", config: COS_CONFIG, request: network.request }),
-    (error) => error === networkError
+    (error) =>
+      error !== networkError &&
+      error?.statusCode === 502 &&
+      error?.code === "COS_NETWORK_ERROR" &&
+      error?.isCosStorageError === true
   );
 });
 
@@ -691,7 +696,7 @@ test("COS helpers cap declared and streamed error response bodies", async () => 
   });
   await assert.rejects(
     headCosObject({ key: "missing.mp4", config: COS_CONFIG, request: declared.request }),
-    hasStatus(404)
+    (error) => error?.statusCode === 404 && error?.code === "COS_OBJECT_NOT_FOUND"
   );
   assert.equal(declared.calls[0].responseDestroyed, true);
 
@@ -701,7 +706,7 @@ test("COS helpers cap declared and streamed error response bodies", async () => 
   });
   await assert.rejects(
     headCosObject({ key: "unavailable.mp4", config: COS_CONFIG, request: streamed.request }),
-    hasStatus(503)
+    (error) => error?.statusCode === 502 && error?.code === "COS_UPSTREAM_ERROR"
   );
   assert.equal(streamed.calls[0].responseDestroyed, true);
 
@@ -711,7 +716,7 @@ test("COS helpers cap declared and streamed error response bodies", async () => 
   });
   await assert.rejects(
     headCosObject({ key: "invalid.mp4", config: COS_CONFIG, request: invalidLength.request }),
-    (error) => error?.statusCode === 503 && error?.code === "COS_INVALID_CONTENT_LENGTH"
+    (error) => error?.statusCode === 502 && error?.code === "COS_UPSTREAM_ERROR"
   );
   assert.equal(invalidLength.calls[0].responseDestroyed, true);
 });
@@ -1387,6 +1392,630 @@ test("album video migration recovers after ALTER succeeds but version recording 
     "exact-index",
     "record-succeeded",
     "commit"
+  ]);
+});
+
+currentTestScope = "api-creation";
+
+const CREATION_SESSION_ID = 41;
+const CREATION_USER_ID = 23;
+const CREATION_SOURCE_URL =
+  "/uploads/session-album/videos/source/admin-video-41-23-1720000000000-0123456789abcdef.mp4";
+const CREATION_USER = {
+  user: { id: CREATION_USER_ID },
+  roles: ["system_admin"]
+};
+
+function creationBody(overrides = {}) {
+  return {
+    sourceUrl: CREATION_SOURCE_URL,
+    durationSeconds: 38,
+    videoWidth: 1920,
+    videoHeight: 1080,
+    ...overrides
+  };
+}
+
+function creationRow(overrides = {}) {
+  return {
+    id: 71,
+    session_id: CREATION_SESSION_ID,
+    uploader_user_id: CREATION_USER_ID,
+    media_type: "video",
+    source_url: CREATION_SOURCE_URL,
+    display_url: CREATION_SOURCE_URL,
+    duration_seconds: 38,
+    video_width: 1920,
+    video_height: 1080,
+    video_byte_size: 654321,
+    video_content_type: "video/mp4",
+    processing_status: "ready",
+    processing_error: null,
+    created_at: "2026-07-10T10:00:00.000Z",
+    status: "active",
+    ...overrides
+  };
+}
+
+function expectedCreationResponse(row, userId = CREATION_USER_ID) {
+  const isMine = Number(row.uploader_user_id) === Number(userId);
+  return {
+    id: Number(row.id),
+    session_id: Number(row.session_id),
+    media_type: "video",
+    processing_status: row.processing_status,
+    uploader_user_id: Number(row.uploader_user_id),
+    is_mine: isMine,
+    can_delete: isMine,
+    can_tag: isMine,
+    duration_seconds: Number(row.duration_seconds),
+    video_width: Number(row.video_width),
+    video_height: Number(row.video_height),
+    video_byte_size: Number(row.video_byte_size),
+    video_content_type: row.video_content_type,
+    processing_error: row.processing_error,
+    created_at: row.created_at,
+    tags: []
+  };
+}
+
+function normalizedSql(sql) {
+  return String(sql).replace(/\s+/g, " ").trim();
+}
+
+test("video creation validates admin, bound source, duration, and optional dimensions", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const invalidCases = [
+    {
+      user: { ...CREATION_USER, roles: [] },
+      body: creationBody(),
+      expectedStatus: 403
+    },
+    {
+      user: CREATION_USER,
+      body: creationBody({
+        sourceUrl:
+          "/uploads/session-album/videos/source/admin-video-41-999-1720000000000-0123456789abcdef.mp4"
+      }),
+      expectedStatus: 400
+    },
+    {
+      user: CREATION_USER,
+      body: creationBody({ durationSeconds: 61 }),
+      expectedStatus: 400
+    },
+    {
+      user: CREATION_USER,
+      body: creationBody({ videoWidth: 0 }),
+      expectedStatus: 400
+    },
+    {
+      user: CREATION_USER,
+      body: creationBody({ videoHeight: -1 }),
+      expectedStatus: 400
+    },
+    {
+      user: CREATION_USER,
+      body: creationBody({ videoWidth: 4_294_967_296 }),
+      expectedStatus: 400
+    }
+  ];
+  let dependencyCalls = 0;
+
+  for (const { user, body, expectedStatus } of invalidCases) {
+    await assert.rejects(
+      createSessionAlbumVideo(user, CREATION_SESSION_ID, body, {
+        inspectObject: async () => {
+          dependencyCalls += 1;
+        },
+        withDatabaseConnection: async () => {
+          dependencyCalls += 1;
+        }
+      }),
+      hasStatus(expectedStatus)
+    );
+  }
+  assert.equal(dependencyCalls, 0);
+});
+
+test("video creation requires an explicit authoritative object inspector", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  await assert.rejects(
+    createSessionAlbumVideo(CREATION_USER, CREATION_SESSION_ID, creationBody()),
+    (error) => error instanceof TypeError && /options\.inspectObject/.test(error.message)
+  );
+});
+
+test("video creation rejects inspection failure before opening an insert transaction", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const inspectionError = Object.assign(new Error("object missing"), { statusCode: 404 });
+  const events = [];
+  let transactionCalls = 0;
+
+  await assert.rejects(
+    createSessionAlbumVideo(CREATION_USER, CREATION_SESSION_ID, creationBody(), {
+      withDatabaseConnection: async (work) => {
+        events.push("authorization-connection");
+        return work({ kind: "authorization" });
+      },
+      withTransaction: async () => {
+        transactionCalls += 1;
+      },
+      authorizeSessionAlbumVideoCreate: async () => {
+        events.push("authorized");
+      },
+      inspectObject: async (sourceUrl) => {
+        events.push(`inspect:${sourceUrl}`);
+        throw inspectionError;
+      }
+    }),
+    (error) => error === inspectionError
+  );
+
+  assert.deepEqual(events, [
+    "authorization-connection",
+    "authorized",
+    `inspect:${CREATION_SOURCE_URL}`
+  ]);
+  assert.equal(transactionCalls, 0);
+});
+
+test("video creation ignores client metadata claims and stores inspected facts", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const cases = [
+    {
+      body: creationBody({ videoByteSize: 1, videoContentType: "image/jpeg" }),
+      expectedWidth: 1920
+    },
+    {
+      body: creationBody({
+        videoByteSize: undefined,
+        videoContentType: undefined,
+        videoWidth: 4_294_967_295
+      }),
+      expectedWidth: 4_294_967_295
+    }
+  ];
+
+  for (const { body, expectedWidth } of cases) {
+    const insertedValues = [];
+    const row = creationRow({ video_width: expectedWidth });
+    const readConnection = {
+      query: async () => {
+        throw new Error("pre-inspection authorization adapter must not query in this test");
+      }
+    };
+    const transactionConnection = {
+      query: async (sql, values) => {
+        const text = normalizedSql(sql);
+        if (text.includes("FROM session_album_photos photo")) {
+          assert.match(text, /source_url = \?/);
+          assert.match(text, /media_type = 'video'/);
+          assert.match(text, /status = 'active'/);
+          assert.deepEqual(values, [CREATION_SESSION_ID, CREATION_SOURCE_URL]);
+          return [[]];
+        }
+        if (text.startsWith("INSERT INTO session_album_photos")) {
+          insertedValues.push(...values);
+          return [{ insertId: row.id }];
+        }
+        if (text === "SELECT * FROM session_album_photos WHERE id = ?") {
+          return [[row]];
+        }
+        throw new Error(`Unexpected creation SQL: ${text}`);
+      }
+    };
+
+    const result = await createSessionAlbumVideo(CREATION_USER, CREATION_SESSION_ID, body, {
+      readyOnCreate: true,
+      inspectObject: async () => ({ byteSize: 654321, contentType: "video/mp4" }),
+      authorizeSessionAlbumVideoCreate: async () => {},
+      withDatabaseConnection: async (work) => work(readConnection),
+      withTransaction: async (work) => work(transactionConnection)
+    });
+
+    assert.deepEqual(insertedValues, [
+      CREATION_SESSION_ID,
+      CREATION_USER_ID,
+      CREATION_SOURCE_URL,
+      CREATION_SOURCE_URL,
+      null,
+      38,
+      expectedWidth,
+      1080,
+      654321,
+      "video/mp4",
+      null,
+      "ready"
+    ]);
+    assert.deepEqual(result, expectedCreationResponse(row));
+  }
+});
+
+test("video creation returns an existing source only after locked current reauthorization", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const existing = creationRow({ id: 72, uploader_user_id: 999 });
+  const session = { id: CREATION_SESSION_ID, organizer_user_id: 999 };
+  let transactionCalls = 0;
+  let inspectCalls = 0;
+  const nonlockingSql = [];
+  const lockedSql = [];
+  const events = [];
+
+  const queryAuthorization = async (sql, values, { locked }) => {
+    const text = normalizedSql(sql);
+    (locked ? lockedSql : nonlockingSql).push(text);
+    if (text.includes("FROM sessions session")) {
+      assert.deepEqual(values, [CREATION_SESSION_ID]);
+      return [[session]];
+    }
+    if (text.includes("FROM session_seats")) {
+      assert.deepEqual(values, [CREATION_SESSION_ID, CREATION_USER_ID]);
+      return [[{ id: 801 }]];
+    }
+    if (text.includes("FROM session_album_photos photo")) {
+      assert.equal(locked, true, "existing source lookup must be a locked current read");
+      assert.deepEqual(values, [CREATION_SESSION_ID, CREATION_SOURCE_URL]);
+      return [[existing]];
+    }
+    throw new Error(`Unexpected authorization SQL: ${text}`);
+  };
+
+  const result = await createSessionAlbumVideo(
+    CREATION_USER,
+    CREATION_SESSION_ID,
+    creationBody(),
+    {
+      inspectObject: async () => {
+        inspectCalls += 1;
+        return { byteSize: 654321, contentType: "video/mp4" };
+      },
+      withDatabaseConnection: async (work) => work({
+        query: (sql, values) => queryAuthorization(sql, values, { locked: false })
+      }),
+      withTransaction: async (work) => {
+        transactionCalls += 1;
+        const value = await work({
+          query: (sql, values) => queryAuthorization(sql, values, { locked: true })
+        });
+        events.push("existing-transaction-commit");
+        return value;
+      }
+    }
+  );
+  events.push("service-returned-existing");
+
+  assert.equal(inspectCalls, 1);
+  assert.equal(transactionCalls, 1);
+  assert.equal(nonlockingSql.every((sql) => !/FOR UPDATE/i.test(sql)), true);
+  assert.equal(lockedSql.length, 3);
+  assert.equal(lockedSql.every((sql) => /FOR UPDATE/i.test(sql)), true);
+  assert.deepEqual(events, ["existing-transaction-commit", "service-returned-existing"]);
+  assert.deepEqual(result, expectedCreationResponse(existing));
+});
+
+test("membership revoked during inspection blocks the existing fast path", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const revokedError = Object.assign(new Error("membership revoked"), { statusCode: 403 });
+  const events = [];
+  let revoked = false;
+  let sourceLookupCalls = 0;
+
+  await assert.rejects(
+    createSessionAlbumVideo(CREATION_USER, CREATION_SESSION_ID, creationBody(), {
+      inspectObject: async () => {
+        events.push("inspect-and-revoke");
+        revoked = true;
+        return { byteSize: 654321, contentType: "video/mp4" };
+      },
+      authorizeSessionAlbumVideoCreate: async (_connection, _sessionId, _user, options) => {
+        if (options?.forUpdate) {
+          events.push("locked-current-reauthorize");
+          if (revoked) throw revokedError;
+        } else {
+          events.push("initial-nonlocking-authorize");
+        }
+      },
+      withDatabaseConnection: async (work) => work({ kind: "read" }),
+      withTransaction: async (work) => {
+        events.push("transaction-begin");
+        try {
+          const value = await work({
+            kind: "transaction",
+            query: async () => {
+              sourceLookupCalls += 1;
+              return [[creationRow({ id: 720 })]];
+            }
+          });
+          events.push("transaction-commit");
+          return value;
+        } catch (error) {
+          events.push("transaction-rollback");
+          throw error;
+        }
+      }
+    }),
+    (error) => error === revokedError
+  );
+
+  assert.equal(sourceLookupCalls, 0);
+  assert.deepEqual(events, [
+    "initial-nonlocking-authorize",
+    "inspect-and-revoke",
+    "transaction-begin",
+    "locked-current-reauthorize",
+    "transaction-rollback"
+  ]);
+});
+
+test("source duplicate recovery rolls back before locked authorization and winner read in a fresh transaction", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const winner = creationRow({ id: 73 });
+  const events = [];
+  let transactionNumber = 0;
+  let winnerQueryCalls = 0;
+
+  const result = await createSessionAlbumVideo(
+    CREATION_USER,
+    CREATION_SESSION_ID,
+    creationBody(),
+    {
+      inspectObject: async () => {
+        events.push("inspect");
+        return { byteSize: 654321, contentType: "video/mp4" };
+      },
+      authorizeSessionAlbumVideoCreate: async (connection, _sessionId, _user, options) => {
+        if (connection.kind === "read") {
+          assert.notEqual(options?.forUpdate, true);
+          events.push("authorize-nonlocking");
+          return;
+        }
+        assert.equal(options?.forUpdate, true);
+        events.push(`authorize-locked:${connection.kind}`);
+      },
+      withDatabaseConnection: async (work) => {
+        events.push("preauth-connection-open");
+        try {
+          return await work({
+            kind: "read",
+            query: async () => {
+              throw new Error("winner recovery must not use a non-transaction connection");
+            }
+          });
+        } finally {
+          events.push("preauth-connection-close");
+        }
+      },
+      withTransaction: async (work) => {
+        transactionNumber += 1;
+        const currentTransaction = transactionNumber;
+        events.push(`transaction-${currentTransaction}-begin`);
+        try {
+          const value = await work({
+            kind: `transaction-${currentTransaction}`,
+            query: async (sql) => {
+              const text = normalizedSql(sql);
+              if (text.includes("FROM session_album_photos photo")) {
+                assert.match(text, /FOR UPDATE/i);
+                if (currentTransaction === 1) {
+                  events.push("initial-locked-source-read");
+                  return [[]];
+                }
+                assert.equal(currentTransaction, 3);
+                winnerQueryCalls += 1;
+                events.push("fresh-locked-winner-read");
+                return [[winner]];
+              }
+              assert.equal(currentTransaction, 2);
+              assert.match(text, /^INSERT INTO session_album_photos/);
+              events.push("insert-duplicate");
+              throw Object.assign(new Error("duplicate source"), {
+                code: "ER_DUP_ENTRY",
+                constraint: "uniq_session_album_video_source_url"
+              });
+            }
+          });
+          events.push(`transaction-${currentTransaction}-commit`);
+          return value;
+        } catch (error) {
+          events.push(`transaction-${currentTransaction}-rollback-complete`);
+          throw error;
+        }
+      }
+    }
+  );
+
+  assert.deepEqual(result, expectedCreationResponse(winner));
+  assert.equal(transactionNumber, 3);
+  assert.equal(winnerQueryCalls, 1);
+  assert.ok(
+    events.indexOf("transaction-2-rollback-complete") <
+      events.indexOf("authorize-locked:transaction-3") &&
+      events.indexOf("authorize-locked:transaction-3") <
+        events.indexOf("fresh-locked-winner-read") &&
+      events.indexOf("fresh-locked-winner-read") <
+        events.indexOf("transaction-3-commit"),
+    `fresh transaction order is invalid: ${events.join(", ")}`
+  );
+});
+
+test("membership revoked after duplicate rollback blocks fresh winner recovery", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const revokedError = Object.assign(new Error("membership revoked before recovery"), {
+    statusCode: 403
+  });
+  const events = [];
+  let transactionNumber = 0;
+  let revoked = false;
+  let winnerQueryCalls = 0;
+
+  await assert.rejects(
+    createSessionAlbumVideo(CREATION_USER, CREATION_SESSION_ID, creationBody(), {
+      inspectObject: async () => ({ byteSize: 654321, contentType: "video/mp4" }),
+      authorizeSessionAlbumVideoCreate: async (connection, _sessionId, _user, options) => {
+        if (connection.kind === "read") return;
+        assert.equal(options?.forUpdate, true);
+        events.push(`authorize:${connection.kind}`);
+        if (revoked) throw revokedError;
+      },
+      withDatabaseConnection: async (work) => work({
+        kind: "read",
+        query: async () => {
+          throw new Error("revoked recovery must not use a non-transaction winner read");
+        }
+      }),
+      withTransaction: async (work) => {
+        transactionNumber += 1;
+        const currentTransaction = transactionNumber;
+        events.push(`transaction-${currentTransaction}-begin`);
+        try {
+          const value = await work({
+            kind: `transaction-${currentTransaction}`,
+            query: async (sql) => {
+              const text = normalizedSql(sql);
+              if (text.includes("FROM session_album_photos photo")) {
+                if (currentTransaction === 1) return [[]];
+                winnerQueryCalls += 1;
+                return [[creationRow({ id: 730 })]];
+              }
+              assert.equal(currentTransaction, 2);
+              throw Object.assign(new Error("duplicate source"), {
+                code: "ER_DUP_ENTRY",
+                constraint: "uniq_session_album_video_source_url"
+              });
+            }
+          });
+          events.push(`transaction-${currentTransaction}-commit`);
+          return value;
+        } catch (error) {
+          events.push(`transaction-${currentTransaction}-rollback-complete`);
+          if (currentTransaction === 2) revoked = true;
+          throw error;
+        }
+      }
+    }),
+    (error) => error === revokedError
+  );
+
+  assert.equal(transactionNumber, 3);
+  assert.equal(winnerQueryCalls, 0);
+  assert.deepEqual(events.slice(-4), [
+    "transaction-2-rollback-complete",
+    "transaction-3-begin",
+    "authorize:transaction-3",
+    "transaction-3-rollback-complete"
+  ]);
+});
+
+test("video creation propagates duplicates from unrelated indexes", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const unrelatedDuplicate = Object.assign(new Error("duplicate tag"), {
+    code: "ER_DUP_ENTRY",
+    key: "uniq_session_album_photo_tag"
+  });
+  let connectionCalls = 0;
+  let transactionCalls = 0;
+
+  await assert.rejects(
+    createSessionAlbumVideo(CREATION_USER, CREATION_SESSION_ID, creationBody(), {
+      inspectObject: async () => ({ byteSize: 654321, contentType: "video/mp4" }),
+      authorizeSessionAlbumVideoCreate: async () => {},
+      withDatabaseConnection: async (work) => {
+        connectionCalls += 1;
+        return work({
+          query: async () => {
+            throw new Error("unrelated duplicate must not open a fresh recovery read");
+          }
+        });
+      },
+      withTransaction: async (work) => {
+        transactionCalls += 1;
+        return work({
+          query: async (sql) => {
+            const text = normalizedSql(sql);
+            if (text.includes("FROM session_album_photos photo")) return [[]];
+            if (text.startsWith("INSERT INTO session_album_photos")) throw unrelatedDuplicate;
+            throw new Error(`Unexpected duplicate test SQL: ${text}`);
+          }
+        });
+      }
+    }),
+    (error) => error === unrelatedDuplicate
+  );
+
+  assert.equal(connectionCalls, 1, "unrelated duplicate must not open a recovery connection");
+  assert.equal(transactionCalls, 2);
+});
+
+test("video creation authorizes before inspection and locks authorization in lookup and insert transactions", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  const events = [];
+  let transactionDepth = 0;
+  let transactionNumber = 0;
+  const row = creationRow({ id: 74, processing_status: "processing", display_url: null });
+
+  await createSessionAlbumVideo(CREATION_USER, CREATION_SESSION_ID, creationBody(), {
+    inspectObject: async () => {
+      assert.equal(transactionDepth, 0, "object inspection must not hold a write transaction");
+      events.push("inspect-outside-transaction");
+      return { byteSize: 654321, contentType: "video/mp4" };
+    },
+    authorizeSessionAlbumVideoCreate: async (connection, sessionId, user, options) => {
+      assert.equal(sessionId, CREATION_SESSION_ID);
+      assert.equal(user, CREATION_USER);
+      if (connection.kind === "read") {
+        assert.notEqual(options?.forUpdate, true);
+        events.push("authorize:read-nonlocking");
+      } else {
+        assert.equal(options?.forUpdate, true);
+        events.push("authorize:transaction-locked");
+      }
+    },
+    withDatabaseConnection: async (work) => work({
+      kind: "read"
+    }),
+    withTransaction: async (work) => {
+      transactionNumber += 1;
+      const currentTransaction = transactionNumber;
+      transactionDepth += 1;
+      events.push(`transaction-${currentTransaction}-begin`);
+      try {
+        return await work({
+          kind: "transaction",
+          query: async (sql) => {
+            const text = normalizedSql(sql);
+            if (text.includes("FROM session_album_photos photo")) {
+              assert.equal(currentTransaction, 1);
+              assert.match(text, /FOR UPDATE/i);
+              events.push("locked-active-source-read");
+              return [[]];
+            }
+            if (text.startsWith("INSERT INTO session_album_photos")) {
+              assert.equal(currentTransaction, 2);
+              events.push("insert");
+              return [{ insertId: row.id }];
+            }
+            return [[row]];
+          }
+        });
+      } finally {
+        events.push(`transaction-${currentTransaction}-end`);
+        transactionDepth -= 1;
+      }
+    }
+  });
+
+  assert.deepEqual(events, [
+    "authorize:read-nonlocking",
+    "inspect-outside-transaction",
+    "transaction-1-begin",
+    "authorize:transaction-locked",
+    "locked-active-source-read",
+    "transaction-1-end",
+    "transaction-2-begin",
+    "authorize:transaction-locked",
+    "insert",
+    "transaction-2-end"
   ]);
 });
 

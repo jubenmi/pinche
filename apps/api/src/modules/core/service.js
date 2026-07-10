@@ -14,8 +14,10 @@ import {
   notifySignupCreated,
   notifySignupReviewed
 } from "../wechat/subscribe-message.js";
+import { createIdempotentAlbumVideo } from "../album-video/lifecycle.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
+const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
 const ALBUM_VIDEO_PROCESSING_STATUSES = new Set(["processing", "ready", "failed"]);
 
 function requireValue(body, key) {
@@ -884,6 +886,14 @@ function optionalPositiveInteger(value, fieldName) {
   return number;
 }
 
+function optionalAlbumVideoDimension(value, fieldName) {
+  const number = optionalPositiveInteger(value, fieldName);
+  if (number !== null && number > ALBUM_VIDEO_MAX_DIMENSION) {
+    throw badRequest(`${fieldName} must be at most ${ALBUM_VIDEO_MAX_DIMENSION}`);
+  }
+  return number;
+}
+
 function requiredPositiveInteger(value, fieldName) {
   const number = optionalPositiveInteger(value, fieldName);
   if (number === null) {
@@ -1656,8 +1666,9 @@ async function currentEligibleSignup(connection, sessionId, userId) {
   return rows[0] || null;
 }
 
-async function requireSessionAlbumOpen(connection, sessionId) {
+async function requireSessionAlbumOpen(connection, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
+  const lockClause = options.forUpdate === true ? "FOR UPDATE" : "";
   const [rows] = await connection.query(
     `
       SELECT session.*
@@ -1665,6 +1676,7 @@ async function requireSessionAlbumOpen(connection, sessionId) {
       WHERE session.id = ?
         AND ${reviewWindowSql()}
       LIMIT 1
+      ${lockClause}
     `,
     [id]
   );
@@ -1672,14 +1684,29 @@ async function requireSessionAlbumOpen(connection, sessionId) {
     return rows[0];
   }
 
-  const session = await findById(connection, "sessions", id);
+  let session;
+  if (options.forUpdate === true) {
+    const [sessionRows] = await connection.query(
+      `
+        SELECT *
+        FROM sessions
+        WHERE id = ?
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [id]
+    );
+    session = sessionRows[0] || null;
+  } else {
+    session = await findById(connection, "sessions", id);
+  }
   if (!session) {
     throw notFound("Session not found");
   }
   throw forbidden("Session album opens after the session starts");
 }
 
-async function isSessionAlbumMember(connection, session, userId) {
+async function isSessionAlbumMember(connection, session, userId, options = {}) {
   const id = Number(userId);
   if (!id) {
     return false;
@@ -1700,6 +1727,7 @@ async function isSessionAlbumMember(connection, session, userId) {
         AND confirmed_user_id = ?
         AND status IN ('confirmed', 'locked')
       LIMIT 1
+      ${options.forUpdate === true ? "FOR UPDATE" : ""}
     `,
     [session.id, id]
   );
@@ -1715,14 +1743,15 @@ async function isSessionAlbumMember(connection, session, userId) {
         AND bound_user_id = ?
         AND status = 'active'
       LIMIT 1
+      ${options.forUpdate === true ? "FOR UPDATE" : ""}
     `,
     [session.id, id]
   );
   return npcRoleRows.length > 0;
 }
 
-async function requireSessionAlbumMember(connection, session, user) {
-  if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
+async function requireSessionAlbumMember(connection, session, user, options = {}) {
+  if (!(await isSessionAlbumMember(connection, session, user.user.id, options))) {
     throw forbidden("Only session members can use the session album");
   }
 }
@@ -5878,6 +5907,67 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
   });
 }
 
+async function requireSessionAlbumVideoCreateAllowed(connection, sessionId, user, options = {}) {
+  const session = await requireSessionAlbumOpen(connection, sessionId, options);
+  await requireSessionAlbumMember(connection, session, user, options);
+  return session;
+}
+
+async function findActiveSessionAlbumVideoBySource(
+  connection,
+  sessionId,
+  sourceUrl,
+  options = {}
+) {
+  const [rows] = await connection.query(
+    `
+      SELECT photo.*
+      FROM session_album_photos photo
+      WHERE photo.session_id = ?
+        AND photo.source_url = ?
+        AND photo.media_type = 'video'
+        AND photo.status = 'active'
+      LIMIT 1
+      ${options.forUpdate === true ? "FOR UPDATE" : ""}
+    `,
+    [sessionId, sourceUrl]
+  );
+  return rows[0] || null;
+}
+
+function inspectedAlbumVideoMetadata(value) {
+  const byteSize = requiredPositiveInteger(value?.byteSize, "inspected video byteSize");
+  if (value?.contentType === undefined || value?.contentType === null || value.contentType === "") {
+    throw badRequest("inspected video contentType is required");
+  }
+  return {
+    byteSize,
+    contentType: albumVideoContentType(value.contentType)
+  };
+}
+
+function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId) {
+  const isMine = Number(media.uploader_user_id) === Number(userId);
+  return {
+    id: Number(media.id),
+    session_id: Number(media.session_id),
+    media_type: "video",
+    processing_status: media.processing_status || fallbackProcessingStatus,
+    uploader_user_id: Number(media.uploader_user_id),
+    is_mine: isMine,
+    can_delete: isMine,
+    can_tag: isMine,
+    duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
+    video_width: media.video_width ? Number(media.video_width) : null,
+    video_height: media.video_height ? Number(media.video_height) : null,
+    video_byte_size: media.video_byte_size ? Number(media.video_byte_size) : null,
+    video_content_type: media.video_content_type || "video/mp4",
+    processing_error: media.processing_error || null,
+    created_at: media.created_at,
+    tags: []
+  };
+}
+
 export async function createSessionAlbumVideo(user, sessionId, body = {}, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   if (!isAdmin(user)) {
@@ -5891,81 +5981,102 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   const durationSeconds = albumVideoDurationSeconds(
     body.durationSeconds ?? body.duration_seconds
   );
-  const videoWidth = optionalPositiveInteger(body.videoWidth ?? body.video_width, "videoWidth");
-  const videoHeight = optionalPositiveInteger(body.videoHeight ?? body.video_height, "videoHeight");
-  const videoByteSize = requiredPositiveInteger(
-    body.videoByteSize ?? body.video_byte_size,
-    "videoByteSize"
+  const videoWidth = optionalAlbumVideoDimension(
+    body.videoWidth ?? body.video_width,
+    "videoWidth"
   );
-  const videoContentType = albumVideoContentType(
-    body.videoContentType || body.video_content_type
+  const videoHeight = optionalAlbumVideoDimension(
+    body.videoHeight ?? body.video_height,
+    "videoHeight"
   );
+  const inspectObject = options.inspectObject;
+  if (typeof inspectObject !== "function") {
+    throw new TypeError("createSessionAlbumVideo requires options.inspectObject");
+  }
+  const runWithDatabaseConnection = options.withDatabaseConnection || withDatabaseConnection;
+  const runWithTransaction = options.withTransaction || withTransaction;
+  const authorize =
+    options.authorizeSessionAlbumVideoCreate || requireSessionAlbumVideoCreateAllowed;
+
+  // Authorize before any storage I/O, while deliberately releasing the read
+  // connection before HEAD/Range inspection. The insert transaction repeats
+  // this check below so a membership/session-state change cannot win a race.
+  await runWithDatabaseConnection((connection) =>
+    authorize(connection, id, user, { forUpdate: false })
+  );
+  const { byteSize: videoByteSize, contentType: videoContentType } =
+    inspectedAlbumVideoMetadata(await inspectObject(sourceUrl));
+
   const readyOnCreate = options.readyOnCreate === true || options.localFallbackReady === true;
   const processingStatus = readyOnCreate ? "ready" : "processing";
   const displayUrl = options.displayUrl || (readyOnCreate ? sourceUrl : null);
   const coverUrl = options.coverUrl || null;
   const ciJobId = options.ciJobId || null;
 
-  return withTransaction(async (connection) => {
-    const session = await requireSessionAlbumOpen(connection, id);
-    await requireSessionAlbumMember(connection, session, user);
-    const [result] = await connection.query(
-      `
-        INSERT INTO session_album_photos
-          (
-            session_id,
-            uploader_user_id,
-            media_type,
-            photo_url,
-            source_url,
-            display_url,
-            cover_url,
-            duration_seconds,
-            video_width,
-            video_height,
-            video_byte_size,
-            video_content_type,
-            ci_job_id,
-            processing_status,
-            status
-          )
-        VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-      `,
-      [
-        id,
-        user.user.id,
-        sourceUrl,
-        displayUrl,
-        coverUrl,
-        durationSeconds,
-        videoWidth,
-        videoHeight,
-        videoByteSize,
-        videoContentType,
-        ciJobId,
-        processingStatus
-      ]
-    );
-    const media = await findById(connection, "session_album_photos", result.insertId);
-    return {
-      id: Number(media.id),
-      session_id: Number(media.session_id),
-      media_type: "video",
-      processing_status: media.processing_status || processingStatus,
-      uploader_user_id: Number(media.uploader_user_id),
-      is_mine: true,
-      can_delete: true,
-      can_tag: true,
-      duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
-      video_width: media.video_width ? Number(media.video_width) : null,
-      video_height: media.video_height ? Number(media.video_height) : null,
-      video_byte_size: media.video_byte_size ? Number(media.video_byte_size) : null,
-      video_content_type: media.video_content_type || "video/mp4",
-      processing_error: media.processing_error || null,
-      created_at: media.created_at,
-      tags: []
-    };
+  const media = await createIdempotentAlbumVideo({
+    sourceUrl,
+    findExisting: (candidateSourceUrl) =>
+      runWithTransaction(async (connection) => {
+        await authorize(connection, id, user, { forUpdate: true });
+        return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
+          forUpdate: true
+        });
+      }),
+    insert: (candidateSourceUrl) => runWithTransaction(async (connection) => {
+      await authorize(connection, id, user, { forUpdate: true });
+      const [result] = await connection.query(
+        `
+          INSERT INTO session_album_photos
+            (
+              session_id,
+              uploader_user_id,
+              media_type,
+              photo_url,
+              source_url,
+              display_url,
+              cover_url,
+              duration_seconds,
+              video_width,
+              video_height,
+              video_byte_size,
+              video_content_type,
+              ci_job_id,
+              processing_status,
+              status
+            )
+          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        `,
+        [
+          id,
+          user.user.id,
+          candidateSourceUrl,
+          displayUrl,
+          coverUrl,
+          durationSeconds,
+          videoWidth,
+          videoHeight,
+          videoByteSize,
+          videoContentType,
+          ciJobId,
+          processingStatus
+        ]
+      );
+      return findById(connection, "session_album_photos", result.insertId);
+    }),
+    // This is intentionally a different callback from findExisting. The
+    // lifecycle helper invokes it only after the insert transaction wrapper
+    // has rejected, so its rollback is complete before this fresh transaction
+    // performs locked current-read authorization and reads the winner.
+    findAfterDuplicateOnFreshConnection: (candidateSourceUrl) =>
+      runWithTransaction(async (connection) => {
+        await authorize(connection, id, user, { forUpdate: true });
+        return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
+          forUpdate: true
+        });
+      })
   });
+
+  return sessionAlbumVideoCreateResponse(media, processingStatus, user.user.id);
 }
 
 export async function updateSessionAlbumVideoProcessingResult(body = {}) {

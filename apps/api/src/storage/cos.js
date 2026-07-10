@@ -9,6 +9,56 @@ const DEFAULT_COS_DELETE_TIMEOUT_MS = 30_000;
 const DEFAULT_COS_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
 const DEFAULT_COS_ERROR_RESPONSE_MAX_BYTES = 64 * 1024;
 
+const TRUSTED_COS_ERROR_CODES = new Set([
+  "COS_OBJECT_NOT_FOUND",
+  "COS_PRECONDITION_FAILED",
+  "COS_UPSTREAM_ERROR",
+  "COS_NETWORK_ERROR",
+  "COS_REQUEST_TIMEOUT",
+  "COS_RESPONSE_ABORTED",
+  "COS_RESPONSE_TOO_LARGE",
+  "COS_INVALID_CONTENT_LENGTH",
+  "COS_INVALID_RANGE_RESPONSE"
+]);
+const trustedCosStorageErrors = new WeakSet();
+
+function cosStorageError(statusCode, code, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  error.isCosStorageError = true;
+  trustedCosStorageErrors.add(error);
+  return error;
+}
+
+function cosHttpError(statusCode) {
+  if (statusCode === 404) {
+    return cosStorageError(404, "COS_OBJECT_NOT_FOUND", "COS object was not found");
+  }
+  if (statusCode === 412) {
+    return cosStorageError(
+      412,
+      "COS_PRECONDITION_FAILED",
+      "COS object version precondition failed"
+    );
+  }
+  return cosStorageError(502, "COS_UPSTREAM_ERROR", "COS storage request failed");
+}
+
+function cosNetworkError() {
+  return cosStorageError(502, "COS_NETWORK_ERROR", "COS storage network request failed");
+}
+
+export function isTrustedCosStorageError(error) {
+  return Boolean(
+    error &&
+      trustedCosStorageErrors.has(error) &&
+      error.isCosStorageError === true &&
+      TRUSTED_COS_ERROR_CODES.has(error.code) &&
+      [404, 412, 502, 504].includes(Number(error.statusCode))
+  );
+}
+
 function hmacSha1(key, value) {
   return crypto.createHmac("sha1", key).update(value).digest("hex");
 }
@@ -123,6 +173,7 @@ function cosRequest({
   key,
   body,
   contentType,
+  contentLength,
   headers: extraHeaders = {},
   ciProcess,
   collectBody = true,
@@ -146,11 +197,36 @@ function cosRequest({
 
   const host = cosHost(config);
   const date = new Date().toUTCString();
+  const hasBody = body !== undefined && body !== null;
+  const streamBody = hasBody && typeof body?.pipe === "function";
+  let normalizedContentLength = contentLength;
+  if (hasBody && !streamBody) {
+    const actualLength = Buffer.isBuffer(body)
+      ? body.length
+      : Buffer.byteLength(String(body));
+    if (normalizedContentLength === undefined) normalizedContentLength = actualLength;
+    if (normalizedContentLength !== actualLength) {
+      throw new TypeError("COS request body length does not match contentLength");
+    }
+  }
+  if (streamBody && normalizedContentLength === undefined) {
+    throw new TypeError("streaming COS request body requires contentLength");
+  }
+  if (
+    normalizedContentLength !== undefined &&
+    (!Number.isSafeInteger(normalizedContentLength) || normalizedContentLength < 0)
+  ) {
+    throw new TypeError("invalid COS request contentLength");
+  }
   const normalizedExtraHeaders = Object.fromEntries(
     Object.entries(extraHeaders)
       .filter(([, value]) => value !== undefined && value !== null && value !== "")
       .map(([name, value]) => [name.toLowerCase(), String(value)])
   );
+  if (contentType) normalizedExtraHeaders["content-type"] = String(contentType);
+  if (normalizedContentLength !== undefined) {
+    normalizedExtraHeaders["content-length"] = String(normalizedContentLength);
+  }
   const signedHeaders = { date, host, ...normalizedExtraHeaders };
   const headers = {
     date,
@@ -163,12 +239,6 @@ function cosRequest({
       config
     })
   };
-  if (contentType) {
-    headers["content-type"] = contentType;
-  }
-  if (body) {
-    headers["content-length"] = body.length;
-  }
 
   return new Promise((resolve, reject) => {
     let pendingRequest = null;
@@ -195,24 +265,22 @@ function cosRequest({
     };
     const resolveOnce = (value) => settle(resolve, value);
     const rejectOnce = (error) => settle(reject, error);
-    const gatewayError = (statusCode, code, message) => {
-      const error = new Error(message);
-      error.statusCode = statusCode;
-      error.code = code;
-      return error;
-    };
+    const gatewayError = (statusCode, code, message) =>
+      cosStorageError(statusCode, code, message);
     const abortTransport = () => {
       activeResponse?.destroy?.();
       pendingRequest?.destroy?.();
+      if (streamBody) body.destroy?.();
     };
     const rejectOversizedResponse = (response, byteLimit) => {
       const successfulResponse = response.statusCode >= 200 && response.statusCode < 300;
-      const statusCode = successfulResponse ? 502 : response.statusCode;
-      const error = gatewayError(
-        statusCode,
-        "COS_RESPONSE_TOO_LARGE",
-        `COS response exceeded ${byteLimit} bytes`
-      );
+      const error = successfulResponse
+        ? gatewayError(
+            502,
+            "COS_RESPONSE_TOO_LARGE",
+            `COS response exceeded ${byteLimit} bytes`
+          )
+        : cosHttpError(response.statusCode);
       rejectOnce(error);
       abortTransport();
     };
@@ -263,7 +331,7 @@ function cosRequest({
             rejectOnce(error);
             abortTransport();
           });
-          response.on("error", (error) => rejectOnce(error));
+          response.on("error", () => rejectOnce(cosNetworkError()));
           response.on("end", () => {
             if (settled) return;
             const responseBody = chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks);
@@ -276,10 +344,8 @@ function cosRequest({
               return;
             }
 
-            const error = new Error(`COS request failed with status ${response.statusCode}`);
-            error.statusCode = response.statusCode;
-            error.body = responseBody.toString("utf8");
-            rejectOnce(error);
+            void responseBody;
+            rejectOnce(cosHttpError(response.statusCode));
           });
 
           const rawContentLength = response.headers["content-length"];
@@ -287,12 +353,13 @@ function cosRequest({
             const text = String(rawContentLength);
             const declaredByteSize = /^\d+$/.test(text) ? Number(text) : NaN;
             if (!Number.isSafeInteger(declaredByteSize) || declaredByteSize < 0) {
-              const statusCode = successfulResponse ? 502 : response.statusCode;
-              const error = gatewayError(
-                statusCode,
-                "COS_INVALID_CONTENT_LENGTH",
-                "COS response returned an invalid Content-Length"
-              );
+              const error = successfulResponse
+                ? gatewayError(
+                    502,
+                    "COS_INVALID_CONTENT_LENGTH",
+                    "COS response returned an invalid Content-Length"
+                  )
+                : cosHttpError(response.statusCode);
               rejectOnce(error);
               abortTransport();
               return;
@@ -303,11 +370,19 @@ function cosRequest({
           }
         }
       );
-      pendingRequest.on("error", (error) => rejectOnce(error));
-      if (body) pendingRequest.write(body);
-      pendingRequest.end();
-    } catch (error) {
-      rejectOnce(error);
+      pendingRequest.on("error", () => rejectOnce(cosNetworkError()));
+      if (streamBody) {
+        body.once("error", () => {
+          rejectOnce(cosNetworkError());
+          abortTransport();
+        });
+        body.pipe(pendingRequest);
+      } else {
+        if (hasBody) pendingRequest.write(body);
+        pendingRequest.end();
+      }
+    } catch {
+      rejectOnce(cosNetworkError());
       abortTransport();
     }
   });
@@ -317,19 +392,28 @@ export async function putCosObject({
   key,
   body,
   contentType,
+  contentLength,
   picOperations,
+  headers = {},
+  forbidOverwrite = false,
   config,
   request,
   timeoutMs = DEFAULT_COS_TRANSFER_TIMEOUT_MS,
   setTimeoutFn,
   clearTimeoutFn
 }) {
+  const putHeaders = {
+    ...headers,
+    ...(picOperations ? { "pic-operations": picOperations } : {}),
+    ...(forbidOverwrite ? { "x-cos-forbid-overwrite": "true" } : {})
+  };
   return cosRequest({
     method: "PUT",
     key,
     body,
     contentType,
-    headers: picOperations ? { "pic-operations": picOperations } : {},
+    contentLength,
+    headers: putHeaders,
     request,
     timeoutMs,
     setTimeoutFn,
@@ -383,6 +467,8 @@ export async function readCosObjectRange({
   key,
   start = 0,
   end = 11,
+  ifMatch,
+  expectedByteSize,
   config,
   request,
   timeoutMs = DEFAULT_COS_INSPECTION_TIMEOUT_MS,
@@ -393,14 +479,19 @@ export async function readCosObjectRange({
     !Number.isSafeInteger(start) ||
     !Number.isSafeInteger(end) ||
     start < 0 ||
-    end < start
+    end < start ||
+    (expectedByteSize !== undefined &&
+      (!Number.isSafeInteger(expectedByteSize) || expectedByteSize <= 0))
   ) {
     throw new TypeError("invalid COS object byte range");
   }
   const response = await cosRequest({
     method: "GET",
     key,
-    headers: { range: `bytes=${start}-${end}` },
+    headers: {
+      range: `bytes=${start}-${end}`,
+      ...(ifMatch ? { "if-match": ifMatch } : {})
+    },
     maxResponseBytes: end - start + 1,
     timeoutMs,
     setTimeoutFn,
@@ -409,10 +500,11 @@ export async function readCosObjectRange({
     config
   });
   if (response.statusCode !== 206) {
-    const error = new Error(`COS range request returned status ${response.statusCode}`);
-    error.statusCode = 502;
-    error.code = "COS_INVALID_RANGE_RESPONSE";
-    throw error;
+    throw cosStorageError(
+      502,
+      "COS_INVALID_RANGE_RESPONSE",
+      "COS range response was invalid"
+    );
   }
 
   const contentRange = String(response.headers["content-range"] || "");
@@ -429,6 +521,7 @@ export async function readCosObjectRange({
     !Number.isSafeInteger(actualEnd) ||
     actualEnd < actualStart ||
     actualEnd > end ||
+    (expectedByteSize !== undefined && completeLength !== expectedByteSize) ||
     (completeLength !== null &&
       (!Number.isSafeInteger(completeLength) ||
         completeLength <= actualStart ||
@@ -436,10 +529,11 @@ export async function readCosObjectRange({
         actualEnd !== expectedEnd)) ||
     response.body.length !== actualEnd - actualStart + 1
   ) {
-    const error = new Error("COS range request returned an invalid Content-Range");
-    error.statusCode = 502;
-    error.code = "COS_INVALID_RANGE_RESPONSE";
-    throw error;
+    throw cosStorageError(
+      502,
+      "COS_INVALID_RANGE_RESPONSE",
+      "COS range response was invalid"
+    );
   }
   return response.body;
 }
