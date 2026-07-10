@@ -12,11 +12,11 @@
 ## 当前进度
 
 - 更新于：2026-07-10
-- 顶层任务：2/11 完成（Task 1–2）；细分任务：9/55 完成。
-- 已完成：spec 审阅、逐文件实施计划、49 个 D42 行为 RED 契约、9 个架构 RED 断言、隔离 smoke 写入前门禁，并完成规格与代码质量复核。
-- 待实现：Task 3–10 的生产代码；当前这些项均未勾选，不把测试契约误记为功能完成。
+- 顶层任务：2/11 完成（Task 1–2）；细分任务：12/55 完成。
+- 已完成：spec 审阅、逐文件实施计划、D42 行为/架构契约、隔离 smoke 写入前门禁、后端媒体 primitives，以及视频 `source_url` 唯一索引迁移与无损 preflight。
+- 待实现：Task 3.4–10 的生产代码接入；已具备幂等创建和删除清理 lifecycle primitives，但在 service/server 接入前不提前勾选 3.7 或 Task 10。
 - 待验证：Task 11 的完整 D42、相册回归、两端生产构建和微信开发者工具手工场景。
-- 当前实现基线提交：`d0e9c84`（`test: define album video hardening coverage`）。
+- 后端 media 实现提交：`a44d2a3`（`feat: add album video media primitives`）；migration/lifecycle 变更纳入当前提交。
 
 ## 执行任务
 
@@ -34,9 +34,9 @@
   - [x] 2.5 为大小单位、Bearer 边界、公开分享、viewer 重试和后台竞态增加失败测试。
 
 - [ ] 3. 加固视频对象验证和数据库幂等
-  - [ ] 3.1 新增迁移 `0022_session_album_video_hardening.sql` 和 `source_url` 唯一索引。
-  - [ ] 3.2 迁移前检测重复 source，禁止静默删除历史数据。
-  - [ ] 3.3 COS storage 增加 HEAD 和最小 Range 读取能力。
+  - [x] 3.1 新增迁移 `0022_session_album_video_hardening.sql` 和 `source_url` 唯一索引。
+  - [x] 3.2 迁移前检测重复 source，禁止静默删除历史数据。
+  - [x] 3.3 COS storage 增加 HEAD 和最小 Range 读取能力。
   - [ ] 3.4 本地 storage 增加 stat 和最小文件头读取能力。
   - [ ] 3.5 创建视频记录前验证对象存在、真实大小、类型和 MP4 文件头。
   - [ ] 3.6 写库使用服务端真实 byte size/content type。
@@ -106,3 +106,4 @@
 - 2026-07-10：D42 RED 观察结果：`node scripts/d42-album-video-hardening-unit-check.js` 以退出码 1 结束（49/49 个独立行为契约因 future helper 模块尚未创建而 `ERR_MODULE_NOT_FOUND`，覆盖权威对象 metadata、可注入 COS HEAD/最小 Range 与本地 stat/12-byte read、本地 HEAD/GET/Range/404、multipart、COS 全量/部分/缺失可见 header、幂等创建、删除重试、viewer 失败状态机及既有 admin RequestSerial）；`node scripts/d42-album-video-hardening-check.js` 以退出码 1 结束（旧实现 9/9 架构断言失败）；`--allow-red` 仅在 API media、小程序 albumVideo 和后台 albumMedia 三个 future 模块全部缺失时返回 0，任一模块存在即恢复非零退出。
 - 2026-07-10：D42 隔离门禁观察结果：未设置隔离变量时 `env -u NODE_ENV -u WECHAT_MOCK_LOGIN -u D42_SMOKE_ISOLATED -u MYSQL_HOST -u MYSQL_DATABASE node scripts/d42-album-video-hardening-smoke.js --run` 在任何 API/数据库导入或写入前退出码 1；`NODE_ENV=test WECHAT_MOCK_LOGIN=true D42_SMOKE_ISOLATED=1 MYSQL_HOST=127.0.0.1 MYSQL_DATABASE=pinche_d42_test node scripts/d42-album-video-hardening-smoke.js --run` 退出码 0；无参数运行退出码 0 并打印 skip。未连接或写入默认 `pinche` 数据库。
 - 2026-07-10：后端 media primitives 与 COS HEAD/最小 Range helper 已实现；默认 `node scripts/d42-album-video-hardening-unit-check.js` 当前精确结果为 47/65 PASS、18/65 RED（8 个 lifecycle、8 个小程序、2 个后台契约仅因对应后续模块尚未创建而失败），新增绿色门禁 `npm run d42:api-media` 为 47/47 PASS 并已接入根 `check`。新增契约使用注入 fake HTTPS/timeout，不访问真实网络，覆盖 metadata 失败时不读 Range、缺失 MIME 的 `.mp4` 路径 fallback、签名 HEAD、精确 `Range: bytes=0-11`、206/`Content-Range` total 一致性、所有成功/错误响应体上限、提前 `Content-Length` 拒绝、404/5xx/network 错误传播、HEAD/Range 10 秒短 timeout、完整 PUT/GET 5 分钟 timeout、DELETE 30 秒 timeout、显式 timeout 覆盖、abort 504、参数化 MP4 MIME 与空文件；`node --check` 三个 scoped JS、`node scripts/d17-cos-storage-check.js`、聚焦 media/COS 边界矩阵和 scoped `git diff --check` 均通过。此节点尚未接入 `server.js`，因此 3.4–3.7、4.2–4.4、5.1–5.3 及 Task 11 保持未勾选。
+- 2026-07-10：Task 3.1–3.3 已实现并通过 fake/injectable 契约验证：`0022_session_album_video_hardening.sql` 只添加 `uniq_session_album_video_source_url (source_url)`，无 delete/update/backfill；迁移前以单条有序 join 查询全部非 NULL（包括空字符串）重复 source/count/ids，不依赖 `GROUP_CONCAT` 或 N+1，超长人类错误截断但 `error.details` 保留 1000 个测试 ID 的完整有序数组。迁移 CLI 在保留原有 `code/message` JSON 形状的同时透传 `error.details`，另以 400 个 ID 的 JSON 往返证明结构化明细不会丢失。执行器先检查 `information_schema.statistics`：索引缺失时 preflight 后 ALTER，精确 `UNIQUE(source_url)` 已存在时跳过 DDL 并补记版本，错误唯一性/列/顺序/prefix 形状时停止；fake 还覆盖 ALTER 已隐式提交而版本写入失败后的下一次对账恢复。幂等创建只为命名 source 索引的 `ER_DUP_ENTRY` 启用恢复，并强制使用区别于初始查询的 `findAfterDuplicateOnFreshConnection`；未来 service 必须先 rollback 插入事务，再用新连接/current read 查赢家。删除清理将冻结、去重 URL snapshot 传给 finalize，只有显式 `{deleted:true}` 成功，snapshot changed/false 返回 409；未来 service 需 `SELECT ... FOR UPDATE` 比对后原子删除标签和媒体行。`a44d2a3` 已提供并测试 COS HEAD 与精确最小 Range helper。`npm run d42:api-lifecycle` 为 17/17 PASS，`npm run d42:api-media` 为 47/47 PASS；默认 D42 精确为 64/74 PASS、10/74 RED，剩余仅小程序 8 项和后台 2 项 future module。API 18-file check、聚焦 `node --check` 和 scoped diff-check 通过，未连接数据库或网络；真实 MySQL REPEATABLE READ 并发、DDL 故障与隔离 smoke 尚未执行，不把 fake 结果声明为 DB 证明，Task 11 保持未勾选。3.4–3.7、Task 10 的 service/server 接入也仍未勾选。

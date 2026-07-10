@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -25,6 +25,8 @@ function test(name, run) {
 const apiMediaHelpers = () => import("../apps/api/src/modules/album-video/media.js");
 const apiCosHelpers = () => import("../apps/api/src/storage/cos.js");
 const apiLifecycleHelpers = () => import("../apps/api/src/modules/album-video/lifecycle.js");
+const apiMigrationHelpers = () => import("../apps/api/src/modules/album-video/migration.js");
+const apiMigrationRunner = () => import("../apps/api/src/db/migrate.js");
 const miniProgramHelpers = () => import("../apps/miniprogram/src/utils/albumVideo.js");
 const adminHelpers = () => import("../apps/admin-web/src/albumMedia.js");
 
@@ -839,7 +841,7 @@ test("idempotent create returns an existing video without inserting", async () =
     insert: async () => {
       insertCalls += 1;
     },
-    findAfterDuplicate: async () => null
+    findAfterDuplicateOnFreshConnection: async () => null
   });
   assert.equal(result, existing);
   assert.equal(insertCalls, 0);
@@ -857,61 +859,120 @@ test("idempotent create inserts exactly once when no video exists", async () => 
       assert.equal(sourceUrl, inserted.source_url);
       return inserted;
     },
-    findAfterDuplicate: async () => null
+    findAfterDuplicateOnFreshConnection: async () => null
   });
   assert.equal(result, inserted);
   assert.equal(insertCalls, 1);
 });
 
-test("idempotent create catches duplicate key and returns the concurrent winner", async () => {
+test("idempotent create uses a fresh connection after the source index wins a race", async () => {
   const { createIdempotentAlbumVideo } = await apiLifecycleHelpers();
   const winner = { id: 9, source_url: "video/race.mp4" };
-  let requeryCalls = 0;
+  const calls = [];
+  const initialFind = async (sourceUrl) => {
+    calls.push(["initial-transaction-find", sourceUrl]);
+    return null;
+  };
+  const freshFind = async (sourceUrl, duplicateError) => {
+    calls.push(["fresh-connection-current-read", sourceUrl, duplicateError.constraint]);
+    return winner;
+  };
+  assert.notEqual(initialFind, freshFind);
   const result = await createIdempotentAlbumVideo({
     sourceUrl: winner.source_url,
-    findExisting: async () => null,
+    findExisting: initialFind,
     insert: async () => {
-      const error = new Error("duplicate source_url");
-      error.code = "ER_DUP_ENTRY";
-      throw error;
+      calls.push(["insert-transaction-rolled-back-before-recovery"]);
+      throw Object.assign(new Error("duplicate source_url"), {
+        code: "ER_DUP_ENTRY",
+        constraint: "uniq_session_album_video_source_url"
+      });
     },
-    findAfterDuplicate: async (sourceUrl) => {
-      requeryCalls += 1;
-      assert.equal(sourceUrl, winner.source_url);
-      return winner;
-    }
+    findAfterDuplicateOnFreshConnection: freshFind
   });
   assert.equal(result, winner);
-  assert.equal(requeryCalls, 1);
-});
+  assert.deepEqual(calls, [
+    ["initial-transaction-find", winner.source_url],
+    ["insert-transaction-rolled-back-before-recovery"],
+    [
+      "fresh-connection-current-read",
+      winner.source_url,
+      "uniq_session_album_video_source_url"
+    ]
+  ]);
 
-test("idempotent create propagates non-duplicate insert errors", async () => {
-  const { createIdempotentAlbumVideo } = await apiLifecycleHelpers();
-  const networkError = Object.assign(new Error("database unavailable"), { code: "ECONNRESET" });
-  let requeryCalls = 0;
+  const reusedTransactionRead = async () => null;
   await assert.rejects(
     createIdempotentAlbumVideo({
-      sourceUrl: "video/failure.mp4",
-      findExisting: async () => null,
-      insert: async () => { throw networkError; },
-      findAfterDuplicate: async () => { requeryCalls += 1; }
+      sourceUrl: "video/reused-transaction.mp4",
+      findExisting: reusedTransactionRead,
+      insert: async () => winner,
+      findAfterDuplicateOnFreshConnection: reusedTransactionRead
     }),
-    (error) => error === networkError
+    (error) => error instanceof TypeError && /fresh-connection current read/.test(error.message)
   );
-  assert.equal(requeryCalls, 0);
+});
+
+test("idempotent create reports a conflict when the duplicate winner is missing", async () => {
+  const { createIdempotentAlbumVideo } = await apiLifecycleHelpers();
+  await assert.rejects(
+    createIdempotentAlbumVideo({
+      sourceUrl: "video/missing-winner.mp4",
+      findExisting: async () => null,
+      insert: async () => {
+        throw Object.assign(new Error("duplicate source_url"), {
+          code: "ER_DUP_ENTRY",
+          sqlMessage:
+            "Duplicate entry 'video/missing-winner.mp4' for key 'session_album_photos.uniq_session_album_video_source_url'"
+        });
+      },
+      findAfterDuplicateOnFreshConnection: async () => null
+    }),
+    (error) =>
+      error?.statusCode === 409 && error?.code === "ALBUM_VIDEO_DUPLICATE_WINNER_MISSING"
+  );
+});
+
+test("idempotent create propagates non-source-index insert errors", async () => {
+  const { createIdempotentAlbumVideo } = await apiLifecycleHelpers();
+  for (const insertError of [
+    Object.assign(new Error("database unavailable"), { code: "ECONNRESET" }),
+    Object.assign(new Error("unrelated duplicate"), {
+      code: "ER_DUP_ENTRY",
+      key: "uniq_session_album_photo_tag"
+    })
+  ]) {
+    let freshConnectionCalls = 0;
+    await assert.rejects(
+      createIdempotentAlbumVideo({
+        sourceUrl: "video/failure.mp4",
+        findExisting: async () => null,
+        insert: async () => { throw insertError; },
+        findAfterDuplicateOnFreshConnection: async () => { freshConnectionCalls += 1; }
+      }),
+      (error) => error === insertError
+    );
+    assert.equal(freshConnectionCalls, 0);
+  }
 });
 
 test("delete cleanup deduplicates object URLs before finalizing", async () => {
   const { cleanupAlbumVideoBeforeDelete } = await apiLifecycleHelpers();
   const deleted = [];
   let finalizeCalls = 0;
-  await cleanupAlbumVideoBeforeDelete({
+  const result = await cleanupAlbumVideoBeforeDelete({
     urls: ["source.mp4", "cover.jpg", "source.mp4", "", null, "cover.jpg"],
     deleteObject: async (url) => { deleted.push(url); },
-    finalize: async () => { finalizeCalls += 1; }
+    finalizeSnapshot: async (expectedUrls) => {
+      finalizeCalls += 1;
+      assert.equal(Object.isFrozen(expectedUrls), true);
+      assert.deepEqual(expectedUrls, ["source.mp4", "cover.jpg"]);
+      return { deleted: true };
+    }
   });
   assert.deepEqual(deleted, ["source.mp4", "cover.jpg"]);
   assert.equal(finalizeCalls, 1);
+  assert.deepEqual(result, { deleted: true });
 });
 
 test("delete cleanup treats object 404 as success", async () => {
@@ -920,7 +981,11 @@ test("delete cleanup treats object 404 as success", async () => {
   await cleanupAlbumVideoBeforeDelete({
     urls: ["already-missing.mp4"],
     deleteObject: async () => { throw Object.assign(new Error("missing"), { statusCode: 404 }); },
-    finalize: async () => { finalizeCalls += 1; }
+    finalizeSnapshot: async (expectedUrls) => {
+      finalizeCalls += 1;
+      assert.deepEqual(expectedUrls, ["already-missing.mp4"]);
+      return { deleted: true };
+    }
   });
   assert.equal(finalizeCalls, 1);
 });
@@ -936,7 +1001,10 @@ test("delete cleanup keeps the database row on network and 5xx failures", async 
       cleanupAlbumVideoBeforeDelete({
         urls: ["source.mp4"],
         deleteObject: async () => { throw error; },
-        finalize: async () => { finalizeCalls += 1; }
+        finalizeSnapshot: async () => {
+          finalizeCalls += 1;
+          return { deleted: true };
+        }
       }),
       (actual) => actual === error
     );
@@ -958,7 +1026,11 @@ test("delete cleanup retry finalizes only after every object is cleaned", async 
       }
       deleted.add(url);
     },
-    finalize: async () => { finalizeCalls += 1; }
+    finalizeSnapshot: async (expectedUrls) => {
+      finalizeCalls += 1;
+      assert.deepEqual(expectedUrls, ["source.mp4", "display.mp4", "cover.jpg"]);
+      return { deleted: true };
+    }
   };
   await assert.rejects(cleanupAlbumVideoBeforeDelete(options), hasStatus(503));
   assert.equal(finalizeCalls, 0);
@@ -966,6 +1038,356 @@ test("delete cleanup retry finalizes only after every object is cleaned", async 
   await cleanupAlbumVideoBeforeDelete(options);
   assert.deepEqual([...deleted].sort(), ["cover.jpg", "display.mp4", "source.mp4"]);
   assert.equal(finalizeCalls, 1);
+});
+
+test("delete cleanup rejects when the locked database snapshot changed", async () => {
+  const { cleanupAlbumVideoBeforeDelete } = await apiLifecycleHelpers();
+  const deleted = [];
+  await assert.rejects(
+    cleanupAlbumVideoBeforeDelete({
+      urls: ["source-v1.mp4", "cover-v1.jpg", "source-v1.mp4"],
+      deleteObject: async (url) => { deleted.push(url); },
+      // Service integration must SELECT ... FOR UPDATE, compare these immutable
+      // URLs, then delete tags/media atomically only when the snapshot matches.
+      finalizeSnapshot: async (expectedUrls) => {
+        assert.equal(Object.isFrozen(expectedUrls), true);
+        assert.deepEqual(expectedUrls, ["source-v1.mp4", "cover-v1.jpg"]);
+        return { deleted: false, reason: "changed" };
+      }
+    }),
+    (error) =>
+      error?.statusCode === 409 && error?.code === "ALBUM_VIDEO_DELETE_SNAPSHOT_CHANGED"
+  );
+  assert.deepEqual(deleted, ["source-v1.mp4", "cover-v1.jpg"]);
+  await assert.rejects(
+    cleanupAlbumVideoBeforeDelete({
+      urls: [],
+      deleteObject: async () => {},
+      finalizeSnapshot: async () => false
+    }),
+    (error) =>
+      error?.statusCode === 409 && error?.code === "ALBUM_VIDEO_DELETE_SNAPSHOT_CHANGED"
+  );
+});
+
+test("album video migration preflight passes when source URLs are unique", async () => {
+  const {
+    assertSessionAlbumVideoSourceUrlsUnique,
+    DUPLICATE_SESSION_ALBUM_VIDEO_SOURCE_QUERY
+  } = await apiMigrationHelpers();
+  const queries = [];
+  await assertSessionAlbumVideoSourceUrlsUnique({
+    query: async (sql) => {
+      queries.push(sql);
+      return [[]];
+    }
+  });
+  assert.deepEqual(queries, [DUPLICATE_SESSION_ALBUM_VIDEO_SOURCE_QUERY]);
+  assert.match(queries[0], /source_url IS NOT NULL/);
+  assert.doesNotMatch(queries[0], /source_url\s*<>\s*''/);
+  assert.match(queries[0], /HAVING COUNT\(\*\) > 1/);
+  assert.match(queries[0], /INNER JOIN/);
+  assert.match(queries[0], /ORDER BY duplicates\.source_url ASC, album\.id ASC/);
+  assert.doesNotMatch(queries[0], /GROUP_CONCAT/);
+});
+
+test("album video migration preflight stops on empty sources and lists every duplicate id", async () => {
+  const { applyMigration } = await apiMigrationRunner();
+  const {
+    SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
+    SESSION_ALBUM_VIDEO_SOURCE_INDEX
+  } = await apiMigrationHelpers();
+  const largeGroupIds = Array.from({ length: 1000 }, (_, index) => index * 3 + 1);
+  const duplicateRows = [
+    { source_url: "", id: 4, duplicate_count: 2 },
+    { source_url: "", id: 9, duplicate_count: 2 },
+    ...largeGroupIds.map((id) => ({
+      source_url: "videos/large.mp4",
+      id,
+      duplicate_count: largeGroupIds.length
+    }))
+  ];
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => { calls.push("begin"); },
+    query: async (sql, values) => {
+      const normalized = sql.replace(/\s+/g, " ").trim();
+      if (normalized.includes("FROM information_schema.statistics")) {
+        assert.deepEqual(values, [SESSION_ALBUM_VIDEO_SOURCE_INDEX]);
+        calls.push("index-inspection");
+        return [[]];
+      }
+      if (normalized.startsWith("SELECT duplicates.source_url,")) {
+        calls.push("ordered-duplicate-rows");
+        return [duplicateRows];
+      }
+      calls.push(normalized);
+      return [[]];
+    },
+    commit: async () => { calls.push("commit"); },
+    rollback: async () => { calls.push("rollback"); }
+  };
+  await assert.rejects(
+    applyMigration(connection, {
+      file: SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
+      sql: `ALTER TABLE session_album_photos
+        ADD UNIQUE KEY uniq_session_album_video_source_url (source_url);`
+    }),
+    (error) => {
+      assert.equal(error?.code, "SESSION_ALBUM_VIDEO_DUPLICATE_SOURCE_URL");
+      for (const expected of ["source_url=\"\"", "count=2", "ids=[4,9]"]) {
+        assert.equal(error.message.includes(expected), true, expected);
+      }
+      assert.deepEqual(error.duplicates, [
+        { sourceUrl: "", count: 2, ids: [4, 9] },
+        {
+          sourceUrl: "videos/large.mp4",
+          count: largeGroupIds.length,
+          ids: largeGroupIds
+        }
+      ]);
+      assert.deepEqual(error.details?.duplicates, error.duplicates);
+      assert.equal(error.message.includes("[truncated; full IDs in error.details]"), true);
+      assert.equal(error.message.length < 2300, true);
+      return true;
+    }
+  );
+  assert.deepEqual(calls, [
+    "begin",
+    "index-inspection",
+    "ordered-duplicate-rows",
+    "rollback"
+  ]);
+});
+
+test("migration CLI JSON preserves all structured duplicate details", async () => {
+  const { serializeMigrationError } = await apiMigrationRunner();
+  const ids = Array.from({ length: 400 }, (_, index) => 1_000_000 + index * 7);
+  const error = new Error("duplicate details were capped in the human message");
+  error.details = {
+    duplicates: [{
+      sourceUrl: "videos/cli-details.mp4",
+      count: ids.length,
+      ids
+    }]
+  };
+  const cliJson = JSON.stringify({ ok: false, error: serializeMigrationError(error) });
+  const parsed = JSON.parse(cliJson);
+  assert.deepEqual(parsed, {
+    ok: false,
+    error: {
+      code: "MIGRATION_FAILED",
+      message: error.message,
+      details: error.details
+    }
+  });
+  assert.equal(parsed.error.details.duplicates[0].ids.length, 400);
+  assert.deepEqual(parsed.error.details.duplicates[0].ids, ids);
+  assert.deepEqual(serializeMigrationError(new Error("legacy shape")), {
+    code: "MIGRATION_FAILED",
+    message: "legacy shape"
+  });
+});
+
+test("album video migration runs preflight immediately before its ALTER", async () => {
+  const { applyMigration } = await apiMigrationRunner();
+  const {
+    prepareMigration,
+    SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
+    SESSION_ALBUM_VIDEO_SOURCE_INDEX
+  } = await apiMigrationHelpers();
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => { calls.push("begin"); },
+    query: async (sql, values) => {
+      const normalized = sql.replace(/\s+/g, " ").trim();
+      if (normalized.includes("FROM information_schema.statistics")) {
+        assert.deepEqual(values, [SESSION_ALBUM_VIDEO_SOURCE_INDEX]);
+        calls.push("index-inspection");
+        return [[]];
+      }
+      if (normalized.startsWith("SELECT duplicates.source_url,")) {
+        calls.push("preflight");
+        return [[]];
+      }
+      if (normalized.startsWith("ALTER TABLE session_album_photos")) {
+        calls.push("alter");
+      } else if (normalized.startsWith("INSERT INTO schema_migrations")) {
+        calls.push(["record", values]);
+      }
+      return [[]];
+    },
+    commit: async () => { calls.push("commit"); },
+    rollback: async () => { calls.push("rollback"); }
+  };
+
+  const sql = await readFile(
+    new URL("../apps/api/migrations/0022_session_album_video_hardening.sql", import.meta.url),
+    "utf8"
+  );
+  assert.equal(
+    sql,
+    "ALTER TABLE session_album_photos\n" +
+      "  ADD UNIQUE KEY uniq_session_album_video_source_url (source_url);\n"
+  );
+  await applyMigration(connection, {
+    file: SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
+    sql
+  });
+
+  assert.deepEqual(calls, [
+    "begin",
+    "index-inspection",
+    "preflight",
+    "alter",
+    ["record", [SESSION_ALBUM_VIDEO_HARDENING_MIGRATION]],
+    "commit"
+  ]);
+  assert.deepEqual(
+    await prepareMigration(
+      { query: async () => { throw new Error("other migrations must not inspect the video index"); } },
+      "0022_store_location_data.sql"
+    ),
+    { skipStatements: false }
+  );
+});
+
+test("album video migration reconciles an exact existing unique index", async () => {
+  const { applyMigration } = await apiMigrationRunner();
+  const {
+    SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
+    SESSION_ALBUM_VIDEO_SOURCE_INDEX
+  } = await apiMigrationHelpers();
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => { calls.push("begin"); },
+    query: async (sql, values) => {
+      const normalized = sql.replace(/\s+/g, " ").trim();
+      if (normalized.includes("FROM information_schema.statistics")) {
+        assert.deepEqual(values, [SESSION_ALBUM_VIDEO_SOURCE_INDEX]);
+        calls.push("exact-index");
+        return [[{ non_unique: 0, column_name: "source_url", seq_in_index: 1 }]];
+      }
+      if (normalized.startsWith("INSERT INTO schema_migrations")) {
+        calls.push(["record", values]);
+        return [[]];
+      }
+      calls.push(normalized);
+      return [[]];
+    },
+    commit: async () => { calls.push("commit"); },
+    rollback: async () => { calls.push("rollback"); }
+  };
+  await applyMigration(connection, {
+    file: SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
+    sql: "ALTER TABLE session_album_photos ADD UNIQUE KEY ignored_by_reconciliation (source_url);"
+  });
+  assert.deepEqual(calls, [
+    "begin",
+    "exact-index",
+    ["record", [SESSION_ALBUM_VIDEO_HARDENING_MIGRATION]],
+    "commit"
+  ]);
+});
+
+test("album video migration rejects wrong uniqueness, columns, order, and prefixes", async () => {
+  const { applyMigration } = await apiMigrationRunner();
+  const { SESSION_ALBUM_VIDEO_HARDENING_MIGRATION } = await apiMigrationHelpers();
+  const wrongShapes = [
+    [{ non_unique: 1, column_name: "source_url", seq_in_index: 1 }],
+    [{ non_unique: 0, column_name: "display_url", seq_in_index: 1 }],
+    [{ non_unique: 0, column_name: "source_url", seq_in_index: 2 }],
+    [{ non_unique: 0, column_name: "source_url", seq_in_index: 1, sub_part: 191 }]
+  ];
+  for (const rows of wrongShapes) {
+    const calls = [];
+    const connection = {
+      beginTransaction: async () => { calls.push("begin"); },
+      query: async (sql) => {
+        const normalized = sql.replace(/\s+/g, " ").trim();
+        if (normalized.includes("FROM information_schema.statistics")) {
+          calls.push("wrong-index");
+          return [rows];
+        }
+        calls.push(normalized);
+        return [[]];
+      },
+      commit: async () => { calls.push("commit"); },
+      rollback: async () => { calls.push("rollback"); }
+    };
+    await assert.rejects(
+      applyMigration(connection, {
+        file: SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
+        sql: "ALTER TABLE session_album_photos ADD UNIQUE KEY wrong (source_url);"
+      }),
+      (error) => {
+        assert.equal(error?.code, "SESSION_ALBUM_VIDEO_SOURCE_INDEX_SHAPE_MISMATCH");
+        assert.deepEqual(error.details?.expected, { unique: true, columns: ["source_url"] });
+        assert.equal(Array.isArray(error.details?.actual), true);
+        return true;
+      }
+    );
+    assert.deepEqual(calls, ["begin", "wrong-index", "rollback"]);
+  }
+});
+
+test("album video migration recovers after ALTER succeeds but version recording fails", async () => {
+  const { applyMigration } = await apiMigrationRunner();
+  const { SESSION_ALBUM_VIDEO_HARDENING_MIGRATION } = await apiMigrationHelpers();
+  const versionError = new Error("schema_migrations write failed");
+  let indexExists = false;
+  let failVersionRecord = true;
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => { calls.push("begin"); },
+    query: async (sql) => {
+      const normalized = sql.replace(/\s+/g, " ").trim();
+      if (normalized.includes("FROM information_schema.statistics")) {
+        calls.push(indexExists ? "exact-index" : "absent-index");
+        return [indexExists
+          ? [{ non_unique: 0, column_name: "source_url", seq_in_index: 1 }]
+          : []];
+      }
+      if (normalized.startsWith("SELECT duplicates.source_url,")) {
+        calls.push("preflight");
+        return [[]];
+      }
+      if (normalized.startsWith("ALTER TABLE session_album_photos")) {
+        calls.push("alter-implicitly-committed");
+        indexExists = true;
+        return [[]];
+      }
+      if (normalized.startsWith("INSERT INTO schema_migrations")) {
+        calls.push(failVersionRecord ? "record-failed" : "record-succeeded");
+        if (failVersionRecord) throw versionError;
+        return [[]];
+      }
+      return [[]];
+    },
+    commit: async () => { calls.push("commit"); },
+    rollback: async () => { calls.push("rollback-does-not-remove-ddl"); }
+  };
+  const options = {
+    file: SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
+    sql: "ALTER TABLE session_album_photos ADD UNIQUE KEY uniq_session_album_video_source_url (source_url);"
+  };
+
+  await assert.rejects(applyMigration(connection, options), (error) => error === versionError);
+  failVersionRecord = false;
+  await applyMigration(connection, options);
+
+  assert.deepEqual(calls, [
+    "begin",
+    "absent-index",
+    "preflight",
+    "alter-implicitly-committed",
+    "record-failed",
+    "rollback-does-not-remove-ddl",
+    "begin",
+    "exact-index",
+    "record-succeeded",
+    "commit"
+  ]);
 });
 
 currentTestScope = "mini";

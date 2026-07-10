@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config/env.js";
+import { prepareMigration } from "../modules/album-video/migration.js";
 import { createServerConnection } from "./mysql.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,6 +27,36 @@ function splitSqlStatements(sql) {
     .split(";")
     .map((statement) => statement.trim())
     .filter(Boolean);
+}
+
+export async function applyMigration(connection, { file, sql }) {
+  const statements = splitSqlStatements(sql);
+
+  await connection.beginTransaction();
+  try {
+    const { skipStatements } = await prepareMigration(connection, file);
+    if (!skipStatements) {
+      for (const statement of statements) {
+        await connection.query(statement);
+      }
+    }
+    await connection.query("INSERT INTO schema_migrations (version) VALUES (?)", [file]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  }
+}
+
+export function serializeMigrationError(error) {
+  const serialized = {
+    code: "MIGRATION_FAILED",
+    message: error.message
+  };
+  if (error.details !== undefined) {
+    serialized.details = error.details;
+  }
+  return serialized;
 }
 
 async function ensureDatabase(connection) {
@@ -75,21 +106,7 @@ export async function runMigrations() {
       }
 
       const sql = await fs.readFile(path.join(migrationsDir, file), "utf8");
-      const statements = splitSqlStatements(sql);
-
-      await connection.beginTransaction();
-      try {
-        for (const statement of statements) {
-          await connection.query(statement);
-        }
-        await connection.query("INSERT INTO schema_migrations (version) VALUES (?)", [
-          file
-        ]);
-        await connection.commit();
-      } catch (error) {
-        await connection.rollback();
-        throw error;
-      }
+      await applyMigration(connection, { file, sql });
 
       executed.push(file);
     }
@@ -121,10 +138,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         JSON.stringify(
           {
             ok: false,
-            error: {
-              code: "MIGRATION_FAILED",
-              message: error.message
-            }
+            error: serializeMigrationError(error)
           },
           null,
           2
