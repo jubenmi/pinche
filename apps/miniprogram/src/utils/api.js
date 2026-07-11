@@ -16,7 +16,6 @@ export const BACKEND_STATUS_CHANGE_EVENT = "pinche-backend-status-change";
 const BACKEND_HEALTH_TIMEOUT = 10000;
 const MAINTENANCE_USER_MESSAGE = "服务正在上线维护中，请稍后再试。";
 let cosClient = null;
-let cosSdkConstructor = null;
 const albumUploadIdsByKey = new Map();
 const backendStatus = {
   checking: false,
@@ -487,13 +486,8 @@ function readFileAsArrayBuffer(filePath) {
 }
 
 async function loadCosSdk() {
-  if (cosSdkConstructor) {
-    return cosSdkConstructor;
-  }
-
-  const module = await import("cos-wx-sdk-v5/index.js");
-  cosSdkConstructor = module.default || module;
-  return cosSdkConstructor;
+  const module = require("cos-wx-sdk-v5/index.js");
+  return module.default || module;
 }
 
 async function getCosClient() {

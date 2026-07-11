@@ -223,6 +223,7 @@ import {
   readCityDiscoveryCache,
   writeCityDiscoveryCache
 } from "../utils/cityDiscovery";
+import { sessionCalendarStripeTone } from "../utils/sessionCalendarStripe";
 import { showModal, showToast } from "../utils/tdesignFeedback";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -968,13 +969,11 @@ function refreshCalendarItem(item) {
 }
 
 function calendarStripeTone(item) {
-  if (calendarItemFailed(item)) {
-    return "red";
-  }
-  if (isCalendarItemPostStart(item)) {
-    return "green";
-  }
-  return "amber";
+  return sessionCalendarStripeTone({
+    failed: calendarItemFailed(item),
+    postStart: isCalendarItemPostStart(item),
+    albumMediaCount: item.raw?.album_media_count
+  });
 }
 
 function calendarItemFailed(item) {

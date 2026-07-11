@@ -167,7 +167,14 @@ assert(imagePolicy.includes("会员照片") && imagePolicy.includes("原图"), "
 assert(imagePolicy.includes("小程序直传 COS"), "image policy must document direct COS upload");
 
 const miniprogramApi = read("apps/miniprogram/src/utils/api.js");
-assert(miniprogramApi.includes('import("cos-wx-sdk-v5/index.js")'), "miniprogram API must lazy-load the COS SDK source entry");
+assert(
+  miniprogramApi.includes('require("cos-wx-sdk-v5/index.js")'),
+  "miniprogram API must synchronously require the COS SDK source entry"
+);
+assert(
+  !miniprogramApi.includes('import("cos-wx-sdk-v5/index.js")'),
+  "miniprogram API must not compile the COS SDK require into a Promise-like dynamic import"
+);
 assert(miniprogramApi.includes("getCosClient"), "miniprogram API must create a COS SDK client");
 assert(miniprogramApi.includes("/api/uploads/cos-intent"), "miniprogram API must request direct upload intents");
 assert(miniprogramApi.includes("/api/uploads/cos-authorization"), "miniprogram API must request backend COS signatures");
