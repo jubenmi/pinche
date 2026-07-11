@@ -3274,6 +3274,8 @@ git commit -m "test: verify direct COS album media flow"
 
 ## Task 16: Staged production rollout and acceptance
 
+执行状态：等待生产授权（2026-07-11）。只读现网检查确认 API `/health` 与管理后台可用、Bucket 匿名 HEAD 为 403；但 COS 预检当前仍返回 `Access-Control-Allow-Origin: *`、额外允许 `POST`，且暴露头不完整，尚未通过 Step 2 门禁。发布前必须应用 `deploy/cos/cors.production.xml` 并重新验证。
+
 **Files:**
 - Verify: `docs/runbooks/album-media-cos-direct-release.md`
 - Verify: `deploy/cos/cors.production.xml`
