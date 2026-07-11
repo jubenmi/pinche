@@ -868,6 +868,8 @@ function albumMediaResponse(media, tags = [], options = {}) {
 
   return {
     ...common,
+    storage_object_key: media.object_key || null,
+    storage_object_etag: media.object_etag || null,
     image_width: media.image_width ? Number(media.image_width) : null,
     image_height: media.image_height ? Number(media.image_height) : null,
     image_byte_size: media.image_byte_size ? Number(media.image_byte_size) : null,
@@ -5597,9 +5599,10 @@ async function deleteSessionTree(connection, id) {
 export async function assertSessionAlbumUploadAllowed(user, sessionId) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
-    const session = await requireSessionAlbumOpen(connection, id);
-    await requireSessionAlbumMember(connection, session, user);
-    return session;
+    return assertSessionAlbumImageUploadAllowed(connection, user, {
+      sessionId: id,
+      kind: "sessionAlbumPhoto"
+    });
   });
 }
 
@@ -5609,12 +5612,62 @@ export async function assertAdminOwnSessionAlbumAllowed(user, sessionId) {
     throw forbidden("system_admin role required");
   }
   return withDatabaseConnection(async (connection) => {
-    const session = await requireSessionAlbumOpen(connection, id);
-    if (Number(session.organizer_user_id) !== Number(user.user.id)) {
+    return assertSessionAlbumImageUploadAllowed(connection, user, {
+      sessionId: id,
+      kind: "adminSessionAlbumPhoto"
+    });
+  });
+}
+
+export async function assertSessionAlbumImageUploadAllowed(
+  connection,
+  user,
+  { sessionId, kind, forUpdate = false }
+) {
+  const session = await requireSessionAlbumOpen(connection, sessionId, { forUpdate });
+  if (kind === "adminSessionAlbumPhoto") {
+    if (!isAdmin(user) || Number(session.organizer_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the session organizer can use admin album upload");
     }
     return session;
-  });
+  }
+  await requireSessionAlbumMember(connection, session, user, { forUpdate });
+  return session;
+}
+
+export async function insertFinalizedSessionAlbumImage(connection, { intent, metadata }) {
+  const [result] = await connection.query(
+    `INSERT INTO session_album_photos
+      (session_id, uploader_user_id, media_type, photo_url, object_key, object_etag,
+       image_width, image_height, image_byte_size, image_content_type,
+       processing_status, status)
+     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'active')`,
+    [
+      Number(intent.session_id),
+      Number(intent.user_id),
+      `/${intent.object_key}`,
+      intent.object_key,
+      metadata.etag,
+      metadata.width,
+      metadata.height,
+      metadata.byteSize
+    ]
+  );
+  return findById(connection, "session_album_photos", result.insertId);
+}
+
+export async function getFinalizedSessionAlbumImage(connection, { mediaId, user }) {
+  const photo = await findById(connection, "session_album_photos", mediaId);
+  if (!photo || albumMediaType(photo) !== "image" || photo.status !== "active") {
+    throw notFound("Album photo not found");
+  }
+  const session = await requireSessionAlbumOpen(connection, photo.session_id);
+  await requireSessionAlbumMember(connection, session, user);
+  return albumMediaResponse(photo, [], { userId: user.user.id });
+}
+
+export function serializeSessionAlbumImage(media, userId) {
+  return albumMediaResponse(media, [], { userId });
 }
 
 export async function getMySessionAlbumPrivacy(user, sessionId) {

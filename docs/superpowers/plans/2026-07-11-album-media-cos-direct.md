@@ -1015,13 +1015,15 @@ git commit -m "feat: validate album images without proxying bytes"
 
 ## Task 5: Intent repository and connection-aware album access
 
+执行状态：已完成（2026-07-11，10/10 仓储与权限测试、D18/D23 隐私回归及 API 语法检查通过）。
+
 **Files:**
 - Create: `apps/api/src/modules/album-image/repository.js`
 - Modify: `apps/api/src/modules/core/service.js:809-875,1672-1760,5597-5622,5860-5919`
 - Create: `apps/api/test/album-image-repository.test.mjs`
 - Create: `apps/api/test/album-image-access.test.mjs`
 
-- [ ] **Step 1: Write failing repository and access tests**
+- [x] **Step 1: Write failing repository and access tests**
 
 Test with a recording connection so transaction boundaries and `FOR UPDATE` are explicit:
 
@@ -1074,13 +1076,13 @@ In `apps/api/test/album-image-access.test.mjs`, use a fake SQL connection and ex
 - `forUpdate: true` appears on session and membership reads;
 - closed/cancelled window and revoked membership reject with 403.
 
-- [ ] **Step 2: Run repository/access tests to verify RED**
+- [x] **Step 2: Run repository/access tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-repository.test.mjs apps/api/test/album-image-access.test.mjs`
 
 Expected: FAIL because `repository.js` and the exported connection-aware access function do not exist.
 
-- [ ] **Step 3: Implement the narrow repository API**
+- [x] **Step 3: Implement the narrow repository API**
 
 Create `apps/api/src/modules/album-image/repository.js` with only parameterized SQL. The public contract is:
 
@@ -1177,7 +1179,7 @@ export async function markAlbumImageIntentState(
 
 Keep cleanup claims out of this commit; Task 9 extends this same repository after its lease tests exist.
 
-- [ ] **Step 4: Export connection-aware access and finalized image helpers**
+- [x] **Step 4: Export connection-aware access and finalized image helpers**
 
 In `apps/api/src/modules/core/service.js`, add these exact public boundaries and have the two existing wrapper functions call the first one inside their current connection scopes:
 
@@ -1243,7 +1245,7 @@ storage_object_etag: media.object_etag || null
 
 Task 8 must strip both fields before every response; add an immediate test here that `albumMediaResponse` contains them only as server-internal projection inputs, not through a route response.
 
-- [ ] **Step 5: Run focused and existing privacy tests**
+- [x] **Step 5: Run focused and existing privacy tests**
 
 Run: `node --test apps/api/test/album-image-repository.test.mjs apps/api/test/album-image-access.test.mjs`
 
@@ -1253,7 +1255,7 @@ Run: `node scripts/d18-session-album-privacy-check.js && node scripts/d23-album-
 
 Expected: existing membership and public-share privacy contracts pass.
 
-- [ ] **Step 6: Commit repository and access boundaries**
+- [x] **Step 6: Commit repository and access boundaries**
 
 ```bash
 git add apps/api/src/modules/album-image/repository.js apps/api/src/modules/core/service.js apps/api/test/album-image-repository.test.mjs apps/api/test/album-image-access.test.mjs
