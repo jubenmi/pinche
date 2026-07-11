@@ -69,8 +69,8 @@ import {
   createStore,
   createSubscriptionRequest,
   deleteAdminSession,
-  deleteSessionAlbumPhoto,
   prepareSessionAlbumPhotoDeletion,
+  requestSessionAlbumImageDeletion,
   finalizeSessionAlbumPhotoDeletion,
   deleteScript,
   deleteStore,
@@ -3505,16 +3505,13 @@ async function route(request, response) {
       jsonResponse(response, 200, { ok: true, data: { id: deletedVideo.id, deleted: true } });
       return;
     }
-    const deletedPhoto = await deleteSessionAlbumPhoto(user, sessionAlbumPhotoId);
-    await cleanupUploadedSessionAlbumPhotoObject(deletedPhoto.photo_url);
-    await cleanupUploadedSessionAlbumMediaObjects(
-      (deletedPhoto.object_urls || []).filter((url) => url !== deletedPhoto.photo_url)
-    );
-    jsonResponse(response, 200, {
+    const deletion = await requestSessionAlbumImageDeletion(user, sessionAlbumPhotoId);
+    jsonResponse(response, 202, {
       ok: true,
       data: {
-        id: deletedPhoto.id,
-        deleted: true
+        id: deletion.id,
+        deleted: false,
+        deletionPending: true
       }
     });
     return;

@@ -6353,17 +6353,80 @@ export async function deleteSessionAlbumPhoto(user, photoId) {
   });
 }
 
+export async function requestAlbumImageDeletion(connection, { user, mediaId }) {
+  const id = positiveId(mediaId, "mediaId");
+  const photo = await findById(connection, "session_album_photos", id, { forUpdate: true });
+  if (!photo || !["active", "deleting"].includes(photo.status)) {
+    throw notFound("Album photo not found");
+  }
+  if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the photo uploader can delete this photo");
+  }
+  if (albumMediaType(photo) !== "image") {
+    throw badRequest("Video deletion must use the video cleanup path");
+  }
+  if (photo.status === "deleting") {
+    const [jobs] = await connection.query(
+      `SELECT * FROM session_album_object_cleanup_jobs
+       WHERE media_id = ? LIMIT 1 FOR UPDATE`,
+      [id]
+    );
+    if (!jobs[0]) throw conflict("Album image deletion job is missing");
+    return { id, status: "deleting", job: jobs[0] };
+  }
+
+  let storageKind;
+  let objectKey = null;
+  let localPath = null;
+  if (photo.object_key) {
+    storageKind = "cos";
+    objectKey = String(photo.object_key);
+  } else {
+    const path = String(photo.photo_url || "");
+    if (!/^\/uploads\/session-album\/display\/[A-Za-z0-9._-]+$/.test(path)) {
+      throw badRequest("Album image local path is invalid");
+    }
+    storageKind = "local";
+    localPath = path;
+  }
+  await connection.query(
+    "UPDATE session_album_photos SET status = 'deleting' WHERE id = ? AND status = 'active'",
+    [id]
+  );
+  const [inserted] = await connection.query(
+    `INSERT INTO session_album_object_cleanup_jobs
+      (media_id, session_id, storage_kind, object_key, local_path, status)
+     VALUES (?, ?, ?, ?, ?, 'pending')`,
+    [id, Number(photo.session_id), storageKind, objectKey, localPath]
+  );
+  return {
+    id,
+    status: "deleting",
+    job: { id: Number(inserted.insertId), media_id: id, status: "pending" }
+  };
+}
+
+export async function requestSessionAlbumImageDeletion(user, mediaId) {
+  return withTransaction((connection) => requestAlbumImageDeletion(connection, { user, mediaId }));
+}
+
 export async function prepareSessionAlbumPhotoDeletion(user, photoId) {
   const id = positiveId(photoId, "photoId");
   return withDatabaseConnection(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
-    if (!photo || photo.status !== "active") throw notFound("Album photo not found");
+    if (!photo || !["active", "deleting"].includes(photo.status)) {
+      throw notFound("Album photo not found");
+    }
     if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the photo uploader can delete this photo");
     }
+    const mediaType = albumMediaType(photo);
+    if (photo.status === "deleting" && mediaType !== "image") {
+      throw notFound("Album photo not found");
+    }
     return {
       id,
-      media_type: albumMediaType(photo),
+      media_type: mediaType,
       object_urls: [photo.photo_url, photo.source_url, photo.display_url, photo.cover_url].filter(Boolean)
     };
   });

@@ -39,7 +39,8 @@ assert.match(server, /prepareSessionAlbumPhotoDeletion\(user, sessionAlbumPhotoI
 assert.match(server, /media_type === "video"/);
 assert.match(server, /cleanupAlbumVideoBeforeDelete\(/);
 assert.match(server, /finalizeSessionAlbumPhotoDeletion\(/);
-assert.match(server, /const deletedPhoto = await deleteSessionAlbumPhoto\(user, sessionAlbumPhotoId\)/);
+assert.match(server, /requestSessionAlbumImageDeletion\(user, sessionAlbumPhotoId\)/);
+assert.match(server, /deletionPending: true/);
 assert.match(service, /SELECT \* FROM \$\{table\} WHERE id = \?\$\{options\.forUpdate/);
 assert.match(service, /DELETE FROM session_album_photo_tags/);
 assert.match(service, /DELETE FROM session_album_photos/);

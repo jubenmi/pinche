@@ -1972,6 +1972,8 @@ git commit -m "feat: return short lived COS album image URLs"
 
 ## Task 9: Crash-safe orphan cleanup, durable image deletion, and HEAD-gated backfill
 
+执行状态：已完成（2026-07-11，8/8 清理、回填及删除测试；D42 视频删除回归与 API 语法检查通过。实际 worker 删除入口留待受控发布验证）。
+
 **Files:**
 - Modify: `apps/api/src/modules/album-image/repository.js`
 - Create: `apps/api/src/modules/album-image/cleanup.js`
@@ -1985,7 +1987,7 @@ git commit -m "feat: return short lived COS album image URLs"
 - Create: `apps/api/test/album-image-backfill.test.mjs`
 - Create: `apps/api/test/album-image-delete.test.mjs`
 
-- [ ] **Step 1: Write failing lease, deletion, and backfill tests**
+- [x] **Step 1: Write failing lease, deletion, and backfill tests**
 
 Lock the crash and race behavior with an in-memory repository fake:
 
@@ -2041,13 +2043,13 @@ test("backfill updates only an exact COS candidate whose HEAD succeeds", async (
 
 Add cases for `cleanup_not_before`, active authorization/finalize deadline, finalize versus cleanup claim, idempotent DELETE, local unlink, successful hard delete of tags/media only after object deletion, cleanup-job retry, and a video delete proving it never enters the new image job.
 
-- [ ] **Step 2: Run cleanup/backfill/delete tests to verify RED**
+- [x] **Step 2: Run cleanup/backfill/delete tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-cleanup.test.mjs apps/api/test/album-image-backfill.test.mjs apps/api/test/album-image-delete.test.mjs`
 
 Expected: FAIL because cleanup, backfill, lease claims, and durable image deletion do not exist.
 
-- [ ] **Step 3: Add transactional claims with expired-lease recovery**
+- [x] **Step 3: Add transactional claims with expired-lease recovery**
 
 Extend `repository.js` with transaction-scoped claims. MySQL 8.4 uses `FOR UPDATE SKIP LOCKED`; set a 60-second lease in the same transaction:
 
@@ -2119,7 +2121,7 @@ export async function claimAlbumObjectCleanupJobs(
 
 Completion/failure updates must require both row ID and lease token. Retry delay is `min(6 hours, 30 seconds * 2 ** min(attempts, 10))`; clear lease fields on every completion/failure transition.
 
-- [ ] **Step 4: Implement cleanup without losing database anchors**
+- [x] **Step 4: Implement cleanup without losing database anchors**
 
 Create `cleanup.js` with injected `headObject`, `deleteObject`, `unlinkFile`, and transaction helpers. For an orphan intent: HEAD, treat trusted 404 as success, DELETE a present object, then mark `cleaned`. For a business deletion job: delete COS/local bytes first; then in one transaction lock job and media, delete tags, hard-delete the media row, and mark job `cleaned`. On any untrusted or retryable error, retain both rows and schedule retry.
 
@@ -2159,7 +2161,7 @@ export async function runAlbumImageCleanupBatch({
 
 `claimAllCleanup` returns tagged entries `{ type: "intent" | "media", row }` and shares the batch limit across both sources.
 
-- [ ] **Step 5: Change image deletion to a durable state transition only**
+- [x] **Step 5: Change image deletion to a durable state transition only**
 
 Add `requestSessionAlbumImageDeletion(user, mediaId)` in core service. In one transaction it locks the image and current permission rows, returns the existing job if status is already `deleting`, otherwise updates `status='deleting'` and inserts one cleanup job with `storage_kind='cos'` plus `object_key`, or `storage_kind='local'` plus the validated local path.
 
@@ -2189,7 +2191,7 @@ return;
 
 Keep list queries on `status='active'`, so `deleting` disappears immediately. Do not change the video cleanup calls or their strict COS error behavior.
 
-- [ ] **Step 6: Implement HEAD-gated, resumable backfill**
+- [x] **Step 6: Implement HEAD-gated, resumable backfill**
 
 Create `backfill.js` that pages by media ID over active image rows with `object_key IS NULL` and a root-relative display path. Validate the path with the existing COS key parser, HEAD it, then use a conditional update:
 
@@ -2207,7 +2209,7 @@ const result = await backfillAlbumImageObjectKeys({ repository, storage, apply }
 console.log(JSON.stringify({ ok: true, apply, ...result }, null, 2));
 ```
 
-- [ ] **Step 7: Add worker scripts and run focused tests**
+- [x] **Step 7: Add worker scripts and run focused tests**
 
 Add API scripts:
 
@@ -2226,7 +2228,7 @@ Run: `npm run d42:api-delete`
 
 Expected: all video deletion checks pass without entering the image job path.
 
-- [ ] **Step 8: Commit cleanup and backfill**
+- [x] **Step 8: Commit cleanup and backfill**
 
 ```bash
 git add apps/api/src/modules/album-image/repository.js apps/api/src/modules/album-image/cleanup.js apps/api/src/modules/album-image/backfill.js apps/api/src/jobs/album-image-cleanup.js apps/api/src/jobs/backfill-album-image-object-keys.js apps/api/src/modules/core/service.js apps/api/src/server.js apps/api/package.json apps/api/test/album-image-cleanup.test.mjs apps/api/test/album-image-backfill.test.mjs apps/api/test/album-image-delete.test.mjs
