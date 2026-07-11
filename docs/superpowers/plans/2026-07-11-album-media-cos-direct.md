@@ -2237,6 +2237,8 @@ git commit -m "feat: make album image cleanup recoverable"
 
 ## Task 10: Mini-program v2 upload adapter with scoped errors and local-only fallback
 
+执行状态：已完成（2026-07-11，7/7 小程序上传测试；maintenance、D17 与 D42 mini 回归通过）。
+
 **Files:**
 - Modify: `apps/miniprogram/package.json`
 - Modify: `package-lock.json`
@@ -2244,7 +2246,7 @@ git commit -m "feat: make album image cleanup recoverable"
 - Create: `apps/miniprogram/src/utils/albumPhotoUpload.js`
 - Create: `apps/miniprogram/test/albumPhotoUpload.test.mjs`
 
-- [ ] **Step 1: Write failing mini-program upload tests**
+- [x] **Step 1: Write failing mini-program upload tests**
 
 Inject all API/COS calls into the adapter. Lock production/local routing and maintenance isolation:
 
@@ -2307,13 +2309,13 @@ Add adapter cases for two retry attempts, status reconciliation before retry, co
 
 Add a source assertion around `api.js` that album intent/status/finalize calls set `suppressMaintenance: true`, while a normal API network failure still invokes the existing maintenance behavior.
 
-- [ ] **Step 2: Run mini upload tests to verify RED**
+- [x] **Step 2: Run mini upload tests to verify RED**
 
 Run: `node --test apps/miniprogram/test/albumPhotoUpload.test.mjs`
 
 Expected: FAIL because `albumPhotoUpload.js` does not exist.
 
-- [ ] **Step 3: Add the shared workspace dependency and preserve rich errors**
+- [x] **Step 3: Add the shared workspace dependency and preserve rich errors**
 
 Add to `apps/miniprogram/package.json`:
 
@@ -2340,7 +2342,7 @@ function normalizedApiError({ status = 0, payload = {}, fallbackMessage }) {
 
 Wrap existing calls to `markBackendMaintenance` with `if (!options.suppressMaintenance)`. Do not alter its default. Only the album intent, authorization, status, finalize, signed-media refresh, and direct media download paths pass `suppressMaintenance: true`.
 
-- [ ] **Step 4: Add uploadId-aware COS calls without changing generic fallback**
+- [x] **Step 4: Add uploadId-aware COS calls without changing generic fallback**
 
 Export these low-level functions from `api.js`:
 
@@ -2381,7 +2383,7 @@ Keep a short-lived `Map` from exact COS key to uploadId only during `putObject`;
 
 Normalize mini-program `url not in domain list` errors to `COS_DOMAIN_NOT_ALLOWED`, timeouts to `COS_REQUEST_TIMEOUT`, and preserve COS XML `Code`/`Message` from the SDK. Add fire-and-forget `reportAlbumMediaEvent` calls for retry/failure and URL refresh outcomes; reporting itself uses `suppressMaintenance: true` and never changes the user-visible result.
 
-- [ ] **Step 5: Implement the mini-program adapter around the shared state machine**
+- [x] **Step 5: Implement the mini-program adapter around the shared state machine**
 
 Create `albumPhotoUpload.js`:
 
@@ -2432,7 +2434,7 @@ export async function uploadAlbumPhoto({
 
 `uploadSessionAlbumPhotoLocal` exports the current multipart helper and resolves to its photo URL string. `createSessionAlbumPhotoLegacy` POSTs that URL, reads `dataOf(response)`, and resolves to `{ photo: dataOf(response) }`, matching the v2 finalize shape. Both are reachable only through the exact `api-local` condition above.
 
-- [ ] **Step 6: Verify focused and generic-upload behavior**
+- [x] **Step 6: Verify focused and generic-upload behavior**
 
 Run: `node --test apps/miniprogram/test/albumPhotoUpload.test.mjs`
 
@@ -2442,7 +2444,7 @@ Run: `node scripts/check-maintenance-mode.js && node scripts/d17-cos-storage-che
 
 Expected: scoped album failures never set maintenance; default maintenance, avatar/review fallback, and video paths remain green.
 
-- [ ] **Step 7: Commit the mini-program upload adapter**
+- [x] **Step 7: Commit the mini-program upload adapter**
 
 ```bash
 git add apps/miniprogram/package.json package-lock.json apps/miniprogram/src/utils/api.js apps/miniprogram/src/utils/albumPhotoUpload.js apps/miniprogram/test/albumPhotoUpload.test.mjs
