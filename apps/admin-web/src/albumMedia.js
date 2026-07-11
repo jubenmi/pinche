@@ -1,4 +1,59 @@
-import { albumMediaError, executeAlbumCosUpload } from "@pinche/shared";
+import {
+  albumMediaError,
+  createSingleFlight,
+  executeAlbumCosUpload,
+  mergeAlbumMediaUrls,
+  shouldRefreshAlbumMedia
+} from "@pinche/shared";
+
+export function normalizeAdminAlbumImage(photo = {}) {
+  const preview = photo.preview_display_url || photo.preview_url || photo.image_url || "";
+  return {
+    ...photo,
+    image_url: preview,
+    preview_url: preview,
+    thumbnail_url: photo.thumbnail_display_url || photo.thumbnail_url || preview,
+    download_url: photo.download_url || preview,
+    display_url: photo.display_url || ""
+  };
+}
+
+export function createAdminAlbumRefreshController(options) {
+  const flight = createSingleFlight();
+  let timer = null;
+  const clear = () => {
+    if (timer !== null) options.clearTimer(timer);
+    timer = null;
+  };
+  const schedule = () => {
+    clear();
+    const expiries = (options.readAlbum()?.photos || [])
+      .map((photo) => Date.parse(photo.media_url_expires_at || ""))
+      .filter(Number.isFinite);
+    if (expiries.length === 0) return;
+    timer = options.setTimer(
+      () => { void refresh(); },
+      Math.max(0, Math.min(...expiries) - options.now() - 30_000)
+    );
+  };
+  const refresh = () => flight.run(async () => {
+    const next = await options.reloadAlbum();
+    options.writeAlbum(mergeAlbumMediaUrls(options.readAlbum(), next));
+    schedule();
+    return options.readAlbum();
+  });
+  const checkNow = () => {
+    const expiring = (options.readAlbum()?.photos || []).some((photo) =>
+      shouldRefreshAlbumMedia(photo.media_url_expires_at, { nowMs: options.now() })
+    );
+    return expiring ? refresh() : (schedule(), Promise.resolve(options.readAlbum()));
+  };
+  return { refresh, schedule, checkNow, dispose: clear };
+}
+
+export function shouldReloadAuthorizedImage({ mediaKeyChanged, hasObjectUrl, failed }) {
+  return mediaKeyChanged || !hasObjectUrl || failed;
+}
 
 export async function uploadAdminAlbumPhoto({
   sessionId,

@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { executeAlbumCosUpload } from "@pinche/shared";
-import { uploadAdminAlbumPhoto } from "../src/albumMedia.js";
+import {
+  createAdminAlbumRefreshController,
+  normalizeAdminAlbumImage,
+  shouldReloadAuthorizedImage,
+  uploadAdminAlbumPhoto
+} from "../src/albumMedia.js";
 
 function photoFile(size = 2048, name = "photo.png", type = "image/png") {
   return new File([new Uint8Array(size)], name, { type });
@@ -144,4 +149,86 @@ test("generic album video continues using generic fallback upload", async () => 
   assert.match(source, /albumAuthorizationErrorsByKey\.get\(key\)/);
   assert.match(source, /300_000/);
   assert.match(source, /task\?\.abort\?\.\(\)/);
+});
+
+test("admin refresh is single-flight and merges URLs without resetting controls", async () => {
+  const state = {
+    album: { photos: [{ id: 1, preview_display_url: "old", display_url: "blob:loaded" }] },
+    activeFilter: "mine",
+    selectedIds: [1],
+    scrollTop: 420
+  };
+  let loads = 0;
+  const controller = createAdminAlbumRefreshController({
+    readAlbum: () => state.album,
+    writeAlbum: (album) => { state.album = album; },
+    reloadAlbum: async () => {
+      loads += 1;
+      return { photos: [{ id: 1, preview_display_url: "new" }] };
+    },
+    setTimer: () => 1,
+    clearTimer: () => {},
+    now: () => Date.parse("2026-07-11T01:04:40.000Z")
+  });
+  await Promise.all([controller.refresh(), controller.refresh()]);
+  assert.equal(loads, 1);
+  assert.equal(state.album.photos[0].preview_display_url, "new");
+  assert.equal(state.album.photos[0].display_url, "blob:loaded");
+  assert.equal(state.activeFilter, "mine");
+  assert.deepEqual(state.selectedIds, [1]);
+  assert.equal(state.scrollTop, 420);
+});
+
+test("admin normalization prefers signed fields and preserves loaded blobs", () => {
+  const normalized = normalizeAdminAlbumImage({
+    id: 1,
+    preview_display_url: "signed-preview",
+    thumbnail_display_url: "signed-thumb",
+    download_url: "signed-download",
+    preview_url: "legacy",
+    display_url: "blob:loaded"
+  });
+  assert.equal(normalized.preview_url, "signed-preview");
+  assert.equal(normalized.thumbnail_url, "signed-thumb");
+  assert.equal(normalized.download_url, "signed-download");
+  assert.equal(normalized.display_url, "blob:loaded");
+});
+
+test("lazy image keeps loaded blob for signature refresh and reloads key changes or failures", () => {
+  assert.equal(shouldReloadAuthorizedImage({
+    mediaKeyChanged: false, hasObjectUrl: true, failed: false
+  }), false);
+  assert.equal(shouldReloadAuthorizedImage({
+    mediaKeyChanged: true, hasObjectUrl: true, failed: false
+  }), true);
+  assert.equal(shouldReloadAuthorizedImage({
+    mediaKeyChanged: false, hasObjectUrl: true, failed: true
+  }), true);
+  assert.equal(shouldReloadAuthorizedImage({
+    mediaKeyChanged: false, hasObjectUrl: false, failed: false
+  }), true);
+});
+
+test("admin workspace wires signed refresh, one-step upload, visibility checks, and media keys", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workspace = await readFile(
+    new URL("../src/components/SessionAlbumWorkspace.vue", import.meta.url),
+    "utf8"
+  );
+  const lazyImage = await readFile(
+    new URL("../src/components/AuthorizedLazyImage.vue", import.meta.url),
+    "utf8"
+  );
+  const uploadStart = workspace.indexOf("async function uploadFiles");
+  const uploadEnd = workspace.indexOf("function previewMedia", uploadStart);
+  const uploadBlock = workspace.slice(uploadStart, uploadEnd);
+  assert.match(uploadBlock, /uploadAdminAlbumPhoto\(\{/);
+  assert.doesNotMatch(uploadBlock, /upload\.photoUrl/);
+  assert.match(workspace, /createAdminAlbumRefreshController/);
+  assert.match(workspace, /visibilitychange/);
+  assert.match(workspace, /albumRefreshController\?\.dispose\(\)/);
+  assert.match(workspace, /`\$\{photoId\}:\$\{failedUrl\}`/);
+  assert.match(workspace, /:media-key="photo\.id"/);
+  assert.match(lazyImage, /shouldReloadAuthorizedImage/);
+  assert.match(lazyImage, /nextKey !== previousKey/);
 });

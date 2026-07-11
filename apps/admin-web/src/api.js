@@ -80,12 +80,32 @@ export async function fetchAuthorizedMediaObjectUrl(path) {
   const headers = shouldAttachAdminAuthorization(path)
     ? (auth.token ? { authorization: `Bearer ${auth.token}` } : {})
     : {};
-  const response = await fetch(path, {
-    headers
-  });
+  let response;
+  try {
+    response = await fetch(path, { headers });
+  } catch (cause) {
+    const error = new Error(cause?.message || "Media request failed");
+    const hostname = (() => {
+      try { return new URL(path, window.location.origin).hostname; } catch { return ""; }
+    })();
+    error.status = 0;
+    error.statusCode = 0;
+    error.code = cause instanceof TypeError && hostname.endsWith(".myqcloud.com")
+      ? "COS_DOMAIN_NOT_ALLOWED"
+      : "MEDIA_NETWORK_ERROR";
+    error.cause = cause;
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error(`Media request failed: ${response.status}`);
     error.status = response.status;
+    error.statusCode = response.status;
+    error.code = [401, 403].includes(response.status)
+      ? "MEDIA_URL_EXPIRED"
+      : "MEDIA_REQUEST_FAILED";
+    error.requestId = response.headers.get("x-cos-request-id") ||
+      response.headers.get("x-request-id") || "";
+    error.details = error.requestId ? { requestId: error.requestId } : undefined;
     throw error;
   }
   return URL.createObjectURL(await response.blob());

@@ -2814,13 +2814,15 @@ git commit -m "feat: upload admin album images directly to COS"
 
 ## Task 13: Admin signed URL lifecycle and blob-cache stability
 
+执行状态：已完成（2026-07-11，10/10 管理端媒体测试；runtime、D12/D31/D32 与生产构建通过）。
+
 **Files:**
 - Modify: `apps/admin-web/src/albumMedia.js`
 - Modify: `apps/admin-web/src/components/SessionAlbumWorkspace.vue:453-518,902-1263,1486-1501`
 - Modify: `apps/admin-web/src/components/AuthorizedLazyImage.vue:1-113`
 - Modify: `apps/admin-web/test/albumMedia.test.mjs`
 
-- [ ] **Step 1: Add failing admin refresh and lazy-image cache tests**
+- [x] **Step 1: Add failing admin refresh and lazy-image cache tests**
 
 Extend `albumMedia.test.mjs` with fixed timers and album state:
 
@@ -2861,13 +2863,13 @@ export function shouldReloadAuthorizedImage({ mediaKeyChanged, hasObjectUrl, fai
 }
 ```
 
-- [ ] **Step 2: Run admin lifecycle tests to verify RED**
+- [x] **Step 2: Run admin lifecycle tests to verify RED**
 
 Run: `npm --workspace apps/admin-web run test:album-media`
 
 Expected: FAIL on missing refresh controller and lazy-image predicate.
 
-- [ ] **Step 3: Add the admin refresh controller and signed-field normalization**
+- [x] **Step 3: Add the admin refresh controller and signed-field normalization**
 
 Wrap shared helpers in `albumMedia.js`:
 
@@ -2915,7 +2917,7 @@ export function createAdminAlbumRefreshController(options) {
 }
 ```
 
-- [ ] **Step 4: Integrate upload, expiry, visibility, and one current-media retry**
+- [x] **Step 4: Integrate upload, expiry, visibility, and one current-media retry**
 
 In `SessionAlbumWorkspace.vue`:
 
@@ -2932,7 +2934,7 @@ Use `fetchAuthorizedMediaObjectUrl` for both API and COS; its existing origin pr
 
 Wrap cross-origin fetch failures: a COS 401/403 becomes `MEDIA_URL_EXPIRED` and enters the one-refresh path; a browser `TypeError`/CORS failure for the configured COS origin becomes `COS_DOMAIN_NOT_ALLOWED` and is shown without a refresh loop. Preserve `status`, `code`, and the response request ID when exposed by CORS.
 
-- [ ] **Step 5: Keep loaded blobs across signature refreshes**
+- [x] **Step 5: Keep loaded blobs across signature refreshes**
 
 Add a `mediaKey` prop to `AuthorizedLazyImage.vue`, passed as `photo.id`. On `src` change with the same `mediaKey`, keep a valid `objectUrl`. If the prior fetch failed, clear failure and load the new source. On `mediaKey` change or unmount, revoke the blob. The watch logic is:
 
@@ -2960,7 +2962,7 @@ watch(
 );
 ```
 
-- [ ] **Step 6: Run admin tests and production build**
+- [x] **Step 6: Run admin tests and production build**
 
 Run: `npm --workspace apps/admin-web run test:album-media && npm --workspace apps/admin-web run test:runtime-config`
 
@@ -2974,7 +2976,7 @@ Run: `npm run build:admin-web`
 
 Expected: Vite production build exits 0.
 
-- [ ] **Step 7: Commit admin URL lifecycle**
+- [x] **Step 7: Commit admin URL lifecycle**
 
 ```bash
 git add apps/admin-web/src/albumMedia.js apps/admin-web/src/components/SessionAlbumWorkspace.vue apps/admin-web/src/components/AuthorizedLazyImage.vue apps/admin-web/test/albumMedia.test.mjs
