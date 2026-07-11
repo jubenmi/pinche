@@ -542,6 +542,39 @@ function runMixedVideoWindowCheck(component) {
   assert.ok(runtime.pausedVideoIds.includes("album-image-viewer-video-5"));
 }
 
+function runRemovedVideoEventCheck(component) {
+  const photos = makePhotos(3);
+  photos[1] = {
+    ...photos[1],
+    media_type: "video",
+    video_display_url: "wxfile://video-2.mp4"
+  };
+  const { instance, emitted } = openViewerWithPhotos(component, photos, 1);
+  const removedVideo = instance.currentPhoto;
+
+  applyPhotos(
+    component,
+    instance,
+    photos.filter((photo) => photo.id !== removedVideo.id)
+  );
+  const videoErrorCount = emitted.filter(({ event }) => event === "video-error").length;
+  const needVideoCount = emitted.filter(({ event }) => event === "need-video").length;
+
+  instance.handleVideoError(removedVideo);
+  instance.retryVideo(removedVideo);
+
+  assert.equal(
+    emitted.filter(({ event }) => event === "video-error").length,
+    videoErrorCount,
+    "A removed native video node must not emit a stale video-error payload"
+  );
+  assert.equal(
+    emitted.filter(({ event }) => event === "need-video").length,
+    needVideoCount,
+    "A removed native video node must not emit a stale retry payload"
+  );
+}
+
 function runCurrentMediaStateCheck(component) {
   const { instance, emitted } = openViewer(component, 10, 4);
   const photo = instance.currentPhoto;
@@ -583,6 +616,7 @@ function runSequenceCheck() {
   runFullTraversalCheck(component);
   runPhotosChangeCheck(component);
   runMixedVideoWindowCheck(component);
+  runRemovedVideoEventCheck(component);
   runCurrentMediaStateCheck(component);
 }
 

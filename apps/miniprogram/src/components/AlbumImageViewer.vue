@@ -202,6 +202,8 @@ export default {
       }
     },
     photos(nextPhotos, previousPhotos) {
+      // Structural list changes replace the array; in-place item writes are media hydration
+      // and intentionally must not rebuild the native swiper generation.
       if (this.visible) {
         this.syncCurrentIndexAfterPhotosChange(nextPhotos, previousPhotos);
         this.$nextTick(() => this.requestCurrentVideoIfNeeded());
@@ -235,12 +237,19 @@ export default {
       return this.clampIndex(this.windowStart + this.clampWindowIndex(windowIndex));
     },
     logicalIndexForPhoto(photo) {
-      if (!photo || photo.id === undefined || photo.id === null) {
-        return this.currentIndex;
+      if (!photo) {
+        return -1;
+      }
+      const exactIndex = this.photos.indexOf(photo);
+      if (exactIndex >= 0) {
+        return exactIndex;
+      }
+      if (photo.id === undefined || photo.id === null) {
+        return -1;
       }
       const key = String(photo.id);
       const index = this.photos.findIndex((item) => String(item?.id) === key);
-      return index >= 0 ? index : this.currentIndex;
+      return index;
     },
     rebuildWindowAt(logicalIndex, { force = false } = {}) {
       const nextIndex = this.clampIndex(logicalIndex);
@@ -435,8 +444,12 @@ export default {
       this.setPhotoState("thumbnailFailedById", photo, true);
     },
     handleVideoError(photo) {
+      const logicalIndex = this.logicalIndexForPhoto(photo);
+      if (logicalIndex < 0) {
+        return;
+      }
       this.$emit("video-error", {
-        index: this.logicalIndexForPhoto(photo),
+        index: logicalIndex,
         photo
       });
     },
@@ -447,9 +460,13 @@ export default {
       return Boolean(this.isVideo(photo) && (photo?.video_load_failed || this.videoFailedById[this.photoStateKey(photo)]));
     },
     retryVideo(photo) {
+      const logicalIndex = this.logicalIndexForPhoto(photo);
+      if (logicalIndex < 0) {
+        return;
+      }
       this.setPhotoState("videoFailedById", photo, false);
       this.$emit("need-video", {
-        index: this.logicalIndexForPhoto(photo),
+        index: logicalIndex,
         photo,
         retry: true
       });
