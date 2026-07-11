@@ -143,7 +143,54 @@ assert.ok(
 const compressVideo = block(album, "async compressVideoBeforeUpload", "shouldCompressVideoBeforeUpload");
 assert.match(compressVideo, /compressVideoSizeBytes\(result\.size\)/);
 assert.match(album, /if\s*\(!uploadSize\)[\s\S]*无法确认视频大小/);
-assert.doesNotMatch(block(album, "async uploadChosenVideo", "async uploadChosenPhotos"), /Math\.max\(1,/);
+const uploadChosenVideo = block(album, "async uploadChosenVideo(file) {", "async uploadChosenPhotos(paths) {");
+assert.doesNotMatch(uploadChosenVideo, /Math\.max\(1,/);
+assert.match(
+  album,
+  /import\s*\{\s*runExclusiveAlbumMediaTask\s*\}\s*from\s*["']\.\.\/\.\.\/utils\/albumMediaOperation["'];/
+);
+const exclusiveVideoTask = block(
+  uploadChosenVideo,
+  "await runExclusiveAlbumMediaTask({",
+  "\n        });\n      } catch (error) {"
+);
+assert.equal(
+  uploadChosenVideo.indexOf("await "),
+  uploadChosenVideo.indexOf("await runExclusiveAlbumMediaTask({"),
+  "video upload must acquire the exclusive lock before its first await"
+);
+assert.match(exclusiveVideoTask, /isBusy:\s*\(\)\s*=>\s*this\.albumBusy/);
+assert.match(
+  exclusiveVideoTask,
+  /setBusy:\s*\(?value\)?\s*=>\s*\{\s*this\.uploading\s*=\s*value;\s*\}/
+);
+const exclusiveTaskStart = exclusiveVideoTask.indexOf("task: async () => {");
+const firstExclusiveTaskAwait = exclusiveVideoTask.indexOf("await ", exclusiveTaskStart);
+assert.notEqual(exclusiveTaskStart, -1, "video upload must provide an exclusive async task");
+assert.equal(
+  firstExclusiveTaskAwait,
+  exclusiveVideoTask.indexOf("await this.getVideoFileInfo(originalPath)", exclusiveTaskStart),
+  "video metadata preprocessing must be the first await inside the exclusive task"
+);
+assertOrdered(
+  exclusiveVideoTask,
+  [
+    "await runExclusiveAlbumMediaTask({",
+    "isBusy: () => this.albumBusy",
+    "setBusy:",
+    "task: async () => {",
+    'this.statusText = "正在处理视频...";',
+    "await this.getVideoFileInfo(originalPath)"
+  ],
+  "exclusive album video preparation"
+);
+assert.doesNotMatch(uploadChosenVideo, /!confirmed\s*\|\|\s*this\.albumBusy/);
+assert.doesNotMatch(uploadChosenVideo, /this\.uploading\s*=\s*(?:true|false)/);
+assert.match(uploadChosenVideo, /if\s*\(!confirmed\)\s*\{/);
+assert.match(
+  uploadChosenVideo,
+  /catch\s*\(error\)\s*\{[\s\S]*error\?\.userMessage\s*\|\|\s*"相册视频上传失败，请稍后重试。"/
+);
 
 assertAlbumMediaEntryContract(album);
 
