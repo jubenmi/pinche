@@ -75,4 +75,27 @@ assert(
   "both list responses must normalize album_media_count to a number"
 );
 
-console.log("D43 post-session media stripe checks passed");
+const calendarSource = readFileSync(
+  new URL("../apps/miniprogram/src/components/SessionCalendar.vue", import.meta.url),
+  "utf8"
+);
+assert(
+  calendarSource.includes(
+    'import { sessionCalendarStripeTone } from "../utils/sessionCalendarStripe";'
+  ),
+  "SessionCalendar must import the pure stripe helper"
+);
+for (const token of [
+  "return sessionCalendarStripeTone({",
+  "failed: calendarItemFailed(item)",
+  "postStart: isCalendarItemPostStart(item)",
+  "albumMediaCount: item.raw?.album_media_count"
+]) {
+  assert(calendarSource.includes(token), `SessionCalendar stripe wiring must include: ${token}`);
+}
+assert(
+  !calendarSource.includes('if (isCalendarItemPostStart(item)) {\n    return "green";'),
+  "post-start sessions must no longer become green unconditionally"
+);
+
+console.log("D44 post-session media stripe checks passed");

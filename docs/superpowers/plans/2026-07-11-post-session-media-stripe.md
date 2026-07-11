@@ -16,20 +16,20 @@ Design reference: `docs/superpowers/specs/2026-07-11-post-session-media-stripe-d
 
 - Create `apps/miniprogram/src/utils/sessionCalendarStripe.js`: pure, framework-free stripe-tone decision.
 - Create `apps/api/src/modules/core/session-album-media-count.js`: safe shared SQL expression for counting effective album media.
-- Create `scripts/d43-post-session-media-stripe-check.js`: executable behavioral and source-integration regression check.
+- Create `scripts/d44-post-session-media-stripe-check.js`: executable behavioral and source-integration regression check.
 - Modify `apps/api/src/modules/core/service.js`: expose the shared media count from organizer and participant list queries.
 - Modify `apps/miniprogram/src/components/SessionCalendar.vue`: delegate the stripe decision to the pure helper.
-- Modify `package.json`: register the D43 check in the normal repository check command.
+- Modify `package.json`: register the D44 check in the normal repository check command.
 
 ### Task 1: Lock the three-color decision in a pure helper
 
 **Files:**
-- Create: `scripts/d43-post-session-media-stripe-check.js`
+- Create: `scripts/d44-post-session-media-stripe-check.js`
 - Create: `apps/miniprogram/src/utils/sessionCalendarStripe.js`
 
 - [ ] **Step 1: Write the failing stripe-decision check**
 
-Create `scripts/d43-post-session-media-stripe-check.js` with:
+Create `scripts/d44-post-session-media-stripe-check.js` with:
 
 ```js
 import assert from "node:assert/strict";
@@ -77,7 +77,7 @@ for (const testCase of stripeCases) {
   );
 }
 
-console.log("D43 post-session media stripe checks passed");
+console.log("D44 post-session media stripe checks passed");
 ```
 
 - [ ] **Step 2: Run the check and verify RED**
@@ -85,7 +85,7 @@ console.log("D43 post-session media stripe checks passed");
 Run:
 
 ```bash
-node scripts/d43-post-session-media-stripe-check.js
+node scripts/d44-post-session-media-stripe-check.js
 ```
 
 Expected: FAIL with `ERR_MODULE_NOT_FOUND` for `sessionCalendarStripe.js`.
@@ -120,15 +120,15 @@ export function sessionCalendarStripeTone({
 Run:
 
 ```bash
-node scripts/d43-post-session-media-stripe-check.js
+node scripts/d44-post-session-media-stripe-check.js
 ```
 
-Expected: PASS with `D43 post-session media stripe checks passed`.
+Expected: PASS with `D44 post-session media stripe checks passed`.
 
 - [ ] **Step 5: Commit the isolated decision helper**
 
 ```bash
-git add scripts/d43-post-session-media-stripe-check.js apps/miniprogram/src/utils/sessionCalendarStripe.js
+git add scripts/d44-post-session-media-stripe-check.js apps/miniprogram/src/utils/sessionCalendarStripe.js
 git commit -m "test: define post-session stripe colors"
 ```
 
@@ -137,11 +137,11 @@ git commit -m "test: define post-session stripe colors"
 **Files:**
 - Create: `apps/api/src/modules/core/session-album-media-count.js`
 - Modify: `apps/api/src/modules/core/service.js:1-12,3651-3696,5006-5051`
-- Modify: `scripts/d43-post-session-media-stripe-check.js`
+- Modify: `scripts/d44-post-session-media-stripe-check.js`
 
 - [ ] **Step 1: Extend the check with the missing API count contract**
 
-Add these imports at the top of `scripts/d43-post-session-media-stripe-check.js`:
+Add these imports at the top of `scripts/d44-post-session-media-stripe-check.js`:
 
 ```js
 import { readFileSync } from "node:fs";
@@ -188,7 +188,7 @@ assert(
 Run:
 
 ```bash
-node scripts/d43-post-session-media-stripe-check.js
+node scripts/d44-post-session-media-stripe-check.js
 ```
 
 Expected: FAIL with `ERR_MODULE_NOT_FOUND` for `session-album-media-count.js`.
@@ -255,15 +255,15 @@ album_media_count: Number(row.album_media_count || 0),
 
 Keep `active_album_photo_count` and `photo_count` unchanged because existing cancellation and album flows consume them.
 
-- [ ] **Step 5: Run the D43 check and verify GREEN**
+- [ ] **Step 5: Run the D44 check and verify GREEN**
 
 Run:
 
 ```bash
-node scripts/d43-post-session-media-stripe-check.js
+node scripts/d44-post-session-media-stripe-check.js
 ```
 
-Expected: PASS with `D43 post-session media stripe checks passed`.
+Expected: PASS with `D44 post-session media stripe checks passed`.
 
 - [ ] **Step 6: Run the API syntax check**
 
@@ -278,7 +278,7 @@ Expected: PASS with `API JavaScript syntax checks passed`.
 - [ ] **Step 7: Commit the API count contract**
 
 ```bash
-git add apps/api/src/modules/core/session-album-media-count.js apps/api/src/modules/core/service.js scripts/d43-post-session-media-stripe-check.js
+git add apps/api/src/modules/core/session-album-media-count.js apps/api/src/modules/core/service.js scripts/d44-post-session-media-stripe-check.js
 git commit -m "feat: expose effective album media counts"
 ```
 
@@ -286,12 +286,12 @@ git commit -m "feat: expose effective album media counts"
 
 **Files:**
 - Modify: `apps/miniprogram/src/components/SessionCalendar.vue:218-230,931-978`
-- Modify: `scripts/d43-post-session-media-stripe-check.js`
+- Modify: `scripts/d44-post-session-media-stripe-check.js`
 - Modify: `package.json:13-44`
 
 - [ ] **Step 1: Extend the check with the missing Vue wiring contract**
 
-Add these assertions before the final `console.log` in `scripts/d43-post-session-media-stripe-check.js`:
+Add these assertions before the final `console.log` in `scripts/d44-post-session-media-stripe-check.js`:
 
 ```js
 const calendarSource = readFileSync(
@@ -323,7 +323,7 @@ assert(
 Run:
 
 ```bash
-node scripts/d43-post-session-media-stripe-check.js
+node scripts/d44-post-session-media-stripe-check.js
 ```
 
 Expected: FAIL with `SessionCalendar must import the pure stripe helper`.
@@ -350,28 +350,28 @@ function calendarStripeTone(item) {
 
 Do not change `statusTone`, `calendarItemStatusText`, `calendarAlbumCtaNote`, or the existing CSS colors.
 
-- [ ] **Step 4: Run the D43 check and verify GREEN**
+- [ ] **Step 4: Run the D44 check and verify GREEN**
 
 Run:
 
 ```bash
-node scripts/d43-post-session-media-stripe-check.js
+node scripts/d44-post-session-media-stripe-check.js
 ```
 
-Expected: PASS with `D43 post-session media stripe checks passed`.
+Expected: PASS with `D44 post-session media stripe checks passed`.
 
-- [ ] **Step 5: Register the D43 regression check**
+- [ ] **Step 5: Register the D44 regression check**
 
 Add this exact script entry to `package.json`:
 
 ```json
-"d43:check": "node scripts/d43-post-session-media-stripe-check.js"
+"d44:check": "node scripts/d44-post-session-media-stripe-check.js"
 ```
 
 Append this exact suffix to the current root `scripts.check` string:
 
 ```text
- && npm run d43:check
+ && npm run d44:check
 ```
 
 - [ ] **Step 6: Build the WeChat mini-program**
@@ -389,12 +389,12 @@ Expected: exit code 0 and a completed `mp-weixin` production build.
 Run:
 
 ```bash
-npm run d43:check
+npm run d44:check
 npm --workspace apps/api run check
 node scripts/check-miniprogram.js
 ```
 
-Expected: all three commands exit 0; D43, API syntax, and mini-program source checks report success.
+Expected: all three commands exit 0; D44, API syntax, and mini-program source checks report success.
 
 - [ ] **Step 8: Run the full repository check**
 
@@ -404,7 +404,7 @@ Run:
 npm run check
 ```
 
-Expected: exit code 0 with the existing suite plus `D43 post-session media stripe checks passed`.
+Expected: exit code 0 with the existing suite plus `D44 post-session media stripe checks passed`.
 
 - [ ] **Step 9: Inspect the final diff**
 
@@ -415,11 +415,11 @@ git diff --check
 git status --short
 ```
 
-Expected: `git diff --check` prints nothing; status lists only the intended D43 implementation files.
+Expected: `git diff --check` prints nothing; status lists only the intended D44 implementation files.
 
 - [ ] **Step 10: Commit the calendar integration**
 
 ```bash
-git add apps/miniprogram/src/components/SessionCalendar.vue scripts/d43-post-session-media-stripe-check.js package.json
+git add apps/miniprogram/src/components/SessionCalendar.vue scripts/d44-post-session-media-stripe-check.js package.json
 git commit -m "feat: mark ended sessions red until media exists"
 ```
