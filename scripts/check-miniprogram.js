@@ -2993,12 +2993,25 @@ if (!fs.existsSync(pagesJsonPath)) {
   for (const requiredSwiperChangeText of [
     "event?.detail?.current",
     "this.currentIndex = nextIndex",
-    "this.swiperIndex = nextIndex",
     'this.$emit("change"'
   ]) {
     if (!albumViewerSwiperChangeSource.includes(requiredSwiperChangeText)) {
       fail(`AlbumImageViewer must keep 1-20 swipe state in sync: ${requiredSwiperChangeText}`);
     }
+  }
+  if (albumViewerSwiperChangeSource.includes("this.swiperIndex = nextIndex")) {
+    fail("AlbumImageViewer native change handler must not rewrite the programmatic swiper index");
+  }
+  const albumViewerSyncInitialIndexSource = methodBody(albumImageViewerSource, "syncInitialIndex");
+  if (!albumViewerSyncInitialIndexSource.includes("this.swiperIndex = nextIndex")) {
+    fail("AlbumImageViewer initial index sync must keep programmatic swiper positioning");
+  }
+  const albumViewerSyncAfterPhotosChangeSource = methodBody(
+    albumImageViewerSource,
+    "syncCurrentIndexAfterPhotosChange"
+  );
+  if (!albumViewerSyncAfterPhotosChangeSource.includes("this.swiperIndex = nextIndex")) {
+    fail("AlbumImageViewer photos clamp must keep programmatic swiper positioning");
   }
   const albumViewerPhotosWatcherSource = methodBody(albumImageViewerSource, "photos");
   if (albumViewerPhotosWatcherSource.includes("syncInitialIndex")) {

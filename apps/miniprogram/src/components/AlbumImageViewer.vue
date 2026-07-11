@@ -422,7 +422,6 @@ export default {
         this.pauseVideoAt(previousIndex);
       }
       this.currentIndex = nextIndex;
-      this.swiperIndex = nextIndex;
       this.$emit("change", {
         index: nextIndex,
         photo: this.photos[nextIndex] || null

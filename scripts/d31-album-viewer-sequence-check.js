@@ -117,7 +117,49 @@ function runFastSwipeHydrationCheck(component) {
     "Viewer must not rewrite swiperIndex during fast-swipe media hydration"
   );
   assert(instance.currentIndex === 5, "Viewer currentIndex must remain on the fast-swiped photo");
-  assert(instance.swiperIndex === 5, "Viewer swiperIndex must remain on the fast-swiped photo");
+  assert(instance.swiperIndex === 0, "Viewer swiperIndex must remain at the programmatic position after a fast swipe");
+}
+
+function runNativeSwipeControlFeedbackCheck(component) {
+  const { instance, emitted } = createInstance(component, makePhotos(6));
+
+  instance.visible = true;
+  component.watch.visible.call(instance, true, false);
+
+  const swiperIndexWrites = trackWrites(instance, "swiperIndex");
+  const touchIndexes = [1, 2, 1, 2, 3];
+  for (const current of touchIndexes) {
+    instance.handleSwiperChange({ detail: { current, source: "touch" } });
+  }
+
+  const changeIndexes = emitted
+    .filter((event) => event.event === "change")
+    .map((event) => event.payload.index);
+  assert(instance.currentIndex === 3, "Viewer currentIndex must follow the final native swipe");
+  assert(swiperIndexWrites.writes === 0, "Viewer native swipes must not rewrite swiperIndex");
+  assert(instance.swiperIndex === 0, "Viewer swiperIndex must remain at its programmatic position");
+  assert(
+    JSON.stringify(changeIndexes) === JSON.stringify(touchIndexes),
+    "Viewer native swipe change events must preserve the 1,2,1,2,3 index sequence"
+  );
+}
+
+function runProgrammaticPositioningCheck(component) {
+  const { instance } = createInstance(component, makePhotos(6));
+
+  instance.initialIndex = 3;
+  instance.visible = true;
+  component.watch.visible.call(instance, true, false);
+
+  assert(instance.currentIndex === 3, "Viewer currentIndex must open at initialIndex 3");
+  assert(instance.swiperIndex === 3, "Viewer swiperIndex must programmatically open at initialIndex 3");
+
+  const previousPhotos = instance.photos;
+  instance.photos = makePhotos(2);
+  component.watch.photos.call(instance, instance.photos, previousPhotos);
+
+  assert(instance.currentIndex === 1, "Viewer currentIndex must clamp after photos shrink");
+  assert(instance.swiperIndex === 1, "Viewer swiperIndex must programmatically clamp after photos shrink");
 }
 
 function runSequenceCheck() {
@@ -135,7 +177,7 @@ function runSequenceCheck() {
   for (let index = 0; index < 20; index += 1) {
     instance.handleSwiperChange({ detail: { current: index } });
     assert(instance.currentIndex === index, `Viewer currentIndex must follow swipe to ${index + 1}/20`);
-    assert(instance.swiperIndex === index, `Viewer swiperIndex must follow swipe to ${index + 1}/20`);
+    assert(instance.swiperIndex === 0, `Viewer swiperIndex must remain at 0 after native swipe to ${index + 1}/20`);
     assert(
       computed(component, instance, "counterText") === `${index + 1}/20`,
       `Viewer counter must stay at ${index + 1}/20 before media hydration`
@@ -194,8 +236,8 @@ function runSequenceCheck() {
       `Viewer must not jump after photo ${index + 1} preview reaches 100%`
     );
     assert(
-      instance.swiperIndex === index,
-      `Viewer swiper must not jump after photo ${index + 1} preview reaches 100%`
+      instance.swiperIndex === 0,
+      `Viewer swiperIndex must remain at 0 after photo ${index + 1} preview reaches 100%`
     );
     assert(
       computed(component, instance, "counterText") === `${index + 1}/20`,
@@ -214,6 +256,8 @@ function runSequenceCheck() {
     "Viewer change events must be ordered from photo 1 to photo 20"
   );
   runFastSwipeHydrationCheck(component);
+  runNativeSwipeControlFeedbackCheck(component);
+  runProgrammaticPositioningCheck(component);
 }
 
 runSequenceCheck();
