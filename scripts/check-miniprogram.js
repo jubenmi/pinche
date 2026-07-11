@@ -2976,6 +2976,15 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`AlbumImageViewer must implement five-slide windowing: ${requiredAlbumViewerWindowText}`);
     }
   }
+  const albumViewerWindowPhotosSource = methodBody(albumImageViewerSource, "windowPhotos");
+  for (const requiredWindowPhotosText of [
+    "this.photos.slice(",
+    "this.windowStart + ALBUM_VIEWER_WINDOW_SIZE"
+  ]) {
+    if (!albumViewerWindowPhotosSource.includes(requiredWindowPhotosText)) {
+      fail(`AlbumImageViewer windowPhotos must slice the five-slide logical window: ${requiredWindowPhotosText}`);
+    }
+  }
   for (const requiredAlbumImageViewerText of [
     "thumbnail_display_url",
     "previewLoadedById",

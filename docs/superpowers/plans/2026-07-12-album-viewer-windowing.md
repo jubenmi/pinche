@@ -68,6 +68,7 @@ The current parent changes initialIndex only inside openPhotoPreview, which imme
 
 - **RED evidence:** D31 exited 1 with `AlbumImageViewer must expose computed.windowPhotos`; the mini-program static check exited 1 first with `AlbumImageViewer swiper template must render windowPhotos instead of the full photos list`; D42 exited 1 on the logical active-video binding regex. Follow-up review RED exited 1 with `reopening must use a generation distinct from the destroyed native swiper` (`actual: 0`, `expected: not 0`).
 - **GREEN evidence:** `AlbumImageViewer core five-slide window sequence check passed`; `UniApp miniprogram check passed: 13 pages`; `D42 mini-program integration checks passed: upload, viewer, timeline, and auth boundaries`; `git diff --check` clean.
+- **Spec-review follow-up:** Added full logical/physical state and exact-ID assertions for 0/1/2/5 photos plus a `windowPhotos` method-body slice guard. The three Task 1 checks remained GREEN with the outputs above, and `git diff --check` remained clean.
 
 **Files:**
 - Modify: scripts/d31-album-viewer-sequence-check.js

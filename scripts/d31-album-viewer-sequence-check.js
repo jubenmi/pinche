@@ -110,15 +110,44 @@ function runWindowSizeCheck(component) {
     "AlbumImageViewer must expose computed.windowPhotos"
   );
 
-  for (const count of [0, 1, 2, 5, 263]) {
-    const { instance } = openViewer(component, count, Math.max(0, count - 1));
-    assert.ok(instance.windowPhotos.length <= 5, `${count} photos must mount at most five slides`);
+  const smallListCases = [
+    { count: 0, initialIndex: 0, currentIndex: 0, activeWindowIndex: 0, ids: [] },
+    { count: 1, initialIndex: 0, currentIndex: 0, activeWindowIndex: 0, ids: [1] },
+    { count: 2, initialIndex: 1, currentIndex: 1, activeWindowIndex: 1, ids: [1, 2] },
+    { count: 5, initialIndex: 4, currentIndex: 4, activeWindowIndex: 4, ids: [1, 2, 3, 4, 5] }
+  ];
+
+  for (const expected of smallListCases) {
+    const { instance } = openViewer(component, expected.count, expected.initialIndex);
+    assert.ok(
+      instance.windowPhotos.length <= 5,
+      `${expected.count} photos must mount at most five slides`
+    );
     assert.equal(
-      instance.windowPhotos.length,
-      Math.min(count, 5),
-      `${count} photos must expose the expected window length`
+      instance.currentIndex,
+      expected.currentIndex,
+      `${expected.count} photos must retain the expected logical index`
+    );
+    assert.equal(instance.windowStart, 0, `${expected.count} photos must start at window zero`);
+    assert.equal(
+      instance.activeWindowIndex,
+      expected.activeWindowIndex,
+      `${expected.count} photos must select the expected physical slide`
+    );
+    assert.equal(
+      instance.swiperIndex,
+      expected.activeWindowIndex,
+      `${expected.count} photos must position the native swiper correctly`
+    );
+    assert.equal(
+      JSON.stringify(windowIds(instance)),
+      JSON.stringify(expected.ids),
+      `${expected.count} photos must expose the exact logical window IDs`
     );
   }
+
+  const { instance: largeInstance } = openViewer(component, 263, 262);
+  assert.equal(largeInstance.windowPhotos.length, 5, "263 photos must mount exactly five slides");
 }
 
 function runOpeningPositionCheck(component) {
