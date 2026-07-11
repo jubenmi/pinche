@@ -363,7 +363,7 @@ git commit -m "feat: unify album image and video upload entry"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-07-12-album-single-media-upload-entry.md`
 
-- [ ] **Step 1: 运行相册媒体和权限回归**
+- [x] **Step 1: 运行相册媒体和权限回归**
 
 Run:
 
@@ -376,13 +376,13 @@ node scripts/d31-album-viewer-sequence-check.js
 
 Expected: D42 mini 8/8 通过，D42 集成检查、D18、D23 和 D31 全部 PASS。
 
-- [ ] **Step 2: 运行小程序生产构建**
+- [x] **Step 2: 运行小程序生产构建**
 
 Run: `npm run build:mp-weixin`
 
 Expected: exit 0，生成 `apps/miniprogram/dist/build/mp-weixin`；允许现有 Sass legacy API 弃用警告，不允许编译错误。
 
-- [ ] **Step 3: 运行根检查并检查补丁卫生**
+- [x] **Step 3: 运行根检查并检查补丁卫生**
 
 Run:
 
@@ -394,11 +394,11 @@ git status --short
 
 Expected: `npm run check` exit 0；`git diff --check` 无输出；状态只允许计划复选框的最终更新。
 
-- [ ] **Step 4: 请求代码审查并处理问题**
+- [x] **Step 4: 请求代码审查并处理问题**
 
 使用 `superpowers:requesting-code-review` 对设计提交 `d255de6` 至当前 HEAD 的差异做审查。若发现问题，先添加会失败的回归测试，再做最小修复并重跑 Task 3 的全部命令。
 
-- [ ] **Step 5: 标记 Task 3 完成并提交计划状态**
+- [x] **Step 5: 标记 Task 3 完成并提交计划状态**
 
 把 Task 3 全部复选框改为 `- [x]`，然后运行：
 
@@ -407,7 +407,7 @@ git add docs/superpowers/plans/2026-07-12-album-single-media-upload-entry.md
 git commit -m "docs: complete album media upload entry plan"
 ```
 
-- [ ] **Step 6: 最终状态核验**
+- [x] **Step 6: 最终状态核验**
 
 Run:
 
