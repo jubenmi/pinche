@@ -328,6 +328,7 @@ assert(
 
 const dockerWorkflow = read(".github/workflows/docker-publish.yml");
 const apiDockerfile = read("apps/api/Dockerfile");
+const adminDockerfile = read("apps/admin-web/Dockerfile");
 const apiEntrypoint = read("apps/api/docker-entrypoint.sh");
 assert(
   apiDockerfile.includes("docker-entrypoint.sh") && apiDockerfile.includes("ENTRYPOINT"),
@@ -352,6 +353,10 @@ assert(
 assert(
   dockerWorkflow.includes("file: apps/admin-web/Dockerfile"),
   "docker workflow should build admin-web Dockerfile"
+);
+assert(
+  /COPY packages\/shared(?:\s+packages\/shared|\/src\s+packages\/shared\/src)/.test(adminDockerfile),
+  "admin web Dockerfile should copy the shared package implementation before building"
 );
 assert(
   (dockerWorkflow.match(/docker\/build-push-action@v6/g) || []).length >= 2,
