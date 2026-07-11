@@ -852,11 +852,13 @@ git commit -m "feat: sign private COS album image URLs"
 
 ## Task 4: Authoritative processed-image validator
 
+执行状态：已完成（2026-07-11，11/11 校验器测试与 API 语法检查通过）。
+
 **Files:**
 - Create: `apps/api/src/modules/album-image/validator.js`
 - Create: `apps/api/test/album-image-validator.test.mjs`
 
-- [ ] **Step 1: Write failing validator tests**
+- [x] **Step 1: Write failing validator tests**
 
 Use an injected storage adapter and assert call order and metadata semantics:
 
@@ -923,13 +925,13 @@ test("non-JPEG or dimensions above 2048 are invalid", async () => {
 
 Add cases for trusted 404 → `missing`, trusted 412 → `processing`, zero/oversized dimensions, zero byte length, and verify no adapter method named `getObject` is invoked.
 
-- [ ] **Step 2: Run the validator test to verify RED**
+- [x] **Step 2: Run the validator test to verify RED**
 
 Run: `node --test apps/api/test/album-image-validator.test.mjs`
 
 Expected: FAIL because `validator.js` does not exist.
 
-- [ ] **Step 3: Implement the validator as the only finalize inspection path**
+- [x] **Step 3: Implement the validator as the only finalize inspection path**
 
 Create `apps/api/src/modules/album-image/validator.js`:
 
@@ -998,13 +1000,13 @@ export async function validateStoredAlbumImage({ intent, storage }) {
 }
 ```
 
-- [ ] **Step 4: Run the validator tests to verify GREEN**
+- [x] **Step 4: Run the validator tests to verify GREEN**
 
 Run: `node --test apps/api/test/album-image-validator.test.mjs`
 
 Expected: all validator cases pass and the recorded happy-path call order is exactly HEAD, ImageInfo, HEAD.
 
-- [ ] **Step 5: Commit the validator**
+- [x] **Step 5: Commit the validator**
 
 ```bash
 git add apps/api/src/modules/album-image/validator.js apps/api/test/album-image-validator.test.mjs
