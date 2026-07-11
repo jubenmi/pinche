@@ -15,8 +15,8 @@ export function classifyAlbumMediaSelection(result = {}) {
   const media = []
 
   for (const file of files) {
-    const type = file?.fileType ?? file?.type ?? result?.type
-    const rawPath = file?.tempFilePath ?? file?.path
+    const type = file?.fileType || file?.type || result?.type
+    const rawPath = file?.tempFilePath || file?.path
     const path = typeof rawPath === 'string' ? rawPath.trim() : ''
 
     if ((type !== 'image' && type !== 'video') || !path) {

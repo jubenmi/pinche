@@ -51,6 +51,37 @@ test('uses the result-level type when a file has no file type', () => {
   })
 })
 
+test('uses the result-level type when the file type is empty', () => {
+  const result = classifyAlbumMediaSelection({
+    type: 'image',
+    tempFiles: [
+      { fileType: '', tempFilePath: '/tmp/fallback-type.jpg' },
+    ],
+  })
+
+  assert.deepEqual(result, {
+    kind: 'images',
+    paths: ['/tmp/fallback-type.jpg'],
+  })
+})
+
+test('uses the fallback path when the temporary file path is empty', () => {
+  const result = classifyAlbumMediaSelection({
+    tempFiles: [
+      {
+        fileType: 'image',
+        tempFilePath: '',
+        path: '/tmp/fallback-path.jpg',
+      },
+    ],
+  })
+
+  assert.deepEqual(result, {
+    kind: 'images',
+    paths: ['/tmp/fallback-path.jpg'],
+  })
+})
+
 test('rejects a mixed image and video selection', () => {
   const result = classifyAlbumMediaSelection({
     tempFiles: [
