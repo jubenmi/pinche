@@ -15,6 +15,7 @@ coverage/
 .vscode/
 tmp/
 .superpowers/
+.worktrees/
 docker-data/
 apps/api/uploads/
 apps/miniprogram/project.private.config.json
