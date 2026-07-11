@@ -101,6 +101,13 @@ WECHAT_APP_ID
 WECHAT_APP_SECRET
 SESSION_SECRET
 BOOTSTRAP_ADMIN_OPENIDS
+COS_ENABLED
+COS_SECRET_ID
+COS_SECRET_KEY
+COS_BUCKET
+COS_REGION
+COS_DIRECT_MEDIA_URLS
+COS_DIRECT_UPLOAD_REQUIRED
 ```
 
 开发模式下 `WECHAT_MOCK_LOGIN=true`，`code=dev-admin-openid` 会得到 `system_admin` 角色。
@@ -130,6 +137,7 @@ curl -sS http://localhost:3018/health/db
 - [MVP开发阶段划分](./docs/development-roadmap.md)
 - [情感本拼车产品设计](./docs/mini-program-product-design.md)
 - [后端架构与部署设计](./docs/backend-architecture.md)
+- [相册图片直传 COS 发布与回滚手册](./docs/runbooks/album-media-cos-direct-release.md)
 - [微信小程序合规护栏](./docs/wechat-compliance-guardrails.md)
 
 ## 小程序开发

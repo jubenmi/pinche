@@ -88,13 +88,15 @@ Implementation references for the non-obvious COS contracts:
 
 ## Task 1: Shared album-media protocol and deterministic state machine
 
+执行状态：已完成（2026-07-11，6/6 共享协议测试通过）。
+
 **Files:**
 - Create: `packages/shared/src/albumMedia.js`
 - Modify: `packages/shared/src/index.js`
 - Modify: `packages/shared/package.json`
 - Create: `packages/shared/test/albumMedia.test.mjs`
 
-- [ ] **Step 1: Write failing classification and retry tests**
+- [x] **Step 1: Write failing classification and retry tests**
 
 Create `packages/shared/test/albumMedia.test.mjs` with deterministic fakes. Cover all decisions rather than testing SDK wording:
 
@@ -194,13 +196,13 @@ test("expiry, URL-only merge, and single flight preserve page state", async () =
 });
 ```
 
-- [ ] **Step 2: Run the shared test to verify RED**
+- [x] **Step 2: Run the shared test to verify RED**
 
 Run: `node --test packages/shared/test/albumMedia.test.mjs`
 
 Expected: FAIL with `ERR_MODULE_NOT_FOUND` for `packages/shared/src/albumMedia.js`.
 
-- [ ] **Step 3: Implement the pure shared protocol**
+- [x] **Step 3: Implement the pure shared protocol**
 
 Create `packages/shared/src/albumMedia.js` with these public names and fixed limits:
 
@@ -429,13 +431,13 @@ Add the focused script to `packages/shared/package.json`:
 }
 ```
 
-- [ ] **Step 4: Run the shared tests to verify GREEN**
+- [x] **Step 4: Run the shared tests to verify GREEN**
 
 Run: `npm --workspace packages/shared run test:album-media`
 
 Expected: all shared album-media tests pass; the conflict test reports exactly one PUT.
 
-- [ ] **Step 5: Commit the shared protocol**
+- [x] **Step 5: Commit the shared protocol**
 
 ```bash
 git add packages/shared/src/albumMedia.js packages/shared/src/index.js packages/shared/package.json packages/shared/test/albumMedia.test.mjs
@@ -444,13 +446,15 @@ git commit -m "feat: add shared album media state machine"
 
 ## Task 2: Durable schema for object identity, intents, and cleanup jobs
 
+执行状态：已完成（2026-07-11，迁移测试通过，隔离 MySQL 首次应用 25 个迁移且二次执行为空）。
+
 **Files:**
 - Create: `apps/api/migrations/0023_album_media_cos_direct.sql`
 - Modify: `apps/api/src/db/mysql.js`
 - Create: `apps/api/test/album-image-migration.test.mjs`
 - Modify: `apps/api/package.json`
 
-- [ ] **Step 1: Write the failing migration contract test**
+- [x] **Step 1: Write the failing migration contract test**
 
 Create a source-level test that locks the table names, foreign-key behavior, uniqueness, lease fields, and readiness registration:
 
@@ -477,13 +481,13 @@ test("album image migration has durable intent and cleanup anchors", async () =>
 });
 ```
 
-- [ ] **Step 2: Run the migration test to verify RED**
+- [x] **Step 2: Run the migration test to verify RED**
 
 Run: `node --test apps/api/test/album-image-migration.test.mjs`
 
 Expected: FAIL because migration `0023_album_media_cos_direct.sql` does not exist and readiness lacks the tables.
 
-- [ ] **Step 3: Add the complete additive migration**
+- [x] **Step 3: Add the complete additive migration**
 
 Create `apps/api/migrations/0023_album_media_cos_direct.sql`:
 
@@ -571,7 +575,7 @@ Add `test:album-image` to `apps/api/package.json` without replacing `check`:
 "test:album-image": "node --test test/album-image-*.test.mjs"
 ```
 
-- [ ] **Step 4: Verify the migration contract and an isolated MySQL apply**
+- [x] **Step 4: Verify the migration contract and an isolated MySQL apply**
 
 Run: `npm --workspace apps/api run test:album-image`
 
@@ -581,7 +585,7 @@ Run against the disposable local MySQL configured for this worktree: `MYSQL_DATA
 
 Expected: JSON contains `"0023_album_media_cos_direct.sql"` in `executed`; a second identical command reports an empty `executed` list.
 
-- [ ] **Step 5: Commit the schema**
+- [x] **Step 5: Commit the schema**
 
 ```bash
 git add apps/api/migrations/0023_album_media_cos_direct.sql apps/api/src/db/mysql.js apps/api/test/album-image-migration.test.mjs apps/api/package.json
@@ -590,6 +594,8 @@ git commit -m "feat: persist album image upload lifecycle"
 
 ## Task 3: Lossless COS query signing and five-minute image URLs
 
+执行状态：已完成（2026-07-11，6/6 聚焦测试与 69/69 D42 视频回归通过）。
+
 **Files:**
 - Create: `apps/api/src/modules/album-image/constants.js`
 - Create: `apps/api/src/modules/album-image/signed-urls.js`
@@ -597,7 +603,7 @@ git commit -m "feat: persist album image upload lifecycle"
 - Create: `apps/api/test/album-image-signed-urls.test.mjs`
 - Create: `apps/api/test/album-image-cos-storage.test.mjs`
 
-- [ ] **Step 1: Write failing canonical-query and URL tests**
+- [x] **Step 1: Write failing canonical-query and URL tests**
 
 The tests must prove that valueless image-processing tokens appear without `=` in the request URL but with an empty value in COS canonical signing, and that every image URL expires after 300 seconds:
 
@@ -644,13 +650,13 @@ Add a storage test with a fake HTTPS request that asserts `GET /key?imageInfo`, 
 
 Add a second storage case where conditional ImageInfo returns 400/405/501: retry ImageInfo once without `If-Match`, then rely on the validator's mandatory second HEAD ETag comparison. Map COS 409 and 412 overwrite responses to trusted `COS_PRECONDITION_FAILED` while retaining the upstream status for diagnostics.
 
-- [ ] **Step 2: Run the focused signing tests to verify RED**
+- [x] **Step 2: Run the focused signing tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-signed-urls.test.mjs apps/api/test/album-image-cos-storage.test.mjs`
 
 Expected: FAIL because the album-image modules and `getCosImageInfo` do not exist.
 
-- [ ] **Step 3: Add exact constants and structured query rendering**
+- [x] **Step 3: Add exact constants and structured query rendering**
 
 Create `apps/api/src/modules/album-image/constants.js`:
 
@@ -784,7 +790,7 @@ export function buildAlbumImageUrls({ objectKey, mediaId, nowSeconds, config }) 
 }
 ```
 
-- [ ] **Step 4: Add a signed ImageInfo storage primitive**
+- [x] **Step 4: Add a signed ImageInfo storage primitive**
 
 Extend the internal `cosRequest` to accept `urlParams`, render its request query from the same entries, and include those entries in `buildCosAuthorization`. Then export:
 
@@ -827,7 +833,7 @@ Add `COS_INVALID_IMAGE_INFO` to the trusted storage error set and ensure `cosReq
 
 Update `cosHttpError` so 409/412 both produce status 412 and code `COS_PRECONDITION_FAILED`, and every mapped error keeps a non-enumerated `upstreamStatusCode` for the conditional-ImageInfo fallback above.
 
-- [ ] **Step 5: Run focused and regression tests**
+- [x] **Step 5: Run focused and regression tests**
 
 Run: `node --test apps/api/test/album-image-signed-urls.test.mjs apps/api/test/album-image-cos-storage.test.mjs`
 
@@ -837,7 +843,7 @@ Run: `npm run d42:api-media && npm run d42:api-server`
 
 Expected: existing video signing, metadata, GET, HEAD, and Range checks pass unchanged.
 
-- [ ] **Step 6: Commit COS signing and ImageInfo support**
+- [x] **Step 6: Commit COS signing and ImageInfo support**
 
 ```bash
 git add apps/api/src/modules/album-image/constants.js apps/api/src/modules/album-image/signed-urls.js apps/api/src/storage/cos.js apps/api/test/album-image-signed-urls.test.mjs apps/api/test/album-image-cos-storage.test.mjs
@@ -846,11 +852,13 @@ git commit -m "feat: sign private COS album image URLs"
 
 ## Task 4: Authoritative processed-image validator
 
+执行状态：已完成（2026-07-11，11/11 校验器测试与 API 语法检查通过）。
+
 **Files:**
 - Create: `apps/api/src/modules/album-image/validator.js`
 - Create: `apps/api/test/album-image-validator.test.mjs`
 
-- [ ] **Step 1: Write failing validator tests**
+- [x] **Step 1: Write failing validator tests**
 
 Use an injected storage adapter and assert call order and metadata semantics:
 
@@ -917,13 +925,13 @@ test("non-JPEG or dimensions above 2048 are invalid", async () => {
 
 Add cases for trusted 404 → `missing`, trusted 412 → `processing`, zero/oversized dimensions, zero byte length, and verify no adapter method named `getObject` is invoked.
 
-- [ ] **Step 2: Run the validator test to verify RED**
+- [x] **Step 2: Run the validator test to verify RED**
 
 Run: `node --test apps/api/test/album-image-validator.test.mjs`
 
 Expected: FAIL because `validator.js` does not exist.
 
-- [ ] **Step 3: Implement the validator as the only finalize inspection path**
+- [x] **Step 3: Implement the validator as the only finalize inspection path**
 
 Create `apps/api/src/modules/album-image/validator.js`:
 
@@ -992,13 +1000,13 @@ export async function validateStoredAlbumImage({ intent, storage }) {
 }
 ```
 
-- [ ] **Step 4: Run the validator tests to verify GREEN**
+- [x] **Step 4: Run the validator tests to verify GREEN**
 
 Run: `node --test apps/api/test/album-image-validator.test.mjs`
 
 Expected: all validator cases pass and the recorded happy-path call order is exactly HEAD, ImageInfo, HEAD.
 
-- [ ] **Step 5: Commit the validator**
+- [x] **Step 5: Commit the validator**
 
 ```bash
 git add apps/api/src/modules/album-image/validator.js apps/api/test/album-image-validator.test.mjs
@@ -1007,13 +1015,15 @@ git commit -m "feat: validate album images without proxying bytes"
 
 ## Task 5: Intent repository and connection-aware album access
 
+执行状态：已完成（2026-07-11，10/10 仓储与权限测试、D18/D23 隐私回归及 API 语法检查通过）。
+
 **Files:**
 - Create: `apps/api/src/modules/album-image/repository.js`
 - Modify: `apps/api/src/modules/core/service.js:809-875,1672-1760,5597-5622,5860-5919`
 - Create: `apps/api/test/album-image-repository.test.mjs`
 - Create: `apps/api/test/album-image-access.test.mjs`
 
-- [ ] **Step 1: Write failing repository and access tests**
+- [x] **Step 1: Write failing repository and access tests**
 
 Test with a recording connection so transaction boundaries and `FOR UPDATE` are explicit:
 
@@ -1066,13 +1076,13 @@ In `apps/api/test/album-image-access.test.mjs`, use a fake SQL connection and ex
 - `forUpdate: true` appears on session and membership reads;
 - closed/cancelled window and revoked membership reject with 403.
 
-- [ ] **Step 2: Run repository/access tests to verify RED**
+- [x] **Step 2: Run repository/access tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-repository.test.mjs apps/api/test/album-image-access.test.mjs`
 
 Expected: FAIL because `repository.js` and the exported connection-aware access function do not exist.
 
-- [ ] **Step 3: Implement the narrow repository API**
+- [x] **Step 3: Implement the narrow repository API**
 
 Create `apps/api/src/modules/album-image/repository.js` with only parameterized SQL. The public contract is:
 
@@ -1169,7 +1179,7 @@ export async function markAlbumImageIntentState(
 
 Keep cleanup claims out of this commit; Task 9 extends this same repository after its lease tests exist.
 
-- [ ] **Step 4: Export connection-aware access and finalized image helpers**
+- [x] **Step 4: Export connection-aware access and finalized image helpers**
 
 In `apps/api/src/modules/core/service.js`, add these exact public boundaries and have the two existing wrapper functions call the first one inside their current connection scopes:
 
@@ -1235,7 +1245,7 @@ storage_object_etag: media.object_etag || null
 
 Task 8 must strip both fields before every response; add an immediate test here that `albumMediaResponse` contains them only as server-internal projection inputs, not through a route response.
 
-- [ ] **Step 5: Run focused and existing privacy tests**
+- [x] **Step 5: Run focused and existing privacy tests**
 
 Run: `node --test apps/api/test/album-image-repository.test.mjs apps/api/test/album-image-access.test.mjs`
 
@@ -1245,7 +1255,7 @@ Run: `node scripts/d18-session-album-privacy-check.js && node scripts/d23-album-
 
 Expected: existing membership and public-share privacy contracts pass.
 
-- [ ] **Step 6: Commit repository and access boundaries**
+- [x] **Step 6: Commit repository and access boundaries**
 
 ```bash
 git add apps/api/src/modules/album-image/repository.js apps/api/src/modules/core/service.js apps/api/test/album-image-repository.test.mjs apps/api/test/album-image-access.test.mjs
@@ -1253,6 +1263,8 @@ git commit -m "feat: add album image intent repository"
 ```
 
 ## Task 6: Intent creation, strict PUT authorization, and feature flags
+
+执行状态：已完成（2026-07-11，9/9 意图、授权及遥测测试；D17、D42 创建回归与 API 语法检查通过）。
 
 **Files:**
 - Create: `apps/api/src/modules/album-image/upload-service.js`
@@ -1264,7 +1276,7 @@ git commit -m "feat: add album image intent repository"
 - Create: `apps/api/test/album-image-upload-intent.test.mjs`
 - Create: `apps/api/test/album-image-authorization.test.mjs`
 
-- [ ] **Step 1: Write failing intent and authorization tests**
+- [x] **Step 1: Write failing intent and authorization tests**
 
 Build the service with injected clock, UUID, database, access, and signer. Lock these cases:
 
@@ -1324,13 +1336,13 @@ test("required production mode fails closed when COS is unavailable", async () =
 
 Also test JPEG/PNG only, 4MB maximum, uploadId ownership, pending-only authorization, current access recheck, Bucket/Region/PUT equality, exact header-name set, exact Pic-Operations, one-time legacy length binding, and authorization expiry capped by `upload_expires_at`.
 
-- [ ] **Step 2: Run intent/authorization tests to verify RED**
+- [x] **Step 2: Run intent/authorization tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-upload-intent.test.mjs apps/api/test/album-image-authorization.test.mjs`
 
 Expected: FAIL because `createAlbumImageUploadService` does not exist.
 
-- [ ] **Step 3: Add feature flags and stable structured telemetry**
+- [x] **Step 3: Add feature flags and stable structured telemetry**
 
 Add config without exposing secrets:
 
@@ -1367,7 +1379,7 @@ export function emitAlbumImageEvent(event, fields = {}, sink = console.info) {
 }
 ```
 
-- [ ] **Step 4: Implement `createAlbumImageUploadService` create/authorize methods**
+- [x] **Step 4: Implement `createAlbumImageUploadService` create/authorize methods**
 
 The module initially exposes the two methods implemented and tested in this task:
 
@@ -1451,7 +1463,7 @@ const REQUIRED_HEADERS = Object.freeze([
 
 Require an empty Query, exact Bucket/Region/PUT/Key, exact source facts and Pic-Operations, server COS host, and overwrite value `true`. Sign for `Math.min(300, secondsUntilUploadExpiry)` and atomically record `last_authorization_expires_at` plus recomputed `cleanup_not_before` before returning `{ authorization, expiresAt }`.
 
-- [ ] **Step 5: Wire only album-image kinds through the service**
+- [x] **Step 5: Wire only album-image kinds through the service**
 
 In the existing `/api/uploads/cos-intent` route, delegate when `isAlbumImageKind(body.kind)` and preserve the current function for all other kinds:
 
@@ -1483,7 +1495,7 @@ if (config.albumMedia.directUploadRequired) {
 
 Keep this guard out of the album-video multipart route. Add authenticated `POST /api/telemetry/album-media` with an allowlist of `upload_retry`, `upload_failure`, `media_refresh_success`, and `media_refresh_failure`; accept only numeric session/retry fields plus a stable error code, pass them to `emitAlbumImageEvent`, and return 202. This endpoint carries no filenames, URLs, object keys, ETags, or image bytes.
 
-- [ ] **Step 6: Run new tests and non-goal regressions**
+- [x] **Step 6: Run new tests and non-goal regressions**
 
 Run: `node --test apps/api/test/album-image-upload-intent.test.mjs apps/api/test/album-image-authorization.test.mjs`
 
@@ -1493,7 +1505,7 @@ Run: `node scripts/d17-cos-storage-check.js && npm run d42:api-creation`
 
 Expected: avatar, review-photo, and video intent/authorization behavior remains green.
 
-- [ ] **Step 7: Commit intent creation and authorization**
+- [x] **Step 7: Commit intent creation and authorization**
 
 ```bash
 git add apps/api/src/modules/album-image/upload-service.js apps/api/src/modules/album-image/telemetry.js apps/api/src/config/env.js .env.example .env.production.example apps/api/src/server.js apps/api/test/album-image-upload-intent.test.mjs apps/api/test/album-image-authorization.test.mjs
@@ -1501,6 +1513,8 @@ git commit -m "feat: issue strict album image upload intents"
 ```
 
 ## Task 7: Status reconciliation, idempotent finalize, and legacy create adapter
+
+执行状态：已完成（2026-07-11，9/9 finalize/路由测试；D18 与 D42 创建、生命周期回归通过）。
 
 **Files:**
 - Modify: `apps/api/src/modules/album-image/upload-service.js`
@@ -1510,7 +1524,7 @@ git commit -m "feat: issue strict album image upload intents"
 - Create: `apps/api/test/album-image-finalize.test.mjs`
 - Create: `apps/api/test/album-image-routes.test.mjs`
 
-- [ ] **Step 1: Write failing status/finalize tests**
+- [x] **Step 1: Write failing status/finalize tests**
 
 Cover external validation, the short transaction, and current authorization separately:
 
@@ -1581,13 +1595,13 @@ Add explicit cases for another user, closed album, admin-owner revocation, deadl
 
 For routes, assert `GET /api/uploads/:uploadId/status` and `POST /api/uploads/:uploadId/finalize` require auth. Assert old photo-create routes call `finalizeLegacy` for a persisted COS key and never call `getSessionAlbumDisplayMetadata` or `getCosObject`.
 
-- [ ] **Step 2: Run finalize tests to verify RED**
+- [x] **Step 2: Run finalize tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-finalize.test.mjs apps/api/test/album-image-routes.test.mjs`
 
 Expected: FAIL because status/finalize are not exported or routed.
 
-- [ ] **Step 3: Implement status with current-access reauthorization**
+- [x] **Step 3: Implement status with current-access reauthorization**
 
 Extend the service factory:
 
@@ -1691,7 +1705,7 @@ async function status(deps, input) {
 
 Conditional repository updates may move pending to processing or pending/processing to rejected. They cannot move finalized, expired, cleanup_pending, cleanup_failed, or cleaned rows.
 
-- [ ] **Step 4: Implement the short idempotent finalize transaction**
+- [x] **Step 4: Implement the short idempotent finalize transaction**
 
 Inspect outside the transaction, then lock and commit only when ready:
 
@@ -1764,7 +1778,7 @@ Emit `intent_finalized` only after transaction commit, with session/media IDs an
 
 Construct the server dependencies with `withDatabaseConnection`, `withTransaction`, repository functions, `assertSessionAlbumImageUploadAllowed`, `validateStoredAlbumImage`, `insertFinalizedSessionAlbumImage`, `getFinalizedSessionAlbumImage`, `serializeSessionAlbumImage`, `Date.now`, and the COS storage adapter. `validation.etag` is the validator's second-HEAD ETag; no client-supplied ETag reaches this path. If a finalized intent's media row no longer exists, return `FINALIZED_MEDIA_MISSING` without creating a replacement.
 
-- [ ] **Step 5: Implement exact-key legacy adaptation and HTTP routes**
+- [x] **Step 5: Implement exact-key legacy adaptation and HTTP routes**
 
 `finalizeLegacy` accepts only a root-relative display URL, converts it to an exact object key, finds the current user's persisted intent, and checks session/kind equality before calling `finalize`. It ignores all client metadata.
 
@@ -1826,7 +1840,7 @@ If no existing `stringMatch` helper exists, add one next to `idMatch` that retur
 
 For the two old `{ photoUrl }` create routes: when COS is enabled, call `finalizeLegacy` and return its one photo; when COS is disabled, retain the local metadata/create path. A COS key without a matching persisted intent returns `UPLOAD_INTENT_NOT_FOUND` and never invokes full-object Sharp inspection.
 
-- [ ] **Step 6: Run finalize, route, privacy, and video regression tests**
+- [x] **Step 6: Run finalize, route, privacy, and video regression tests**
 
 Run: `node --test apps/api/test/album-image-finalize.test.mjs apps/api/test/album-image-routes.test.mjs`
 
@@ -1836,7 +1850,7 @@ Run: `node scripts/d18-session-album-privacy-check.js && npm run d42:api-creatio
 
 Expected: image privacy and the entire video creation/lifecycle suite remain green.
 
-- [ ] **Step 7: Commit finalize and reconciliation**
+- [x] **Step 7: Commit finalize and reconciliation**
 
 ```bash
 git add apps/api/src/modules/album-image/upload-service.js apps/api/src/modules/album-image/repository.js apps/api/src/modules/core/service.js apps/api/src/server.js apps/api/test/album-image-finalize.test.mjs apps/api/test/album-image-routes.test.mjs
@@ -1845,13 +1859,15 @@ git commit -m "feat: finalize album images from COS metadata"
 
 ## Task 8: Signed album responses with legacy/local compatibility
 
+执行状态：已完成（2026-07-11，8/8 响应、隐私及路由测试；D18/D23/D31 回归通过）。
+
 **Files:**
 - Modify: `apps/api/src/server.js:1420-1735,3110-3265`
 - Modify: `apps/api/src/modules/core/service.js:809-875,5711-5857`
 - Create: `apps/api/test/album-image-response-urls.test.mjs`
 - Create: `apps/api/test/album-image-privacy-integration.test.mjs`
 
-- [ ] **Step 1: Write failing response URL and privacy tests**
+- [x] **Step 1: Write failing response URL and privacy tests**
 
 Use fixed time and injected signer. Cover member, admin, public share, legacy COS row, local row, and video:
 
@@ -1887,13 +1903,13 @@ test("local or unbackfilled image exposes new fields through the old API and no 
 
 The integration test seeds one visible and one hidden photo for each existing privacy rule, calls member/admin/public-share list paths, and records signer calls. Assert no signer call occurs for a filtered photo and no endpoint accepts arbitrary photo IDs for bulk signing.
 
-- [ ] **Step 2: Run response tests to verify RED**
+- [x] **Step 2: Run response tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-response-urls.test.mjs apps/api/test/album-image-privacy-integration.test.mjs`
 
 Expected: FAIL because the new fields are absent and storage facts are not consumed.
 
-- [ ] **Step 3: Add one image attachment function and strip internals**
+- [x] **Step 3: Add one image attachment function and strip internals**
 
 Refactor the duplicated `photos`/`media` mapping through one function. Preserve existing video branches byte-for-byte:
 
@@ -1933,11 +1949,11 @@ Use one `nowSeconds` captured at the start of each album response so all image v
 
 Emit one `media_urls_signed` event per album response with route kind and signed image count, not one event per URL. In the retained legacy image proxy routes, emit `legacy_proxy_read` with variant, response byte count, and outcome so rollout dashboards can measure proxy calls and API image egress.
 
-- [ ] **Step 4: Add signed URLs to finalize responses without a new lookup endpoint**
+- [x] **Step 4: Add signed URLs to finalize responses without a new lookup endpoint**
 
 Pass a finalized photo through the same attachment helper using current authenticated/member context. If direct reads are off, return new fields pointing to legacy API URLs. Duplicate finalize after revocation still fails before this helper executes.
 
-- [ ] **Step 5: Run response, privacy, and compatibility tests**
+- [x] **Step 5: Run response, privacy, and compatibility tests**
 
 Run: `node --test apps/api/test/album-image-response-urls.test.mjs apps/api/test/album-image-privacy-integration.test.mjs`
 
@@ -1947,7 +1963,7 @@ Run: `node scripts/d18-session-album-privacy-check.js && node scripts/d23-album-
 
 Expected: existing privacy, share-seat, and viewer-order behavior remains green.
 
-- [ ] **Step 6: Commit signed album responses**
+- [x] **Step 6: Commit signed album responses**
 
 ```bash
 git add apps/api/src/server.js apps/api/src/modules/core/service.js apps/api/test/album-image-response-urls.test.mjs apps/api/test/album-image-privacy-integration.test.mjs
@@ -1955,6 +1971,8 @@ git commit -m "feat: return short lived COS album image URLs"
 ```
 
 ## Task 9: Crash-safe orphan cleanup, durable image deletion, and HEAD-gated backfill
+
+执行状态：已完成（2026-07-11，8/8 清理、回填及删除测试；D42 视频删除回归与 API 语法检查通过。实际 worker 删除入口留待受控发布验证）。
 
 **Files:**
 - Modify: `apps/api/src/modules/album-image/repository.js`
@@ -1969,7 +1987,7 @@ git commit -m "feat: return short lived COS album image URLs"
 - Create: `apps/api/test/album-image-backfill.test.mjs`
 - Create: `apps/api/test/album-image-delete.test.mjs`
 
-- [ ] **Step 1: Write failing lease, deletion, and backfill tests**
+- [x] **Step 1: Write failing lease, deletion, and backfill tests**
 
 Lock the crash and race behavior with an in-memory repository fake:
 
@@ -2025,13 +2043,13 @@ test("backfill updates only an exact COS candidate whose HEAD succeeds", async (
 
 Add cases for `cleanup_not_before`, active authorization/finalize deadline, finalize versus cleanup claim, idempotent DELETE, local unlink, successful hard delete of tags/media only after object deletion, cleanup-job retry, and a video delete proving it never enters the new image job.
 
-- [ ] **Step 2: Run cleanup/backfill/delete tests to verify RED**
+- [x] **Step 2: Run cleanup/backfill/delete tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-cleanup.test.mjs apps/api/test/album-image-backfill.test.mjs apps/api/test/album-image-delete.test.mjs`
 
 Expected: FAIL because cleanup, backfill, lease claims, and durable image deletion do not exist.
 
-- [ ] **Step 3: Add transactional claims with expired-lease recovery**
+- [x] **Step 3: Add transactional claims with expired-lease recovery**
 
 Extend `repository.js` with transaction-scoped claims. MySQL 8.4 uses `FOR UPDATE SKIP LOCKED`; set a 60-second lease in the same transaction:
 
@@ -2103,7 +2121,7 @@ export async function claimAlbumObjectCleanupJobs(
 
 Completion/failure updates must require both row ID and lease token. Retry delay is `min(6 hours, 30 seconds * 2 ** min(attempts, 10))`; clear lease fields on every completion/failure transition.
 
-- [ ] **Step 4: Implement cleanup without losing database anchors**
+- [x] **Step 4: Implement cleanup without losing database anchors**
 
 Create `cleanup.js` with injected `headObject`, `deleteObject`, `unlinkFile`, and transaction helpers. For an orphan intent: HEAD, treat trusted 404 as success, DELETE a present object, then mark `cleaned`. For a business deletion job: delete COS/local bytes first; then in one transaction lock job and media, delete tags, hard-delete the media row, and mark job `cleaned`. On any untrusted or retryable error, retain both rows and schedule retry.
 
@@ -2143,7 +2161,7 @@ export async function runAlbumImageCleanupBatch({
 
 `claimAllCleanup` returns tagged entries `{ type: "intent" | "media", row }` and shares the batch limit across both sources.
 
-- [ ] **Step 5: Change image deletion to a durable state transition only**
+- [x] **Step 5: Change image deletion to a durable state transition only**
 
 Add `requestSessionAlbumImageDeletion(user, mediaId)` in core service. In one transaction it locks the image and current permission rows, returns the existing job if status is already `deleting`, otherwise updates `status='deleting'` and inserts one cleanup job with `storage_kind='cos'` plus `object_key`, or `storage_kind='local'` plus the validated local path.
 
@@ -2173,7 +2191,7 @@ return;
 
 Keep list queries on `status='active'`, so `deleting` disappears immediately. Do not change the video cleanup calls or their strict COS error behavior.
 
-- [ ] **Step 6: Implement HEAD-gated, resumable backfill**
+- [x] **Step 6: Implement HEAD-gated, resumable backfill**
 
 Create `backfill.js` that pages by media ID over active image rows with `object_key IS NULL` and a root-relative display path. Validate the path with the existing COS key parser, HEAD it, then use a conditional update:
 
@@ -2191,7 +2209,7 @@ const result = await backfillAlbumImageObjectKeys({ repository, storage, apply }
 console.log(JSON.stringify({ ok: true, apply, ...result }, null, 2));
 ```
 
-- [ ] **Step 7: Add worker scripts and run focused tests**
+- [x] **Step 7: Add worker scripts and run focused tests**
 
 Add API scripts:
 
@@ -2210,7 +2228,7 @@ Run: `npm run d42:api-delete`
 
 Expected: all video deletion checks pass without entering the image job path.
 
-- [ ] **Step 8: Commit cleanup and backfill**
+- [x] **Step 8: Commit cleanup and backfill**
 
 ```bash
 git add apps/api/src/modules/album-image/repository.js apps/api/src/modules/album-image/cleanup.js apps/api/src/modules/album-image/backfill.js apps/api/src/jobs/album-image-cleanup.js apps/api/src/jobs/backfill-album-image-object-keys.js apps/api/src/modules/core/service.js apps/api/src/server.js apps/api/package.json apps/api/test/album-image-cleanup.test.mjs apps/api/test/album-image-backfill.test.mjs apps/api/test/album-image-delete.test.mjs
@@ -2219,6 +2237,8 @@ git commit -m "feat: make album image cleanup recoverable"
 
 ## Task 10: Mini-program v2 upload adapter with scoped errors and local-only fallback
 
+执行状态：已完成（2026-07-11，7/7 小程序上传测试；maintenance、D17 与 D42 mini 回归通过）。
+
 **Files:**
 - Modify: `apps/miniprogram/package.json`
 - Modify: `package-lock.json`
@@ -2226,7 +2246,7 @@ git commit -m "feat: make album image cleanup recoverable"
 - Create: `apps/miniprogram/src/utils/albumPhotoUpload.js`
 - Create: `apps/miniprogram/test/albumPhotoUpload.test.mjs`
 
-- [ ] **Step 1: Write failing mini-program upload tests**
+- [x] **Step 1: Write failing mini-program upload tests**
 
 Inject all API/COS calls into the adapter. Lock production/local routing and maintenance isolation:
 
@@ -2289,13 +2309,13 @@ Add adapter cases for two retry attempts, status reconciliation before retry, co
 
 Add a source assertion around `api.js` that album intent/status/finalize calls set `suppressMaintenance: true`, while a normal API network failure still invokes the existing maintenance behavior.
 
-- [ ] **Step 2: Run mini upload tests to verify RED**
+- [x] **Step 2: Run mini upload tests to verify RED**
 
 Run: `node --test apps/miniprogram/test/albumPhotoUpload.test.mjs`
 
 Expected: FAIL because `albumPhotoUpload.js` does not exist.
 
-- [ ] **Step 3: Add the shared workspace dependency and preserve rich errors**
+- [x] **Step 3: Add the shared workspace dependency and preserve rich errors**
 
 Add to `apps/miniprogram/package.json`:
 
@@ -2322,7 +2342,7 @@ function normalizedApiError({ status = 0, payload = {}, fallbackMessage }) {
 
 Wrap existing calls to `markBackendMaintenance` with `if (!options.suppressMaintenance)`. Do not alter its default. Only the album intent, authorization, status, finalize, signed-media refresh, and direct media download paths pass `suppressMaintenance: true`.
 
-- [ ] **Step 4: Add uploadId-aware COS calls without changing generic fallback**
+- [x] **Step 4: Add uploadId-aware COS calls without changing generic fallback**
 
 Export these low-level functions from `api.js`:
 
@@ -2363,7 +2383,7 @@ Keep a short-lived `Map` from exact COS key to uploadId only during `putObject`;
 
 Normalize mini-program `url not in domain list` errors to `COS_DOMAIN_NOT_ALLOWED`, timeouts to `COS_REQUEST_TIMEOUT`, and preserve COS XML `Code`/`Message` from the SDK. Add fire-and-forget `reportAlbumMediaEvent` calls for retry/failure and URL refresh outcomes; reporting itself uses `suppressMaintenance: true` and never changes the user-visible result.
 
-- [ ] **Step 5: Implement the mini-program adapter around the shared state machine**
+- [x] **Step 5: Implement the mini-program adapter around the shared state machine**
 
 Create `albumPhotoUpload.js`:
 
@@ -2414,7 +2434,7 @@ export async function uploadAlbumPhoto({
 
 `uploadSessionAlbumPhotoLocal` exports the current multipart helper and resolves to its photo URL string. `createSessionAlbumPhotoLegacy` POSTs that URL, reads `dataOf(response)`, and resolves to `{ photo: dataOf(response) }`, matching the v2 finalize shape. Both are reachable only through the exact `api-local` condition above.
 
-- [ ] **Step 6: Verify focused and generic-upload behavior**
+- [x] **Step 6: Verify focused and generic-upload behavior**
 
 Run: `node --test apps/miniprogram/test/albumPhotoUpload.test.mjs`
 
@@ -2424,7 +2444,7 @@ Run: `node scripts/check-maintenance-mode.js && node scripts/d17-cos-storage-che
 
 Expected: scoped album failures never set maintenance; default maintenance, avatar/review fallback, and video paths remain green.
 
-- [ ] **Step 7: Commit the mini-program upload adapter**
+- [x] **Step 7: Commit the mini-program upload adapter**
 
 ```bash
 git add apps/miniprogram/package.json package-lock.json apps/miniprogram/src/utils/api.js apps/miniprogram/src/utils/albumPhotoUpload.js apps/miniprogram/test/albumPhotoUpload.test.mjs
@@ -2433,12 +2453,14 @@ git commit -m "feat: upload mini program album images directly to COS"
 
 ## Task 11: Mini-program signed URL lifecycle, cache preservation, and real errors
 
+执行状态：已完成（2026-07-11，12/12 小程序 URL/上传测试；静态、维护、D31、D42 与生产构建通过）。
+
 **Files:**
 - Create: `apps/miniprogram/src/utils/albumMediaUrls.js`
 - Modify: `apps/miniprogram/src/pages/session/album.vue:594-950,1295-1765,1949-2015,2384-2531,2717-2750,3067-3127`
 - Create: `apps/miniprogram/test/albumMediaUrls.test.mjs`
 
-- [ ] **Step 1: Write failing URL normalization and refresh-controller tests**
+- [x] **Step 1: Write failing URL normalization and refresh-controller tests**
 
 ```js
 import assert from "node:assert/strict";
@@ -2489,13 +2511,13 @@ test("concurrent expiry and auth failures cause one full-album refresh", async (
 
 Add tests for a timer scheduled 30 seconds early, `onShow` immediate refresh after suspended expiry, `dispose` clearing timers, public-share reload closure, one current-media auth retry, second failure surfacing, and filters/scroll/selection/preview index untouched because only URL fields merge.
 
-- [ ] **Step 2: Run URL lifecycle tests to verify RED**
+- [x] **Step 2: Run URL lifecycle tests to verify RED**
 
 Run: `node --test apps/miniprogram/test/albumMediaUrls.test.mjs`
 
 Expected: FAIL because `albumMediaUrls.js` does not exist.
 
-- [ ] **Step 3: Implement URL selection and a single-flight controller**
+- [x] **Step 3: Implement URL selection and a single-flight controller**
 
 Create `albumMediaUrls.js` using shared `createSingleFlight`, `mergeAlbumMediaUrls`, and `shouldRefreshAlbumMedia`:
 
@@ -2548,7 +2570,7 @@ export function createAlbumMediaRefreshController({
 }
 ```
 
-- [ ] **Step 4: Integrate upload phases and remove the new-client two-step create**
+- [x] **Step 4: Integrate upload phases and remove the new-client two-step create**
 
 Replace the photo loop's `uploadSessionAlbumPhoto` then `createSessionAlbumPhoto` with `uploadAlbumPhoto`. Map phases exactly:
 
@@ -2577,7 +2599,7 @@ if (!result?.photo?.id) {
 
 Import `albumMediaError` from `@pinche/shared`. Do not POST `{ photoUrl }` on the v2 path. Use the exact prepared file size/type already produced by photo preparation, then use the existing end-of-batch album reload to display finalized rows.
 
-- [ ] **Step 5: Integrate member/public batch refresh without resetting page state**
+- [x] **Step 5: Integrate member/public batch refresh without resetting page state**
 
 Instantiate the controller after mode/session/share-token resolution with `reloadAlbum` pointing to the same member or public-share loader. The reload closure fetches album data but does not reset filters, scroll position, selections, preview index, or local preview paths. On `onShow`, call `checkNow`; after every full load, call `schedule`; on `onUnload`, call `dispose`.
 
@@ -2596,11 +2618,11 @@ async function retryCurrentMediaAfterAuthFailure(photo, failedUrl, loadCurrent) 
 
 Use it for member and public preview/download errors only when COS/API status is 401/403 or the normalized code is `MEDIA_URL_EXPIRED`, and only once per failed URL.
 
-- [ ] **Step 6: Preserve local preview files and prefer signed download URLs**
+- [x] **Step 6: Preserve local preview files and prefer signed download URLs**
 
 Keep valid `USER_DATA_PATH` files as the first preview source. URL refresh must not delete or redownload them. For save/download: use cached local preview first; otherwise use `download_url`, then the compatibility preview URL. Do not add Bearer authorization to COS URLs. Mark request/download failures with scoped errors and render `error.message` plus `[error.code]` when a code exists; never call `reLaunch` or global maintenance.
 
-- [ ] **Step 7: Run mini-program unit, static, and production build checks**
+- [x] **Step 7: Run mini-program unit, static, and production build checks**
 
 Run: `node --test apps/miniprogram/test/albumMediaUrls.test.mjs apps/miniprogram/test/albumPhotoUpload.test.mjs`
 
@@ -2614,7 +2636,7 @@ Run: `npm run build:mp-weixin`
 
 Expected: UniApp production build exits 0 and emits `apps/miniprogram/dist/build/mp-weixin`.
 
-- [ ] **Step 8: Commit mini-program URL lifecycle**
+- [x] **Step 8: Commit mini-program URL lifecycle**
 
 ```bash
 git add apps/miniprogram/src/utils/albumMediaUrls.js apps/miniprogram/src/pages/session/album.vue apps/miniprogram/test/albumMediaUrls.test.mjs
@@ -2623,6 +2645,8 @@ git commit -m "feat: refresh mini program COS album URLs"
 
 ## Task 12: Admin-web v2 image upload without production fallback
 
+执行状态：已完成（2026-07-11，6/6 管理端上传测试；D12、D32 与 D42 创建回归通过）。
+
 **Files:**
 - Modify: `apps/admin-web/package.json`
 - Modify: `package-lock.json`
@@ -2630,7 +2654,7 @@ git commit -m "feat: refresh mini program COS album URLs"
 - Modify: `apps/admin-web/src/albumMedia.js`
 - Create: `apps/admin-web/test/albumMedia.test.mjs`
 
-- [ ] **Step 1: Write failing admin upload-adapter tests**
+- [x] **Step 1: Write failing admin upload-adapter tests**
 
 Add tests next to the existing authorization/serial helpers:
 
@@ -2676,13 +2700,13 @@ test("admin local fallback requires both exact server fields", async () => {
 
 Add the same retry/conflict/signature/status/processing/error cases as the mini adapter. Add a source assertion that generic `uploadCosBackedFile` remains used by album video and its fallback is unchanged.
 
-- [ ] **Step 2: Run admin adapter tests to verify RED**
+- [x] **Step 2: Run admin adapter tests to verify RED**
 
 Run: `node --test apps/admin-web/test/albumMedia.test.mjs`
 
 Expected: FAIL because `uploadAdminAlbumPhoto` does not exist.
 
-- [ ] **Step 3: Add the shared dependency and low-level v2 API**
+- [x] **Step 3: Add the shared dependency and low-level v2 API**
 
 Add to `apps/admin-web/package.json`:
 
@@ -2732,7 +2756,7 @@ Store uploadId by exact key while `putObject` is active and include it in author
 
 Rename/export the current image multipart function as `uploadSessionAlbumPhotoLocal(sessionId, file, options)` and keep its resolved value as the photo URL string. Do not route album video through this export.
 
-- [ ] **Step 4: Implement the admin adapter using shared semantics**
+- [x] **Step 4: Implement the admin adapter using shared semantics**
 
 Extend `albumMedia.js`:
 
@@ -2771,7 +2795,7 @@ This required dependency avoids a circular import because `api.js` already impor
 
 Keep existing `shouldAttachAdminAuthorization` behavior: same-origin API proxy requests receive Bearer; `*.myqcloud.com` signed reads do not.
 
-- [ ] **Step 5: Verify admin adapter and video fallback**
+- [x] **Step 5: Verify admin adapter and video fallback**
 
 Run: `npm --workspace apps/admin-web run test:album-media`
 
@@ -2781,7 +2805,7 @@ Run: `node scripts/d12-admin-web-check.js && node scripts/d32-admin-album-video-
 
 Expected: new image assertions pass and the generic video upload/fallback behavior remains green.
 
-- [ ] **Step 6: Commit admin upload adapter**
+- [x] **Step 6: Commit admin upload adapter**
 
 ```bash
 git add apps/admin-web/package.json package-lock.json apps/admin-web/src/api.js apps/admin-web/src/albumMedia.js apps/admin-web/test/albumMedia.test.mjs
@@ -2790,13 +2814,15 @@ git commit -m "feat: upload admin album images directly to COS"
 
 ## Task 13: Admin signed URL lifecycle and blob-cache stability
 
+执行状态：已完成（2026-07-11，10/10 管理端媒体测试；runtime、D12/D31/D32 与生产构建通过）。
+
 **Files:**
 - Modify: `apps/admin-web/src/albumMedia.js`
 - Modify: `apps/admin-web/src/components/SessionAlbumWorkspace.vue:453-518,902-1263,1486-1501`
 - Modify: `apps/admin-web/src/components/AuthorizedLazyImage.vue:1-113`
 - Modify: `apps/admin-web/test/albumMedia.test.mjs`
 
-- [ ] **Step 1: Add failing admin refresh and lazy-image cache tests**
+- [x] **Step 1: Add failing admin refresh and lazy-image cache tests**
 
 Extend `albumMedia.test.mjs` with fixed timers and album state:
 
@@ -2837,13 +2863,13 @@ export function shouldReloadAuthorizedImage({ mediaKeyChanged, hasObjectUrl, fai
 }
 ```
 
-- [ ] **Step 2: Run admin lifecycle tests to verify RED**
+- [x] **Step 2: Run admin lifecycle tests to verify RED**
 
 Run: `npm --workspace apps/admin-web run test:album-media`
 
 Expected: FAIL on missing refresh controller and lazy-image predicate.
 
-- [ ] **Step 3: Add the admin refresh controller and signed-field normalization**
+- [x] **Step 3: Add the admin refresh controller and signed-field normalization**
 
 Wrap shared helpers in `albumMedia.js`:
 
@@ -2891,7 +2917,7 @@ export function createAdminAlbumRefreshController(options) {
 }
 ```
 
-- [ ] **Step 4: Integrate upload, expiry, visibility, and one current-media retry**
+- [x] **Step 4: Integrate upload, expiry, visibility, and one current-media retry**
 
 In `SessionAlbumWorkspace.vue`:
 
@@ -2908,7 +2934,7 @@ Use `fetchAuthorizedMediaObjectUrl` for both API and COS; its existing origin pr
 
 Wrap cross-origin fetch failures: a COS 401/403 becomes `MEDIA_URL_EXPIRED` and enters the one-refresh path; a browser `TypeError`/CORS failure for the configured COS origin becomes `COS_DOMAIN_NOT_ALLOWED` and is shown without a refresh loop. Preserve `status`, `code`, and the response request ID when exposed by CORS.
 
-- [ ] **Step 5: Keep loaded blobs across signature refreshes**
+- [x] **Step 5: Keep loaded blobs across signature refreshes**
 
 Add a `mediaKey` prop to `AuthorizedLazyImage.vue`, passed as `photo.id`. On `src` change with the same `mediaKey`, keep a valid `objectUrl`. If the prior fetch failed, clear failure and load the new source. On `mediaKey` change or unmount, revoke the blob. The watch logic is:
 
@@ -2936,7 +2962,7 @@ watch(
 );
 ```
 
-- [ ] **Step 6: Run admin tests and production build**
+- [x] **Step 6: Run admin tests and production build**
 
 Run: `npm --workspace apps/admin-web run test:album-media && npm --workspace apps/admin-web run test:runtime-config`
 
@@ -2950,7 +2976,7 @@ Run: `npm run build:admin-web`
 
 Expected: Vite production build exits 0.
 
-- [ ] **Step 7: Commit admin URL lifecycle**
+- [x] **Step 7: Commit admin URL lifecycle**
 
 ```bash
 git add apps/admin-web/src/albumMedia.js apps/admin-web/src/components/SessionAlbumWorkspace.vue apps/admin-web/src/components/AuthorizedLazyImage.vue apps/admin-web/test/albumMedia.test.mjs
@@ -2959,6 +2985,8 @@ git commit -m "feat: refresh admin COS album URLs"
 
 ## Task 14: COS CORS, cleanup service, and real-bucket contract gate
 
+执行状态：已完成（2026-07-11，静态运维门禁与默认安全跳过路径通过；显式真实桶检查留待受控预发布）。
+
 **Files:**
 - Create: `deploy/cos/cors.production.xml`
 - Create: `deploy/cos/cors.development.xml`
@@ -2966,7 +2994,7 @@ git commit -m "feat: refresh admin COS album URLs"
 - Modify: `docker-compose.prod.example.yml`
 - Modify: `package.json`
 
-- [ ] **Step 1: Write a failing static operations contract**
+- [x] **Step 1: Write a failing static operations contract**
 
 Create assertions in `scripts/d43-album-media-cos-direct-check.js` for exact production origin, methods, headers, exposed diagnostics, compose worker, and opt-in live script:
 
@@ -2991,13 +3019,13 @@ assert.match(liveContract, /forbidOverwrite:\s*true/);
 assert.match(liveContract, /getCosImageInfo/);
 ```
 
-- [ ] **Step 2: Run the static operations check to verify RED**
+- [x] **Step 2: Run the static operations check to verify RED**
 
 Run: `node scripts/d43-album-media-cos-direct-check.js --scope=operations`
 
 Expected: FAIL because CORS files, worker service, and live contract do not exist.
 
-- [ ] **Step 3: Add exact production and local-development CORS documents**
+- [x] **Step 3: Add exact production and local-development CORS documents**
 
 Create `deploy/cos/cors.production.xml`:
 
@@ -3027,7 +3055,7 @@ Create `deploy/cos/cors.production.xml`:
 
 Create a separate development document with the same methods/headers and two explicit rules for `http://localhost:5173` and `http://127.0.0.1:5173`; do not use wildcard origins or metadata/ACL headers.
 
-- [ ] **Step 4: Add the continuously running cleanup service**
+- [x] **Step 4: Add the continuously running cleanup service**
 
 Change the API and migrate services to `image: ${PINCHE_API_IMAGE:-hkccr.ccs.tencentyun.com/murder/pinche:latest}`, then add the worker with that same variable so an operator can pin all three to one digest:
 
@@ -3050,7 +3078,7 @@ Change the API and migrate services to `image: ${PINCHE_API_IMAGE:-hkccr.ccs.ten
 
 The release runbook in Task 15 must pin API, migrate, and worker to the same publish artifact during a rollout; do not run a worker from a different schema version.
 
-- [ ] **Step 5: Implement the opt-in destructive-safe live bucket contract**
+- [x] **Step 5: Implement the opt-in destructive-safe live bucket contract**
 
 The script exits successfully with `D43 COS live contract skipped` unless `D43_COS_CONTRACT=1`. When enabled, require `COS_SECRET_ID`, `COS_SECRET_KEY`, `COS_BUCKET`, and `COS_REGION`. Use a unique key under `contract-tests/album-image/`, an embedded 1×1 PNG, and `finally` deletion.
 
@@ -3097,7 +3125,7 @@ Add root scripts:
 "d43:check": "node scripts/d43-album-media-cos-direct-check.js"
 ```
 
-- [ ] **Step 6: Run static checks and the opt-in skip path**
+- [x] **Step 6: Run static checks and the opt-in skip path**
 
 Run: `node scripts/d43-album-media-cos-direct-check.js --scope=operations && npm run d43:cos-contract`
 
@@ -3107,7 +3135,7 @@ Run during pre-production with approved test-bucket credentials: `D43_COS_CONTRA
 
 Expected: one processed JPEG object passes HEAD/ImageInfo/four signed URL checks, the second PUT is rejected, tampered URLs fail, and final cleanup succeeds.
 
-- [ ] **Step 7: Commit operations artifacts**
+- [x] **Step 7: Commit operations artifacts**
 
 ```bash
 git add deploy/cos/cors.production.xml deploy/cos/cors.development.xml scripts/d43-cos-live-contract-check.js scripts/d43-album-media-cos-direct-check.js docker-compose.prod.example.yml package.json
@@ -3115,6 +3143,8 @@ git commit -m "ops: gate album image COS direct rollout"
 ```
 
 ## Task 15: Cross-app regression gate, smoke test, and release runbook
+
+执行状态：已完成（2026-07-11，D43 单元/静态/隔离 smoke、全仓检查及小程序与管理后台生产构建全部通过）。
 
 **Files:**
 - Create: `scripts/d43-album-media-cos-direct-smoke.js`
@@ -3133,7 +3163,7 @@ git commit -m "ops: gate album image COS direct rollout"
 - Modify: `docs/image-processing-policy.md`
 - Modify: `specs/d9-mvp-release/release-checklist.md`
 
-- [ ] **Step 1: Add failing cross-app source contracts before relaxing old assertions**
+- [x] **Step 1: Add failing cross-app source contracts before relaxing old assertions**
 
 The D43 check must import pure helpers where possible and use source assertions only for route/UI wiring. It locks:
 
@@ -3152,13 +3182,13 @@ assert.match(sharedProtocol, /COS_UPLOAD_CONFLICT_UNRESOLVED/);
 
 Add runtime checks for exactly three PUT attempts, a single auth refresh, one album refresh for many expiring items, legacy/local fallback fields, and no raw `object_key`/ETag response fields.
 
-- [ ] **Step 2: Run the new D43 check to verify RED**
+- [x] **Step 2: Run the new D43 check to verify RED**
 
 Run: `npm run d43:check`
 
 Expected: FAIL on old assertions and any integration wiring not yet present.
 
-- [ ] **Step 3: Narrow old gates instead of deleting non-goal protection**
+- [x] **Step 3: Narrow old gates instead of deleting non-goal protection**
 
 Make these exact semantic changes:
 
@@ -3170,7 +3200,7 @@ Make these exact semantic changes:
 - `check-miniprogram` prefers new signed fields while continuing to accept compatibility fields and USER_DATA_PATH-only viewer sources.
 - maintenance checks require suppression only for album upload/status/finalize/media refresh; ordinary network failures still enter current maintenance mode.
 
-- [ ] **Step 4: Add an isolated API smoke for the lifecycle and privacy boundary**
+- [x] **Step 4: Add an isolated API smoke for the lifecycle and privacy boundary**
 
 `d43-album-media-cos-direct-smoke.js` must refuse non-isolated databases using the established smoke target guard. With a fake COS adapter or local HTTP COS stub, run:
 
@@ -3190,7 +3220,7 @@ Print one deterministic success line:
 console.log("D43 album media COS direct smoke passed: strict upload, idempotent finalize, signed reads, privacy, cleanup, and video isolation");
 ```
 
-- [ ] **Step 5: Document configuration, domains, error triage, metrics, and rollback**
+- [x] **Step 5: Document configuration, domains, error triage, metrics, and rollback**
 
 The runbook must include:
 
@@ -3206,7 +3236,7 @@ The runbook must include:
 
 Update image policy with source-versus-stored metadata and same-key Pic-Operations. Update the release checklist with CORS, WeChat domains, live contract, client versions, staged flags, and one full mini-program release-cycle observation before removing proxy routes.
 
-- [ ] **Step 6: Add D43 and focused tests to root check**
+- [x] **Step 6: Add D43 and focused tests to root check**
 
 Add scripts:
 
@@ -3217,7 +3247,7 @@ Add scripts:
 
 Insert `npm run d43:unit && npm run d43:check` into root `check`. Keep isolated smoke and live contract opt-in so normal CI cannot touch a real database or Bucket.
 
-- [ ] **Step 7: Run focused, full, and build verification**
+- [x] **Step 7: Run focused, full, and build verification**
 
 Run: `npm run d43:unit && npm run d43:check`
 
@@ -3235,7 +3265,7 @@ Run: `npm run build:mp-weixin && npm run build:admin-web`
 
 Expected: both production builds exit 0.
 
-- [ ] **Step 8: Commit regression gates and documentation**
+- [x] **Step 8: Commit regression gates and documentation**
 
 ```bash
 git add scripts/d43-album-media-cos-direct-smoke.js scripts/d43-album-media-cos-direct-check.js scripts/d12-admin-web-check.js scripts/d17-cos-storage-check.js scripts/d18-session-album-privacy-check.js scripts/d18-session-album-privacy-smoke.js scripts/d31-album-viewer-sequence-check.js scripts/d42-album-video-delete-integration-check.js scripts/check-miniprogram.js scripts/check-maintenance-mode.js package.json docs/runbooks/album-media-cos-direct-release.md README.md docs/image-processing-policy.md specs/d9-mvp-release/release-checklist.md
@@ -3243,6 +3273,8 @@ git commit -m "test: verify direct COS album media flow"
 ```
 
 ## Task 16: Staged production rollout and acceptance
+
+执行状态：等待生产授权（2026-07-11）。只读现网检查确认 API `/health` 与管理后台可用、Bucket 匿名 HEAD 为 403；但 COS 预检当前仍返回 `Access-Control-Allow-Origin: *`、额外允许 `POST`，且暴露头不完整，尚未通过 Step 2 门禁。发布前必须应用 `deploy/cos/cors.production.xml` 并重新验证。
 
 **Files:**
 - Verify: `docs/runbooks/album-media-cos-direct-release.md`

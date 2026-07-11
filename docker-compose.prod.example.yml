@@ -1,6 +1,6 @@
 services:
   api:
-    image: hkccr.ccs.tencentyun.com/murder/pinche:latest
+    image: ${PINCHE_API_IMAGE:-hkccr.ccs.tencentyun.com/murder/pinche:latest}
     pull_policy: always
     env_file:
       - .env.production
@@ -47,7 +47,7 @@ services:
     restart: unless-stopped
 
   migrate:
-    image: hkccr.ccs.tencentyun.com/murder/pinche:latest
+    image: ${PINCHE_API_IMAGE:-hkccr.ccs.tencentyun.com/murder/pinche:latest}
     pull_policy: always
     env_file:
       - .env.production
@@ -58,6 +58,21 @@ services:
       mysql:
         condition: service_healthy
     restart: "no"
+
+  album-image-cleanup:
+    image: ${PINCHE_API_IMAGE:-hkccr.ccs.tencentyun.com/murder/pinche:latest}
+    pull_policy: always
+    env_file:
+      - .env.production
+    command: npm run job:album-image-cleanup
+    networks:
+      - internal
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
 
   mysql:
     image: mysql:8.4

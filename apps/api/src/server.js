@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { config, publicConfig } from "./config/env.js";
-import { checkDatabaseReadiness } from "./db/mysql.js";
+import { checkDatabaseReadiness, withDatabaseConnection, withTransaction } from "./db/mysql.js";
 import { AppError, badRequest, forbidden, notFound, unauthorized } from "./http/errors.js";
 import { updateUserPhone, updateUserProfile } from "./modules/auth/users.js";
 import {
@@ -27,6 +27,7 @@ import {
   cosStorageEnabled,
   deleteCosObject,
   getCosObject,
+  getCosImageInfo,
   headCosObject,
   isTrustedCosStorageError,
   readCosObjectRange,
@@ -46,6 +47,7 @@ import {
 import { cleanupAlbumVideoBeforeDelete } from "./modules/album-video/lifecycle.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
+  assertSessionAlbumImageUploadAllowed,
   assertSessionJoinInviteAllowed,
   assertSessionAlbumUploadAllowed,
   approveSignup,
@@ -67,8 +69,8 @@ import {
   createStore,
   createSubscriptionRequest,
   deleteAdminSession,
-  deleteSessionAlbumPhoto,
   prepareSessionAlbumPhotoDeletion,
+  requestSessionAlbumImageDeletion,
   finalizeSessionAlbumPhotoDeletion,
   deleteScript,
   deleteStore,
@@ -81,6 +83,7 @@ import {
   getMySessionReview,
   getVisibleSessionAlbumPhotoForMedia,
   getVisibleSessionAlbumVideoForPlayback,
+  getFinalizedSessionAlbumImage,
   hideMySignup,
   kickSessionSeat,
   leaveSessionOrganizer,
@@ -126,8 +129,23 @@ import {
   updateSessionNpcRole,
   updateStore,
   upsertMySessionReview,
-  upsertPerformerProfile
+  upsertPerformerProfile,
+  insertFinalizedSessionAlbumImage,
+  serializeSessionAlbumImage
 } from "./modules/core/service.js";
+import { isAlbumImageKind } from "./modules/album-image/constants.js";
+import {
+  bindLegacyIntentByteSize,
+  findAlbumImageIntent,
+  findAlbumImageIntentByObjectKey,
+  insertAlbumImageIntent,
+  markAlbumImageIntentState,
+  recordAlbumImageAuthorization
+} from "./modules/album-image/repository.js";
+import { createAlbumImageUploadService } from "./modules/album-image/upload-service.js";
+import { emitAlbumImageEvent } from "./modules/album-image/telemetry.js";
+import { validateStoredAlbumImage } from "./modules/album-image/validator.js";
+import { buildAlbumImageUrls } from "./modules/album-image/signed-urls.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "..");
@@ -165,6 +183,52 @@ const avatarMimeTypes = {
   "image/jpeg": ".jpg",
   "image/png": ".png"
 };
+
+const albumImageUploads = createAlbumImageUploadService({
+  cosConfig: config.cos,
+  directUploadRequired: config.albumMedia.directUploadRequired,
+  transaction: withTransaction,
+  access: assertSessionAlbumImageUploadAllowed,
+  repository: {
+    insert: insertAlbumImageIntent,
+    find: findAlbumImageIntent,
+    findByObjectKey: findAlbumImageIntentByObjectKey,
+    bindByteSize: bindLegacyIntentByteSize,
+    recordAuthorization: recordAlbumImageAuthorization,
+    markState: markAlbumImageIntentState
+  },
+  withDatabaseConnection,
+  validateStoredImage: (intent) => validateStoredAlbumImage({
+    intent,
+    storage: {
+      head: async (key) => {
+        const response = await headCosObject({ key, config: config.cos });
+        return {
+          etag: response.headers.etag || "",
+          byteSize: Number(response.headers["content-length"] || 0),
+          contentType: String(response.headers["content-type"] || "")
+        };
+      },
+      imageInfo: ({ key, etag }) => getCosImageInfo({ key, etag, config: config.cos })
+    }
+  }),
+  insertFinalizedImage: insertFinalizedSessionAlbumImage,
+  getFinalizedImage: getFinalizedSessionAlbumImage,
+  serializeImage: serializeSessionAlbumImage,
+  emit: emitAlbumImageEvent
+});
+
+async function isPersistedAlbumImageAuthorization(user, body) {
+  if (body.uploadId || body.upload_id) return true;
+  const key = String(body.key || body.Key || "");
+  if (!key) return false;
+  return withDatabaseConnection(async (connection) => Boolean(
+    await findAlbumImageIntentByObjectKey(connection, {
+      userId: Number(user.user.id),
+      objectKey: key
+    })
+  ));
+}
 
 function jsonResponse(response, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -1160,6 +1224,52 @@ function sessionAlbumMediaPath(photoId, variant = "preview") {
   return variant === "thumbnail" ? `${path}&variant=thumbnail` : path;
 }
 
+function attachAlbumImageUrls(photo, legacyUrls, options) {
+  const { storage_object_key: objectKey, storage_object_etag: ignoredEtag, ...safePhoto } = photo;
+  void ignoredEtag;
+  const signed = options.directMediaUrls && objectKey && cosStorageEnabled(options.cosConfig)
+    ? options.buildUrls({
+        objectKey,
+        mediaId: photo.id,
+        nowSeconds: options.nowSeconds,
+        config: options.cosConfig
+      })
+    : {
+        thumbnail_display_url: legacyUrls.thumbnail,
+        preview_display_url: legacyUrls.preview,
+        download_url: legacyUrls.preview,
+        media_url_expires_at: null
+      };
+  return {
+    ...safePhoto,
+    image_url: legacyUrls.preview,
+    preview_url: legacyUrls.preview,
+    thumbnail_url: legacyUrls.thumbnail,
+    preview_load_url: legacyUrls.previewLoad || legacyUrls.preview,
+    thumbnail_load_url: legacyUrls.thumbnailLoad || legacyUrls.thumbnail,
+    ...signed
+  };
+}
+
+function albumImageUrlOptions(options = {}) {
+  return {
+    directMediaUrls: options.directMediaUrls ?? config.albumMedia.directMediaUrls,
+    nowSeconds: options.nowSeconds ?? Math.floor(Date.now() / 1000),
+    cosConfig: options.cosConfig || config.cos,
+    buildUrls: options.buildUrls || buildAlbumImageUrls
+  };
+}
+
+function attachLegacyFinalizedAlbumImageUrls(finalized, options = {}) {
+  const resolved = albumImageUrlOptions(options);
+  const preview = sessionAlbumMediaPath(finalized.photo.id, "preview");
+  const thumbnail = sessionAlbumMediaPath(finalized.photo.id, "thumbnail");
+  return {
+    uploadId: finalized.uploadId,
+    photo: attachAlbumImageUrls(finalized.photo, { preview, thumbnail }, resolved)
+  };
+}
+
 function sessionAlbumVideoUrlPath(mediaId) {
   return `/api/session-album/media/${mediaId}/video-url`;
 }
@@ -1459,45 +1569,39 @@ function mediaVariantName(variant) {
   throw badRequest("unsupported album media variant");
 }
 
-function attachSessionAlbumMediaUrls(album, userId) {
+export function attachSessionAlbumMediaUrls(album, userId, options = {}) {
+  const resolved = albumImageUrlOptions(options);
+  let signedImageCount = 0;
+  const photos = album.photos.map((photo) => {
+      if (photo.media_type === "video") {
+        const safePhoto = stripAlbumVideoInternalFields(photo);
+        return {
+          ...safePhoto,
+          cover_url: photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
+          video_url: photo.processing_status === "ready" ? sessionAlbumVideoUrlPath(photo.id) : ""
+        };
+      }
+      const preview = sessionAlbumMediaPath(photo.id, "preview");
+      const thumbnail = sessionAlbumMediaPath(photo.id, "thumbnail");
+      const willSign = resolved.directMediaUrls && photo.storage_object_key &&
+        cosStorageEnabled(resolved.cosConfig);
+      if (willSign) signedImageCount += 1;
+      return attachAlbumImageUrls(photo, {
+        preview,
+        thumbnail,
+        previewLoad: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview"),
+        thumbnailLoad: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")
+      }, resolved);
+    });
+  (options.emit || emitAlbumImageEvent)("media_urls_signed", {
+    sessionId: Number(album.session_id),
+    outcome: options.routeKind || "member",
+    signedImageCount
+  });
   return {
     ...album,
-    photos: album.photos.map((photo) => {
-      if (photo.media_type === "video") {
-        const safePhoto = stripAlbumVideoInternalFields(photo);
-        return {
-          ...safePhoto,
-          cover_url: photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
-          video_url: photo.processing_status === "ready" ? sessionAlbumVideoUrlPath(photo.id) : ""
-        };
-      }
-      return {
-        ...photo,
-        image_url: sessionAlbumMediaPath(photo.id),
-        preview_url: sessionAlbumMediaPath(photo.id, "preview"),
-        thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail"),
-        preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview"),
-        thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")
-      };
-    }),
-    media: album.photos.map((photo) => {
-      if (photo.media_type === "video") {
-        const safePhoto = stripAlbumVideoInternalFields(photo);
-        return {
-          ...safePhoto,
-          cover_url: photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
-          video_url: photo.processing_status === "ready" ? sessionAlbumVideoUrlPath(photo.id) : ""
-        };
-      }
-      return {
-        ...photo,
-        image_url: sessionAlbumMediaPath(photo.id),
-        preview_url: sessionAlbumMediaPath(photo.id, "preview"),
-        thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail"),
-        preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview"),
-        thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")
-      };
-    })
+    photos,
+    media: photos
   };
 }
 
@@ -1668,63 +1772,38 @@ function verifySessionAlbumPublicMediaQuery(photoId, query) {
   return normalizeSessionAlbumShareClaims(payload);
 }
 
-function attachPublicSessionAlbumMediaUrls(album, claims, albumShareToken) {
+export function attachPublicSessionAlbumMediaUrls(
+  album,
+  claims,
+  albumShareToken,
+  options = {}
+) {
+  const resolved = albumImageUrlOptions(options);
+  let signedImageCount = 0;
+  const photos = album.photos.map((photo) => {
+      if (photo.media_type === "video") {
+        const safePhoto = stripAlbumVideoInternalFields(photo);
+        return {
+          ...safePhoto,
+          cover_url: photo.has_cover
+            ? signedPublicAlbumVideoSnapshotUrl(photo, claims, albumShareToken)
+            : ""
+        };
+      }
+      const preview = sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken, "preview");
+      const thumbnail = sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken, "thumbnail");
+      const willSign = resolved.directMediaUrls && photo.storage_object_key &&
+        cosStorageEnabled(resolved.cosConfig);
+      if (willSign) signedImageCount += 1;
+      return attachAlbumImageUrls(photo, { preview, thumbnail }, resolved);
+    });
+  (options.emit || emitAlbumImageEvent)("media_urls_signed", {
+    sessionId: Number(album.session_id), outcome: "public-share", signedImageCount
+  });
   return {
     ...album,
-    photos: album.photos.map((photo) => {
-      if (photo.media_type === "video") {
-        const safePhoto = stripAlbumVideoInternalFields(photo);
-        return {
-          ...safePhoto,
-          cover_url: photo.has_cover
-            ? signedPublicAlbumVideoSnapshotUrl(photo, claims, albumShareToken)
-            : ""
-        };
-      }
-      return {
-        ...photo,
-        image_url: sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken),
-        preview_url: sessionAlbumPublicMediaPath(
-          photo.id,
-          claims,
-          albumShareToken,
-          "preview"
-        ),
-        thumbnail_url: sessionAlbumPublicMediaPath(
-          photo.id,
-          claims,
-          albumShareToken,
-          "thumbnail"
-        )
-      };
-    }),
-    media: album.photos.map((photo) => {
-      if (photo.media_type === "video") {
-        const safePhoto = stripAlbumVideoInternalFields(photo);
-        return {
-          ...safePhoto,
-          cover_url: photo.has_cover
-            ? signedPublicAlbumVideoSnapshotUrl(photo, claims, albumShareToken)
-            : ""
-        };
-      }
-      return {
-        ...photo,
-        image_url: sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken),
-        preview_url: sessionAlbumPublicMediaPath(
-          photo.id,
-          claims,
-          albumShareToken,
-          "preview"
-        ),
-        thumbnail_url: sessionAlbumPublicMediaPath(
-          photo.id,
-          claims,
-          albumShareToken,
-          "thumbnail"
-        )
-      };
-    })
+    photos,
+    media: photos
   };
 }
 
@@ -1760,6 +1839,7 @@ async function serveLocalUploadedObject({ filePath, filename, response, cacheCon
     "content-type": uploadedObjectContentType(filename)
   });
   response.end(file);
+  return file.length;
 }
 
 async function serveCosUploadedObject({ key, filename, response, cacheControl, ciProcess }) {
@@ -1775,6 +1855,7 @@ async function serveCosUploadedObject({ key, filename, response, cacheControl, c
     "content-type": uploadedObjectContentType(filename, object.headers["content-type"])
   });
   response.end(object.body);
+  return object.body.length;
 }
 
 async function serveUploadedObject({ url, prefix, localDir, response, cacheControl, ciProcess }) {
@@ -1787,8 +1868,7 @@ async function serveUploadedObject({ url, prefix, localDir, response, cacheContr
   const key = cosObjectKeyFromUploadPath(`${prefix}${filename}`, prefix);
   if (isCosUploadStorageEnabled()) {
     try {
-      await serveCosUploadedObject({ key, filename, response, cacheControl, ciProcess });
-      return;
+      return await serveCosUploadedObject({ key, filename, response, cacheControl, ciProcess });
     } catch (error) {
       if (error.statusCode && error.statusCode !== 404) {
         throw new AppError(502, "COS_STORAGE_ERROR", "COS storage request failed", error.body);
@@ -1796,7 +1876,7 @@ async function serveUploadedObject({ url, prefix, localDir, response, cacheContr
     }
   }
 
-  await serveLocalUploadedObject({
+  return serveLocalUploadedObject({
     filePath: path.join(localDir, filename),
     filename,
     response,
@@ -2001,7 +2081,7 @@ async function serveUploadedSessionAlbumPhoto(photo, response, options = {}) {
   try {
     const photoUrl = new URL(photo.photo_url, "http://localhost");
     if (photoUrl.pathname.startsWith("/uploads/session-album/display/")) {
-      await serveUploadedObject({
+      const byteCount = await serveUploadedObject({
         url: photoUrl,
         prefix: "/uploads/session-album/display/",
         localDir: sessionAlbumDisplayUploadDir,
@@ -2009,9 +2089,16 @@ async function serveUploadedSessionAlbumPhoto(photo, response, options = {}) {
         cacheControl,
         ciProcess
       });
-      return;
+      emitAlbumImageEvent("legacy_proxy_read", {
+        sessionId: Number(photo.session_id),
+        mediaId: Number(photo.id),
+        outcome: "success",
+        variant: options.variant || "preview",
+        byteCount
+      });
+      return byteCount;
     }
-    await serveUploadedObject({
+    const byteCount = await serveUploadedObject({
       url: photoUrl,
       prefix: "/uploads/session-album/",
       localDir: sessionAlbumUploadDir,
@@ -2019,7 +2106,22 @@ async function serveUploadedSessionAlbumPhoto(photo, response, options = {}) {
       cacheControl,
       ciProcess
     });
+    emitAlbumImageEvent("legacy_proxy_read", {
+      sessionId: Number(photo.session_id),
+      mediaId: Number(photo.id),
+      outcome: "success",
+      variant: options.variant || "preview",
+      byteCount
+    });
+    return byteCount;
   } catch (error) {
+    emitAlbumImageEvent("legacy_proxy_read", {
+      sessionId: Number(photo.session_id),
+      mediaId: Number(photo.id),
+      outcome: "failure",
+      variant: options.variant || "preview",
+      errorCode: error?.code || "LEGACY_PROXY_READ_FAILED"
+    });
     if (error instanceof AppError) {
       throw error;
     }
@@ -2144,6 +2246,11 @@ async function getSessionAlbumDisplayMetadata(photoUrl) {
 function idMatch(pathname, pattern) {
   const match = pathname.match(pattern);
   return match ? Number(match[1]) : null;
+}
+
+function stringMatch(pathname, pattern) {
+  const match = pathname.match(pattern);
+  return match ? match[1] : null;
 }
 
 async function getAuthUser(request) {
@@ -2349,6 +2456,13 @@ async function route(request, response) {
   if (request.method === "POST" && sessionAlbumUploadId) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumUploadId);
+    if (config.albumMedia.directUploadRequired) {
+      throw new AppError(
+        409,
+        "DIRECT_UPLOAD_REQUIRED",
+        "Production album images must be uploaded directly to COS"
+      );
+    }
     const photoUrl = await saveUploadedSessionAlbumPhoto(
       request,
       user.user.id,
@@ -2368,6 +2482,13 @@ async function route(request, response) {
   if (request.method === "POST" && adminSessionAlbumUploadId) {
     const user = await getAuthUser(request);
     const session = await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumUploadId);
+    if (config.albumMedia.directUploadRequired) {
+      throw new AppError(
+        409,
+        "DIRECT_UPLOAD_REQUIRED",
+        "Production album images must be uploaded directly to COS"
+      );
+    }
     const photoUrl = await saveUploadedSessionAlbumPhoto(
       request,
       user.user.id,
@@ -2414,16 +2535,19 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/uploads/cos-intent") {
     const user = await getAuthUser(request);
-    jsonResponse(response, 200, {
-      ok: true,
-      data: {
-        upload: await createCosDirectUploadIntent({
+    const upload = isAlbumImageKind(body.kind)
+      ? await albumImageUploads.createIntent({ user, body })
+      : await createCosDirectUploadIntent({
           kind: body.kind,
           extension: body.extension,
           user,
           userId: user.user.id,
           sessionId: body.sessionId || body.session_id
-        })
+        });
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        upload
       }
     });
     return;
@@ -2431,13 +2555,44 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/uploads/cos-authorization") {
     const user = await getAuthUser(request);
+    const useAlbumImageAuthorization = await isPersistedAlbumImageAuthorization(user, body);
     jsonResponse(response, 200, {
       ok: true,
-      data: await authorizeCosDirectUpload({
-        body,
-        user
-      })
+      data: useAlbumImageAuthorization
+        ? await albumImageUploads.authorize({ body, user })
+        : await authorizeCosDirectUpload({ body, user })
     });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/telemetry/album-media") {
+    await getAuthUser(request);
+    const allowedEvents = new Set([
+      "upload_retry",
+      "upload_failure",
+      "media_refresh_success",
+      "media_refresh_failure"
+    ]);
+    const event = String(body.event || "");
+    if (!allowedEvents.has(event)) throw badRequest("unsupported album media event");
+    const sessionId = Number(body.sessionId ?? body.session_id ?? 0);
+    const retryCount = Number(body.retryCount ?? body.retry_count ?? 0);
+    if (
+      (sessionId && (!Number.isSafeInteger(sessionId) || sessionId < 0)) ||
+      (!Number.isSafeInteger(retryCount) || retryCount < 0)
+    ) {
+      throw badRequest("invalid album media telemetry fields");
+    }
+    const errorCode = body.errorCode ?? body.error_code;
+    if (errorCode !== undefined && !/^[A-Z0-9_]{1,64}$/.test(String(errorCode))) {
+      throw badRequest("invalid album media telemetry error code");
+    }
+    emitAlbumImageEvent(event, {
+      sessionId,
+      retryCount,
+      errorCode: errorCode ? String(errorCode) : undefined
+    });
+    jsonResponse(response, 202, { ok: true });
     return;
   }
 
@@ -3124,6 +3279,36 @@ async function route(request, response) {
     return;
   }
 
+  const albumUploadStatusId = stringMatch(
+    url.pathname,
+    /^\/api\/uploads\/([0-9a-f-]{36})\/status$/i
+  );
+  if (request.method === "GET" && albumUploadStatusId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await albumImageUploads.status({ user, uploadId: albumUploadStatusId })
+    });
+    return;
+  }
+
+  const albumUploadFinalizeId = stringMatch(
+    url.pathname,
+    /^\/api\/uploads\/([0-9a-f-]{36})\/finalize$/i
+  );
+  if (request.method === "POST" && albumUploadFinalizeId) {
+    const user = await getAuthUser(request);
+    const finalized = await albumImageUploads.finalize({
+      user,
+      uploadId: albumUploadFinalizeId
+    });
+    jsonResponse(response, 200, {
+      ok: true,
+      data: attachLegacyFinalizedAlbumImageUrls(finalized)
+    });
+    return;
+  }
+
   const sessionAlbumId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/album$/);
   if (request.method === "GET" && sessionAlbumId) {
     const user = await getAuthUser(request);
@@ -3145,7 +3330,7 @@ async function route(request, response) {
     const album = await listSessionAlbum(user, adminSessionAlbumId);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album, user.user.id)
+      data: attachSessionAlbumMediaUrls(album, user.user.id, { routeKind: "admin" })
     });
     return;
   }
@@ -3206,6 +3391,18 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumPhotosId);
     const photoUrl = body.photoUrl || body.photo_url;
+    if (isCosUploadStorageEnabled()) {
+      const finalized = attachLegacyFinalizedAlbumImageUrls(
+        await albumImageUploads.finalizeLegacy({
+          user,
+          sessionId: sessionAlbumPhotosId,
+          kind: "sessionAlbumPhoto",
+          photoUrl
+        })
+      );
+      jsonResponse(response, 201, { ok: true, data: finalized.photo });
+      return;
+    }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
     const photo = await createSessionAlbumPhoto(user, sessionAlbumPhotosId, {
       ...body,
@@ -3232,6 +3429,18 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumPhotosId);
     const photoUrl = body.photoUrl || body.photo_url;
+    if (isCosUploadStorageEnabled()) {
+      const finalized = attachLegacyFinalizedAlbumImageUrls(
+        await albumImageUploads.finalizeLegacy({
+          user,
+          sessionId: adminSessionAlbumPhotosId,
+          kind: "adminSessionAlbumPhoto",
+          photoUrl
+        })
+      );
+      jsonResponse(response, 201, { ok: true, data: finalized.photo });
+      return;
+    }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
     const photo = await createSessionAlbumPhoto(user, adminSessionAlbumPhotosId, {
       ...body,
@@ -3296,16 +3505,13 @@ async function route(request, response) {
       jsonResponse(response, 200, { ok: true, data: { id: deletedVideo.id, deleted: true } });
       return;
     }
-    const deletedPhoto = await deleteSessionAlbumPhoto(user, sessionAlbumPhotoId);
-    await cleanupUploadedSessionAlbumPhotoObject(deletedPhoto.photo_url);
-    await cleanupUploadedSessionAlbumMediaObjects(
-      (deletedPhoto.object_urls || []).filter((url) => url !== deletedPhoto.photo_url)
-    );
-    jsonResponse(response, 200, {
+    const deletion = await requestSessionAlbumImageDeletion(user, sessionAlbumPhotoId);
+    jsonResponse(response, 202, {
       ok: true,
       data: {
-        id: deletedPhoto.id,
-        deleted: true
+        id: deletion.id,
+        deleted: false,
+        deletionPending: true
       }
     });
     return;

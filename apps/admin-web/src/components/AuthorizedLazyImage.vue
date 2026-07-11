@@ -9,9 +9,11 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { fetchAuthorizedMediaObjectUrl } from "../api";
+import { shouldReloadAuthorizedImage } from "../albumMedia";
 
 const props = defineProps({
   src: { type: String, default: "" },
+  mediaKey: { type: [String, Number], default: "" },
   alt: { type: String, default: "" },
   ratio: { type: Number, default: 1 }
 });
@@ -65,6 +67,9 @@ async function loadImage() {
     failed.value = true;
     emit("error", {
       status: Number(error?.status || 0),
+      code: error?.code || "",
+      message: error?.message || "",
+      requestId: error?.requestId || error?.details?.requestId || "",
       src: source
     });
   } finally {
@@ -96,13 +101,24 @@ function observeImage() {
 }
 
 watch(
-  () => props.src,
-  () => {
+  () => [props.mediaKey, props.src],
+  ([nextKey], [previousKey]) => {
     sourceSerial += 1;
     loading.value = false;
-    revokeObjectUrl();
-    failed.value = false;
-    observeImage();
+    if (nextKey !== previousKey) {
+      revokeObjectUrl();
+      failed.value = false;
+      observeImage();
+      return;
+    }
+    if (shouldReloadAuthorizedImage({
+      mediaKeyChanged: false,
+      hasObjectUrl: Boolean(objectUrl.value),
+      failed: failed.value
+    })) {
+      failed.value = false;
+      observeImage();
+    }
   }
 );
 

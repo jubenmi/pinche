@@ -26,6 +26,9 @@
 - 相册展示图统一保存到 `uploads/session-album/display/...jpg`。
 - 生产环境启用 COS 时，相册图由客户端 SDK 直传，并通过数据万象上传时处理保存为压缩 JPG。
 - 当前相册展示图处理规则为 `imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip`，用于限制最长边、统一 JPG 并去除 EXIF。
+- 客户端 PUT 的 `Content-Type`/`Content-Length` 是源文件事实；数据库最终保存的 MIME、字节数、宽高来自处理后 JPEG 的 HEAD → ImageInfo → HEAD，禁止把源文件字节数与处理后字节数比较。
+- 上传使用同 key `Pic-Operations`：`fileid` 必须等于当前对象 key，并配合禁止覆盖头；最终确认不读取完整图片正文。
+- 生产读取使用私有 Bucket 的五分钟签名 URL，缩略图、预览和下载分别签名；签名前必须完成现有隐私过滤。
 - 本地未启用 COS 时，后端使用同等参数生成展示 JPG，作为开发 fallback。
 
 ## 会员照片

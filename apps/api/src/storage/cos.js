@@ -17,6 +17,7 @@ const TRUSTED_COS_ERROR_CODES = new Set([
   "COS_REQUEST_TIMEOUT",
   "COS_RESPONSE_ABORTED",
   "COS_RESPONSE_TOO_LARGE",
+  "COS_INVALID_IMAGE_INFO",
   "COS_INVALID_CONTENT_LENGTH",
   "COS_INVALID_RANGE_RESPONSE"
 ]);
@@ -32,17 +33,25 @@ function cosStorageError(statusCode, code, message) {
 }
 
 function cosHttpError(statusCode) {
+  let error;
   if (statusCode === 404) {
-    return cosStorageError(404, "COS_OBJECT_NOT_FOUND", "COS object was not found");
-  }
-  if (statusCode === 412) {
-    return cosStorageError(
+    error = cosStorageError(404, "COS_OBJECT_NOT_FOUND", "COS object was not found");
+  } else if (statusCode === 409 || statusCode === 412) {
+    error = cosStorageError(
       412,
       "COS_PRECONDITION_FAILED",
       "COS object version precondition failed"
     );
+  } else {
+    error = cosStorageError(502, "COS_UPSTREAM_ERROR", "COS storage request failed");
   }
-  return cosStorageError(502, "COS_UPSTREAM_ERROR", "COS storage request failed");
+  Object.defineProperty(error, "upstreamStatusCode", {
+    configurable: false,
+    enumerable: false,
+    value: Number(statusCode),
+    writable: false
+  });
+  return error;
 }
 
 function cosNetworkError() {
@@ -78,11 +87,43 @@ function sortedHeaderEntries(headers = {}) {
     .sort(([left], [right]) => left.localeCompare(right));
 }
 
-function sortedUrlParamEntries(urlParams = {}) {
-  return Object.entries(urlParams)
-    .filter(([, value]) => value !== undefined && value !== null && value !== "")
-    .map(([key, value]) => [encodeCosComponent(key).toLowerCase(), encodeCosComponent(value)])
-    .sort(([left], [right]) => left.localeCompare(right));
+export function cosQueryEntries(urlParams = []) {
+  const raw = Array.isArray(urlParams)
+    ? urlParams.map(({ name, value = null }) => ({ name: String(name), value }))
+    : Object.entries(urlParams).map(([name, value]) => ({ name, value }));
+  return raw
+    .filter(({ value }) => value !== undefined)
+    .sort((left, right) =>
+      encodeCosComponent(left.name).toLowerCase()
+        .localeCompare(encodeCosComponent(right.name).toLowerCase())
+    );
+}
+
+function encodeCosQueryKey(value) {
+  return String(value || "")
+    .split("/")
+    .map(encodeCosComponent)
+    .join("/");
+}
+
+export function renderCosRequestQuery(urlParams) {
+  return cosQueryEntries(urlParams).map(({ name, value }) =>
+    value === null
+      ? encodeCosQueryKey(name)
+      : `${encodeCosComponent(name)}=${encodeCosComponent(value)}`
+  ).join("&");
+}
+
+export function renderCosCanonicalQuery(urlParams) {
+  return cosQueryEntries(urlParams).map(({ name, value }) =>
+    `${encodeCosComponent(name).toLowerCase()}=${
+      value === null ? "" : encodeCosComponent(value)
+    }`
+  ).join("&");
+}
+
+export function encodeCosObjectPath(key) {
+  return String(key || "").split("/").map(encodeCosComponent).join("/");
 }
 
 export function cosStorageEnabled(cosConfig = {}) {
@@ -139,12 +180,14 @@ export function buildCosAuthorization({
 }) {
   const keyTime = `${nowSeconds};${nowSeconds + expiresInSeconds}`;
   const headerEntries = sortedHeaderEntries(headers);
-  const urlParamEntries = sortedUrlParamEntries(urlParams);
+  const urlParamEntries = cosQueryEntries(urlParams);
   const headerList = headerEntries.map(([name]) => name).join(";");
-  const urlParamList = urlParamEntries.map(([name]) => name).join(";");
+  const urlParamList = urlParamEntries
+    .map(({ name }) => encodeCosComponent(name).toLowerCase())
+    .join(";");
   const httpHeaders = headerEntries.map(([name, value]) => `${name}=${value}`).join("&");
-  const httpParameters = urlParamEntries.map(([name, value]) => `${name}=${value}`).join("&");
-  const uriPathname = `/${String(key || "").split("/").map(encodeURIComponent).join("/")}`;
+  const httpParameters = renderCosCanonicalQuery(urlParamEntries);
+  const uriPathname = `/${encodeCosObjectPath(key)}`;
   const httpString = `${method.toLowerCase()}\n${uriPathname}\n${httpParameters}\n${httpHeaders}\n`;
   const stringToSign = `${SIGN_ALGORITHM}\n${keyTime}\n${sha1(httpString)}\n`;
   const signKey = hmacSha1(config.secretKey, keyTime);
@@ -161,13 +204,6 @@ export function buildCosAuthorization({
   ].join("&");
 }
 
-function encodeCosQueryKey(value) {
-  return String(value || "")
-    .split("/")
-    .map(encodeCosComponent)
-    .join("/");
-}
-
 function cosRequest({
   method,
   key,
@@ -176,6 +212,7 @@ function cosRequest({
   contentLength,
   headers: extraHeaders = {},
   ciProcess,
+  urlParams,
   collectBody = true,
   maxResponseBytes = DEFAULT_COS_RESPONSE_MAX_BYTES,
   maxErrorResponseBytes = DEFAULT_COS_ERROR_RESPONSE_MAX_BYTES,
@@ -196,6 +233,11 @@ function cosRequest({
   }
 
   const host = cosHost(config);
+  const queryEntries = cosQueryEntries(
+    urlParams === undefined && ciProcess
+      ? [{ name: ciProcess, value: null }]
+      : (urlParams || [])
+  );
   const date = new Date().toUTCString();
   const hasBody = body !== undefined && body !== null;
   const streamBody = hasBody && typeof body?.pipe === "function";
@@ -236,6 +278,7 @@ function cosRequest({
       method,
       key,
       headers: signedHeaders,
+      urlParams: queryEntries,
       config
     })
   };
@@ -296,7 +339,9 @@ function cosRequest({
         {
           method,
           hostname: host,
-          path: `/${key}${ciProcess ? `?${encodeCosQueryKey(ciProcess)}` : ""}`,
+          path: `/${key}${
+            queryEntries.length > 0 ? `?${renderCosRequestQuery(queryEntries)}` : ""
+          }`,
           headers
         },
         (response) => {
@@ -461,6 +506,55 @@ export async function headCosObject({
     request,
     config
   });
+}
+
+export async function getCosImageInfo({
+  key,
+  etag,
+  config,
+  request = https.request,
+  timeoutMs = DEFAULT_COS_INSPECTION_TIMEOUT_MS,
+  setTimeoutFn,
+  clearTimeoutFn
+}) {
+  const read = (headers) => cosRequest({
+    method: "GET",
+    key,
+    headers,
+    urlParams: [{ name: "imageInfo", value: null }],
+    maxResponseBytes: 64 * 1024,
+    timeoutMs,
+    setTimeoutFn,
+    clearTimeoutFn,
+    request,
+    config
+  });
+
+  let response;
+  try {
+    response = await read(etag ? { "if-match": etag } : {});
+  } catch (error) {
+    if (!etag || ![400, 405, 501].includes(Number(error.upstreamStatusCode))) throw error;
+    response = await read({});
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(response.body.toString("utf8"));
+  } catch {
+    throw cosStorageError(
+      502,
+      "COS_INVALID_IMAGE_INFO",
+      "COS imageInfo response was invalid JSON"
+    );
+  }
+  return {
+    format: String(parsed.format || "").toLowerCase(),
+    width: Number(parsed.width || 0),
+    height: Number(parsed.height || 0),
+    byteSize: Number(parsed.size || 0),
+    etag: String(response.headers.etag || etag || "").replace(/^\"|\"$/g, "")
+  };
 }
 
 export async function readCosObjectRange({

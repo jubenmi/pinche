@@ -16,7 +16,7 @@ function block(source, start, end) {
   return source.slice(from, to);
 }
 
-const uploadCosObject = block(api, "async function uploadCosObject", "async function uploadCosBackedFile");
+const uploadCosObject = block(api, "async function uploadCosObject", "function normalizeAlbumCosError");
 assert.match(uploadCosObject, /Headers:\s*upload\.headers\s*\|\|\s*\{\}/);
 assert.doesNotMatch(uploadCosObject, /Authorization|Bearer/);
 

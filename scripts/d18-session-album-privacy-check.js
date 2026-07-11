@@ -134,10 +134,10 @@ assert(
   "album photos must not be exposed as public static uploads"
 );
 assert(
-  server.includes("cleanupUploadedSessionAlbumPhotoObject") &&
-    server.includes("console.warn(\"session album COS cleanup failed\"") &&
-    /deleteSessionAlbumPhoto\(user, sessionAlbumPhotoId\)[\s\S]{0,220}cleanupUploadedSessionAlbumPhotoObject\(deletedPhoto\.photo_url\)/.test(server),
-  "album photo deletion must not fail the user request when COS object cleanup is denied"
+  /prepareSessionAlbumPhotoDeletion\(user, sessionAlbumPhotoId\)/.test(server) &&
+    /requestSessionAlbumImageDeletion\(user, sessionAlbumPhotoId\)/.test(server) &&
+    server.includes("deletionPending: true"),
+  "album image deletion must preserve its durable cleanup anchor and return a pending response"
 );
 
 const cosStorage = read("apps/api/src/storage/cos.js");
@@ -170,7 +170,8 @@ for (const token of [
   "/api/admin/sessions/",
   "sessionAlbumBasePath",
   "sessionAlbumPhoto",
-  "fallbackUploadSessionAlbumPhoto",
+  "fallbackUpload:",
+  "uploadSessionAlbumPhotoLocal",
   "getMySessionAlbumPrivacy",
   "updateMySessionAlbumPrivacy",
   "return data.photoUrl"
@@ -228,7 +229,7 @@ for (const token of [
   "downloadAlbumImage",
   "display_url",
   'v-if="canUpload"',
-  "uploadSessionAlbumPhoto",
+  "uploadAlbumPhoto",
   "标注",
   "tagKeys",
   "photo.can_delete",

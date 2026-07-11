@@ -11,6 +11,7 @@ COPY packages/shared/package.json packages/shared/package.json
 
 RUN npm install --workspace apps/admin-web
 
+COPY packages/shared packages/shared
 COPY apps/admin-web apps/admin-web
 
 RUN npm --workspace apps/admin-web run build

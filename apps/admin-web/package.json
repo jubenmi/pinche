@@ -7,9 +7,11 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test:runtime-config": "node test/runtimeConfig.test.mjs && node test/runtimeConfigEntrypoint.test.mjs"
+    "test:runtime-config": "node test/runtimeConfig.test.mjs && node test/runtimeConfigEntrypoint.test.mjs",
+    "test:album-media": "node --test test/albumMedia.test.mjs"
   },
   "dependencies": {
+    "@pinche/shared": "file:../../packages/shared",
     "cos-js-sdk-v5": "^1.10.1",
     "qrcode": "^1.5.4",
     "vue": "^3.5.16",
