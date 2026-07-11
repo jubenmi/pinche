@@ -32,6 +32,7 @@
     "d32:smoke": "node scripts/d32-admin-album-video-smoke.js",
     "d34:smoke": "node scripts/d34-store-location-smoke.js",
     "d38:smoke": "node scripts/d38-city-session-discovery-smoke.js",
+    "d40:smoke": "node scripts/d40-guest-calendar-home-smoke.js",
     "d8:qa": "node scripts/d8-qa-check.js",
     "d9:release-check": "node scripts/d9-release-check.js",
     "d42:check": "node scripts/d42-album-video-hardening-unit-check.js && node scripts/d42-miniprogram-album-video-check.js && node scripts/d42-album-video-delete-integration-check.js && node scripts/d42-album-video-hardening-check.js",
