@@ -594,6 +594,8 @@ git commit -m "feat: persist album image upload lifecycle"
 
 ## Task 3: Lossless COS query signing and five-minute image URLs
 
+执行状态：已完成（2026-07-11，6/6 聚焦测试与 69/69 D42 视频回归通过）。
+
 **Files:**
 - Create: `apps/api/src/modules/album-image/constants.js`
 - Create: `apps/api/src/modules/album-image/signed-urls.js`
@@ -601,7 +603,7 @@ git commit -m "feat: persist album image upload lifecycle"
 - Create: `apps/api/test/album-image-signed-urls.test.mjs`
 - Create: `apps/api/test/album-image-cos-storage.test.mjs`
 
-- [ ] **Step 1: Write failing canonical-query and URL tests**
+- [x] **Step 1: Write failing canonical-query and URL tests**
 
 The tests must prove that valueless image-processing tokens appear without `=` in the request URL but with an empty value in COS canonical signing, and that every image URL expires after 300 seconds:
 
@@ -648,13 +650,13 @@ Add a storage test with a fake HTTPS request that asserts `GET /key?imageInfo`, 
 
 Add a second storage case where conditional ImageInfo returns 400/405/501: retry ImageInfo once without `If-Match`, then rely on the validator's mandatory second HEAD ETag comparison. Map COS 409 and 412 overwrite responses to trusted `COS_PRECONDITION_FAILED` while retaining the upstream status for diagnostics.
 
-- [ ] **Step 2: Run the focused signing tests to verify RED**
+- [x] **Step 2: Run the focused signing tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-signed-urls.test.mjs apps/api/test/album-image-cos-storage.test.mjs`
 
 Expected: FAIL because the album-image modules and `getCosImageInfo` do not exist.
 
-- [ ] **Step 3: Add exact constants and structured query rendering**
+- [x] **Step 3: Add exact constants and structured query rendering**
 
 Create `apps/api/src/modules/album-image/constants.js`:
 
@@ -788,7 +790,7 @@ export function buildAlbumImageUrls({ objectKey, mediaId, nowSeconds, config }) 
 }
 ```
 
-- [ ] **Step 4: Add a signed ImageInfo storage primitive**
+- [x] **Step 4: Add a signed ImageInfo storage primitive**
 
 Extend the internal `cosRequest` to accept `urlParams`, render its request query from the same entries, and include those entries in `buildCosAuthorization`. Then export:
 
@@ -831,7 +833,7 @@ Add `COS_INVALID_IMAGE_INFO` to the trusted storage error set and ensure `cosReq
 
 Update `cosHttpError` so 409/412 both produce status 412 and code `COS_PRECONDITION_FAILED`, and every mapped error keeps a non-enumerated `upstreamStatusCode` for the conditional-ImageInfo fallback above.
 
-- [ ] **Step 5: Run focused and regression tests**
+- [x] **Step 5: Run focused and regression tests**
 
 Run: `node --test apps/api/test/album-image-signed-urls.test.mjs apps/api/test/album-image-cos-storage.test.mjs`
 
@@ -841,7 +843,7 @@ Run: `npm run d42:api-media && npm run d42:api-server`
 
 Expected: existing video signing, metadata, GET, HEAD, and Range checks pass unchanged.
 
-- [ ] **Step 6: Commit COS signing and ImageInfo support**
+- [x] **Step 6: Commit COS signing and ImageInfo support**
 
 ```bash
 git add apps/api/src/modules/album-image/constants.js apps/api/src/modules/album-image/signed-urls.js apps/api/src/storage/cos.js apps/api/test/album-image-signed-urls.test.mjs apps/api/test/album-image-cos-storage.test.mjs
