@@ -27,7 +27,7 @@
 - Create: `apps/miniprogram/src/utils/albumMediaSelection.js`
 - Modify: `docs/superpowers/plans/2026-07-12-album-single-media-upload-entry.md`
 
-- [ ] **Step 1: 写入会失败的分类行为测试**
+- [x] **Step 1: 写入会失败的分类行为测试**
 
 创建 `apps/miniprogram/test/albumMediaSelection.test.mjs`：
 
@@ -123,13 +123,13 @@ test("rejects empty, unknown, and pathless selections", async () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认 RED**
+- [x] **Step 2: 运行测试并确认 RED**
 
 Run: `node --test apps/miniprogram/test/albumMediaSelection.test.mjs`
 
 Expected: FAIL，断言信息为 `album media selection helper must exist`，因为分类模块尚未创建；测试文件本身可以被 Node 正常加载和执行。
 
-- [ ] **Step 3: 写入最小分类实现**
+- [x] **Step 3: 写入最小分类实现**
 
 创建 `apps/miniprogram/src/utils/albumMediaSelection.js`：
 
@@ -179,13 +179,13 @@ export function classifyAlbumMediaSelection(result = {}) {
 }
 ```
 
-- [ ] **Step 4: 运行测试并确认 GREEN**
+- [x] **Step 4: 运行测试并确认 GREEN**
 
 Run: `node --test apps/miniprogram/test/albumMediaSelection.test.mjs`
 
 Expected: PASS，6 个测试通过，0 个失败。
 
-- [ ] **Step 5: 标记 Task 1 完成并提交**
+- [x] **Step 5: 标记 Task 1 完成并提交**
 
 更新本计划 Task 1 的复选框为 `- [x]`，然后运行：
 
