@@ -12,3 +12,11 @@ export function albumMediaCountSql(alias) {
     `THEN ${tableAlias}.id END)`
   );
 }
+
+export function visibleSignupAlbumMediaCount(status, value) {
+  if (status !== "approved") {
+    return 0;
+  }
+  const count = Number(value);
+  return Number.isFinite(count) && count > 0 ? count : 0;
+}

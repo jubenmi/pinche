@@ -15,7 +15,10 @@ import {
   notifySignupReviewed
 } from "../wechat/subscribe-message.js";
 import { createIdempotentAlbumVideo } from "../album-video/lifecycle.js";
-import { albumMediaCountSql } from "./session-album-media-count.js";
+import {
+  albumMediaCountSql,
+  visibleSignupAlbumMediaCount
+} from "./session-album-media-count.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -5041,6 +5044,7 @@ export async function listMySignups(user) {
             SELECT ${albumMediaCountSql("album_media")}
             FROM session_album_photos album_media
             WHERE album_media.session_id = signup.session_id
+              AND signup.status = 'approved'
           ) AS album_media_count,
           (
             signup.review_eligible_at IS NOT NULL
@@ -5059,7 +5063,7 @@ export async function listMySignups(user) {
     );
     return rows.map((row) => ({
       ...row,
-      album_media_count: Number(row.album_media_count || 0),
+      album_media_count: visibleSignupAlbumMediaCount(row.status, row.album_media_count),
       can_review: Boolean(row.can_review),
       has_review: Boolean(row.has_review)
     }));

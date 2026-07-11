@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { albumMediaCountSql } from "../apps/api/src/modules/core/session-album-media-count.js";
+import {
+  albumMediaCountSql,
+  visibleSignupAlbumMediaCount
+} from "../apps/api/src/modules/core/session-album-media-count.js";
 import { sessionCalendarStripeTone } from "../apps/miniprogram/src/utils/sessionCalendarStripe.js";
 
 const stripeCases = [
@@ -57,22 +60,60 @@ assert.throws(
   /safe SQL identifier/,
   "SQL aliases must not allow injected syntax"
 );
+assert.equal(
+  visibleSignupAlbumMediaCount("pending", 9),
+  0,
+  "pending signups must not receive private album media counts"
+);
+assert.equal(
+  visibleSignupAlbumMediaCount("approved", "4"),
+  4,
+  "approved signup media counts must be normalized to numbers"
+);
+for (const value of ["invalid", 0, -1]) {
+  assert.equal(
+    visibleSignupAlbumMediaCount("approved", value),
+    0,
+    "approved signup media counts must reject invalid or non-positive values"
+  );
+}
 
 const serviceSource = readFileSync(
   new URL("../apps/api/src/modules/core/service.js", import.meta.url),
   "utf8"
 );
+const listMySessionsSource = serviceSource.slice(
+  serviceSource.indexOf("export async function listMySessions"),
+  serviceSource.indexOf("export async function listDiscoverableSessions")
+);
+const listMySignupsSource = serviceSource.slice(
+  serviceSource.indexOf("export async function listMySignups"),
+  serviceSource.indexOf("export async function hideMySignup")
+);
 assert(
-  serviceSource.includes('${albumMediaCountSql("album_photo")} AS album_media_count'),
+  listMySessionsSource.includes('${albumMediaCountSql("album_photo")} AS album_media_count'),
   "listMySessions must select album_media_count"
 );
 assert(
-  serviceSource.includes('SELECT ${albumMediaCountSql("album_media")}'),
+  listMySignupsSource.includes('SELECT ${albumMediaCountSql("album_media")}'),
   "listMySignups must select album_media_count"
 );
 assert(
-  serviceSource.match(/album_media_count: Number\(row\.album_media_count \|\| 0\)/g)?.length >= 2,
-  "both list responses must normalize album_media_count to a number"
+  listMySignupsSource.includes(
+    "WHERE album_media.session_id = signup.session_id\n" +
+    "              AND signup.status = 'approved'"
+  ),
+  "listMySignups must count album media only for approved signups"
+);
+assert(
+  listMySessionsSource.includes("album_media_count: Number(row.album_media_count || 0)"),
+  "listMySessions must normalize album_media_count to a number"
+);
+assert(
+  listMySignupsSource.includes(
+    "album_media_count: visibleSignupAlbumMediaCount(row.status, row.album_media_count)"
+  ),
+  "listMySignups must hide album_media_count from non-approved signups"
 );
 
 const calendarSource = readFileSync(
