@@ -40,6 +40,10 @@ test("all album image variants share an exact five-minute expiry", () => {
     urls.thumbnail_display_url,
     /imageMogr2\/auto-orient\/thumbnail\/640x640%3E/
   );
+  assert.match(
+    urls.thumbnail_display_url,
+    /q-url-param-list=imagemogr2%252fauto-orient%252fthumbnail%252f640x640%253e%252fformat%252fjpg%252fquality%252f75%252fstrip/
+  );
   for (const url of [
     urls.thumbnail_display_url,
     urls.preview_display_url,

@@ -27,9 +27,10 @@ export function buildSignedCosImageUrl({
     config
   });
   const dataQuery = renderCosRequestQuery(entries);
+  const authorizationQuery = authorization.replaceAll("%", "%25");
   return `https://${cosHost(config)}/${encodeCosObjectPath(objectKey)}?${
     dataQuery ? `${dataQuery}&` : ""
-  }${authorization}`;
+  }${authorizationQuery}`;
 }
 
 export function buildAlbumImageUrls({ objectKey, mediaId, nowSeconds, config }) {
