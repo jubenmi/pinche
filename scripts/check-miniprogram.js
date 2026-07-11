@@ -2182,6 +2182,24 @@ if (!fs.existsSync(pagesJsonPath)) {
   const albumImageViewerSource = fs.existsSync(albumImageViewerPath)
     ? fs.readFileSync(albumImageViewerPath, "utf8")
     : "";
+  const builtAlbumImageViewerWxmlPath = path.join(
+    miniprogramBuildRoot,
+    "components",
+    "AlbumImageViewer.wxml"
+  );
+  if (fs.existsSync(builtAlbumImageViewerWxmlPath)) {
+    const builtAlbumImageViewerWxml = fs.readFileSync(builtAlbumImageViewerWxmlPath, "utf8");
+    const builtAlbumViewerSwiperTag =
+      builtAlbumImageViewerWxml.match(/<swiper(?=[\s>])[^>]*>/)?.[0] || "";
+    if (!builtAlbumViewerSwiperTag) {
+      fail("Built AlbumImageViewer WXML must contain a structural swiper tag");
+    }
+    for (const requiredBuiltSwiperAttribute of ["wx:for=", "wx:key=", "data-generation="]) {
+      if (!builtAlbumViewerSwiperTag.includes(requiredBuiltSwiperAttribute)) {
+        fail(`Built AlbumImageViewer swiper must remount structurally: ${requiredBuiltSwiperAttribute}`);
+      }
+    }
+  }
   if (!albumImageViewerSource.includes('v-for="(photo, windowIndex) in windowPhotos"')) {
     fail("AlbumImageViewer swiper template must render windowPhotos instead of the full photos list");
   }
@@ -2964,8 +2982,9 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   for (const requiredAlbumViewerWindowText of [
     "const ALBUM_VIEWER_WINDOW_SIZE = 5;",
-    ':key="swiperGeneration"',
-    ':data-generation="swiperGeneration"',
+    'v-for="generation in swiperGenerations"',
+    ':key="generation"',
+    ':data-generation="generation"',
     '@animationfinish="handleSwiperAnimationFinish"',
     'v-for="(photo, windowIndex) in windowPhotos"',
     ':key="photoKey(photo, logicalIndexForWindowIndex(windowIndex))"',
@@ -2975,6 +2994,16 @@ if (!fs.existsSync(pagesJsonPath)) {
     if (!albumImageViewerSource.includes(requiredAlbumViewerWindowText)) {
       fail(`AlbumImageViewer must implement five-slide windowing: ${requiredAlbumViewerWindowText}`);
     }
+  }
+  if (albumImageViewerSource.includes(':data-generation="swiperGeneration"')) {
+    fail("AlbumImageViewer swiper must not use a non-structural swiperGeneration data binding");
+  }
+  const albumViewerSwiperGenerationsSource = methodBody(
+    albumImageViewerSource,
+    "swiperGenerations"
+  );
+  if (!albumViewerSwiperGenerationsSource.includes("return [this.swiperGeneration]")) {
+    fail("AlbumImageViewer swiperGenerations must expose exactly the current generation token");
   }
   const albumViewerWindowPhotosSource = methodBody(albumImageViewerSource, "windowPhotos");
   for (const requiredWindowPhotosText of [

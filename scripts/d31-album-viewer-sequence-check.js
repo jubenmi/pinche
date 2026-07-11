@@ -303,8 +303,38 @@ function runReopenGenerationCheck(component) {
   assert.equal(changeEvents(emitted).length, 1, "old-instance events must not emit business changes");
 }
 
+function runSwiperGenerationTokenCheck(component) {
+  assert.equal(
+    typeof component.computed?.swiperGenerations,
+    "function",
+    "AlbumImageViewer must expose computed.swiperGenerations"
+  );
+
+  const { instance } = openViewer(component, 5, 2);
+  const firstTokens = Array.from(instance.swiperGenerations);
+  assert.equal(firstTokens.length, 1, "swiperGenerations must expose exactly one native instance token");
+  assert.equal(
+    firstTokens[0],
+    instance.swiperGeneration,
+    "the native instance token must equal the current swiper generation"
+  );
+
+  const firstToken = firstTokens[0];
+  instance.visible = false;
+  component.watch.visible.call(instance, false, true);
+  const nextTokens = Array.from(instance.swiperGenerations);
+  assert.equal(nextTokens.length, 1, "a new generation must still expose exactly one native token");
+  assert.equal(
+    nextTokens[0],
+    instance.swiperGeneration,
+    "the native instance token must follow the incremented generation"
+  );
+  assert.notEqual(nextTokens[0], firstToken, "the native instance token must change with generation");
+}
+
 function runSequenceCheck() {
   const component = loadComponent();
+  runSwiperGenerationTokenCheck(component);
   runWindowSizeCheck(component);
   runOpeningPositionCheck(component);
   runNonEdgeChangeCheck(component);

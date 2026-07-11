@@ -8,10 +8,11 @@
     @tap.stop
   >
     <swiper
-      :key="swiperGeneration"
+      v-for="generation in swiperGenerations"
+      :key="generation"
       class="album-image-viewer__swiper"
       :current="swiperIndex"
-      :data-generation="swiperGeneration"
+      :data-generation="generation"
       :duration="220"
       @change="handleSwiperChange"
       @animationfinish="handleSwiperAnimationFinish"
@@ -158,6 +159,9 @@ export default {
     };
   },
   computed: {
+    swiperGenerations() {
+      return [this.swiperGeneration];
+    },
     windowPhotos() {
       return this.photos.slice(
         this.windowStart,
