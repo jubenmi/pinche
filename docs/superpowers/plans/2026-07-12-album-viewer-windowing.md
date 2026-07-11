@@ -825,13 +825,18 @@ git commit -m "fix: window album viewer slides"
 
 ### Task 2: Cover Full Traversal, Structure Changes, Hydration, and Video
 
+**Status:** Completed
+
+- **RED evidence:** `node scripts/d31-album-viewer-sequence-check.js` exited 1 at `photos reorder must preserve the active photo by stable ID` (`actual: 131`, `expected: 132`). `node scripts/check-miniprogram.js` exited 1 with `AlbumImageViewer photos watcher must distinguish hydration from structure changes` plus missing `this.samePhotoStructure`, `previousPhotos[previousIndex]`, `this.pauseVideoPhoto`, and `this.rebuildWindowAt(nextIndex, { force: true })`.
+- **GREEN evidence:** `node scripts/d31-album-viewer-sequence-check.js` exited 0 with `AlbumImageViewer windowing checks passed`; `node scripts/check-miniprogram.js` exited 0 with `UniApp miniprogram check passed: 13 pages`; `node scripts/d42-miniprogram-album-video-check.js` exited 0 with `D42 mini-program integration checks passed: upload, viewer, timeline, and auth boundaries`; `npm run build:mp-weixin` exited 0 with `DONE Build complete`; the compiled WXML retained the generation-keyed structural `wx:for`/`wx:key` swiper remount; `git diff --check` exited 0.
+
 **Files:**
 - Modify: scripts/d31-album-viewer-sequence-check.js
 - Modify: scripts/check-miniprogram.js
 - Modify: apps/miniprogram/src/components/AlbumImageViewer.vue
 - Update: docs/superpowers/plans/2026-07-12-album-viewer-windowing.md
 
-- [ ] **Step 1: Add traversal and lifecycle helpers to D31**
+- [x] **Step 1: Add traversal and lifecycle helpers to D31**
 
 Insert after dispatchAnimationFinish:
 
@@ -1156,7 +1161,7 @@ runCurrentMediaStateCheck();
 console.log("AlbumImageViewer windowing checks passed");
 ~~~
 
-- [ ] **Step 2: Run D31 and verify the structure RED**
+- [x] **Step 2: Run D31 and verify the structure RED**
 
 Run:
 
@@ -1166,7 +1171,7 @@ node scripts/d31-album-viewer-sequence-check.js
 
 Expected: exit non-zero at Viewer photos reorder must preserve the active photo by stable ID, the empty-list pause assertion, or an earlier structure assertion. Core window checks before that point remain green.
 
-- [ ] **Step 3: Implement ID-aware structure synchronization and old-video pause**
+- [x] **Step 3: Implement ID-aware structure synchronization and old-video pause**
 
 Change the photos watcher to pass both arrays:
 
@@ -1305,7 +1310,7 @@ retryVideo(photo) {
 },
 ~~~
 
-- [ ] **Step 4: Strengthen static structure guards**
+- [x] **Step 4: Strengthen static structure guards**
 
 In scripts/check-miniprogram.js, replace the old photos watcher assertions with:
 
@@ -1345,7 +1350,7 @@ for (const requiredText of [
 }
 ~~~
 
-- [ ] **Step 5: Run component regression checks and verify GREEN**
+- [x] **Step 5: Run component regression checks and verify GREEN**
 
 Run:
 
@@ -1361,7 +1366,7 @@ Expected:
 - UniApp miniprogram check passed: 13 pages.
 - D42 mini-program integration checks passed: upload, viewer, timeline, and auth boundaries.
 
-- [ ] **Step 6: Review and commit lifecycle coverage**
+- [x] **Step 6: Review and commit lifecycle coverage**
 
 Run:
 

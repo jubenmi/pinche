@@ -3107,11 +3107,26 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
   }
   const albumViewerPhotosWatcherSource = methodBody(albumImageViewerSource, "photos");
-  if (albumViewerPhotosWatcherSource.includes("syncInitialIndex")) {
-    fail("AlbumImageViewer photos watcher must not reset swiper to initialIndex during media hydration");
+  if (
+    !albumViewerPhotosWatcherSource.includes("syncCurrentIndexAfterPhotosChange(") ||
+    !albumViewerPhotosWatcherSource.includes("nextPhotos") ||
+    !albumViewerPhotosWatcherSource.includes("previousPhotos")
+  ) {
+    fail("AlbumImageViewer photos watcher must distinguish hydration from structure changes");
   }
-  if (!albumViewerPhotosWatcherSource.includes("syncCurrentIndexAfterPhotosChange")) {
-    fail("AlbumImageViewer photos watcher must preserve the current swiper index during media hydration");
+  const albumViewerPhotosSyncSource = methodBody(
+    albumImageViewerSource,
+    "syncCurrentIndexAfterPhotosChange"
+  );
+  for (const requiredPhotosSyncText of [
+    "this.samePhotoStructure",
+    "previousPhotos[previousIndex]",
+    "this.pauseVideoPhoto",
+    "this.rebuildWindowAt(nextIndex, { force: true })"
+  ]) {
+    if (!albumViewerPhotosSyncSource.includes(requiredPhotosSyncText)) {
+      fail(`AlbumImageViewer structure sync is missing ${requiredPhotosSyncText}`);
+    }
   }
   const albumViewerThumbnailUrlSource = methodBody(albumImageViewerSource, "thumbnailUrl");
   if (!albumViewerThumbnailUrlSource.includes("photo?.thumbnail_display_url")) {

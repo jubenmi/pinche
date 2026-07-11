@@ -7,9 +7,21 @@ const root = process.cwd();
 const viewerPath = path.join(root, "apps/miniprogram/src/components/AlbumImageViewer.vue");
 const source = fs.readFileSync(viewerPath, "utf8");
 const script = source.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
+const runtime = { pausedVideoIds: [] };
 
 function loadComponent() {
-  const context = { component: null };
+  const context = {
+    component: null,
+    uni: {
+      createVideoContext(id) {
+        return {
+          pause() {
+            runtime.pausedVideoIds.push(id);
+          }
+        };
+      }
+    }
+  };
   const body = script.replace(/export\s+default/, "component =");
   vm.runInNewContext(body, context, { filename: viewerPath });
   return context.component;
@@ -60,10 +72,20 @@ function createInstance(component, photos, initialIndex = 0) {
 }
 
 function openViewer(component, photoCount, initialIndex) {
-  const result = createInstance(component, makePhotos(photoCount), initialIndex);
+  return openViewerWithPhotos(component, makePhotos(photoCount), initialIndex);
+}
+
+function openViewerWithPhotos(component, photos, initialIndex = 0) {
+  const result = createInstance(component, photos, initialIndex);
   result.instance.visible = true;
   component.watch.visible.call(result.instance, true, false);
   return result;
+}
+
+function applyPhotos(component, instance, nextPhotos) {
+  const previousPhotos = instance.photos;
+  instance.photos = nextPhotos;
+  component.watch.photos.call(instance, nextPhotos, previousPhotos);
 }
 
 function nativeSwiperEvent(instance, current, options = {}) {
@@ -101,6 +123,38 @@ function assertPending(instance, generation, logicalIndex, message) {
     logicalIndex,
     `${message}: pending logical index must match`
   );
+}
+
+function swipeOneLogicalStep(instance, emitted, direction) {
+  const expectedIndex = instance.currentIndex + direction;
+  const nextWindowIndex = instance.activeWindowIndex + direction;
+  assert.ok(
+    nextWindowIndex >= 0 && nextWindowIndex < instance.windowPhotos.length,
+    "Viewer must expose the next logical neighbor"
+  );
+
+  const generation = instance.swiperGeneration;
+  instance.handleSwiperChange(nativeSwiperEvent(instance, nextWindowIndex));
+  assert.equal(instance.currentIndex, expectedIndex);
+
+  if (instance.pendingWindowRebase) {
+    const eventCount = changeEvents(emitted).length;
+    instance.handleSwiperAnimationFinish(
+      nativeSwiperEvent(instance, nextWindowIndex, { generation })
+    );
+    assert.equal(instance.swiperGeneration, generation + 1);
+    assert.equal(instance.currentIndex, expectedIndex);
+    instance.handleSwiperChange(
+      nativeSwiperEvent(instance, instance.activeWindowIndex, { source: "" })
+    );
+    assert.equal(
+      changeEvents(emitted).length,
+      eventCount,
+      "Remount must not duplicate a logical change"
+    );
+  }
+  assert.ok(instance.windowPhotos.length <= 5);
+  assert.equal(instance.windowStart + instance.activeWindowIndex, instance.currentIndex);
 }
 
 function runWindowSizeCheck(component) {
@@ -332,6 +386,191 @@ function runSwiperGenerationTokenCheck(component) {
   assert.notEqual(nextTokens[0], firstToken, "the native instance token must change with generation");
 }
 
+function runDynamicInitialIndexCheck(component) {
+  const { instance, emitted } = openViewer(component, 263, 0);
+  const generation = instance.swiperGeneration;
+  instance.initialIndex = 262;
+  component.watch.initialIndex.call(instance, 262, 0);
+  assert.equal(instance.currentIndex, 262);
+  assert.equal(instance.windowStart, 258);
+  assert.equal(instance.activeWindowIndex, 4);
+  assert.equal(JSON.stringify(windowIds(instance)), JSON.stringify([259, 260, 261, 262, 263]));
+  assert.equal(instance.swiperGeneration, generation + 1);
+  assert.equal(changeEvents(emitted).length, 0);
+}
+
+function runFullTraversalCheck(component) {
+  const { instance, emitted } = openViewer(component, 263, 0);
+  for (let index = 1; index < 263; index += 1) {
+    swipeOneLogicalStep(instance, emitted, 1);
+  }
+  assert.equal(instance.currentIndex, 262);
+  const lastGeneration = instance.swiperGeneration;
+  instance.handleSwiperAnimationFinish(nativeSwiperEvent(instance, instance.activeWindowIndex));
+  assert.equal(instance.swiperGeneration, lastGeneration, "last boundary must not rebuild");
+
+  for (let index = 261; index >= 0; index -= 1) {
+    swipeOneLogicalStep(instance, emitted, -1);
+  }
+  assert.equal(instance.currentIndex, 0);
+  const firstGeneration = instance.swiperGeneration;
+  instance.handleSwiperAnimationFinish(nativeSwiperEvent(instance, instance.activeWindowIndex));
+  assert.equal(instance.swiperGeneration, firstGeneration, "first boundary must not rebuild");
+
+  assert.deepEqual(
+    changeEvents(emitted).map(({ payload }) => payload.index),
+    [
+      ...Array.from({ length: 262 }, (_, index) => index + 1),
+      ...Array.from({ length: 262 }, (_, index) => 261 - index)
+    ],
+    "Viewer must visit 1 through 263 and back without gaps"
+  );
+}
+
+function runPhotosChangeCheck(component) {
+  const photos = makePhotos(263);
+  const hydratedCase = openViewerWithPhotos(component, photos, 131);
+  const beforeHydration = {
+    currentIndex: hydratedCase.instance.currentIndex,
+    windowStart: hydratedCase.instance.windowStart,
+    activeWindowIndex: hydratedCase.instance.activeWindowIndex,
+    swiperIndex: hydratedCase.instance.swiperIndex,
+    swiperGeneration: hydratedCase.instance.swiperGeneration
+  };
+  const hydrated = photos.map((photo) =>
+    photo.id === 132
+      ? { ...photo, preview_display_url: "wxfile://hydrated-132.jpg" }
+      : photo
+  );
+  applyPhotos(component, hydratedCase.instance, hydrated);
+  assert.deepEqual(
+    {
+      currentIndex: hydratedCase.instance.currentIndex,
+      windowStart: hydratedCase.instance.windowStart,
+      activeWindowIndex: hydratedCase.instance.activeWindowIndex,
+      swiperIndex: hydratedCase.instance.swiperIndex,
+      swiperGeneration: hydratedCase.instance.swiperGeneration
+    },
+    beforeHydration,
+    "Media hydration must not reset or rebuild the window"
+  );
+  assert.equal(hydratedCase.instance.currentPhoto.preview_display_url, "wxfile://hydrated-132.jpg");
+
+  const reorderCase = openViewerWithPhotos(component, photos, 131);
+  const reorderGeneration = reorderCase.instance.swiperGeneration;
+  const activePhoto = photos[131];
+  const remaining = photos.filter((photo) => photo.id !== activePhoto.id);
+  applyPhotos(component, reorderCase.instance, [
+    ...remaining.slice(0, 10),
+    activePhoto,
+    ...remaining.slice(10)
+  ]);
+  assert.equal(reorderCase.instance.currentPhoto.id, 132, "photos reorder must preserve the active photo by stable ID");
+  assert.equal(reorderCase.instance.currentIndex, 10);
+  assert.equal(reorderCase.instance.windowStart, 8);
+  assert.equal(reorderCase.instance.activeWindowIndex, 2);
+  assert.equal(reorderCase.instance.swiperGeneration, reorderGeneration + 1);
+  assert.equal(changeEvents(reorderCase.emitted).length, 0);
+
+  const removeCase = openViewerWithPhotos(component, photos, 131);
+  const removeGeneration = removeCase.instance.swiperGeneration;
+  applyPhotos(component, removeCase.instance, photos.filter((photo) => photo.id !== 132));
+  assert.equal(removeCase.instance.currentIndex, 131);
+  assert.equal(removeCase.instance.currentPhoto.id, 133);
+  assert.equal(removeCase.instance.swiperGeneration, removeGeneration + 1);
+
+  const videoPhotos = makePhotos(3);
+  videoPhotos[1] = {
+    ...videoPhotos[1],
+    media_type: "video",
+    video_display_url: "wxfile://video-2.mp4"
+  };
+  const emptyCase = openViewerWithPhotos(component, videoPhotos, 1);
+  const emptyGeneration = emptyCase.instance.swiperGeneration;
+  runtime.pausedVideoIds.length = 0;
+  applyPhotos(component, emptyCase.instance, []);
+  assert.equal(emptyCase.instance.currentIndex, 0);
+  assert.equal(emptyCase.instance.windowStart, 0);
+  assert.equal(emptyCase.instance.activeWindowIndex, 0);
+  assert.equal(emptyCase.instance.swiperIndex, 0);
+  assert.equal(emptyCase.instance.windowPhotos.length, 0);
+  assert.equal(emptyCase.instance.swiperGeneration, emptyGeneration + 1);
+  assert.equal(emptyCase.instance.pendingWindowRebase, null);
+  assert.ok(
+    runtime.pausedVideoIds.includes("album-image-viewer-video-2"),
+    "Emptying the list must pause the previous active video"
+  );
+  assert.equal(changeEvents(emptyCase.emitted).length, 0);
+}
+
+function runMixedVideoWindowCheck(component) {
+  const photos = makePhotos(8);
+  photos[4] = { ...photos[4], media_type: "video", video_display_url: "" };
+  const { instance, emitted } = openViewerWithPhotos(component, photos, 0);
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 4));
+  assert.equal(instance.currentIndex, 4);
+  assert.equal(instance.isActiveVideo(4), true);
+  assert.equal(instance.isActiveVideo(2), false);
+  const needVideo = emitted.filter(({ event }) => event === "need-video");
+  assert.equal(needVideo.length, 1);
+  assert.equal(needVideo[0].payload.index, 4);
+  assert.equal(needVideo[0].payload.photo.id, 5);
+
+  instance.handleSwiperAnimationFinish(nativeSwiperEvent(instance, 4));
+  instance.handleSwiperChange(nativeSwiperEvent(instance, instance.activeWindowIndex, { source: "" }));
+  assert.equal(emitted.filter(({ event }) => event === "need-video").length, 1);
+
+  instance.handleVideoError(instance.currentPhoto);
+  assert.equal(emitted.find(({ event }) => event === "video-error").payload.index, 4);
+  instance.retryVideo(instance.currentPhoto);
+  const retry = emitted.filter(({ event }) => event === "need-video").at(-1);
+  assert.equal(retry.payload.index, 4);
+  assert.equal(retry.payload.retry, true);
+
+  const generation = instance.swiperGeneration;
+  applyPhotos(
+    component,
+    instance,
+    instance.photos.map((photo) =>
+      photo.id === 5 ? { ...photo, video_display_url: "wxfile://video-5.mp4" } : photo
+    )
+  );
+  assert.equal(instance.swiperGeneration, generation);
+  runtime.pausedVideoIds.length = 0;
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 3));
+  assert.equal(instance.currentIndex, 5);
+  assert.ok(runtime.pausedVideoIds.includes("album-image-viewer-video-5"));
+}
+
+function runCurrentMediaStateCheck(component) {
+  const { instance, emitted } = openViewer(component, 10, 4);
+  const photo = instance.currentPhoto;
+  instance.mediaProgress = {
+    [`${photo.id}:thumbnail`]: { loading: true, failed: false, progress: 36 }
+  };
+  assert.equal(instance.showLoading(photo), true);
+  assert.equal(instance.loadingProgressValue(photo), 36);
+  instance.handleThumbnailLoad(photo);
+  assert.equal(instance.thumbnailLoaded(photo), true);
+  const generation = instance.swiperGeneration;
+  applyPhotos(
+    component,
+    instance,
+    instance.photos.map((item) =>
+      item.id === photo.id ? { ...item, preview_display_url: "wxfile://hydrated-5.jpg" } : item
+    )
+  );
+  assert.equal(instance.swiperGeneration, generation);
+  const hydrated = instance.currentPhoto;
+  assert.equal(instance.previewCanLoad(hydrated), true);
+  instance.handlePreviewLoad(hydrated);
+  assert.equal(instance.previewLoaded(hydrated), true);
+  instance.requestDownload("button");
+  const download = emitted.find(({ event }) => event === "download");
+  assert.equal(download.payload.index, 4);
+  assert.equal(download.payload.photo.id, 5);
+}
+
 function runSequenceCheck() {
   const component = loadComponent();
   runSwiperGenerationTokenCheck(component);
@@ -340,8 +579,13 @@ function runSequenceCheck() {
   runNonEdgeChangeCheck(component);
   runGenerationSafeEdgeRebaseCheck(component);
   runReopenGenerationCheck(component);
+  runDynamicInitialIndexCheck(component);
+  runFullTraversalCheck(component);
+  runPhotosChangeCheck(component);
+  runMixedVideoWindowCheck(component);
+  runCurrentMediaStateCheck(component);
 }
 
 runSequenceCheck();
 
-console.log("AlbumImageViewer core five-slide window sequence check passed");
+console.log("AlbumImageViewer windowing checks passed");

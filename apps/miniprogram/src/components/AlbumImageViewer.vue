@@ -201,9 +201,9 @@ export default {
         this.$nextTick(() => this.requestCurrentVideoIfNeeded());
       }
     },
-    photos() {
+    photos(nextPhotos, previousPhotos) {
       if (this.visible) {
-        this.syncCurrentIndexAfterPhotosChange();
+        this.syncCurrentIndexAfterPhotosChange(nextPhotos, previousPhotos);
         this.$nextTick(() => this.requestCurrentVideoIfNeeded());
       }
     }
@@ -234,6 +234,14 @@ export default {
     logicalIndexForWindowIndex(windowIndex) {
       return this.clampIndex(this.windowStart + this.clampWindowIndex(windowIndex));
     },
+    logicalIndexForPhoto(photo) {
+      if (!photo || photo.id === undefined || photo.id === null) {
+        return this.currentIndex;
+      }
+      const key = String(photo.id);
+      const index = this.photos.findIndex((item) => String(item?.id) === key);
+      return index >= 0 ? index : this.currentIndex;
+    },
     rebuildWindowAt(logicalIndex, { force = false } = {}) {
       const nextIndex = this.clampIndex(logicalIndex);
       const nextWindowStart = this.windowStartForIndex(nextIndex);
@@ -260,12 +268,53 @@ export default {
       }
       this.rebuildWindowAt(nextIndex);
     },
-    syncCurrentIndexAfterPhotosChange() {
-      const nextIndex = this.clampIndex(this.currentIndex);
-      if (nextIndex === this.currentIndex) {
+    photoIdentityKey(photo, index) {
+      if (!photo) {
+        return "";
+      }
+      if (photo.id !== undefined && photo.id !== null) {
+        return "id:" + String(photo.id);
+      }
+      return "index:" + String(index);
+    },
+    samePhotoStructure(nextPhotos = [], previousPhotos = []) {
+      if (nextPhotos === previousPhotos) {
+        return true;
+      }
+      if (nextPhotos.length !== previousPhotos.length) {
+        return false;
+      }
+      return nextPhotos.every(
+        (photo, index) =>
+          this.photoIdentityKey(photo, index) ===
+          this.photoIdentityKey(previousPhotos[index], index)
+      );
+    },
+    syncCurrentIndexAfterPhotosChange(nextPhotos = [], previousPhotos = []) {
+      if (this.samePhotoStructure(nextPhotos, previousPhotos)) {
         return;
       }
-      this.rebuildWindowAt(nextIndex);
+
+      const previousIndex = this.currentIndex;
+      const previousPhoto = previousPhotos[previousIndex] || null;
+      const previousIdentity = this.photoIdentityKey(previousPhoto, previousIndex);
+      let nextIndex = -1;
+      if (previousIdentity) {
+        nextIndex = nextPhotos.findIndex(
+          (photo, index) =>
+            this.photoIdentityKey(photo, index) === previousIdentity
+        );
+      }
+      if (nextIndex < 0) {
+        nextIndex = this.clampIndex(previousIndex);
+      }
+
+      const nextPhoto = nextPhotos[nextIndex] || null;
+      const nextIdentity = this.photoIdentityKey(nextPhoto, nextIndex);
+      if (previousPhoto && previousIdentity !== nextIdentity) {
+        this.pauseVideoPhoto(previousPhoto, previousIndex);
+      }
+      this.rebuildWindowAt(nextIndex, { force: true });
     },
     resetImageStates() {
       this.previewLoadedById = {};
@@ -387,7 +436,7 @@ export default {
     },
     handleVideoError(photo) {
       this.$emit("video-error", {
-        index: this.currentIndex,
+        index: this.logicalIndexForPhoto(photo),
         photo
       });
     },
@@ -400,7 +449,7 @@ export default {
     retryVideo(photo) {
       this.setPhotoState("videoFailedById", photo, false);
       this.$emit("need-video", {
-        index: this.currentIndex,
+        index: this.logicalIndexForPhoto(photo),
         photo,
         retry: true
       });
@@ -424,12 +473,11 @@ export default {
       }
       return createVideoContext(this.videoDomId(photo, index), this);
     },
-    pauseVideoAt(index) {
-      const photo = this.photos[index];
+    pauseVideoPhoto(photo, logicalIndex) {
       if (!this.isVideo(photo) || !this.videoUrl(photo)) {
         return;
       }
-      const videoContext = this.createVideoContext(photo, index);
+      const videoContext = this.createVideoContext(photo, logicalIndex);
       if (!videoContext || typeof videoContext.pause !== "function") {
         return;
       }
@@ -438,6 +486,9 @@ export default {
       } catch (error) {
         // Some mini program runtimes throw while the video node is being removed.
       }
+    },
+    pauseVideoAt(index) {
+      this.pauseVideoPhoto(this.photos[index], index);
     },
     pauseAllVideos() {
       this.photos.forEach((photo, index) => {
