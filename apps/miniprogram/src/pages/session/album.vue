@@ -479,7 +479,7 @@
       :photos="previewPhotos"
       :initial-index="previewInitialIndex"
       :allow-download="!timelineMode"
-      :media-progress="mediaProgressById"
+      :media-progress="previewMediaProgress"
       @close="closePhotoPreview"
       @change="handlePreviewChange"
       @video-error="handlePreviewVideoError"
@@ -683,6 +683,36 @@ export default {
     },
     previewCurrentPhoto() {
       return this.previewPhotos[this.previewCurrentIndex] || null;
+    },
+    previewMediaProgress() {
+      const result = {};
+      if (!this.previewPhotos.length) {
+        return result;
+      }
+      const parsedIndex = Number(this.previewCurrentIndex);
+      const currentIndex = Number.isFinite(parsedIndex)
+        ? Math.min(
+            Math.max(0, Math.trunc(parsedIndex)),
+            this.previewPhotos.length - 1
+          )
+        : 0;
+      const start = Math.max(0, currentIndex - 2);
+      const end = Math.min(this.previewPhotos.length, currentIndex + 3);
+
+      for (let index = start; index < end; index += 1) {
+        const photo = this.previewPhotos[index];
+        if (!photo || photo.id === undefined || photo.id === null) {
+          continue;
+        }
+        for (const variant of ["thumbnail", "preview"]) {
+          const key = this.albumMediaProgressKey(photo.id, variant);
+          const entry = this.mediaProgressById[key];
+          if (entry) {
+            result[key] = entry;
+          }
+        }
+      }
+      return result;
     },
     albumTitle() {
       if (this.timelineMode) {
@@ -1468,12 +1498,9 @@ export default {
     },
     setAlbumMediaProgress(photoId, variant, values) {
       const key = this.albumMediaProgressKey(photoId, variant);
-      this.mediaProgressById = {
-        ...this.mediaProgressById,
-        [key]: {
-          ...(this.mediaProgressById[key] || {}),
-          ...values
-        }
+      this.mediaProgressById[key] = {
+        ...(this.mediaProgressById[key] || {}),
+        ...values
       };
     },
     isAlbumMediaAuthError(error) {
@@ -1882,18 +1909,18 @@ export default {
       };
     },
     updatePreviewPhotoDisplayMedia(photoId, values) {
-      const key = String(photoId);
+      const key = photoId === undefined || photoId === null ? "" : String(photoId);
       if (!key || !this.previewPhotos.length) {
         return;
       }
-      this.previewPhotos = this.previewPhotos.map((photo) =>
-        String(photo.id) === key
-          ? {
-              ...photo,
-              ...values
-            }
-          : photo
-      );
+      const photoIndex = this.previewPhotos.findIndex((photo) => String(photo.id) === key);
+      if (photoIndex === -1) {
+        return;
+      }
+      this.previewPhotos.splice(photoIndex, 1, {
+        ...this.previewPhotos[photoIndex],
+        ...values
+      });
     },
     listThumbnailStateKey(photo) {
       return photo?.id === undefined || photo?.id === null ? "" : String(photo.id);
@@ -2814,8 +2841,16 @@ export default {
       };
     },
     ensurePreviewMediaAround(centerIndex) {
-      const start = Math.max(0, centerIndex - 1);
-      const end = Math.min(this.previewPhotos.length, centerIndex + 2);
+      const parsedCenter = Number(centerIndex);
+      if (!Number.isFinite(parsedCenter) || !this.previewPhotos.length) {
+        return;
+      }
+      const center = Math.min(
+        Math.max(0, Math.trunc(parsedCenter)),
+        this.previewPhotos.length - 1
+      );
+      const start = Math.max(0, center - 2);
+      const end = Math.min(this.previewPhotos.length, center + 3);
       this.previewPhotos.slice(start, end).forEach((photo) => {
         if (!photo || photo.id === undefined || photo.id === null) {
           return;

@@ -2,12 +2,56 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import { computed as vueComputed, reactive } from "vue";
 
 const root = process.cwd();
 const viewerPath = path.join(root, "apps/miniprogram/src/components/AlbumImageViewer.vue");
 const source = fs.readFileSync(viewerPath, "utf8");
+const albumPath = path.join(root, "apps/miniprogram/src/pages/session/album.vue");
+const albumSource = fs.readFileSync(albumPath, "utf8");
 const script = source.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
 const runtime = { pausedVideoIds: [] };
+
+function methodDefinition(source, name) {
+  const patterns = [
+    new RegExp("async\\s+" + name + "\\s*\\(([^)]*)\\)\\s*\\{"),
+    new RegExp(name + "\\s*\\(([^)]*)\\)\\s*\\{")
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (!match || match.index === undefined) {
+      continue;
+    }
+    const start = match.index + match[0].length;
+    let depth = 1;
+    for (let index = start; index < source.length; index += 1) {
+      if (source[index] === "{") {
+        depth += 1;
+      } else if (source[index] === "}") {
+        depth -= 1;
+      }
+      if (depth === 0) {
+        return {
+          parameters: match[1],
+          body: source.slice(start, index)
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function methodFromSource(source, name) {
+  const definition = methodDefinition(source, name);
+  assert.ok(definition, "Missing source method: " + name);
+  return new Function(
+    "return function(" +
+      definition.parameters +
+      ") {" +
+      definition.body +
+      "}"
+  )();
+}
 
 function loadComponent() {
   const context = {
@@ -604,6 +648,119 @@ function runCurrentMediaStateCheck(component) {
   assert.equal(download.payload.photo.id, 5);
 }
 
+function runAlbumPageMediaWindowCheck() {
+  const getPreviewMediaProgress = methodFromSource(albumSource, "previewMediaProgress");
+  const setAlbumMediaProgress = methodFromSource(albumSource, "setAlbumMediaProgress");
+  const updatePreviewPhotoDisplayMedia = methodFromSource(
+    albumSource,
+    "updatePreviewPhotoDisplayMedia"
+  );
+  const ensurePreviewMediaAround = methodFromSource(albumSource, "ensurePreviewMediaAround");
+
+  const photos = makePhotos(7);
+  photos[3] = {
+    ...photos[3],
+    media_type: "video",
+    cover_url: "wxfile://album-video-cover-4.jpg"
+  };
+  const mediaProgressById = {};
+  for (const photo of photos) {
+    for (const variant of ["thumbnail", "preview"]) {
+      mediaProgressById[String(photo.id) + ":" + variant] = {
+        loading: true,
+        progress: photo.id
+      };
+    }
+  }
+
+  const requests = [];
+  const state = reactive({
+    previewPhotos: photos,
+    previewCurrentIndex: 3,
+    mediaProgressById,
+    visiblePhotoMedia: {},
+    albumMediaProgressKey(photoId, variant = "preview") {
+      return String(photoId) + ":" + variant;
+    },
+    loadVisiblePhotoMedia(photo, variant) {
+      requests.push(String(photo.id) + ":" + variant);
+      return Promise.resolve("");
+    }
+  });
+
+  let getterRuns = 0;
+  const filteredProgress = vueComputed(() => {
+    getterRuns += 1;
+    return getPreviewMediaProgress.call(state);
+  });
+  const expectedMiddleKeys = [2, 3, 4, 5, 6]
+    .flatMap((id) => [String(id) + ":thumbnail", String(id) + ":preview"])
+    .sort();
+  const initialProgress = filteredProgress.value;
+  assert.deepEqual(Object.keys(initialProgress).sort(), expectedMiddleKeys);
+  assert.equal(getterRuns, 1);
+
+  const progressRoot = state.mediaProgressById;
+  setAlbumMediaProgress.call(state, 1, "thumbnail", { progress: 71 });
+  assert.strictEqual(state.mediaProgressById, progressRoot);
+  assert.strictEqual(filteredProgress.value, initialProgress);
+  assert.equal(getterRuns, 1);
+
+  setAlbumMediaProgress.call(state, 3, "preview", { progress: 83 });
+  assert.notStrictEqual(filteredProgress.value, initialProgress);
+  assert.equal(filteredProgress.value["3:preview"].progress, 83);
+  assert.equal(getterRuns, 2);
+
+  const photosRoot = state.previewPhotos;
+  const previousItems = [...state.previewPhotos];
+  updatePreviewPhotoDisplayMedia.call(state, 4, {
+    video_display_url: "wxfile://album-video-4.mp4"
+  });
+  assert.strictEqual(state.previewPhotos, photosRoot);
+  assert.notStrictEqual(state.previewPhotos[3], previousItems[3]);
+  assert.ok(
+    state.previewPhotos.every(
+      (photo, index) => index === 3 || photo === previousItems[index]
+    )
+  );
+
+  function requestsFor(center) {
+    requests.length = 0;
+    state.visiblePhotoMedia = {};
+    ensurePreviewMediaAround.call(state, center);
+    return {
+      entries: [...requests],
+      ids: [
+        ...new Set(requests.map((entry) => Number(entry.split(":")[0])))
+      ].sort((left, right) => left - right)
+    };
+  }
+
+  const startRequests = requestsFor(0);
+  assert.deepEqual(startRequests.ids, [1, 2, 3]);
+  const middleRequests = requestsFor(3);
+  assert.deepEqual(middleRequests.ids, [2, 3, 4, 5, 6]);
+  assert.ok(middleRequests.entries.includes("4:thumbnail"));
+  assert.ok(!middleRequests.entries.includes("4:preview"));
+  const endRequests = requestsFor(6);
+  assert.deepEqual(endRequests.ids, [5, 6, 7]);
+
+  state.previewCurrentIndex = 0;
+  assert.deepEqual(
+    Object.keys(filteredProgress.value).sort(),
+    [1, 2, 3]
+      .flatMap((id) => [String(id) + ":thumbnail", String(id) + ":preview"])
+      .sort()
+  );
+  state.previewCurrentIndex = 6;
+  assert.deepEqual(
+    Object.keys(filteredProgress.value).sort(),
+    [5, 6, 7]
+      .flatMap((id) => [String(id) + ":thumbnail", String(id) + ":preview"])
+      .sort()
+  );
+}
+
 function runSequenceCheck() {
   const component = loadComponent();
   runSwiperGenerationTokenCheck(component);
@@ -618,6 +775,7 @@ function runSequenceCheck() {
   runMixedVideoWindowCheck(component);
   runRemovedVideoEventCheck(component);
   runCurrentMediaStateCheck(component);
+  runAlbumPageMediaWindowCheck();
 }
 
 runSequenceCheck();

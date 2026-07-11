@@ -1386,13 +1386,18 @@ git commit -m "test: cover album viewer window lifecycle"
 
 ### Task 3: Narrow Parent Media and Progress Hot Paths
 
+**Status:** Completed
+
+- **RED evidence:** After modifying only Task 3 tests/static guards, `node scripts/d31-album-viewer-sequence-check.js` exited 1 with `AssertionError [ERR_ASSERTION]: Missing source method: previewMediaProgress`. `node scripts/check-miniprogram.js` exited 1 with the old full-map binding failures (`Album D31 preview must expose local media download progress to the viewer: :media-progress="previewMediaProgress"`, `Album preview must pass previewMediaProgress to AlbumImageViewer`, and `Album preview must not pass the full media progress map`) plus the expected missing filtered-progress, targeted progress/photo mutation, and `center - 2` / `center + 3` range guards.
+- **GREEN evidence:** `node scripts/d31-album-viewer-sequence-check.js` printed `AlbumImageViewer windowing checks passed`; `node scripts/check-miniprogram.js` printed `UniApp miniprogram check passed: 13 pages`; `node scripts/d42-miniprogram-album-video-check.js` printed `D42 mini-program integration checks passed: upload, viewer, timeline, and auth boundaries`; `npm run build:mp-weixin` completed with `DONE  Build complete.` (Sass deprecation warnings only); `git diff --check` exited 0 with no output. Compiled `pages/session/album.js` contains `previewMediaProgress` and passes `"media-progress":a.previewMediaProgress`.
+
 **Files:**
 - Modify: scripts/d31-album-viewer-sequence-check.js
 - Modify: scripts/check-miniprogram.js
 - Modify: apps/miniprogram/src/pages/session/album.vue
 - Update: docs/superpowers/plans/2026-07-12-album-viewer-windowing.md
 
-- [ ] **Step 1: Add real Vue reactivity and parent method extraction to D31**
+- [x] **Step 1: Add real Vue reactivity and parent method extraction to D31**
 
 Add this import:
 
@@ -1619,7 +1624,7 @@ function runAlbumPageMediaWindowCheck() {
 
 Add runAlbumPageMediaWindowCheck() before the success log.
 
-- [ ] **Step 2: Add parent hot-path static guards**
+- [x] **Step 2: Add parent hot-path static guards**
 
 In scripts/check-miniprogram.js, first replace the requiredAlbumMediaProgressText entry :media-progress="mediaProgressById" with :media-progress="previewMediaProgress". Then add:
 
@@ -1713,7 +1718,7 @@ for (const requiredText of [
 }
 ~~~
 
-- [ ] **Step 3: Run parent checks and verify RED**
+- [x] **Step 3: Run parent checks and verify RED**
 
 Run:
 
@@ -1727,7 +1732,7 @@ Expected:
 - D31 exits non-zero with Missing source method: previewMediaProgress.
 - check-miniprogram exits non-zero because the viewer still receives mediaProgressById.
 
-- [ ] **Step 4: Implement filtered progress, targeted writes, and exact ±2 preload**
+- [x] **Step 4: Implement filtered progress, targeted writes, and exact ±2 preload**
 
 Change the AlbumImageViewer prop binding:
 
@@ -1864,7 +1869,7 @@ ensurePreviewMediaAround(centerIndex) {
 
 Do not modify applyFreshAlbumMediaUrls; it is a low-frequency auth refresh outside this hot-path scope.
 
-- [ ] **Step 5: Run parent, static, mixed-media, and build checks**
+- [x] **Step 5: Run parent, static, mixed-media, and build checks**
 
 Run:
 
@@ -1882,7 +1887,7 @@ Expected:
 - D42 mini-program integration checks passed: upload, viewer, timeline, and auth boundaries.
 - Build completes with Build complete. Sass deprecation warnings are acceptable; compile errors are not.
 
-- [ ] **Step 6: Review and commit the parent hot-path change**
+- [x] **Step 6: Review and commit the parent hot-path change**
 
 Run:
 

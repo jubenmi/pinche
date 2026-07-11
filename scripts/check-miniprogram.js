@@ -3161,10 +3161,55 @@ if (!fs.existsSync(pagesJsonPath)) {
     "onProgressUpdate",
     "progress: progress.progress",
     "uni.downloadFile",
-    ':media-progress="mediaProgressById"'
+    ':media-progress="previewMediaProgress"'
   ]) {
     if (!albumSource.includes(requiredAlbumMediaProgressText)) {
       fail(`Album D31 preview must expose local media download progress to the viewer: ${requiredAlbumMediaProgressText}`);
+    }
+  }
+  if (!albumSource.includes(':media-progress="previewMediaProgress"')) {
+    fail("Album preview must pass previewMediaProgress to AlbumImageViewer");
+  }
+  if (albumSource.includes(':media-progress="mediaProgressById"')) {
+    fail("Album preview must not pass the full media progress map");
+  }
+
+  const previewMediaProgressSource = methodBody(albumSource, "previewMediaProgress");
+  for (const requiredText of [
+    "this.previewCurrentIndex",
+    "this.previewPhotos",
+    '["thumbnail", "preview"]',
+    "this.mediaProgressById[key]"
+  ]) {
+    if (!previewMediaProgressSource.includes(requiredText)) {
+      fail("Album preview progress window is missing " + requiredText);
+    }
+  }
+
+  const setAlbumMediaProgressSource = methodBody(albumSource, "setAlbumMediaProgress");
+  if (
+    !setAlbumMediaProgressSource.includes("this.mediaProgressById[key] =") ||
+    setAlbumMediaProgressSource.includes("this.mediaProgressById =")
+  ) {
+    fail("Album progress must update one key without replacing the root map");
+  }
+
+  const updatePreviewMediaSource = methodBody(
+    albumSource,
+    "updatePreviewPhotoDisplayMedia"
+  );
+  if (
+    !updatePreviewMediaSource.includes("this.previewPhotos.findIndex") ||
+    !updatePreviewMediaSource.includes("this.previewPhotos.splice") ||
+    updatePreviewMediaSource.includes(".map(")
+  ) {
+    fail("Album preview hydration must replace only one matching photo");
+  }
+
+  const ensurePreviewMediaAroundSource = methodBody(albumSource, "ensurePreviewMediaAround");
+  for (const requiredText of ["center - 2", "center + 3"]) {
+    if (!ensurePreviewMediaAroundSource.includes(requiredText)) {
+      fail("Album preview media range is missing " + requiredText);
     }
   }
   const albumDownloadOnceSource = methodBody(albumSource, "downloadAlbumImageOnce");
