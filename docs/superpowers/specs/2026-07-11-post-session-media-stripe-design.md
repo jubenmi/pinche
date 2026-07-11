@@ -2,7 +2,9 @@
 
 日期：2026-07-11
 
-状态：已确认，待实施计划
+状态：已确认，实施计划已生成
+
+实施计划：[2026-07-11-post-session-media-stripe.md](../plans/2026-07-11-post-session-media-stripe.md)
 
 ## 摘要
 
