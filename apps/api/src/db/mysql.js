@@ -11,7 +11,9 @@ export const requiredSchemaTables = Object.freeze([
   "session_npc_roles",
   "admin_web_login_tickets",
   "store_scripts",
-  "wechat_identities"
+  "wechat_identities",
+  "session_album_upload_intents",
+  "session_album_object_cleanup_jobs"
 ]);
 
 export function serverConnectionOptions() {

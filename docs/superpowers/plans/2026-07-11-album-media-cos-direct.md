@@ -446,13 +446,15 @@ git commit -m "feat: add shared album media state machine"
 
 ## Task 2: Durable schema for object identity, intents, and cleanup jobs
 
+执行状态：已完成（2026-07-11，迁移测试通过，隔离 MySQL 首次应用 25 个迁移且二次执行为空）。
+
 **Files:**
 - Create: `apps/api/migrations/0023_album_media_cos_direct.sql`
 - Modify: `apps/api/src/db/mysql.js`
 - Create: `apps/api/test/album-image-migration.test.mjs`
 - Modify: `apps/api/package.json`
 
-- [ ] **Step 1: Write the failing migration contract test**
+- [x] **Step 1: Write the failing migration contract test**
 
 Create a source-level test that locks the table names, foreign-key behavior, uniqueness, lease fields, and readiness registration:
 
@@ -479,13 +481,13 @@ test("album image migration has durable intent and cleanup anchors", async () =>
 });
 ```
 
-- [ ] **Step 2: Run the migration test to verify RED**
+- [x] **Step 2: Run the migration test to verify RED**
 
 Run: `node --test apps/api/test/album-image-migration.test.mjs`
 
 Expected: FAIL because migration `0023_album_media_cos_direct.sql` does not exist and readiness lacks the tables.
 
-- [ ] **Step 3: Add the complete additive migration**
+- [x] **Step 3: Add the complete additive migration**
 
 Create `apps/api/migrations/0023_album_media_cos_direct.sql`:
 
@@ -573,7 +575,7 @@ Add `test:album-image` to `apps/api/package.json` without replacing `check`:
 "test:album-image": "node --test test/album-image-*.test.mjs"
 ```
 
-- [ ] **Step 4: Verify the migration contract and an isolated MySQL apply**
+- [x] **Step 4: Verify the migration contract and an isolated MySQL apply**
 
 Run: `npm --workspace apps/api run test:album-image`
 
@@ -583,7 +585,7 @@ Run against the disposable local MySQL configured for this worktree: `MYSQL_DATA
 
 Expected: JSON contains `"0023_album_media_cos_direct.sql"` in `executed`; a second identical command reports an empty `executed` list.
 
-- [ ] **Step 5: Commit the schema**
+- [x] **Step 5: Commit the schema**
 
 ```bash
 git add apps/api/migrations/0023_album_media_cos_direct.sql apps/api/src/db/mysql.js apps/api/test/album-image-migration.test.mjs apps/api/package.json
