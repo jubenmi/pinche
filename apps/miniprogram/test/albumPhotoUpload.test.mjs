@@ -156,3 +156,11 @@ test("album API requests suppress maintenance without changing generic default",
   assert.match(source, /300_000/);
   assert.match(source, /task\?\.abort\?\.\(\)/);
 });
+
+test("COS SDK uses a synchronous mini-program module require", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../src/utils/api.js", import.meta.url), "utf8")
+  );
+  assert.match(source, /require\("cos-wx-sdk-v5\/index\.js"\)/);
+  assert.doesNotMatch(source, /import\("cos-wx-sdk-v5\/index\.js"\)/);
+});
