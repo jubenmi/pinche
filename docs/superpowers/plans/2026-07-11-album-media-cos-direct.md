@@ -2645,6 +2645,8 @@ git commit -m "feat: refresh mini program COS album URLs"
 
 ## Task 12: Admin-web v2 image upload without production fallback
 
+执行状态：已完成（2026-07-11，6/6 管理端上传测试；D12、D32 与 D42 创建回归通过）。
+
 **Files:**
 - Modify: `apps/admin-web/package.json`
 - Modify: `package-lock.json`
@@ -2652,7 +2654,7 @@ git commit -m "feat: refresh mini program COS album URLs"
 - Modify: `apps/admin-web/src/albumMedia.js`
 - Create: `apps/admin-web/test/albumMedia.test.mjs`
 
-- [ ] **Step 1: Write failing admin upload-adapter tests**
+- [x] **Step 1: Write failing admin upload-adapter tests**
 
 Add tests next to the existing authorization/serial helpers:
 
@@ -2698,13 +2700,13 @@ test("admin local fallback requires both exact server fields", async () => {
 
 Add the same retry/conflict/signature/status/processing/error cases as the mini adapter. Add a source assertion that generic `uploadCosBackedFile` remains used by album video and its fallback is unchanged.
 
-- [ ] **Step 2: Run admin adapter tests to verify RED**
+- [x] **Step 2: Run admin adapter tests to verify RED**
 
 Run: `node --test apps/admin-web/test/albumMedia.test.mjs`
 
 Expected: FAIL because `uploadAdminAlbumPhoto` does not exist.
 
-- [ ] **Step 3: Add the shared dependency and low-level v2 API**
+- [x] **Step 3: Add the shared dependency and low-level v2 API**
 
 Add to `apps/admin-web/package.json`:
 
@@ -2754,7 +2756,7 @@ Store uploadId by exact key while `putObject` is active and include it in author
 
 Rename/export the current image multipart function as `uploadSessionAlbumPhotoLocal(sessionId, file, options)` and keep its resolved value as the photo URL string. Do not route album video through this export.
 
-- [ ] **Step 4: Implement the admin adapter using shared semantics**
+- [x] **Step 4: Implement the admin adapter using shared semantics**
 
 Extend `albumMedia.js`:
 
@@ -2793,7 +2795,7 @@ This required dependency avoids a circular import because `api.js` already impor
 
 Keep existing `shouldAttachAdminAuthorization` behavior: same-origin API proxy requests receive Bearer; `*.myqcloud.com` signed reads do not.
 
-- [ ] **Step 5: Verify admin adapter and video fallback**
+- [x] **Step 5: Verify admin adapter and video fallback**
 
 Run: `npm --workspace apps/admin-web run test:album-media`
 
@@ -2803,7 +2805,7 @@ Run: `node scripts/d12-admin-web-check.js && node scripts/d32-admin-album-video-
 
 Expected: new image assertions pass and the generic video upload/fallback behavior remains green.
 
-- [ ] **Step 6: Commit admin upload adapter**
+- [x] **Step 6: Commit admin upload adapter**
 
 ```bash
 git add apps/admin-web/package.json package-lock.json apps/admin-web/src/api.js apps/admin-web/src/albumMedia.js apps/admin-web/test/albumMedia.test.mjs

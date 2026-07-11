@@ -4,6 +4,8 @@ const ROLES_KEY = "pinche_admin_web_roles";
 import { shouldAttachAdminAuthorization } from "./albumMedia";
 let cosClient = null;
 let cosSdkConstructor = null;
+const albumUploadsByKey = new Map();
+const albumAuthorizationErrorsByKey = new Map();
 
 function readJsonStorage(key, fallback) {
   try {
@@ -39,6 +41,7 @@ async function parseResponse(response) {
   if (!response.ok || payload?.ok === false) {
     const error = new Error(payload?.error?.message || `Request failed: ${response.status}`);
     error.status = response.status;
+    error.statusCode = response.status;
     error.code = payload?.error?.code || "REQUEST_FAILED";
     error.details = payload?.error?.details;
     throw error;
@@ -121,6 +124,7 @@ async function requestCosUploadIntent(kind, file, data = {}) {
 }
 
 async function authorizeCosUpload(options) {
+  const albumUpload = albumUploadsByKey.get(String(options.Key || ""));
   return apiRequest("/api/uploads/cos-authorization", {
     method: "POST",
     body: {
@@ -128,8 +132,17 @@ async function authorizeCosUpload(options) {
       region: options.Region,
       method: options.Method,
       key: options.Key,
-      query: options.Query || {},
-      headers: options.Headers || {}
+      ...(albumUpload ? { uploadId: albumUpload.uploadId } : {}),
+      query: albumUpload ? {} : (options.Query || {}),
+      headers: albumUpload
+        ? {
+            host: `${albumUpload.bucket}.cos.${albumUpload.region}.myqcloud.com`,
+            "content-length": String(albumUpload.contentLength),
+            "content-type": albumUpload.contentType,
+            "pic-operations": albumUpload.picOperations,
+            "x-cos-forbid-overwrite": "true"
+          }
+        : (options.Headers || {})
     }
   });
 }
@@ -154,7 +167,8 @@ async function getCosClient() {
         .then((data) => {
           callback(data?.authorization || "");
         })
-        .catch(() => {
+        .catch((error) => {
+          albumAuthorizationErrorsByKey.set(String(options.Key || ""), error);
           callback("");
         });
     }
@@ -188,6 +202,111 @@ async function uploadCosObject(upload, file) {
       }
     );
   });
+}
+
+function normalizeAlbumCosError(error) {
+  const original = error?.originalError || error || {};
+  const code = original?.error?.Code || original?.Code || error?.code;
+  const message = original?.error?.Message || original?.Message || error?.message ||
+    error?.errMsg || "COS upload failed";
+  const normalized = new Error(String(message));
+  normalized.status = Number(error?.status || error?.statusCode || original?.statusCode || 0);
+  normalized.statusCode = normalized.status;
+  normalized.code = code || (
+    /cors|cross-origin|access-control|blocked by client/i.test(String(message))
+      ? "COS_DOMAIN_NOT_ALLOWED"
+      : /timeout/i.test(String(message))
+        ? "COS_REQUEST_TIMEOUT"
+        : "COS_NETWORK_ERROR"
+  );
+  normalized.details = error?.details;
+  normalized.originalError = original;
+  return normalized;
+}
+
+export async function putAlbumPhotoToCos(upload, file) {
+  const client = await getCosClient();
+  const key = String(upload.key);
+  albumUploadsByKey.set(key, upload);
+  albumAuthorizationErrorsByKey.delete(key);
+  try {
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      let task;
+      const finish = (complete, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        complete(value);
+      };
+      const watchdog = setTimeout(() => {
+        task?.abort?.();
+        finish(reject, Object.assign(new Error("COS upload timed out"), {
+          code: "COS_REQUEST_TIMEOUT", status: 0, statusCode: 0
+        }));
+      }, 300_000);
+      try {
+        task = client.putObject({
+          Bucket: upload.bucket,
+          Region: upload.region,
+          Key: upload.key,
+          Body: file,
+          ContentLength: file.size,
+          ContentType: upload.contentType || file.type,
+          PicOperations: upload.picOperations,
+          Headers: upload.headers || {},
+          onProgress() {}
+        }, (error) => {
+          const authorizationError = albumAuthorizationErrorsByKey.get(key);
+          if (authorizationError) finish(reject, authorizationError);
+          else if (error) finish(reject, normalizeAlbumCosError(error));
+          else finish(resolve, upload.uploadPath);
+        });
+      } catch (error) {
+        finish(reject, normalizeAlbumCosError(error));
+      }
+    });
+  } finally {
+    albumUploadsByKey.delete(key);
+    albumAuthorizationErrorsByKey.delete(key);
+  }
+}
+
+export function clearAlbumPhotoAuthorization(key) {
+  const cache = cosClient?._authorizationCache || cosClient?.authorizationCache;
+  if (cache && typeof cache.delete === "function") cache.delete(String(key));
+  albumAuthorizationErrorsByKey.delete(String(key));
+}
+
+export function requestAlbumPhotoUploadIntent(sessionId, file, options = {}) {
+  return apiRequest("/api/uploads/cos-intent", {
+    method: "POST",
+    body: {
+      kind: options.adminOwner ? "adminSessionAlbumPhoto" : "sessionAlbumPhoto",
+      sessionId,
+      extension: fileExtensionFromName(file.name),
+      contentType: file.type,
+      byteSize: file.size
+    }
+  }).then((data) => data.upload);
+}
+
+export function getAlbumPhotoUploadStatus(uploadId) {
+  return apiRequest(`/api/uploads/${encodeURIComponent(uploadId)}/status`);
+}
+
+export function finalizeAlbumPhotoUpload(uploadId) {
+  return apiRequest(`/api/uploads/${encodeURIComponent(uploadId)}/finalize`, {
+    method: "POST",
+    body: {}
+  });
+}
+
+export function reportAlbumMediaEvent(event, fields = {}) {
+  apiRequest("/api/telemetry/album-media", {
+    method: "POST",
+    body: { event, ...fields }
+  }).catch(() => {});
 }
 
 async function uploadCosBackedFile({ kind, file, fallbackUpload, intentData = {} }) {
@@ -354,7 +473,7 @@ export function updateSessionNpcRole(npcRoleId, body) {
   });
 }
 
-async function fallbackUploadSessionAlbumPhoto(sessionId, file, options = {}) {
+export async function uploadSessionAlbumPhotoLocal(sessionId, file, options = {}) {
   const formData = new FormData();
   formData.append("photo", file);
   const data = await apiFormDataRequest(
@@ -387,7 +506,7 @@ export async function uploadSessionAlbumPhoto(sessionId, file, options = {}) {
     kind,
     file,
     intentData: { sessionId },
-    fallbackUpload: (nextFile) => fallbackUploadSessionAlbumPhoto(sessionId, nextFile, options)
+    fallbackUpload: (nextFile) => uploadSessionAlbumPhotoLocal(sessionId, nextFile, options)
   });
   return { photoUrl };
 }
