@@ -13,10 +13,11 @@ export const AUTH_PHONE_ACK_EVENT = "pinche-auth-phone-ack";
 export const AUTH_PHONE_RESPONSE_EVENT = "pinche-auth-phone-response";
 export const BACKEND_STATUS_CHANGE_EVENT = "pinche-backend-status-change";
 
-const BACKEND_HEALTH_TIMEOUT = 3000;
+const BACKEND_HEALTH_TIMEOUT = 10000;
 const MAINTENANCE_USER_MESSAGE = "服务正在上线维护中，请稍后再试。";
 let cosClient = null;
 let cosSdkConstructor = null;
+const albumUploadIdsByKey = new Map();
 const backendStatus = {
   checking: false,
   available: null,
@@ -78,19 +79,17 @@ export function getApiBaseUrl() {
 
 function isLocalApiBaseUrl() {
   const value = getApiBaseUrl();
-  try {
-    const { hostname } = new URL(value);
-    return (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "0.0.0.0" ||
-      hostname.startsWith("192.168.") ||
-      hostname.startsWith("10.") ||
-      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
-    );
-  } catch (error) {
-    return false;
-  }
+  const normalizedValue = String(value || "").trim();
+  const match = normalizedValue.match(/^https?:\/\/([^/:?#]+)/i);
+  const hostname = match?.[1] || "";
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname.startsWith("192.168.") ||
+    hostname.startsWith("10.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+  );
 }
 
 export function assetUrl(path) {
@@ -290,6 +289,17 @@ function rejectUnauthorizedResponse(response) {
     ...response,
     userMessage: "登录已过期，请重新登录。"
   };
+}
+
+function normalizedApiError({ status = 0, payload = {}, fallbackMessage }) {
+  const details = payload?.error || payload || {};
+  const error = new Error(details.message || payload.message || fallbackMessage);
+  error.status = Number(status || 0);
+  error.statusCode = error.status;
+  error.code = details.code || payload.code || "API_REQUEST_FAILED";
+  error.details = details.details ?? payload.details;
+  error.userMessage = error.message;
+  return error;
 }
 
 function confirmLogin(options = {}) {
@@ -495,6 +505,17 @@ async function getCosClient() {
   cosClient = new COS({
     SimpleUploadMethod: "putObject",
     getAuthorization(options, callback) {
+      const albumUpload = albumUploadIdsByKey.get(String(options.Key || ""));
+      const uploadId = albumUpload?.uploadId;
+      const authorizationHeaders = albumUpload
+        ? {
+            host: `${albumUpload.bucket}.cos.${albumUpload.region}.myqcloud.com`,
+            "content-length": String(albumUpload.contentLength),
+            "content-type": albumUpload.contentType,
+            "pic-operations": albumUpload.picOperations,
+            "x-cos-forbid-overwrite": "true"
+          }
+        : (options.Headers || {});
       request({
         url: "/api/uploads/cos-authorization",
         method: "POST",
@@ -503,9 +524,11 @@ async function getCosClient() {
           region: options.Region,
           method: options.Method,
           key: options.Key,
-          query: options.Query || {},
-          headers: options.Headers || {}
-        }
+          ...(uploadId ? { uploadId } : {}),
+          query: albumUpload ? {} : (options.Query || {}),
+          headers: authorizationHeaders
+        },
+        suppressMaintenance: Boolean(uploadId)
       })
         .then((response) => {
           const data = dataOf(response);
@@ -533,6 +556,63 @@ async function requestCosUploadIntent(kind, filePath, data = {}) {
   return dataOf(response)?.upload || { direct: false };
 }
 
+function getLocalFileSize(filePath) {
+  if (!filePath || typeof uni === "undefined") {
+    return Promise.resolve(0);
+  }
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      const size = Number(value || 0);
+      resolve(Number.isFinite(size) && size > 0 ? size : 0);
+    };
+    const statFile = () => {
+      if (typeof uni.getFileSystemManager !== "function") {
+        finish(0);
+        return;
+      }
+      try {
+        const fileSystem = uni.getFileSystemManager();
+        if (!fileSystem || typeof fileSystem.stat !== "function") {
+          finish(0);
+          return;
+        }
+        fileSystem.stat({
+          path: filePath,
+          success(result) {
+            const stats = result.stats || result.stat || result;
+            finish(stats?.size);
+          },
+          fail() {
+            finish(0);
+          }
+        });
+      } catch (error) {
+        finish(0);
+      }
+    };
+    if (typeof uni.getFileInfo !== "function") {
+      statFile();
+      return;
+    }
+    try {
+      uni.getFileInfo({
+        filePath,
+        success(result) {
+          const size = Number(result?.size || 0);
+          if (Number.isFinite(size) && size > 0) {
+            finish(size);
+            return;
+          }
+          statFile();
+        },
+        fail: statFile
+      });
+    } catch (error) {
+      statFile();
+    }
+  });
+}
+
 async function uploadCosObject(upload, filePath) {
   const client = await getCosClient();
   return new Promise((resolve, reject) => {
@@ -542,7 +622,9 @@ async function uploadCosObject(upload, filePath) {
         Region: upload.region,
         Key: upload.key,
         FilePath: filePath,
+        ContentLength: upload.contentLength,
         ContentType: upload.contentType,
+        Headers: upload.headers || {},
         PicOperations: upload.picOperations,
         onProgress() {}
       },
@@ -561,9 +643,131 @@ async function uploadCosObject(upload, filePath) {
   });
 }
 
+function normalizeAlbumCosError(error) {
+  const original = error?.originalError || error || {};
+  const sdkCode = original?.error?.Code || original?.Code || error?.code;
+  const sdkMessage = original?.error?.Message || original?.Message || error?.message || error?.errMsg;
+  const text = String(sdkMessage || "COS upload failed");
+  const normalized = new Error(text);
+  normalized.status = Number(error?.status || error?.statusCode || original?.statusCode || 0);
+  normalized.statusCode = normalized.status;
+  normalized.code = sdkCode || (
+    /url not in domain list|不在以下 request 合法域名列表中/i.test(text)
+      ? "COS_DOMAIN_NOT_ALLOWED"
+      : /timeout|超时/i.test(text)
+        ? "COS_REQUEST_TIMEOUT"
+        : "COS_NETWORK_ERROR"
+  );
+  normalized.details = error?.details;
+  normalized.originalError = original;
+  return normalized;
+}
+
+export async function putSessionAlbumPhotoToCos(upload, filePath) {
+  const client = await getCosClient();
+  albumUploadIdsByKey.set(String(upload.key), upload);
+  try {
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      let task;
+      const finish = (complete, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        complete(value);
+      };
+      const watchdog = setTimeout(() => {
+        task?.abort?.();
+        finish(reject, Object.assign(new Error("COS upload timed out"), {
+          code: "COS_REQUEST_TIMEOUT",
+          status: 0,
+          statusCode: 0
+        }));
+      }, 300_000);
+      try {
+        task = client.putObject({
+          Bucket: upload.bucket,
+          Region: upload.region,
+          Key: upload.key,
+          FilePath: filePath,
+          ContentLength: Number(upload.contentLength),
+          ContentType: upload.contentType,
+          PicOperations: upload.picOperations,
+          Headers: { ...(upload.headers || {}), "x-cos-forbid-overwrite": "true" },
+          onProgress() {}
+        }, (error) => {
+          if (error) finish(reject, normalizeAlbumCosError(error));
+          else finish(resolve, upload.uploadPath);
+        });
+      } catch (error) {
+        finish(reject, normalizeAlbumCosError(error));
+      }
+    });
+  } finally {
+    albumUploadIdsByKey.delete(String(upload.key));
+  }
+}
+
+export function clearSessionAlbumPhotoAuthorization(key) {
+  const cache = cosClient?._authorizationCache || cosClient?.authorizationCache;
+  if (cache && typeof cache.delete === "function") cache.delete(String(key));
+}
+
+export function createSessionAlbumPhotoUploadIntent(sessionId, facts) {
+  return request({
+    url: "/api/uploads/cos-intent",
+    method: "POST",
+    data: {
+      kind: facts.adminOwner ? "adminSessionAlbumPhoto" : "sessionAlbumPhoto",
+      sessionId,
+      extension: facts.extension,
+      contentType: facts.contentType,
+      byteSize: facts.byteSize
+    },
+    suppressMaintenance: true
+  }).then((response) => dataOf(response)?.upload);
+}
+
+export function getSessionAlbumPhotoUploadStatus(uploadId) {
+  return request({
+    url: `/api/uploads/${encodeURIComponent(uploadId)}/status`,
+    suppressMaintenance: true
+  }).then(dataOf);
+}
+
+export function finalizeSessionAlbumPhotoUpload(uploadId) {
+  return request({
+    url: `/api/uploads/${encodeURIComponent(uploadId)}/finalize`,
+    method: "POST",
+    data: {},
+    suppressMaintenance: true
+  }).then(dataOf);
+}
+
+export function reportAlbumMediaEvent(event, fields = {}) {
+  request({
+    url: "/api/telemetry/album-media",
+    method: "POST",
+    data: { event, ...fields },
+    suppressMaintenance: true
+  }).catch(() => {});
+}
+
 async function uploadCosBackedFile({ kind, filePath, fallbackUpload, intentData = {} }) {
   const upload = await requestCosUploadIntent(kind, filePath, intentData);
+  const localFileSize = await getLocalFileSize(filePath);
+  const maxBytes = Number(upload.maxBytes || 0);
+  if (localFileSize > 0 && maxBytes > 0 && localFileSize > maxBytes) {
+    throw {
+      statusCode: 413,
+      errMsg: "upload file exceeds maxBytes",
+      userMessage: "文件过大，请压缩后重试。"
+    };
+  }
   if (!upload.direct) {
+    return fallbackUpload(filePath);
+  }
+  if (!localFileSize) {
     return fallbackUpload(filePath);
   }
   try {
@@ -758,10 +962,12 @@ export async function uploadSessionReviewPhoto(filePath) {
   });
 }
 
-function fallbackUploadSessionAlbumPhoto(sessionId, filePath) {
+export function uploadSessionAlbumPhotoLocal(sessionId, filePath, options = {}) {
   return uploadBackendFile({
     filePath,
-    url: `/api/sessions/${sessionId}/album/uploads`,
+    url: options.adminOwner
+      ? `/api/admin/sessions/${sessionId}/album/uploads`
+      : `/api/sessions/${sessionId}/album/uploads`,
     name: "photo",
     responseField: "photoUrl",
     timeoutMessage: "相册照片上传超时，请确认本地后端已启动。",
@@ -774,8 +980,20 @@ export async function uploadSessionAlbumPhoto(sessionId, filePath) {
     kind: "sessionAlbumPhoto",
     filePath,
     intentData: { sessionId },
-    fallbackUpload: (path) => fallbackUploadSessionAlbumPhoto(sessionId, path)
+    fallbackUpload: (path) => uploadSessionAlbumPhotoLocal(sessionId, path)
   });
+}
+
+export async function createSessionAlbumPhotoLegacy(sessionId, photoUrl, options = {}) {
+  const response = await request({
+    url: options.adminOwner
+      ? `/api/admin/sessions/${sessionId}/album/photos`
+      : `/api/sessions/${sessionId}/album/photos`,
+    method: "POST",
+    data: { photoUrl },
+    suppressMaintenance: true
+  });
+  return { photo: dataOf(response) };
 }
 
 function fallbackUploadSessionAlbumVideo(sessionId, filePath) {
@@ -983,40 +1201,47 @@ export async function ensureUserPhone(auth, options = {}) {
 }
 
 export function loginWithWechat(options = {}) {
+  const loginWithCode = (code) => {
+    if (!code) {
+      const error = new Error("WeChat login code is missing");
+      error.userMessage = "微信登录凭证获取失败，请重试";
+      return Promise.reject(error);
+    }
+    return request({
+      url: "/api/auth/wechat/login",
+      method: "POST",
+      data: {
+        code
+      }
+    }).then((response) => {
+      const data = dataOf(response);
+      if (data) {
+        setAuth(data);
+      }
+      return data;
+    });
+  };
+
   return new Promise((resolve, reject) => {
     uni.login({
       provider: "weixin",
       success(loginResult) {
-        const code = resolveWechatLoginCode(loginResult, options);
-        if (!code) {
-          const error = new Error("WeChat login code is missing");
-          error.userMessage = "微信登录凭证获取失败，请重试";
-          reject(error);
+        loginWithCode(resolveWechatLoginCode(loginResult, options)).then(resolve).catch(reject);
+      },
+      fail(loginError) {
+        const fallbackCode = resolveWechatLoginCode({}, options);
+        if (!fallbackCode) {
+          reject(loginError);
           return;
         }
-        request({
-          url: "/api/auth/wechat/login",
-          method: "POST",
-          data: {
-            code
-          }
-        })
-          .then((response) => {
-            const data = dataOf(response);
-            if (data) {
-              setAuth(data);
-            }
-            resolve(data);
-          })
-          .catch(reject);
-      },
-      fail: reject
+        loginWithCode(fallbackCode).then(resolve).catch(reject);
+      }
     });
   });
 }
 
 function resolveWechatLoginCode(loginResult, options = {}) {
-  if (import.meta.env.DEV && options.devCode && isLocalApiBaseUrl()) {
+  if (options.devCode && isLocalApiBaseUrl()) {
     return options.devCode;
   }
   if (loginResult.code) {
@@ -1119,28 +1344,30 @@ export function request(options = {}) {
       success(response) {
         const responseData = response.data || {};
         if (response.statusCode >= 400 || responseData.ok === false) {
-          reject(
-            rejectUnauthorizedResponse({
-              ...response,
-              userMessage: responseData.error?.message || responseData.message || "请求失败"
-            })
-          );
+          const authResponse = rejectUnauthorizedResponse(response);
+          reject(normalizedApiError({
+            status: authResponse.statusCode,
+            payload: responseData,
+            fallbackMessage: "请求失败"
+          }));
           return;
         }
         resolve(response);
       },
       fail(error) {
         const errMsg = error?.errMsg || "request failed";
-        markBackendMaintenance(error);
-        reject({
-          statusCode: 0,
-          maintenance: true,
-          errMsg,
-          userMessage: errMsg.includes("timeout")
+        if (!options.suppressMaintenance) markBackendMaintenance(error);
+        const normalized = normalizedApiError({
+          status: 0,
+          payload: {},
+          fallbackMessage: errMsg.includes("timeout")
             ? "请求超时，请确认本地后端已启动。"
-            : "网络请求失败，请稍后重试。",
-          originalError: error
+            : "网络请求失败，请稍后重试。"
         });
+        normalized.code = errMsg.includes("timeout") ? "API_REQUEST_TIMEOUT" : "API_NETWORK_ERROR";
+        normalized.maintenance = !options.suppressMaintenance;
+        normalized.originalError = error;
+        reject(normalized);
       }
     });
   });

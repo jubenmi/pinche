@@ -2,8 +2,8 @@
   "name": "剧本迷·拼车",
   "appid": "__UNI__PINCHE",
   "description": "情感本拼车MVP",
-  "versionName": "0.20260629.1",
-  "versionCode": "2026062901",
+  "versionName": "0.20260710.1",
+  "versionCode": "2026071001",
   "transformPx": false,
   "mp-weixin": {
     "appid": "wx2675a606d3bd242c",
@@ -17,11 +17,12 @@
     "usingComponents": true,
     "permission": {
       "scope.userLocation": {
-        "desc": "用于用户主动选择剧本店位置"
+        "desc": "用于用户主动选择剧本店位置和发现同城可报名车局"
       }
     },
     "requiredPrivateInfos": [
-      "chooseLocation"
+      "chooseLocation",
+      "getLocation"
     ]
   }
 }

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 const releaseApiBaseUrl = process.env.RELEASE_API_BASE_URL || "";
+const lockedApiBaseUrl = "https://api.pinche.jubenmi.com";
 
 function assert(condition, message) {
   if (!condition) {
@@ -76,16 +77,27 @@ async function main() {
   assert(composeProd.includes("\n  migrate:"), "prod compose should include migration service");
   assert(composeProd.includes("npm run migrate"), "prod compose migration service should run migrations");
   assert(manifest["mp-weixin"]?.appid === "wx2675a606d3bd242c", "manifest appid should be set");
-  assert(appSource.includes("VITE_API_BASE_URL"), "miniprogram should support release API base URL");
+  assert(
+    appSource.includes(`const productionApiBaseUrl = "${lockedApiBaseUrl}"`),
+    "miniprogram should lock API base URL to production"
+  );
+  assert(
+    !appSource.includes("import.meta.env.VITE_API_BASE_URL"),
+    "miniprogram should not allow release env to override API base URL"
+  );
   assert(existsSync(new URL(`../${buildAppJsPath}`, import.meta.url)), "mp-weixin build app.js missing");
   assert(existsSync(new URL(`../${buildAppJsonPath}`, import.meta.url)), "mp-weixin build app.json missing");
 
   if (releaseApiBaseUrl) {
     assert(isHttpsUrl(releaseApiBaseUrl), "RELEASE_API_BASE_URL should be an https URL");
+    assert(
+      releaseApiBaseUrl === lockedApiBaseUrl,
+      `RELEASE_API_BASE_URL should match locked API base URL ${lockedApiBaseUrl}`
+    );
     const buildAppJs = await read(buildAppJsPath);
     assert(
-      buildAppJs.includes(releaseApiBaseUrl),
-      "release build should include RELEASE_API_BASE_URL"
+      buildAppJs.includes(lockedApiBaseUrl),
+      "release build should include locked production API base URL"
     );
     assert(!buildAppJs.includes("http://127.0.0.1:3018"), "release build should not use local API");
     await assertProductionApiReady();

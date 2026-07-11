@@ -21,6 +21,8 @@ const miniprogramDevRoot = path.join(miniprogramRoot, "dist/dev/mp-weixin");
 const miniprogramBuildRoot = path.join(miniprogramRoot, "dist/build/mp-weixin");
 const codexHooksPath = path.join(root, ".codex/hooks.json");
 const devtoolsHookPath = path.join(root, "scripts/devtools-refresh-hook.js");
+const d35AdminCatalogCheckPath = path.join(root, "scripts/d35-miniprogram-admin-catalog-check.js");
+const albumImageViewerPath = path.join(srcRoot, "components", "AlbumImageViewer.vue");
 const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
 const productionWechatAppId = "wx2675a606d3bd242c";
 const mainPackageLimitBytes = Math.floor(1.5 * 1024 * 1024);
@@ -246,7 +248,8 @@ function isAllowedNativeAvatarPrimitiveTag(tag, tagSource) {
       /\bavatar\b/.test(className) ||
       /avatar/.test(className) ||
       /photo-preview-image/.test(className) ||
-      /album-image-viewer__image/.test(className)
+      /album-image-viewer__image/.test(className) ||
+      /album-image-viewer__video-poster/.test(className)
     );
   }
   if (tag === "button") {
@@ -882,9 +885,13 @@ if (!fs.existsSync(pagesJsonPath)) {
   const indexSource = fs.existsSync(firstFlowFiles["entry page"])
     ? fs.readFileSync(firstFlowFiles["entry page"], "utf8")
     : "";
-  for (const requiredHomeEntryText of ["发起第一辆车", "开始发车", "我的车局", "发车"]) {
+  for (const requiredHomeEntryText of [
+    "我的车局（点击登录）",
+    "我的车局（点击创建）",
+    "近期车局"
+  ]) {
     if (!indexSource.includes(requiredHomeEntryText)) {
-      fail(`Entry page must support D22 home entry routing UI: ${requiredHomeEntryText}`);
+      fail(`Entry page must support the D40 shared calendar UI: ${requiredHomeEntryText}`);
     }
   }
   for (const requiredHomeRoutingText of [
@@ -893,14 +900,19 @@ if (!fs.existsSync(pagesJsonPath)) {
     "getCurrentUser",
     "getToken",
     "loadHomeCalendar",
+    "loadGuestSessions",
+    "/api/sessions/public/upcoming?limit=20",
     "/api/users/me/sessions?limit=50",
     "/api/users/me/signups",
-    "homeState",
-    "first-session",
-    "calendar"
+    'calendarMode = computed(() => (isAuthenticated.value ? "member" : "guest"))'
   ]) {
     if (!indexSource.includes(requiredHomeRoutingText)) {
-      fail(`Entry page must support D22 home entry routing behavior: ${requiredHomeRoutingText}`);
+      fail(`Entry page must support D40 shared calendar routing: ${requiredHomeRoutingText}`);
+    }
+  }
+  for (const retiredHomeToken of ["发起第一辆车", "first-session", "startFirstSession", "homeState"]) {
+    if (indexSource.includes(retiredHomeToken)) {
+      fail(`Entry page must remove the retired first-session state: ${retiredHomeToken}`);
     }
   }
   for (const requiredMaintenanceText of [
@@ -974,31 +986,23 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!indexSource.includes('@guest-login="loginFromGuestBar"')) {
     fail("Entry page passive guest identity bar must allow users to login from the bar");
   }
-  if (!/\.home-panel\s*\{[\s\S]*width:\s*420rpx;[\s\S]*margin:\s*0 auto;/.test(indexSource)) {
-    fail("Entry page must keep the first-session action stack aligned to one fixed width");
+  const loadGuestSessionsSource = methodBody(indexSource, "loadGuestSessions");
+  if (!loadGuestSessionsSource.includes("/api/sessions/public/upcoming?limit=20")) {
+    fail("Entry page guest mode must load the anonymous D40 upcoming-session feed");
   }
-  if (!/\.primary-action\s*\{[\s\S]*width:\s*100%;[\s\S]*margin:\s*0;[\s\S]*box-sizing:\s*border-box;/.test(indexSource)) {
-    fail("Entry page first-session action button must keep one full-width button box model");
+  if (loadGuestSessionsSource.includes("ensureLoggedIn")) {
+    fail("Entry page guest calendar loading must not request login");
   }
-  const startFirstSessionSource = methodBody(indexSource, "startFirstSession");
-  if (!startFirstSessionSource.includes("ensureLoggedIn")) {
-    fail("Entry page first-session button must request login before starting the first car");
+  const handleCreateActionSource = methodBody(indexSource, "handleCreateAction");
+  if (
+    !handleCreateActionSource.includes("loginFromIdentityAction") ||
+    !handleCreateActionSource.includes("goCreate")
+  ) {
+    fail("Entry page primary action must login guests and enter creation only for members");
   }
-  if (!startFirstSessionSource.includes("loadHomeCalendar")) {
-    fail("Entry page first-session button must reload my sessions after login before deciding where to go");
-  }
-  assertBefore(
-    startFirstSessionSource,
-    "loadHomeCalendar",
-    "goCreate",
-    "Entry page first-session button must reload my sessions before entering creation"
-  );
   const loginFromGuestBarSource = methodBody(indexSource, "loginFromGuestBar");
-  if (!loginFromGuestBarSource.includes("ensureLoggedIn")) {
+  if (!loginFromGuestBarSource.includes("loginFromIdentityAction")) {
     fail("Entry page passive guest identity bar must request login when tapped");
-  }
-  if (!loginFromGuestBarSource.includes("loadHomeCalendar")) {
-    fail("Entry page passive guest identity bar must reload my sessions after login");
   }
   if (loginFromGuestBarSource.includes("goCreate")) {
     fail("Entry page passive guest identity bar must login without entering creation directly");
@@ -1010,11 +1014,6 @@ if (!fs.existsSync(pagesJsonPath)) {
     "uni.navigateTo",
     "Entry page calendar 发车 button must start a fresh create flow before navigating"
   );
-  const indexLogoutSource = methodBody(indexSource, "logout");
-  if (!indexLogoutSource.includes("goHomeAfterLogout")) {
-    fail("Entry page logout must relaunch the home entry after clearing auth");
-  }
-
   const mineSource = fs.existsSync(path.join(srcRoot, "pages/mine/index.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/mine/index.vue"), "utf8")
     : "";
@@ -1079,8 +1078,11 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (indexSource.includes("show-logout-button") || mineSource.includes("show-logout-button")) {
     fail("Session calendar callers must not render a page-header logout button; logout lives in the identity bar");
   }
-  if (!indexSource.includes('create-button-label="我的车局（点击发车）"')) {
-    fail("Entry calendar primary action must be labelled 我的车局（点击发车）");
+  if (
+    !indexSource.includes(':create-button-label="createButtonLabel"') ||
+    !indexSource.includes('isAuthenticated.value ? "我的车局（点击创建）" : "我的车局（点击登录）"')
+  ) {
+    fail("Entry calendar primary action must switch between the D40 guest and member labels");
   }
   for (const requiredCompactCalendarActionBar of [
     'v-if="showCalendarActions"',
@@ -1091,7 +1093,11 @@ if (!fs.existsSync(pagesJsonPath)) {
     "admin-action-icon",
     "min-height: 92rpx",
     "width: 92rpx",
-    'src="/static/icons/toolbox-light.svg"',
+    'src="/static/icons/settings-light.svg"',
+    'aria-label="归位到今天"',
+    'src="/static/icons/return-green.svg"',
+    'aria-label="选择日期"',
+    'src="/static/icons/calendar-green.svg"',
     "linear-gradient(145deg, #2d8069 0%, #1f6f5b 100%)",
     'src="/static/icons/user-plus-white.png"'
   ]) {
@@ -1155,9 +1161,14 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!calendarActionSource.includes("goShare(item.sessionId)")) {
     fail("Pre-start organized calendar card taps must open the share page");
   }
+  if (
+    !calendarActionSource.includes('item.type === "city"') ||
+    !calendarActionSource.includes("goDetail(item.sessionId)")
+  ) {
+    fail("D38 city calendar card taps must open the session detail page");
+  }
   for (const forbiddenCalendarCardAction of [
     "goManage(item.sessionId)",
-    "goDetail(item.sessionId)",
     "goReview(item.sessionId)"
   ]) {
     if (calendarActionSource.includes(forbiddenCalendarCardAction)) {
@@ -1199,21 +1210,20 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
   }
   const sessionCalendarFilterTabsSource =
-    sessionCalendarSource.match(/const filterTabs = computed\(\(\) => \[[\s\S]*?\]\);/)?.[0] || "";
+    sessionCalendarSource.match(/const filterTabs = computed\(\(\) =>[\s\S]*?\n\);/)?.[0] || "";
   for (const requiredCalendarFilterTab of [
-    '{ value: "all", label: "全部", count: totalCount.value }',
-    '{ value: "organized", label: "发起", count: organizedCount.value }'
+    '{ value: "guest", label: "近期车局", count: guestCalendarItems.value.length }',
+    '{ value: "mine", label: "我的", count: mineCalendarItems.value.length }',
+    '{ value: "city", label: "同城", count: cityCalendarItems.value.length }'
   ]) {
     if (!sessionCalendarFilterTabsSource.includes(requiredCalendarFilterTab)) {
-      fail(`Session calendar must keep the compact useful filters: ${requiredCalendarFilterTab}`);
+      fail(`D38 session calendar must expose the fixed discovery filters: ${requiredCalendarFilterTab}`);
     }
   }
-  if (
-    sessionCalendarFilterTabsSource.includes('label: "参与"') ||
-    sessionCalendarFilterTabsSource.includes('value: "joined"') ||
-    sessionCalendarSource.includes('activeCalendarFilter.value === "joined"')
-  ) {
-    fail("Session calendar must not show a redundant 参与 filter; 全部 already covers joined sessions");
+  for (const legacyCalendarFilter of ['label: "全部"', 'value: "organized"', 'value: "pending"']) {
+    if (sessionCalendarFilterTabsSource.includes(legacyCalendarFilter)) {
+      fail(`D38 session calendar must remove the legacy filter: ${legacyCalendarFilter}`);
+    }
   }
   if (!mineSource.includes("SessionCalendar")) {
     fail("Mine page must reuse the shared SessionCalendar component");
@@ -1282,14 +1292,17 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("D34 store location flow must not read current user location");
   }
   const mpWeixinConfig = manifestJson?.["mp-weixin"] || {};
-  if (!mpWeixinConfig.permission?.["scope.userLocation"]?.desc?.includes("剧本店位置")) {
-    fail("D34 store location manifest must explain chooseLocation is only for selecting a script store location");
+  if (
+    !mpWeixinConfig.permission?.["scope.userLocation"]?.desc?.includes("剧本店位置") ||
+    !mpWeixinConfig.permission?.["scope.userLocation"]?.desc?.includes("同城")
+  ) {
+    fail("Location permission copy must explain store selection and D38 city discovery");
   }
   if (!mpWeixinConfig.requiredPrivateInfos?.includes("chooseLocation")) {
     fail("D34 store location manifest must declare chooseLocation in requiredPrivateInfos");
   }
-  if (mpWeixinConfig.requiredPrivateInfos?.includes("getLocation")) {
-    fail("D34 store location manifest must not declare getLocation");
+  if (!mpWeixinConfig.requiredPrivateInfos?.includes("getLocation")) {
+    fail("D38 city discovery manifest must declare getLocation");
   }
 
   const scriptSource = fs.existsSync(firstFlowFiles["script step"])
@@ -2037,7 +2050,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (/onLoad\s*\(\s*options\s*\)\s*\{\s*const auth = await ensureLoggedIn\s*\(/.test(detailSource)) {
     fail("Detail page must let shared users browse before login");
   }
-  if (!/async ensureProtectedActionLogin\(\)\s*\{[\s\S]*ensureLoggedIn\s*\(/.test(detailSource)) {
+  if (!/async ensureProtectedActionLogin\([^)]*\)\s*\{[\s\S]*ensureLoggedIn\s*\(/.test(detailSource)) {
     fail("Detail page must provide a login guard for protected buttons");
   }
   if (!/async goShare\(seat\)\s*\{[\s\S]*ensureProtectedActionLogin\s*\(/.test(detailSource)) {
@@ -2212,10 +2225,15 @@ if (!fs.existsSync(pagesJsonPath)) {
     // D32 admin album video: media_type === "image" and media_type === "video".
     "D32 admin album video",
     "MAX_ALBUM_VIDEO_DURATION_SECONDS",
+    "MIN_ALBUM_VIDEO_COMPRESS_BYTES = 20 * 1024 * 1024",
     "wx.chooseMedia",
     "wx.compressVideo",
     "chooseVideo",
     "canUploadVideo",
+    "shouldCompressVideoBeforeUpload",
+    "isSuspiciousCompressedVideo",
+    "originalSize > 0 && originalSize <= MIN_ALBUM_VIDEO_COMPRESS_BYTES",
+    "压缩后视频异常",
     "media_type === \"image\"",
     "media_type === \"video\"",
     "打开小程序查看视频"
@@ -2223,6 +2241,100 @@ if (!fs.existsSync(pagesJsonPath)) {
     if (!albumSource.includes(requiredD32AlbumVideoText)) {
       fail(`D32 admin album video flow is missing ${requiredD32AlbumVideoText}`);
     }
+  }
+  const albumVideoPreviewPhotoSource = methodBody(albumSource, "previewPhoto");
+  const openPhotoPreviewSourceForVideo = methodBody(albumSource, "openPhotoPreview");
+  if (albumSource.includes("video-player-popup") || albumSource.includes("videoPlayerVisible")) {
+    fail("Album video playback must use AlbumImageViewer instead of a separate video popup");
+  }
+  if (albumSource.includes("openVideoPlayer(") || albumSource.includes("openVideoPlayer(photo)")) {
+    fail("Album video playback must not branch to openVideoPlayer");
+  }
+  if (
+    !albumVideoPreviewPhotoSource.includes("this.timelineMode && photo?.media_type === \"video\"") ||
+    !albumVideoPreviewPhotoSource.includes("打开小程序查看视频")
+  ) {
+    fail("Album timeline video taps must stay outside the member viewer and show the mini-program hint");
+  }
+  if (
+    !openPhotoPreviewSourceForVideo.includes("item.media_type !== \"video\" || this.videoReady(item)") ||
+    !openPhotoPreviewSourceForVideo.includes("!this.timelineMode || item.media_type !== \"video\"")
+  ) {
+    fail("Album member preview must retain ready videos while timeline preview excludes them");
+  }
+  const ensurePreviewMediaAroundSourceForVideo = methodBody(albumSource, "ensurePreviewMediaAround");
+  if (ensurePreviewMediaAroundSourceForVideo.includes("this.loadPreviewVideoUrl(photo);")) {
+    fail("Album preview must only load video playback URLs for the active viewer slide");
+  }
+  for (const requiredAlbumVideoViewerText of [
+    "@need-video=\"handlePreviewVideoRequest\"",
+    "loadPreviewVideoUrl",
+    "const videoUrlEndpoint = `/api/session-album/media/${photo.id}/video-url`;",
+    "this.normalizeAlbumMediaUrl(data.url)",
+    "video_display_url",
+    "video_load_failed"
+  ]) {
+    if (!albumSource.includes(requiredAlbumVideoViewerText)) {
+      fail(`Album video viewer integration is missing ${requiredAlbumVideoViewerText}`);
+    }
+  }
+  for (const requiredAlbumImageViewerVideoText of [
+    "isVideo(photo)",
+    "isActiveVideo(index)",
+    "<video",
+    "v-if=\"isActiveVideo(index) && videoUrl(photo)\"",
+    "album-image-viewer__video",
+    "video_display_url",
+    "video_load_failed",
+    "need-video",
+    "pauseVideoAt",
+    "pauseAllVideos"
+  ]) {
+    if (!albumImageViewerSource.includes(requiredAlbumImageViewerVideoText)) {
+      fail(`AlbumImageViewer must support mixed image/video preview: ${requiredAlbumImageViewerVideoText}`);
+    }
+  }
+  for (const requiredAlbumPhotoCompressText of [
+    "MAX_ALBUM_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024",
+    "ALBUM_PHOTO_COMPRESS_QUALITY",
+    "ALBUM_PHOTO_COMPRESS_WIDTH",
+    "ALBUM_PHOTO_COMPRESS_HEIGHT",
+    "getPhotoFileInfo",
+    "getPhotoFileStat",
+    "getFileSystemManager().stat",
+    "compressPhotoBeforeUpload",
+    "preparePhotoForUpload",
+    "normalizePhotoUploadItem",
+    'sizeType: ["original"]',
+    "result.tempFiles || []",
+    "photoItems.length ? photoItems : result.tempFilePaths || []",
+    "const pickerSize = Number(normalized.size || 0)",
+    "pickerSize || Number(originalInfo.size || 0)",
+    "uni.getFileInfo",
+    "uni.compressImage",
+    "if (!originalSize) {",
+    "if (!uploadSize) {",
+    "无法读取图片大小",
+    "无法读取压缩后图片大小",
+    "originalSize > 0 && originalSize <= MAX_ALBUM_PHOTO_UPLOAD_BYTES",
+    "compressedWidth: ALBUM_PHOTO_COMPRESS_WIDTH",
+    "compressedHeight: ALBUM_PHOTO_COMPRESS_HEIGHT",
+    "uploadSize > MAX_ALBUM_PHOTO_UPLOAD_BYTES",
+    "图片超过 4MB"
+  ]) {
+    if (!albumSource.includes(requiredAlbumPhotoCompressText)) {
+      fail(`Album photo upload must compress and enforce 4MB client-side: ${requiredAlbumPhotoCompressText}`);
+    }
+  }
+  const uploadChosenPhotosSource = methodBody(albumSource, "uploadChosenPhotos");
+  if (!uploadChosenPhotosSource.includes("preparePhotoForUpload(filePath)")) {
+    fail("Album photo upload must prepare each image before uploading");
+  }
+  if (
+    !uploadChosenPhotosSource.includes("uploadAlbumPhoto({") ||
+    !uploadChosenPhotosSource.includes("filePath: prepared.filePath")
+  ) {
+    fail("Album photo upload must send the compressed/prepared image path");
   }
   const deletePhotoSource = methodBody(albumSource, "deletePhoto");
   if (!deletePhotoSource.includes("this.albumBusy")) {
@@ -2763,13 +2875,13 @@ if (!fs.existsSync(pagesJsonPath)) {
   assertBefore(
     albumOnShowSource,
     "consumePreviewReturnRefreshSkip",
-    "loadAlbum",
+    "albumMediaRefresh?.checkNow",
     "Album onShow must consume photo-preview return before refreshing the member album"
   );
   assertBefore(
     albumOnShowSource,
     "consumePreviewReturnRefreshSkip",
-    "loadPublicAlbum",
+    "albumMediaRefresh?.checkNow",
     "Album onShow must consume photo-preview return before refreshing the public album"
   );
   const albumPageConfig = pages.find((page) => page.path === "pages/session/album") || {};
@@ -2807,8 +2919,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     'variant: mediaVariantName(payload.variant || "preview")',
     'exp: tokenPositiveInteger(payload.exp, "exp")',
     "function sessionAlbumDirectMediaPath(photoId, album, userId, variant = \"preview\")",
-    'preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview")',
-    'thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")',
+    'previewLoad: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview")',
+    'thumbnailLoad: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")',
     "data: attachSessionAlbumMediaUrls(album, user.user.id)",
     'const directMediaToken = url.searchParams.get("token") || ""',
     "if (directMediaToken)",
@@ -2867,7 +2979,10 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`AlbumImageViewer must implement D31 viewer behavior: ${requiredAlbumImageViewerText}`);
     }
   }
-  if (!albumImageViewerSource.includes('v-if="previewCanLoad(photo) && !previewFailed(photo)"')) {
+  if (
+    !albumImageViewerSource.includes('v-if="previewCanLoad(photo) && !previewFailed(photo)"') &&
+    !albumImageViewerSource.includes('v-if="isImage(photo) && previewCanLoad(photo) && !previewFailed(photo)"')
+  ) {
     fail("AlbumImageViewer preview image must wait for thumbnail load before mounting");
   }
   const albumViewerCounterSource = methodBody(albumImageViewerSource, "counterText");
@@ -3032,8 +3147,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const openPhotoPreviewSource = methodBody(albumSource, "openPhotoPreview");
   if (
-    !openPhotoPreviewSource.includes("const previewPhotos = [...this.filteredPhotos]") &&
-    !openPhotoPreviewSource.includes("const previewPhotos = this.filteredPhotos.map")
+    !openPhotoPreviewSource.includes("this.filteredPhotos.map")
   ) {
     fail("Album D31 preview must build its preview list from the current filtered photos");
   }
@@ -3053,6 +3167,12 @@ if (!fs.existsSync(pagesJsonPath)) {
   const normalizeAlbumMediaUrlSource = methodBody(albumSource, "normalizeAlbumMediaUrl");
   if (!normalizeAlbumMediaUrlSource.includes("apiUrl(path)")) {
     fail("Album D31 preview media URL normalization must expand /api relative URLs with apiUrl()");
+  }
+  if (!normalizeAlbumMediaUrlSource.includes("/^https?\\/\\//i.test(path)")) {
+    fail("Album media URL normalization must accept absolute http(s) URLs without apiUrl()");
+  }
+  if (!normalizeAlbumMediaUrlSource.includes("path.replace(/^(https?)\\/\\//i")) {
+    fail("Album media URL normalization must repair malformed http(s)// URLs from signed media endpoints");
   }
   for (const forbiddenAlbumPreviewText of [
     "<t-image-viewer",
@@ -3245,6 +3365,14 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!ensureLoggedInSource.includes("options.requireGender === true")) {
     fail("Shared login must only request profile gender when a protected action explicitly requires it");
   }
+  const loginWithWechatSource = methodBody(apiSource, "loginWithWechat");
+  if (
+    !loginWithWechatSource.includes("fail(loginError)") ||
+    !loginWithWechatSource.includes("resolveWechatLoginCode({}, options)") ||
+    !loginWithWechatSource.includes("reject(loginError)")
+  ) {
+    fail("Shared login must fall back to local devCode when wx.login fails in local DevTools mode");
+  }
   const logoutRedirectSource = methodBody(apiSource, "goHomeAfterLogout");
   if (!logoutRedirectSource.includes('uni.reLaunch({ url: "/pages/index/index" })')) {
     fail("Shared logout helper must relaunch the home entry page");
@@ -3383,8 +3511,14 @@ if (!fs.existsSync(pagesJsonPath)) {
   } else if (readEnv(miniprogramProdEnvPath).VITE_API_BASE_URL !== productionApiBaseUrl) {
     fail(`Miniprogram production API base URL must be ${productionApiBaseUrl}`);
   }
-  if (!appSource.includes("import.meta.env.VITE_API_BASE_URL")) {
-    fail("App.vue must read API base URL from VITE_API_BASE_URL");
+  if (!appSource.includes(`const productionApiBaseUrl = "${productionApiBaseUrl}"`)) {
+    fail(`App.vue must lock mini-program API base URL to ${productionApiBaseUrl}`);
+  }
+  if (!appSource.includes("apiBaseUrl: productionApiBaseUrl")) {
+    fail("App.vue globalData.apiBaseUrl must use the locked production API base URL");
+  }
+  if (appSource.includes("import.meta.env.VITE_API_BASE_URL")) {
+    fail("App.vue must not allow VITE_API_BASE_URL to override the locked production API base URL");
   }
   if (!appSource.includes("@font-face") || !appSource.includes("/static/fonts/pinche-brand.ttf")) {
     fail("App.vue must load the packaged brand font from /static/fonts/pinche-brand.ttf");
@@ -3502,6 +3636,10 @@ if (!fs.existsSync(devtoolsHookPath)) {
       fail(`WeChat DevTools refresh hook is missing ${requiredHookText}`);
     }
   }
+}
+
+if (!fs.existsSync(d35AdminCatalogCheckPath)) {
+  fail("Missing D35 mini-program admin catalog check: scripts/d35-miniprogram-admin-catalog-check.js");
 }
 
 if (fs.existsSync(codexHooksPath)) {

@@ -43,6 +43,12 @@ function createInstance(component, photos) {
     initialIndex: 0,
     allowDownload: true,
     mediaProgress: {},
+    $nextTick(callback) {
+      if (typeof callback === "function") {
+        callback();
+      }
+      return Promise.resolve();
+    },
     $emit(event, payload) {
       emitted.push({ event, payload });
     }

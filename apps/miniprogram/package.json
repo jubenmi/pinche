@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@jubenmi/talk": "file:../../packages/talk",
+    "@pinche/shared": "file:../../packages/shared",
     "cos-wx-sdk-v5": "^1.8.0",
     "tdesign-miniprogram": "^1.15.2"
   },

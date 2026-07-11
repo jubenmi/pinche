@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CORSConfiguration>
+  <CORSRule>
+    <ID>pinche-admin-album-media</ID>
+    <AllowedOrigin>https://admin.pinche.jubenmi.com</AllowedOrigin>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>HEAD</AllowedMethod>
+    <AllowedMethod>PUT</AllowedMethod>
+    <AllowedHeader>authorization</AllowedHeader>
+    <AllowedHeader>content-type</AllowedHeader>
+    <AllowedHeader>content-length</AllowedHeader>
+    <AllowedHeader>pic-operations</AllowedHeader>
+    <AllowedHeader>x-cos-forbid-overwrite</AllowedHeader>
+    <AllowedHeader>x-cos-security-token</AllowedHeader>
+    <ExposeHeader>ETag</ExposeHeader>
+    <ExposeHeader>x-cos-hash-crc64ecma</ExposeHeader>
+    <ExposeHeader>x-cos-request-id</ExposeHeader>
+    <ExposeHeader>x-cos-trace-id</ExposeHeader>
+    <MaxAgeSeconds>600</MaxAgeSeconds>
+  </CORSRule>
+</CORSConfiguration>

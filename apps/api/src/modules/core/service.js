@@ -14,8 +14,10 @@ import {
   notifySignupCreated,
   notifySignupReviewed
 } from "../wechat/subscribe-message.js";
+import { createIdempotentAlbumVideo } from "../album-video/lifecycle.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
+const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
 const ALBUM_VIDEO_PROCESSING_STATUSES = new Set(["processing", "ready", "failed"]);
 
 function requireValue(body, key) {
@@ -832,6 +834,8 @@ function albumMediaResponse(media, tags = [], options = {}) {
     }
     return {
       ...base,
+      storage_object_key: media.object_key || null,
+      storage_object_etag: media.object_etag || null,
       image_width: media.image_width ? Number(media.image_width) : null,
       image_height: media.image_height ? Number(media.image_height) : null,
       image_byte_size: media.image_byte_size ? Number(media.image_byte_size) : null,
@@ -866,6 +870,8 @@ function albumMediaResponse(media, tags = [], options = {}) {
 
   return {
     ...common,
+    storage_object_key: media.object_key || null,
+    storage_object_etag: media.object_etag || null,
     image_width: media.image_width ? Number(media.image_width) : null,
     image_height: media.image_height ? Number(media.image_height) : null,
     image_byte_size: media.image_byte_size ? Number(media.image_byte_size) : null,
@@ -880,6 +886,14 @@ function optionalPositiveInteger(value, fieldName) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) {
     throw badRequest(`${fieldName} must be a positive integer`);
+  }
+  return number;
+}
+
+function optionalAlbumVideoDimension(value, fieldName) {
+  const number = optionalPositiveInteger(value, fieldName);
+  if (number !== null && number > ALBUM_VIDEO_MAX_DIMENSION) {
+    throw badRequest(`${fieldName} must be at most ${ALBUM_VIDEO_MAX_DIMENSION}`);
   }
   return number;
 }
@@ -1282,8 +1296,11 @@ function assertMessageTextSafe(label, value) {
   }
 }
 
-async function findById(connection, table, id) {
-  const [rows] = await connection.query(`SELECT * FROM ${table} WHERE id = ?`, [id]);
+async function findById(connection, table, id, options = {}) {
+  const [rows] = await connection.query(
+    `SELECT * FROM ${table} WHERE id = ?${options.forUpdate ? " FOR UPDATE" : ""}`,
+    [id]
+  );
   return rows[0] || null;
 }
 
@@ -1656,8 +1673,9 @@ async function currentEligibleSignup(connection, sessionId, userId) {
   return rows[0] || null;
 }
 
-async function requireSessionAlbumOpen(connection, sessionId) {
+async function requireSessionAlbumOpen(connection, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
+  const lockClause = options.forUpdate === true ? "FOR UPDATE" : "";
   const [rows] = await connection.query(
     `
       SELECT session.*
@@ -1665,6 +1683,7 @@ async function requireSessionAlbumOpen(connection, sessionId) {
       WHERE session.id = ?
         AND ${reviewWindowSql()}
       LIMIT 1
+      ${lockClause}
     `,
     [id]
   );
@@ -1672,14 +1691,29 @@ async function requireSessionAlbumOpen(connection, sessionId) {
     return rows[0];
   }
 
-  const session = await findById(connection, "sessions", id);
+  let session;
+  if (options.forUpdate === true) {
+    const [sessionRows] = await connection.query(
+      `
+        SELECT *
+        FROM sessions
+        WHERE id = ?
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [id]
+    );
+    session = sessionRows[0] || null;
+  } else {
+    session = await findById(connection, "sessions", id);
+  }
   if (!session) {
     throw notFound("Session not found");
   }
   throw forbidden("Session album opens after the session starts");
 }
 
-async function isSessionAlbumMember(connection, session, userId) {
+async function isSessionAlbumMember(connection, session, userId, options = {}) {
   const id = Number(userId);
   if (!id) {
     return false;
@@ -1700,6 +1734,7 @@ async function isSessionAlbumMember(connection, session, userId) {
         AND confirmed_user_id = ?
         AND status IN ('confirmed', 'locked')
       LIMIT 1
+      ${options.forUpdate === true ? "FOR UPDATE" : ""}
     `,
     [session.id, id]
   );
@@ -1715,14 +1750,15 @@ async function isSessionAlbumMember(connection, session, userId) {
         AND bound_user_id = ?
         AND status = 'active'
       LIMIT 1
+      ${options.forUpdate === true ? "FOR UPDATE" : ""}
     `,
     [session.id, id]
   );
   return npcRoleRows.length > 0;
 }
 
-async function requireSessionAlbumMember(connection, session, user) {
-  if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
+async function requireSessionAlbumMember(connection, session, user, options = {}) {
+  if (!(await isSessionAlbumMember(connection, session, user.user.id, options))) {
     throw forbidden("Only session members can use the session album");
   }
 }
@@ -5565,9 +5601,10 @@ async function deleteSessionTree(connection, id) {
 export async function assertSessionAlbumUploadAllowed(user, sessionId) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
-    const session = await requireSessionAlbumOpen(connection, id);
-    await requireSessionAlbumMember(connection, session, user);
-    return session;
+    return assertSessionAlbumImageUploadAllowed(connection, user, {
+      sessionId: id,
+      kind: "sessionAlbumPhoto"
+    });
   });
 }
 
@@ -5577,12 +5614,62 @@ export async function assertAdminOwnSessionAlbumAllowed(user, sessionId) {
     throw forbidden("system_admin role required");
   }
   return withDatabaseConnection(async (connection) => {
-    const session = await requireSessionAlbumOpen(connection, id);
-    if (Number(session.organizer_user_id) !== Number(user.user.id)) {
+    return assertSessionAlbumImageUploadAllowed(connection, user, {
+      sessionId: id,
+      kind: "adminSessionAlbumPhoto"
+    });
+  });
+}
+
+export async function assertSessionAlbumImageUploadAllowed(
+  connection,
+  user,
+  { sessionId, kind, forUpdate = false }
+) {
+  const session = await requireSessionAlbumOpen(connection, sessionId, { forUpdate });
+  if (kind === "adminSessionAlbumPhoto") {
+    if (!isAdmin(user) || Number(session.organizer_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the session organizer can use admin album upload");
     }
     return session;
-  });
+  }
+  await requireSessionAlbumMember(connection, session, user, { forUpdate });
+  return session;
+}
+
+export async function insertFinalizedSessionAlbumImage(connection, { intent, metadata }) {
+  const [result] = await connection.query(
+    `INSERT INTO session_album_photos
+      (session_id, uploader_user_id, media_type, photo_url, object_key, object_etag,
+       image_width, image_height, image_byte_size, image_content_type,
+       processing_status, status)
+     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'active')`,
+    [
+      Number(intent.session_id),
+      Number(intent.user_id),
+      `/${intent.object_key}`,
+      intent.object_key,
+      metadata.etag,
+      metadata.width,
+      metadata.height,
+      metadata.byteSize
+    ]
+  );
+  return findById(connection, "session_album_photos", result.insertId);
+}
+
+export async function getFinalizedSessionAlbumImage(connection, { mediaId, user }) {
+  const photo = await findById(connection, "session_album_photos", mediaId);
+  if (!photo || albumMediaType(photo) !== "image" || photo.status !== "active") {
+    throw notFound("Album photo not found");
+  }
+  const session = await requireSessionAlbumOpen(connection, photo.session_id);
+  await requireSessionAlbumMember(connection, session, user);
+  return albumMediaResponse(photo, [], { userId: user.user.id });
+}
+
+export function serializeSessionAlbumImage(media, userId) {
+  return albumMediaResponse(media, [], { userId });
 }
 
 export async function getMySessionAlbumPrivacy(user, sessionId) {
@@ -5890,6 +5977,67 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
   });
 }
 
+async function requireSessionAlbumVideoCreateAllowed(connection, sessionId, user, options = {}) {
+  const session = await requireSessionAlbumOpen(connection, sessionId, options);
+  await requireSessionAlbumMember(connection, session, user, options);
+  return session;
+}
+
+async function findActiveSessionAlbumVideoBySource(
+  connection,
+  sessionId,
+  sourceUrl,
+  options = {}
+) {
+  const [rows] = await connection.query(
+    `
+      SELECT photo.*
+      FROM session_album_photos photo
+      WHERE photo.session_id = ?
+        AND photo.source_url = ?
+        AND photo.media_type = 'video'
+        AND photo.status = 'active'
+      LIMIT 1
+      ${options.forUpdate === true ? "FOR UPDATE" : ""}
+    `,
+    [sessionId, sourceUrl]
+  );
+  return rows[0] || null;
+}
+
+function inspectedAlbumVideoMetadata(value) {
+  const byteSize = requiredPositiveInteger(value?.byteSize, "inspected video byteSize");
+  if (value?.contentType === undefined || value?.contentType === null || value.contentType === "") {
+    throw badRequest("inspected video contentType is required");
+  }
+  return {
+    byteSize,
+    contentType: albumVideoContentType(value.contentType)
+  };
+}
+
+function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId) {
+  const isMine = Number(media.uploader_user_id) === Number(userId);
+  return {
+    id: Number(media.id),
+    session_id: Number(media.session_id),
+    media_type: "video",
+    processing_status: media.processing_status || fallbackProcessingStatus,
+    uploader_user_id: Number(media.uploader_user_id),
+    is_mine: isMine,
+    can_delete: isMine,
+    can_tag: isMine,
+    duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
+    video_width: media.video_width ? Number(media.video_width) : null,
+    video_height: media.video_height ? Number(media.video_height) : null,
+    video_byte_size: media.video_byte_size ? Number(media.video_byte_size) : null,
+    video_content_type: media.video_content_type || "video/mp4",
+    processing_error: media.processing_error || null,
+    created_at: media.created_at,
+    tags: []
+  };
+}
+
 export async function createSessionAlbumVideo(user, sessionId, body = {}, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   if (!isAdmin(user)) {
@@ -5903,81 +6051,102 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   const durationSeconds = albumVideoDurationSeconds(
     body.durationSeconds ?? body.duration_seconds
   );
-  const videoWidth = optionalPositiveInteger(body.videoWidth ?? body.video_width, "videoWidth");
-  const videoHeight = optionalPositiveInteger(body.videoHeight ?? body.video_height, "videoHeight");
-  const videoByteSize = requiredPositiveInteger(
-    body.videoByteSize ?? body.video_byte_size,
-    "videoByteSize"
+  const videoWidth = optionalAlbumVideoDimension(
+    body.videoWidth ?? body.video_width,
+    "videoWidth"
   );
-  const videoContentType = albumVideoContentType(
-    body.videoContentType || body.video_content_type
+  const videoHeight = optionalAlbumVideoDimension(
+    body.videoHeight ?? body.video_height,
+    "videoHeight"
   );
+  const inspectObject = options.inspectObject;
+  if (typeof inspectObject !== "function") {
+    throw new TypeError("createSessionAlbumVideo requires options.inspectObject");
+  }
+  const runWithDatabaseConnection = options.withDatabaseConnection || withDatabaseConnection;
+  const runWithTransaction = options.withTransaction || withTransaction;
+  const authorize =
+    options.authorizeSessionAlbumVideoCreate || requireSessionAlbumVideoCreateAllowed;
+
+  // Authorize before any storage I/O, while deliberately releasing the read
+  // connection before HEAD/Range inspection. The insert transaction repeats
+  // this check below so a membership/session-state change cannot win a race.
+  await runWithDatabaseConnection((connection) =>
+    authorize(connection, id, user, { forUpdate: false })
+  );
+  const { byteSize: videoByteSize, contentType: videoContentType } =
+    inspectedAlbumVideoMetadata(await inspectObject(sourceUrl));
+
   const readyOnCreate = options.readyOnCreate === true || options.localFallbackReady === true;
   const processingStatus = readyOnCreate ? "ready" : "processing";
   const displayUrl = options.displayUrl || (readyOnCreate ? sourceUrl : null);
   const coverUrl = options.coverUrl || null;
   const ciJobId = options.ciJobId || null;
 
-  return withTransaction(async (connection) => {
-    const session = await requireSessionAlbumOpen(connection, id);
-    await requireSessionAlbumMember(connection, session, user);
-    const [result] = await connection.query(
-      `
-        INSERT INTO session_album_photos
-          (
-            session_id,
-            uploader_user_id,
-            media_type,
-            photo_url,
-            source_url,
-            display_url,
-            cover_url,
-            duration_seconds,
-            video_width,
-            video_height,
-            video_byte_size,
-            video_content_type,
-            ci_job_id,
-            processing_status,
-            status
-          )
-        VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-      `,
-      [
-        id,
-        user.user.id,
-        sourceUrl,
-        displayUrl,
-        coverUrl,
-        durationSeconds,
-        videoWidth,
-        videoHeight,
-        videoByteSize,
-        videoContentType,
-        ciJobId,
-        processingStatus
-      ]
-    );
-    const media = await findById(connection, "session_album_photos", result.insertId);
-    return {
-      id: Number(media.id),
-      session_id: Number(media.session_id),
-      media_type: "video",
-      processing_status: media.processing_status || processingStatus,
-      uploader_user_id: Number(media.uploader_user_id),
-      is_mine: true,
-      can_delete: true,
-      can_tag: true,
-      duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
-      video_width: media.video_width ? Number(media.video_width) : null,
-      video_height: media.video_height ? Number(media.video_height) : null,
-      video_byte_size: media.video_byte_size ? Number(media.video_byte_size) : null,
-      video_content_type: media.video_content_type || "video/mp4",
-      processing_error: media.processing_error || null,
-      created_at: media.created_at,
-      tags: []
-    };
+  const media = await createIdempotentAlbumVideo({
+    sourceUrl,
+    findExisting: (candidateSourceUrl) =>
+      runWithTransaction(async (connection) => {
+        await authorize(connection, id, user, { forUpdate: true });
+        return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
+          forUpdate: true
+        });
+      }),
+    insert: (candidateSourceUrl) => runWithTransaction(async (connection) => {
+      await authorize(connection, id, user, { forUpdate: true });
+      const [result] = await connection.query(
+        `
+          INSERT INTO session_album_photos
+            (
+              session_id,
+              uploader_user_id,
+              media_type,
+              photo_url,
+              source_url,
+              display_url,
+              cover_url,
+              duration_seconds,
+              video_width,
+              video_height,
+              video_byte_size,
+              video_content_type,
+              ci_job_id,
+              processing_status,
+              status
+            )
+          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        `,
+        [
+          id,
+          user.user.id,
+          candidateSourceUrl,
+          displayUrl,
+          coverUrl,
+          durationSeconds,
+          videoWidth,
+          videoHeight,
+          videoByteSize,
+          videoContentType,
+          ciJobId,
+          processingStatus
+        ]
+      );
+      return findById(connection, "session_album_photos", result.insertId);
+    }),
+    // This is intentionally a different callback from findExisting. The
+    // lifecycle helper invokes it only after the insert transaction wrapper
+    // has rejected, so its rollback is complete before this fresh transaction
+    // performs locked current-read authorization and reads the winner.
+    findAfterDuplicateOnFreshConnection: (candidateSourceUrl) =>
+      runWithTransaction(async (connection) => {
+        await authorize(connection, id, user, { forUpdate: true });
+        return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
+          forUpdate: true
+        });
+      })
   });
+
+  return sessionAlbumVideoCreateResponse(media, processingStatus, user.user.id);
 }
 
 export async function updateSessionAlbumVideoProcessingResult(body = {}) {
@@ -6181,6 +6350,103 @@ export async function deleteSessionAlbumPhoto(user, photoId) {
       ].filter(Boolean),
       deleted: true
     };
+  });
+}
+
+export async function requestAlbumImageDeletion(connection, { user, mediaId }) {
+  const id = positiveId(mediaId, "mediaId");
+  const photo = await findById(connection, "session_album_photos", id, { forUpdate: true });
+  if (!photo || !["active", "deleting"].includes(photo.status)) {
+    throw notFound("Album photo not found");
+  }
+  if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the photo uploader can delete this photo");
+  }
+  if (albumMediaType(photo) !== "image") {
+    throw badRequest("Video deletion must use the video cleanup path");
+  }
+  if (photo.status === "deleting") {
+    const [jobs] = await connection.query(
+      `SELECT * FROM session_album_object_cleanup_jobs
+       WHERE media_id = ? LIMIT 1 FOR UPDATE`,
+      [id]
+    );
+    if (!jobs[0]) throw conflict("Album image deletion job is missing");
+    return { id, status: "deleting", job: jobs[0] };
+  }
+
+  let storageKind;
+  let objectKey = null;
+  let localPath = null;
+  if (photo.object_key) {
+    storageKind = "cos";
+    objectKey = String(photo.object_key);
+  } else {
+    const path = String(photo.photo_url || "");
+    if (!/^\/uploads\/session-album\/display\/[A-Za-z0-9._-]+$/.test(path)) {
+      throw badRequest("Album image local path is invalid");
+    }
+    storageKind = "local";
+    localPath = path;
+  }
+  await connection.query(
+    "UPDATE session_album_photos SET status = 'deleting' WHERE id = ? AND status = 'active'",
+    [id]
+  );
+  const [inserted] = await connection.query(
+    `INSERT INTO session_album_object_cleanup_jobs
+      (media_id, session_id, storage_kind, object_key, local_path, status)
+     VALUES (?, ?, ?, ?, ?, 'pending')`,
+    [id, Number(photo.session_id), storageKind, objectKey, localPath]
+  );
+  return {
+    id,
+    status: "deleting",
+    job: { id: Number(inserted.insertId), media_id: id, status: "pending" }
+  };
+}
+
+export async function requestSessionAlbumImageDeletion(user, mediaId) {
+  return withTransaction((connection) => requestAlbumImageDeletion(connection, { user, mediaId }));
+}
+
+export async function prepareSessionAlbumPhotoDeletion(user, photoId) {
+  const id = positiveId(photoId, "photoId");
+  return withDatabaseConnection(async (connection) => {
+    const photo = await findById(connection, "session_album_photos", id);
+    if (!photo || !["active", "deleting"].includes(photo.status)) {
+      throw notFound("Album photo not found");
+    }
+    if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the photo uploader can delete this photo");
+    }
+    const mediaType = albumMediaType(photo);
+    if (photo.status === "deleting" && mediaType !== "image") {
+      throw notFound("Album photo not found");
+    }
+    return {
+      id,
+      media_type: mediaType,
+      object_urls: [photo.photo_url, photo.source_url, photo.display_url, photo.cover_url].filter(Boolean)
+    };
+  });
+}
+
+export async function finalizeSessionAlbumPhotoDeletion(user, photoId, snapshot) {
+  const id = positiveId(photoId, "photoId");
+  const canonicalUrls = (urls) => [...new Set((urls || []).filter(Boolean))].sort();
+  const expected = JSON.stringify(canonicalUrls(snapshot?.object_urls));
+  return withTransaction(async (connection) => {
+    const photo = await findById(connection, "session_album_photos", id, { forUpdate: true });
+    if (!photo || photo.status !== "active") throw notFound("Album photo not found");
+    if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the photo uploader can delete this photo");
+    }
+    const current = JSON.stringify(canonicalUrls([photo.photo_url, photo.source_url, photo.display_url, photo.cover_url]));
+    if (current !== expected) return { deleted: false, reason: "snapshot_changed" };
+    await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [id]);
+    await connection.query("DELETE FROM session_album_photos WHERE id = ?", [id]);
+    return { id, deleted: true };
   });
 }
 

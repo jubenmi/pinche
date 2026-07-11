@@ -67,9 +67,10 @@ async function assertStaticChecks() {
   const apiSource = await readSource("apps/api/src/modules/core/service.js");
 
   assert(
-    appSource.includes("VITE_API_BASE_URL") &&
-      appSource.includes('"https://api.pinche.jubenmi.com"'),
-    "miniprogram API base should support release env and default to production API"
+    appSource.includes('const productionApiBaseUrl = "https://api.pinche.jubenmi.com"') &&
+      appSource.includes("apiBaseUrl: productionApiBaseUrl") &&
+      !appSource.includes("import.meta.env.VITE_API_BASE_URL"),
+    "miniprogram API base should be locked to the production API"
   );
   assert(
     !detailSource.includes("session.note"),

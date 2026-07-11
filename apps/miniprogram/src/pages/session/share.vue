@@ -121,6 +121,7 @@ export default {
       pendingRole: null,
       entry: "",
       sessionId: "",
+      inviteToken: "",
       session: {},
       navigatingAlbum: false,
       currentUserId: "",
@@ -390,6 +391,7 @@ export default {
     const fromQuery = queryToFlow(options);
     this.entry = options.entry || "";
     this.sessionId = options.id || fromQuery.sessionId || stored.sessionId || "";
+    this.inviteToken = options.inviteToken || "";
     if (this.sessionId) {
       await this.loadPublishedSession(this.sessionId);
       if (options.seatId) {
@@ -402,6 +404,7 @@ export default {
           this.statusText = `你已选择 ${this.role.name}，确认后会释放原角色。`;
         }
       }
+      await this.prepareJoinInviteToken();
       this.showShareMenus();
       return;
     }
@@ -452,9 +455,12 @@ export default {
     if (this.sessionId) {
       const shareCode = `s${this.sessionId}-${Date.now()}`;
       const entryQuery = this.entry ? `&entry=${encodeURIComponent(this.entry)}` : "";
+      const inviteQuery = this.inviteToken
+        ? `&inviteToken=${encodeURIComponent(this.inviteToken)}`
+        : "";
       return {
         title,
-        path: `/pages/session/share?id=${this.sessionId}${entryQuery}&shareCode=${shareCode}&source=wechat_share`
+        path: `/pages/session/share?id=${this.sessionId}${entryQuery}&shareCode=${shareCode}${inviteQuery}&source=wechat_share`
       };
     }
     return {
@@ -611,7 +617,10 @@ export default {
     },
     async loadPublishedSession(sessionId) {
       try {
-        const response = await request({ url: `/api/sessions/${sessionId}` });
+        const inviteQuery = this.inviteToken
+          ? `?inviteToken=${encodeURIComponent(this.inviteToken)}`
+          : "";
+        const response = await request({ url: `/api/sessions/${sessionId}${inviteQuery}` });
         const session = dataOf(response) || {};
         this.session = session;
         this.store = {
@@ -667,6 +676,21 @@ export default {
         }
       } catch (error) {
         showToast({ title: "车局加载失败", icon: "none" });
+      }
+    },
+    async prepareJoinInviteToken() {
+      if (this.inviteToken || !this.sessionId || this.session.access_scope !== "member") {
+        return;
+      }
+      try {
+        const response = await request({
+          url: `/api/sessions/${this.sessionId}/join-invite-token`,
+          method: "POST",
+          data: {}
+        });
+        this.inviteToken = dataOf(response)?.token || "";
+      } catch (error) {
+        this.inviteToken = "";
       }
     },
     redirectAlbumMemberIfNeeded() {

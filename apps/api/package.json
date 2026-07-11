@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "check": "node ../../scripts/check-api-js.js src",
+    "test:album-image": "node --test test/album-image-*.test.mjs",
+    "job:album-image-cleanup": "node src/jobs/album-image-cleanup.js",
+    "job:album-image-backfill": "node src/jobs/backfill-album-image-object-keys.js",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "migrate": "node src/db/migrate.js"

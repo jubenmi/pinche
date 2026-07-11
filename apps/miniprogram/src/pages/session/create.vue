@@ -14,7 +14,7 @@
       class="search-surface"
       placeholder="搜索店名或商圈"
       shape="round"
-      @change="keyword = $event.detail.value"
+      @change="keyword = $event.detail.value || ''"
       @submit="loadStores"
     />
 

@@ -141,3 +141,18 @@ apps/miniprogram/dist/build/mp-weixin
 - API 日志查看方式已确认。
 - 回滚方式已记录。
 - 用户确认发布线上版。
+
+## 相册图片直传 COS 门禁
+
+- [ ] 生产 CORS 与 `deploy/cos/cors.production.xml` 一致，无 wildcard origin。
+- [ ] 微信 request 合法域名包含 API 和 COS；uploadFile/downloadFile 包含精确 COS origin，无路径和通配符。
+- [ ] API、migrate、album-image-cleanup 固定为同一镜像 digest。
+- [ ] 数据库迁移完成；backfill dry-run 的 scanned/updated/missing/invalid 已审核，再执行 `--apply`。
+- [ ] `npm run d43:unit`、`npm run d43:check` 和隔离 `d43:smoke` 通过。
+- [ ] `D43_COS_CONTRACT=1 npm run d43:cos-contract` 在批准的测试 Bucket 通过并确认最终清理。
+- [ ] 小程序与管理后台生产构建均包含 v2 uploadId、真实错误展示和五分钟 URL 刷新。
+- [ ] 先启用 `COS_DIRECT_MEDIA_URLS` 并观察，再独立启用 `COS_DIRECT_UPLOAD_REQUIRED`。
+- [ ] 成员、管理员、公开分享隐私回归通过；原始 object key/ETag 不出现在响应。
+- [ ] 图片上传/下载字节不经过 API；头像、评价照片和视频链路保持不变。
+- [ ] 观察至少一个完整小程序发布周期后，才允许另开变更移除旧代理路由。
+- [ ] 已演练两个开关独立回滚，且 cleanup job/媒体数据库锚点不会丢失。
