@@ -62,7 +62,7 @@ for (const token of [
   "empty-upload-button",
   "album-upload-button-content",
   "albumUploadButtonLabel",
-  "@tap=\"choosePhotos\""
+  "@tap=\"chooseAlbumMedia\""
 ]) {
   assert(album.includes(token), `mini-program album empty state must include ${token}`);
 }
