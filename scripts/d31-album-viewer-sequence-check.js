@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -6,17 +7,6 @@ const root = process.cwd();
 const viewerPath = path.join(root, "apps/miniprogram/src/components/AlbumImageViewer.vue");
 const source = fs.readFileSync(viewerPath, "utf8");
 const script = source.match(/<script>([\s\S]*?)<\/script>/)?.[1] || "";
-
-function fail(message) {
-  console.error(message);
-  process.exitCode = 1;
-}
-
-function assert(condition, message) {
-  if (!condition) {
-    fail(message);
-  }
-}
 
 function loadComponent() {
   const context = { component: null };
@@ -28,19 +18,20 @@ function loadComponent() {
 function makePhotos(count) {
   return Array.from({ length: count }, (_, index) => ({
     id: index + 1,
+    media_type: "image",
     thumbnail_display_url: `wxfile://album-thumb-${index + 1}.jpg`,
-    preview_display_url: ""
+    preview_display_url: `wxfile://album-preview-${index + 1}.jpg`
   }));
 }
 
-function createInstance(component, photos) {
+function createInstance(component, photos, initialIndex = 0) {
   const data = component.data.call({});
   const emitted = [];
   const instance = {
     ...data,
     visible: false,
     photos,
-    initialIndex: 0,
+    initialIndex,
     allowDownload: true,
     mediaProgress: {},
     $nextTick(callback) {
@@ -53,215 +44,245 @@ function createInstance(component, photos) {
       emitted.push({ event, payload });
     }
   };
+
   for (const [name, method] of Object.entries(component.methods || {})) {
     instance[name] = method.bind(instance);
   }
+  for (const [name, getter] of Object.entries(component.computed || {})) {
+    Object.defineProperty(instance, name, {
+      configurable: true,
+      enumerable: true,
+      get: getter.bind(instance)
+    });
+  }
+
   return { instance, emitted };
 }
 
-function computed(component, instance, name) {
-  return component.computed[name].call(instance);
+function openViewer(component, photoCount, initialIndex) {
+  const result = createInstance(component, makePhotos(photoCount), initialIndex);
+  result.instance.visible = true;
+  component.watch.visible.call(result.instance, true, false);
+  return result;
 }
 
-function trackWrites(target, property) {
-  let value = target[property];
-  let writes = 0;
-  Object.defineProperty(target, property, {
-    configurable: true,
-    enumerable: true,
-    get() {
-      return value;
-    },
-    set(nextValue) {
-      writes += 1;
-      value = nextValue;
-    }
-  });
+function nativeSwiperEvent(instance, current, options = {}) {
+  const generation = options.generation ?? instance.swiperGeneration;
   return {
-    get writes() {
-      return writes;
+    detail: {
+      current,
+      source: options.source ?? "touch"
+    },
+    currentTarget: {
+      dataset: {
+        generation: String(generation)
+      }
     }
   };
 }
 
-function runFastSwipeHydrationCheck(component) {
-  const photos = makePhotos(20).map((photo) => ({
-    ...photo,
-    preview_display_url: `wxfile://album-preview-${photo.id}.jpg`
-  }));
-  const { instance } = createInstance(component, photos);
-
-  instance.visible = true;
-  component.watch.visible.call(instance, true, false);
-  instance.handleSwiperChange({ detail: { current: 5 } });
-
-  const currentIndexWrites = trackWrites(instance, "currentIndex");
-  const swiperIndexWrites = trackWrites(instance, "swiperIndex");
-  const previousPhotos = instance.photos;
-  instance.photos = instance.photos.map((photo, index) =>
-    index === 4
-      ? {
-          ...photo,
-          preview_display_url: `${photo.preview_display_url}?hydrated=1`
-        }
-      : photo
-  );
-  component.watch.photos.call(instance, instance.photos, previousPhotos);
-
-  assert(
-    currentIndexWrites.writes === 0,
-    "Viewer must not rewrite currentIndex when media hydration keeps the current photo in range"
-  );
-  assert(
-    swiperIndexWrites.writes === 0,
-    "Viewer must not rewrite swiperIndex during fast-swipe media hydration"
-  );
-  assert(instance.currentIndex === 5, "Viewer currentIndex must remain on the fast-swiped photo");
-  assert(instance.swiperIndex === 0, "Viewer swiperIndex must remain at the programmatic position after a fast swipe");
+function changeEvents(emitted) {
+  return emitted.filter((entry) => entry.event === "change");
 }
 
-function runNativeSwipeControlFeedbackCheck(component) {
-  const { instance, emitted } = createInstance(component, makePhotos(6));
+function windowIds(instance) {
+  return instance.windowPhotos.map((photo) => photo.id);
+}
 
-  instance.visible = true;
-  component.watch.visible.call(instance, true, false);
+function assertPending(instance, generation, logicalIndex, message) {
+  assert.ok(instance.pendingWindowRebase, `${message}: pending rebase must exist`);
+  assert.equal(
+    instance.pendingWindowRebase.generation,
+    generation,
+    `${message}: pending generation must match`
+  );
+  assert.equal(
+    instance.pendingWindowRebase.logicalIndex,
+    logicalIndex,
+    `${message}: pending logical index must match`
+  );
+}
 
-  const swiperIndexWrites = trackWrites(instance, "swiperIndex");
-  const touchIndexes = [1, 2, 1, 2, 3];
-  for (const current of touchIndexes) {
-    instance.handleSwiperChange({ detail: { current, source: "touch" } });
+function runWindowSizeCheck(component) {
+  assert.equal(
+    typeof component.computed?.windowPhotos,
+    "function",
+    "AlbumImageViewer must expose computed.windowPhotos"
+  );
+
+  for (const count of [0, 1, 2, 5, 263]) {
+    const { instance } = openViewer(component, count, Math.max(0, count - 1));
+    assert.ok(instance.windowPhotos.length <= 5, `${count} photos must mount at most five slides`);
+    assert.equal(
+      instance.windowPhotos.length,
+      Math.min(count, 5),
+      `${count} photos must expose the expected window length`
+    );
   }
-
-  const changeIndexes = emitted
-    .filter((event) => event.event === "change")
-    .map((event) => event.payload.index);
-  assert(instance.currentIndex === 3, "Viewer currentIndex must follow the final native swipe");
-  assert(swiperIndexWrites.writes === 0, "Viewer native swipes must not rewrite swiperIndex");
-  assert(instance.swiperIndex === 0, "Viewer swiperIndex must remain at its programmatic position");
-  assert(
-    JSON.stringify(changeIndexes) === JSON.stringify(touchIndexes),
-    "Viewer native swipe change events must preserve the 1,2,1,2,3 index sequence"
-  );
 }
 
-function runProgrammaticPositioningCheck(component) {
-  const { instance } = createInstance(component, makePhotos(6));
+function runOpeningPositionCheck(component) {
+  const cases = [
+    { logicalIndex: 0, windowStart: 0, activeWindowIndex: 0, ids: [1, 2, 3, 4, 5] },
+    { logicalIndex: 131, windowStart: 129, activeWindowIndex: 2, ids: [130, 131, 132, 133, 134] },
+    { logicalIndex: 262, windowStart: 258, activeWindowIndex: 4, ids: [259, 260, 261, 262, 263] }
+  ];
 
-  instance.initialIndex = 3;
+  for (const expected of cases) {
+    const { instance, emitted } = openViewer(component, 263, expected.logicalIndex);
+    assert.equal(instance.currentIndex, expected.logicalIndex, "opening must retain the logical index");
+    assert.equal(instance.windowStart, expected.windowStart, "opening must center and clamp windowStart");
+    assert.equal(
+      instance.activeWindowIndex,
+      expected.activeWindowIndex,
+      "opening must select the matching physical slide"
+    );
+    assert.equal(
+      instance.swiperIndex,
+      expected.activeWindowIndex,
+      "opening must position the native swiper on the matching physical slide"
+    );
+    assert.equal(
+      JSON.stringify(windowIds(instance)),
+      JSON.stringify(expected.ids),
+      "opening must expose the expected five logical photos"
+    );
+    assert.equal(changeEvents(emitted).length, 0, "opening must not emit a business change event");
+  }
+}
+
+function runNonEdgeChangeCheck(component) {
+  const { instance, emitted } = openViewer(component, 263, 131);
+  const generation = instance.swiperGeneration;
+  const controlledIndex = instance.swiperIndex;
+
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 3));
+
+  assert.equal(instance.currentIndex, 132, "physical slide 3 must map to logical photo 132");
+  assert.equal(instance.activeWindowIndex, 3, "the active physical slide must follow the native change");
+  assert.equal(instance.pendingWindowRebase, null, "a non-edge slide must not schedule a rebase");
+  assert.equal(instance.windowStart, 129, "a non-edge slide must not rebuild the window");
+  assert.equal(instance.swiperGeneration, generation, "a non-edge slide must preserve generation");
+  assert.equal(instance.swiperIndex, controlledIndex, "a native change must not rewrite swiperIndex");
+  assert.equal(changeEvents(emitted).length, 1, "a new logical page must emit one change event");
+  assert.equal(changeEvents(emitted)[0].payload.index, 132, "the change event must expose the logical index");
+}
+
+function runGenerationSafeEdgeRebaseCheck(component) {
+  const { instance, emitted } = openViewer(component, 263, 0);
+  const openingGeneration = instance.swiperGeneration;
+
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 4));
+
+  assert.equal(instance.currentIndex, 4, "physical edge 4 must map to logical photo 4");
+  assert.equal(instance.activeWindowIndex, 4, "physical edge 4 must become active immediately");
+  assertPending(instance, openingGeneration, 4, "edge change");
+  assert.equal(instance.windowStart, 0, "the edge change must wait for animationfinish before rebuilding");
+  assert.equal(instance.swiperGeneration, openingGeneration, "the edge change must not advance generation");
+  assert.equal(changeEvents(emitted).length, 1, "the edge change must emit one logical business change");
+
+  instance.handleSwiperAnimationFinish(nativeSwiperEvent(instance, 3));
+
+  assert.equal(instance.windowStart, 0, "a wrong-page animationfinish must not rebase");
+  assert.equal(instance.swiperGeneration, openingGeneration, "a wrong-page finish must preserve generation");
+  assertPending(instance, openingGeneration, 4, "wrong-page finish");
+
+  instance.handleSwiperAnimationFinish(nativeSwiperEvent(instance, 4));
+
+  assert.equal(instance.currentIndex, 4, "matching animationfinish must retain the logical photo");
+  assert.equal(instance.windowStart, 2, "matching animationfinish must center the next window");
+  assert.equal(instance.activeWindowIndex, 2, "matching animationfinish must rebase to physical slide 2");
+  assert.equal(instance.swiperIndex, 2, "matching animationfinish must reposition the controlled swiper");
+  assert.equal(
+    instance.swiperGeneration,
+    openingGeneration + 1,
+    "matching animationfinish must advance generation exactly once"
+  );
+  assert.equal(instance.pendingWindowRebase, null, "matching animationfinish must clear pending state");
+  assert.equal(changeEvents(emitted).length, 1, "window rebuilding must not duplicate the business change");
+
+  const rebasedGeneration = instance.swiperGeneration;
+  instance.handleSwiperChange(
+    nativeSwiperEvent(instance, 2, { generation: rebasedGeneration, source: "" })
+  );
+
+  assert.equal(instance.currentIndex, 4, "same-page remount change must retain the logical photo");
+  assert.equal(instance.windowStart, 2, "same-page remount change must not rebuild");
+  assert.equal(instance.swiperGeneration, rebasedGeneration, "same-page remount must preserve generation");
+  assert.equal(changeEvents(emitted).length, 1, "same-page remount must be business-event idempotent");
+
+  instance.handleSwiperChange(
+    nativeSwiperEvent(instance, 3, { generation: rebasedGeneration, source: "" })
+  );
+
+  assert.equal(instance.currentIndex, 5, "an empty-source change to another slot must remain valid");
+  assert.equal(instance.activeWindowIndex, 3, "the valid empty-source change must update physical state");
+  assert.equal(changeEvents(emitted).length, 2, "the valid empty-source change must emit once");
+  assert.equal(changeEvents(emitted)[1].payload.index, 5, "the empty-source event must emit a logical index");
+
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 4, { generation: rebasedGeneration }));
+  assertPending(instance, rebasedGeneration, 6, "new-generation edge change");
+  assert.equal(instance.currentIndex, 6, "the new-generation edge must select logical photo 6");
+  assert.equal(changeEvents(emitted).length, 3, "the new-generation edge must emit once");
+
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 0, { generation: openingGeneration }));
+  instance.handleSwiperAnimationFinish(
+    nativeSwiperEvent(instance, 4, { generation: openingGeneration })
+  );
+
+  assert.equal(instance.currentIndex, 6, "an old-generation change must be ignored");
+  assert.equal(instance.windowStart, 2, "an old-generation finish must not rebuild the window");
+  assert.equal(instance.swiperGeneration, rebasedGeneration, "old native events must preserve generation");
+  assertPending(instance, rebasedGeneration, 6, "old-generation native events");
+  assert.equal(changeEvents(emitted).length, 3, "old native events must not emit business changes");
+}
+
+function runReopenGenerationCheck(component) {
+  const { instance, emitted } = openViewer(component, 263, 0);
+  const oldGeneration = instance.swiperGeneration;
+
+  instance.visible = false;
+  component.watch.visible.call(instance, false, true);
   instance.visible = true;
   component.watch.visible.call(instance, true, false);
 
-  assert(instance.currentIndex === 3, "Viewer currentIndex must open at initialIndex 3");
-  assert(instance.swiperIndex === 3, "Viewer swiperIndex must programmatically open at initialIndex 3");
+  assert.notEqual(
+    instance.swiperGeneration,
+    oldGeneration,
+    "reopening must use a generation distinct from the destroyed native swiper"
+  );
+  assert.equal(changeEvents(emitted).length, 0, "closing and reopening must not emit a business change");
 
-  const previousPhotos = instance.photos;
-  instance.photos = makePhotos(2);
-  component.watch.photos.call(instance, instance.photos, previousPhotos);
+  const reopenedGeneration = instance.swiperGeneration;
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 4));
+  assertPending(instance, reopenedGeneration, 4, "reopened edge change");
+  assert.equal(changeEvents(emitted).length, 1, "the reopened swiper edge must emit once");
 
-  assert(instance.currentIndex === 1, "Viewer currentIndex must clamp after photos shrink");
-  assert(instance.swiperIndex === 1, "Viewer swiperIndex must programmatically clamp after photos shrink");
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 0, { generation: oldGeneration }));
+  instance.handleSwiperAnimationFinish(
+    nativeSwiperEvent(instance, 4, { generation: oldGeneration })
+  );
+
+  assert.equal(instance.currentIndex, 4, "an old-instance change must not alter the reopened logical page");
+  assert.equal(instance.windowStart, 0, "an old-instance finish must not rebuild the reopened window");
+  assert.equal(
+    instance.swiperGeneration,
+    reopenedGeneration,
+    "old-instance native events must preserve the reopened generation"
+  );
+  assertPending(instance, reopenedGeneration, 4, "old-instance native events");
+  assert.equal(changeEvents(emitted).length, 1, "old-instance events must not emit business changes");
 }
 
 function runSequenceCheck() {
   const component = loadComponent();
-  const photos = makePhotos(20);
-  const { instance, emitted } = createInstance(component, photos);
-
-  instance.visible = true;
-  component.watch.visible.call(instance, true, false);
-
-  assert(instance.currentIndex === 0, "Viewer must open on the first photo for this sequence");
-  assert(instance.swiperIndex === 0, "Viewer swiper must open on the first photo");
-  assert(computed(component, instance, "counterText") === "1/20", "Viewer counter must start at 1/20");
-
-  for (let index = 0; index < 20; index += 1) {
-    instance.handleSwiperChange({ detail: { current: index } });
-    assert(instance.currentIndex === index, `Viewer currentIndex must follow swipe to ${index + 1}/20`);
-    assert(instance.swiperIndex === 0, `Viewer swiperIndex must remain at 0 after native swipe to ${index + 1}/20`);
-    assert(
-      computed(component, instance, "counterText") === `${index + 1}/20`,
-      `Viewer counter must stay at ${index + 1}/20 before media hydration`
-    );
-
-    const currentPhoto = instance.photos[index];
-    instance.mediaProgress = {
-      ...instance.mediaProgress,
-      [`${currentPhoto.id}:thumbnail`]: {
-        loading: true,
-        failed: false,
-        progress: 36
-      }
-    };
-    assert(instance.showLoading(currentPhoto), `Photo ${index + 1} must show loading while first preview is loading`);
-    assert(
-      instance.loadingProgressValue(currentPhoto) === 36,
-      `Photo ${index + 1} must show first-preview loading progress`
-    );
-
-    instance.handleThumbnailLoad(currentPhoto);
-    assert(instance.thumbnailLoaded(currentPhoto), `Photo ${index + 1} thumbnail must be marked loaded`);
-    assert(!instance.showFallback(currentPhoto), `Photo ${index + 1} must not show black fallback after thumbnail load`);
-
-    instance.mediaProgress = {
-      ...instance.mediaProgress,
-      [`${currentPhoto.id}:thumbnail`]: {
-        loading: false,
-        failed: false,
-        progress: 100
-      },
-      [`${currentPhoto.id}:preview`]: {
-        loading: true,
-        failed: false,
-        progress: 58
-      }
-    };
-    assert(
-      !instance.showLoading(currentPhoto),
-      `Photo ${index + 1} must not show progress while the second clearer image is loading`
-    );
-    const previousPhotos = instance.photos;
-    instance.photos = instance.photos.map((photo, photoIndex) =>
-      photoIndex === index
-        ? {
-            ...photo,
-            preview_display_url: `wxfile://album-preview-${index + 1}.jpg`
-          }
-        : photo
-    );
-    component.watch.photos.call(instance, instance.photos, previousPhotos);
-
-    const hydratedPhoto = instance.photos[index];
-    assert(
-      instance.currentIndex === index,
-      `Viewer must not jump after photo ${index + 1} preview reaches 100%`
-    );
-    assert(
-      instance.swiperIndex === 0,
-      `Viewer swiperIndex must remain at 0 after photo ${index + 1} preview reaches 100%`
-    );
-    assert(
-      computed(component, instance, "counterText") === `${index + 1}/20`,
-      `Viewer counter must stay at ${index + 1}/20 after media hydration`
-    );
-    assert(instance.previewCanLoad(hydratedPhoto), `Photo ${index + 1} preview must be allowed after thumbnail load`);
-    instance.handlePreviewLoad(hydratedPhoto);
-    assert(instance.previewLoaded(hydratedPhoto), `Photo ${index + 1} preview must be marked loaded`);
-    assert(!instance.showFallback(hydratedPhoto), `Photo ${index + 1} must not show fallback after preview load`);
-  }
-
-  const changeEvents = emitted.filter((event) => event.event === "change");
-  assert(changeEvents.length === 20, "Viewer must emit one change event for each 1-20 swipe step");
-  assert(
-    changeEvents.every((event, index) => event.payload.index === index),
-    "Viewer change events must be ordered from photo 1 to photo 20"
-  );
-  runFastSwipeHydrationCheck(component);
-  runNativeSwipeControlFeedbackCheck(component);
-  runProgrammaticPositioningCheck(component);
+  runWindowSizeCheck(component);
+  runOpeningPositionCheck(component);
+  runNonEdgeChangeCheck(component);
+  runGenerationSafeEdgeRebaseCheck(component);
+  runReopenGenerationCheck(component);
 }
 
 runSequenceCheck();
 
-if (!process.exitCode) {
-  console.log("AlbumImageViewer 1-20 sequence check passed");
-}
+console.log("AlbumImageViewer core five-slide window sequence check passed");

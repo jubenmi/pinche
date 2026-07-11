@@ -62,4 +62,13 @@ assert.doesNotMatch(videoUrlRequest, /this\.photos\s*=/);
 const mediaContext = block(album, "albumMediaDownloadContext(photo", "writeAlbumMediaFile");
 assert.match(mediaContext, /shouldAttachApiAuthorization\(imageUrl,\s*getApiBaseUrl\(\)\)/);
 
+assert.match(
+  viewer,
+  /v-if="isActiveVideo\(logicalIndexForWindowIndex\(windowIndex\)\) && videoUrl\(photo\)"/
+);
+assert.match(
+  viewer,
+  /:id="videoDomId\(photo,\s*logicalIndexForWindowIndex\(windowIndex\)\)"/
+);
+
 console.log("D42 mini-program integration checks passed: upload, viewer, timeline, and auth boundaries");

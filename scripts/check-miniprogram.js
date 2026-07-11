@@ -2182,6 +2182,12 @@ if (!fs.existsSync(pagesJsonPath)) {
   const albumImageViewerSource = fs.existsSync(albumImageViewerPath)
     ? fs.readFileSync(albumImageViewerPath, "utf8")
     : "";
+  if (!albumImageViewerSource.includes('v-for="(photo, windowIndex) in windowPhotos"')) {
+    fail("AlbumImageViewer swiper template must render windowPhotos instead of the full photos list");
+  }
+  if (albumImageViewerSource.includes('v-for="(photo, index) in photos"')) {
+    fail("AlbumImageViewer swiper template must not mount the full photos list");
+  }
   const apiServerSource = fs.existsSync(apiServerPath)
     ? fs.readFileSync(apiServerPath, "utf8")
     : "";
@@ -2280,9 +2286,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   for (const requiredAlbumImageViewerVideoText of [
     "isVideo(photo)",
-    "isActiveVideo(index)",
+    "isActiveVideo(logicalIndexForWindowIndex(windowIndex))",
     "<video",
-    "v-if=\"isActiveVideo(index) && videoUrl(photo)\"",
+    "v-if=\"isActiveVideo(logicalIndexForWindowIndex(windowIndex)) && videoUrl(photo)\"",
+    "videoDomId(photo, logicalIndexForWindowIndex(windowIndex))",
     "album-image-viewer__video",
     "video_display_url",
     "video_load_failed",
@@ -2955,6 +2962,20 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!albumImageViewerSource) {
     fail("AlbumImageViewer component must exist for D31 preview");
   }
+  for (const requiredAlbumViewerWindowText of [
+    "const ALBUM_VIEWER_WINDOW_SIZE = 5;",
+    ':key="swiperGeneration"',
+    ':data-generation="swiperGeneration"',
+    '@animationfinish="handleSwiperAnimationFinish"',
+    'v-for="(photo, windowIndex) in windowPhotos"',
+    ':key="photoKey(photo, logicalIndexForWindowIndex(windowIndex))"',
+    "isActiveVideo(logicalIndexForWindowIndex(windowIndex))",
+    "videoDomId(photo, logicalIndexForWindowIndex(windowIndex))"
+  ]) {
+    if (!albumImageViewerSource.includes(requiredAlbumViewerWindowText)) {
+      fail(`AlbumImageViewer must implement five-slide windowing: ${requiredAlbumViewerWindowText}`);
+    }
+  }
   for (const requiredAlbumImageViewerText of [
     "thumbnail_display_url",
     "previewLoadedById",
@@ -2991,27 +3012,61 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const albumViewerSwiperChangeSource = methodBody(albumImageViewerSource, "handleSwiperChange");
   for (const requiredSwiperChangeText of [
+    "this.isCurrentSwiperEvent(event)",
+    "this.windowPhotos.length",
     "event?.detail?.current",
+    "this.windowStart + windowIndex",
+    "this.activeWindowIndex = windowIndex",
+    "this.updatePendingWindowRebase(windowIndex, nextIndex)",
     "this.currentIndex = nextIndex",
     'this.$emit("change"'
   ]) {
     if (!albumViewerSwiperChangeSource.includes(requiredSwiperChangeText)) {
-      fail(`AlbumImageViewer must keep 1-20 swipe state in sync: ${requiredSwiperChangeText}`);
+      fail(`AlbumImageViewer must map window swipes to logical state: ${requiredSwiperChangeText}`);
     }
   }
-  if (albumViewerSwiperChangeSource.includes("this.swiperIndex = nextIndex")) {
-    fail("AlbumImageViewer native change handler must not rewrite the programmatic swiper index");
+  for (const forbiddenSwiperChangeText of [
+    "this.swiperIndex",
+    "this.windowStart =",
+    "this.swiperGeneration",
+    "this.rebuildWindowAt("
+  ]) {
+    if (albumViewerSwiperChangeSource.includes(forbiddenSwiperChangeText)) {
+      fail(`AlbumImageViewer native change handler must not mutate window structure: ${forbiddenSwiperChangeText}`);
+    }
   }
   const albumViewerSyncInitialIndexSource = methodBody(albumImageViewerSource, "syncInitialIndex");
-  if (!albumViewerSyncInitialIndexSource.includes("this.swiperIndex = nextIndex")) {
-    fail("AlbumImageViewer initial index sync must keep programmatic swiper positioning");
+  if (!albumViewerSyncInitialIndexSource.includes("this.rebuildWindowAt(nextIndex)")) {
+    fail("AlbumImageViewer initial index sync must rebuild the logical window at nextIndex");
   }
-  const albumViewerSyncAfterPhotosChangeSource = methodBody(
+  const albumViewerGenerationGuardSource = methodBody(albumImageViewerSource, "isCurrentSwiperEvent");
+  for (const requiredGenerationGuardText of [
+    "Number(event?.currentTarget?.dataset?.generation)",
+    "Number.isFinite(generation)",
+    "generation === this.swiperGeneration"
+  ]) {
+    if (!albumViewerGenerationGuardSource.includes(requiredGenerationGuardText)) {
+      fail(`AlbumImageViewer native event generation guard is missing: ${requiredGenerationGuardText}`);
+    }
+  }
+  const albumViewerAnimationFinishSource = methodBody(
     albumImageViewerSource,
-    "syncCurrentIndexAfterPhotosChange"
+    "handleSwiperAnimationFinish"
   );
-  if (!albumViewerSyncAfterPhotosChangeSource.includes("this.swiperIndex = nextIndex")) {
-    fail("AlbumImageViewer photos clamp must keep programmatic swiper positioning");
+  for (const requiredAnimationFinishText of [
+    "this.isCurrentSwiperEvent(event)",
+    "this.pendingWindowRebase",
+    "event?.detail?.current",
+    "this.logicalIndexForWindowIndex(finishedWindowIndex)",
+    "pending.generation !== this.swiperGeneration",
+    "pending.logicalIndex !== this.currentIndex",
+    "finishedLogicalIndex !== pending.logicalIndex",
+    "this.windowStartForIndex(this.currentIndex)",
+    "this.rebuildWindowAt(this.currentIndex)"
+  ]) {
+    if (!albumViewerAnimationFinishSource.includes(requiredAnimationFinishText)) {
+      fail(`AlbumImageViewer animationfinish validation is missing: ${requiredAnimationFinishText}`);
+    }
   }
   const albumViewerPhotosWatcherSource = methodBody(albumImageViewerSource, "photos");
   if (albumViewerPhotosWatcherSource.includes("syncInitialIndex")) {

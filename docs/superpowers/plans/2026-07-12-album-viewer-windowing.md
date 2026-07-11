@@ -64,6 +64,11 @@ The current parent changes initialIndex only inside openPhotoPreview, which imme
 
 ### Task 1: Build the Core Five-Slide Swiper State Machine
 
+**Status:** Completed
+
+- **RED evidence:** D31 exited 1 with `AlbumImageViewer must expose computed.windowPhotos`; the mini-program static check exited 1 first with `AlbumImageViewer swiper template must render windowPhotos instead of the full photos list`; D42 exited 1 on the logical active-video binding regex. Follow-up review RED exited 1 with `reopening must use a generation distinct from the destroyed native swiper` (`actual: 0`, `expected: not 0`).
+- **GREEN evidence:** `AlbumImageViewer core five-slide window sequence check passed`; `UniApp miniprogram check passed: 13 pages`; `D42 mini-program integration checks passed: upload, viewer, timeline, and auth boundaries`; `git diff --check` clean.
+
 **Files:**
 - Modify: scripts/d31-album-viewer-sequence-check.js
 - Modify: scripts/check-miniprogram.js
@@ -71,7 +76,7 @@ The current parent changes initialIndex only inside openPhotoPreview, which imme
 - Modify: apps/miniprogram/src/components/AlbumImageViewer.vue
 - Update: docs/superpowers/plans/2026-07-12-album-viewer-windowing.md
 
-- [ ] **Step 1: Replace the old global-index D31 harness with core window tests**
+- [x] **Step 1: Replace the old global-index D31 harness with core window tests**
 
 Replace scripts/d31-album-viewer-sequence-check.js with this core-stage script. It installs actual computed getters, gives every native event a string dataset generation, and tests window math plus deferred rebase.
 
@@ -391,7 +396,7 @@ runRebaseAndGenerationCheck();
 console.log("AlbumImageViewer core windowing checks passed");
 ~~~
 
-- [ ] **Step 2: Replace conflicting static contracts and add core RED guards**
+- [x] **Step 2: Replace conflicting static contracts and add core RED guards**
 
 In scripts/check-miniprogram.js:
 
@@ -531,7 +536,7 @@ assert.match(
 );
 ~~~
 
-- [ ] **Step 3: Run the behavioral, static, and mixed-video checks and record RED**
+- [x] **Step 3: Run the behavioral, static, and mixed-video checks and record RED**
 
 Run:
 
@@ -549,7 +554,7 @@ Expected:
 
 Do not edit production code until all three failures are observed and attributable to the full-list swiper.
 
-- [ ] **Step 4: Add the five-slide template and core state**
+- [x] **Step 4: Add the five-slide template and core state**
 
 At the top of the component script, before export default, add:
 
@@ -606,7 +611,7 @@ windowPhotos() {
 },
 ~~~
 
-- [ ] **Step 5: Implement core positioning, generation validation, and rebase**
+- [x] **Step 5: Implement core positioning, generation validation, and rebase**
 
 Replace clampIndex and syncInitialIndex, then add the remaining methods immediately after them:
 
@@ -781,7 +786,7 @@ handleSwiperAnimationFinish(event) {
 
 The native change method must not assign swiperIndex, windowStart, or swiperGeneration and must not call rebuildWindowAt.
 
-- [ ] **Step 6: Run core checks and verify GREEN**
+- [x] **Step 6: Run core checks and verify GREEN**
 
 Run:
 
@@ -797,7 +802,7 @@ Expected:
 - UniApp miniprogram check passed: 13 pages.
 - D42 mini-program integration checks passed: upload, viewer, timeline, and auth boundaries.
 
-- [ ] **Step 7: Review and commit the green core state machine**
+- [x] **Step 7: Review and commit the green core state machine**
 
 Run:
 
