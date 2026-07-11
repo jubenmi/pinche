@@ -648,7 +648,7 @@ function runCurrentMediaStateCheck(component) {
   assert.equal(download.payload.photo.id, 5);
 }
 
-function runAlbumPageMediaWindowCheck() {
+function runAlbumPageMediaWindowCheck(component) {
   const getPreviewMediaProgress = methodFromSource(albumSource, "previewMediaProgress");
   const setAlbumMediaProgress = methodFromSource(albumSource, "setAlbumMediaProgress");
   const updatePreviewPhotoDisplayMedia = methodFromSource(
@@ -713,6 +713,15 @@ function runAlbumPageMediaWindowCheck() {
 
   const photosRoot = state.previewPhotos;
   const previousItems = [...state.previewPhotos];
+  const viewerState = reactive({
+    photos: state.previewPhotos,
+    windowStart: 1,
+    swiperGeneration: 7
+  });
+  const viewerWindow = vueComputed(() =>
+    component.computed.windowPhotos.call(viewerState)
+  );
+  const previousViewerWindow = viewerWindow.value;
   updatePreviewPhotoDisplayMedia.call(state, 4, {
     video_display_url: "wxfile://album-video-4.mp4"
   });
@@ -723,6 +732,9 @@ function runAlbumPageMediaWindowCheck() {
       (photo, index) => index === 3 || photo === previousItems[index]
     )
   );
+  assert.notStrictEqual(viewerWindow.value, previousViewerWindow);
+  assert.equal(viewerWindow.value[2].video_display_url, "wxfile://album-video-4.mp4");
+  assert.equal(viewerState.swiperGeneration, 7);
 
   function requestsFor(center) {
     requests.length = 0;
@@ -738,12 +750,37 @@ function runAlbumPageMediaWindowCheck() {
 
   const startRequests = requestsFor(0);
   assert.deepEqual(startRequests.ids, [1, 2, 3]);
+  assert.deepEqual(startRequests.entries, [
+    "1:thumbnail",
+    "1:preview",
+    "2:thumbnail",
+    "2:preview",
+    "3:thumbnail",
+    "3:preview"
+  ]);
   const middleRequests = requestsFor(3);
   assert.deepEqual(middleRequests.ids, [2, 3, 4, 5, 6]);
-  assert.ok(middleRequests.entries.includes("4:thumbnail"));
-  assert.ok(!middleRequests.entries.includes("4:preview"));
+  assert.deepEqual(middleRequests.entries, [
+    "2:thumbnail",
+    "2:preview",
+    "3:thumbnail",
+    "3:preview",
+    "4:thumbnail",
+    "5:thumbnail",
+    "5:preview",
+    "6:thumbnail",
+    "6:preview"
+  ]);
   const endRequests = requestsFor(6);
   assert.deepEqual(endRequests.ids, [5, 6, 7]);
+  assert.deepEqual(endRequests.entries, [
+    "5:thumbnail",
+    "5:preview",
+    "6:thumbnail",
+    "6:preview",
+    "7:thumbnail",
+    "7:preview"
+  ]);
 
   state.previewCurrentIndex = 0;
   assert.deepEqual(
@@ -775,7 +812,7 @@ function runSequenceCheck() {
   runMixedVideoWindowCheck(component);
   runRemovedVideoEventCheck(component);
   runCurrentMediaStateCheck(component);
-  runAlbumPageMediaWindowCheck();
+  runAlbumPageMediaWindowCheck(component);
 }
 
 runSequenceCheck();
