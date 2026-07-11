@@ -3144,6 +3144,8 @@ git commit -m "ops: gate album image COS direct rollout"
 
 ## Task 15: Cross-app regression gate, smoke test, and release runbook
 
+执行状态：已完成（2026-07-11，D43 单元/静态/隔离 smoke、全仓检查及小程序与管理后台生产构建全部通过）。
+
 **Files:**
 - Create: `scripts/d43-album-media-cos-direct-smoke.js`
 - Modify: `scripts/d43-album-media-cos-direct-check.js`
@@ -3161,7 +3163,7 @@ git commit -m "ops: gate album image COS direct rollout"
 - Modify: `docs/image-processing-policy.md`
 - Modify: `specs/d9-mvp-release/release-checklist.md`
 
-- [ ] **Step 1: Add failing cross-app source contracts before relaxing old assertions**
+- [x] **Step 1: Add failing cross-app source contracts before relaxing old assertions**
 
 The D43 check must import pure helpers where possible and use source assertions only for route/UI wiring. It locks:
 
@@ -3180,13 +3182,13 @@ assert.match(sharedProtocol, /COS_UPLOAD_CONFLICT_UNRESOLVED/);
 
 Add runtime checks for exactly three PUT attempts, a single auth refresh, one album refresh for many expiring items, legacy/local fallback fields, and no raw `object_key`/ETag response fields.
 
-- [ ] **Step 2: Run the new D43 check to verify RED**
+- [x] **Step 2: Run the new D43 check to verify RED**
 
 Run: `npm run d43:check`
 
 Expected: FAIL on old assertions and any integration wiring not yet present.
 
-- [ ] **Step 3: Narrow old gates instead of deleting non-goal protection**
+- [x] **Step 3: Narrow old gates instead of deleting non-goal protection**
 
 Make these exact semantic changes:
 
@@ -3198,7 +3200,7 @@ Make these exact semantic changes:
 - `check-miniprogram` prefers new signed fields while continuing to accept compatibility fields and USER_DATA_PATH-only viewer sources.
 - maintenance checks require suppression only for album upload/status/finalize/media refresh; ordinary network failures still enter current maintenance mode.
 
-- [ ] **Step 4: Add an isolated API smoke for the lifecycle and privacy boundary**
+- [x] **Step 4: Add an isolated API smoke for the lifecycle and privacy boundary**
 
 `d43-album-media-cos-direct-smoke.js` must refuse non-isolated databases using the established smoke target guard. With a fake COS adapter or local HTTP COS stub, run:
 
@@ -3218,7 +3220,7 @@ Print one deterministic success line:
 console.log("D43 album media COS direct smoke passed: strict upload, idempotent finalize, signed reads, privacy, cleanup, and video isolation");
 ```
 
-- [ ] **Step 5: Document configuration, domains, error triage, metrics, and rollback**
+- [x] **Step 5: Document configuration, domains, error triage, metrics, and rollback**
 
 The runbook must include:
 
@@ -3234,7 +3236,7 @@ The runbook must include:
 
 Update image policy with source-versus-stored metadata and same-key Pic-Operations. Update the release checklist with CORS, WeChat domains, live contract, client versions, staged flags, and one full mini-program release-cycle observation before removing proxy routes.
 
-- [ ] **Step 6: Add D43 and focused tests to root check**
+- [x] **Step 6: Add D43 and focused tests to root check**
 
 Add scripts:
 
@@ -3245,7 +3247,7 @@ Add scripts:
 
 Insert `npm run d43:unit && npm run d43:check` into root `check`. Keep isolated smoke and live contract opt-in so normal CI cannot touch a real database or Bucket.
 
-- [ ] **Step 7: Run focused, full, and build verification**
+- [x] **Step 7: Run focused, full, and build verification**
 
 Run: `npm run d43:unit && npm run d43:check`
 
@@ -3263,7 +3265,7 @@ Run: `npm run build:mp-weixin && npm run build:admin-web`
 
 Expected: both production builds exit 0.
 
-- [ ] **Step 8: Commit regression gates and documentation**
+- [x] **Step 8: Commit regression gates and documentation**
 
 ```bash
 git add scripts/d43-album-media-cos-direct-smoke.js scripts/d43-album-media-cos-direct-check.js scripts/d12-admin-web-check.js scripts/d17-cos-storage-check.js scripts/d18-session-album-privacy-check.js scripts/d18-session-album-privacy-smoke.js scripts/d31-album-viewer-sequence-check.js scripts/d42-album-video-delete-integration-check.js scripts/check-miniprogram.js scripts/check-maintenance-mode.js package.json docs/runbooks/album-media-cos-direct-release.md README.md docs/image-processing-policy.md specs/d9-mvp-release/release-checklist.md

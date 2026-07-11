@@ -169,7 +169,7 @@ contract(
     /@error="handleVideoCoverError\(photo, \$event\)"/.test(adminWorkspace) &&
     /\[401, 403\]/.test(coverFailure) &&
     /refreshAlbumMedia\(photo,/.test(coverFailure) &&
-    /getSessionAlbum\(/.test(refreshAlbumMedia) &&
+    /(?:getSessionAlbum\(|albumRefreshController\?\.refresh\(\))/.test(refreshAlbumMedia) &&
     /mediaRefreshAttempts/.test(refreshAlbumMedia) &&
     /fetchAuthorizedMediaObjectUrl\(url\)/.test(mediaRetry) &&
     /fetchAuthorizedMediaObjectUrl\(refreshedUrl\)/.test(mediaRetry) &&
