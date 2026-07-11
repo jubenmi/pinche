@@ -27,13 +27,13 @@
       :class="{ floating: topActionsFloating }"
     >
       <view class="album-actions album-sticky-actions" :class="{ floating: topActionsFloating }">
-        <view v-if="canUpload" class="album-primary-actions" :class="{ 'has-video': canUploadVideo }">
+        <view v-if="canUpload" class="album-primary-actions">
           <t-button
             class="button album-action-primary"
             :class="{ disabled: albumBusy }"
             :custom-style="albumUploadButtonCustomStyle"
             :disabled="albumBusy"
-            @tap="choosePhotos"
+            @tap="chooseAlbumMedia"
           >
             <view class="album-upload-button-content">
               <text class="album-upload-label">{{ albumUploadButtonLabel }}</text>
@@ -42,16 +42,6 @@
                 src="/static/icons/upload-bold.png"
                 mode="aspectFit"
               />
-            </view>
-          </t-button>
-          <t-button
-            v-if="canUploadVideo"
-            class="button secondary album-video-upload-action"
-            :disabled="albumBusy"
-            @tap="chooseVideo"
-          >
-            <view class="album-privacy-button-content">
-              <text>短视频</text>
             </view>
           </t-button>
           <t-button
@@ -171,7 +161,7 @@
         :class="{ disabled: albumBusy }"
         :custom-style="albumUploadButtonCustomStyle"
         :disabled="albumBusy"
-        @tap="choosePhotos"
+        @tap="chooseAlbumMedia"
       >
         <view class="album-upload-button-content">
           <text class="album-upload-label">{{ albumUploadButtonLabel }}</text>
@@ -587,6 +577,7 @@ import {
   transitionAlbumVideoViewerFailure,
   videoUrlExpiresAt
 } from "../../utils/albumVideo";
+import { classifyAlbumMediaSelection } from "../../utils/albumMediaSelection";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
@@ -2318,6 +2309,40 @@ export default {
         date.getHours()
       )}:${pad(date.getMinutes())}`;
     },
+    chooseAlbumMedia() {
+      if (this.timelineMode || !this.canUpload || this.albumBusy) {
+        showToast({ title: "发车后同车成员可上传", icon: "none" });
+        return;
+      }
+      if (!this.canUploadVideo) {
+        this.choosePhotos();
+        return;
+      }
+      if (typeof wx === "undefined" || typeof wx.chooseMedia !== "function") {
+        showToast({ title: "当前微信版本仅支持选择图片", icon: "none" });
+        this.choosePhotos();
+        return;
+      }
+      wx.chooseMedia({
+        count: 9,
+        mediaType: ["image", "video"],
+        sourceType: ["album", "camera"],
+        sizeType: ["original"],
+        maxDuration: MAX_ALBUM_VIDEO_DURATION_SECONDS,
+        success: async (result) => {
+          const selection = classifyAlbumMediaSelection(result);
+          if (selection.kind === "invalid") {
+            showToast({ title: selection.message, icon: "none" });
+            return;
+          }
+          if (selection.kind === "video") {
+            await this.uploadChosenVideo(selection.file);
+            return;
+          }
+          await this.uploadChosenPhotos(selection.paths);
+        }
+      });
+    },
     choosePhotos() {
       if (this.timelineMode || !this.canUpload || this.albumBusy) {
         showToast({ title: "发车后同车成员可上传", icon: "none" });
@@ -2330,25 +2355,6 @@ export default {
         success: async (result) => {
           const photoItems = result.tempFiles || [];
           await this.uploadChosenPhotos(photoItems.length ? photoItems : result.tempFilePaths || []);
-        }
-      });
-    },
-    chooseVideo() {
-      if (!this.canUploadVideo || this.albumBusy) {
-        showToast({ title: "只有管理员可测试上传视频", icon: "none" });
-        return;
-      }
-      if (typeof wx === "undefined" || typeof wx.chooseMedia !== "function") {
-        showToast({ title: "当前微信版本不支持选择视频", icon: "none" });
-        return;
-      }
-      wx.chooseMedia({
-        count: 1,
-        mediaType: ["video"],
-        sourceType: ["album", "camera"],
-        success: async (result) => {
-          const file = (result.tempFiles || [])[0] || {};
-          await this.uploadChosenVideo(file);
         }
       });
     },
@@ -3353,12 +3359,7 @@ export default {
   gap: 12rpx;
 }
 
-.album-primary-actions.has-video {
-  grid-template-columns: minmax(0, 1fr) 148rpx 148rpx;
-}
-
 .album-action-primary,
-.album-video-upload-action,
 .album-privacy-action {
   height: 78rpx;
   margin: 0;
@@ -3395,7 +3396,6 @@ export default {
   flex-shrink: 0;
 }
 
-.album-video-upload-action,
 .album-privacy-action {
   padding: 0 18rpx;
 }

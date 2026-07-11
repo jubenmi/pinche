@@ -204,7 +204,7 @@ git commit -m "test: cover album media selection routing"
 - Modify: `apps/miniprogram/src/pages/session/album.vue`
 - Modify: `docs/superpowers/plans/2026-07-12-album-single-media-upload-entry.md`
 
-- [ ] **Step 1: 先更新单入口静态契约**
+- [x] **Step 1: 先更新单入口静态契约**
 
 在 `scripts/d42-miniprogram-album-video-check.js` 的上传检查附近加入：
 
@@ -256,7 +256,7 @@ assertNotIncludes("apps/miniprogram/src/pages/session/album.vue", "@tap=\"choose
 "@tap=\"chooseAlbumMedia\""
 ```
 
-- [ ] **Step 2: 运行契约并确认 RED**
+- [x] **Step 2: 运行契约并确认 RED**
 
 Run:
 
@@ -269,7 +269,7 @@ node scripts/check-miniprogram.js
 
 Expected: 每个更新后的契约都因 `chooseAlbumMedia` 尚不存在或旧 `chooseVideo` 入口仍存在而失败；失败必须来自预期的单入口断言。
 
-- [ ] **Step 3: 实现统一入口模板、导入和方法**
+- [x] **Step 3: 实现统一入口模板、导入和方法**
 
 在 `apps/miniprogram/src/pages/session/album.vue`：
 
@@ -323,7 +323,7 @@ chooseAlbumMedia() {
 
 保留现有 `choosePhotos`、`uploadChosenPhotos`、`uploadChosenVideo` 的实现不变。
 
-- [ ] **Step 4: 清理三列视频按钮样式**
+- [x] **Step 4: 清理三列视频按钮样式**
 
 在 `apps/miniprogram/src/pages/session/album.vue` 删除：
 
@@ -335,7 +335,7 @@ chooseAlbumMedia() {
 
 并从所有组合选择器中移除 `.album-video-upload-action`，删除它不再被引用的单独样式；保留 `.album-primary-actions` 的两列布局及 `.album-privacy-action` 样式。
 
-- [ ] **Step 5: 运行分类与静态契约并确认 GREEN**
+- [x] **Step 5: 运行分类与静态契约并确认 GREEN**
 
 Run:
 
@@ -349,7 +349,7 @@ node scripts/check-miniprogram.js
 
 Expected: 所有命令 PASS；静态契约确认两个入口共用 `chooseAlbumMedia`，不存在独立视频按钮，并继续调用原图片/视频上传方法。
 
-- [ ] **Step 6: 标记 Task 2 完成并提交**
+- [x] **Step 6: 标记 Task 2 完成并提交**
 
 更新本计划 Task 2 的复选框为 `- [x]`，然后运行：
 

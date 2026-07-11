@@ -38,6 +38,15 @@ assert.match(compressVideo, /compressVideoSizeBytes\(result\.size\)/);
 assert.match(album, /if\s*\(!uploadSize\)[\s\S]*无法确认视频大小/);
 assert.doesNotMatch(block(album, "async uploadChosenVideo", "async uploadChosenPhotos"), /Math\.max\(1,/);
 
+assert.equal((album.match(/@tap="chooseAlbumMedia"/g) || []).length, 2);
+assert.doesNotMatch(album, /@tap="chooseVideo"|album-video-upload-action|album-primary-actions\.has-video/);
+const chooseAlbumMedia = block(album, "chooseAlbumMedia() {", "choosePhotos() {");
+assert.match(chooseAlbumMedia, /this\.canUploadVideo/);
+assert.match(chooseAlbumMedia, /mediaType:\s*\["image",\s*"video"\]/);
+assert.match(chooseAlbumMedia, /classifyAlbumMediaSelection/);
+assert.match(chooseAlbumMedia, /this\.uploadChosenPhotos\(selection\.paths\)/);
+assert.match(chooseAlbumMedia, /this\.uploadChosenVideo\(selection\.file\)/);
+
 assert.match(viewer, /:autoplay="false"/);
 assert.match(viewer, /\$emit\(\s*["']video-error["']/);
 assert.match(viewer, /视频加载失败，点击重试/);
