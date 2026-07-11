@@ -94,16 +94,33 @@ assert(
   listMySessionsSource.includes('${albumMediaCountSql("album_photo")} AS album_media_count'),
   "listMySessions must select album_media_count"
 );
-assert(
-  listMySignupsSource.includes('SELECT ${albumMediaCountSql("album_media")}'),
-  "listMySignups must select album_media_count"
+const signupAlbumMediaSqlTokens = [
+  "CASE",
+  "WHEN signup.status = 'approved' THEN (",
+  'SELECT ${albumMediaCountSql("album_media")}',
+  "FROM session_album_photos album_media",
+  "WHERE album_media.session_id = signup.session_id",
+  ")",
+  "ELSE 0",
+  "END AS album_media_count"
+];
+let signupAlbumMediaSqlOffset = listMySignupsSource.indexOf(") AS has_review,");
+assert.notEqual(
+  signupAlbumMediaSqlOffset,
+  -1,
+  "listMySignups album media projection must follow has_review"
 );
+for (const token of signupAlbumMediaSqlTokens) {
+  const tokenIndex = listMySignupsSource.indexOf(token, signupAlbumMediaSqlOffset + 1);
+  assert(
+    tokenIndex > signupAlbumMediaSqlOffset,
+    `listMySignups album media SQL must include in order: ${token}`
+  );
+  signupAlbumMediaSqlOffset = tokenIndex;
+}
 assert(
-  listMySignupsSource.includes(
-    "WHERE album_media.session_id = signup.session_id\n" +
-    "              AND signup.status = 'approved'"
-  ),
-  "listMySignups must count album media only for approved signups"
+  !listMySignupsSource.includes("AND signup.status = 'approved'"),
+  "listMySignups must not put the approval gate inside the album media subquery"
 );
 assert(
   listMySessionsSource.includes("album_media_count: Number(row.album_media_count || 0)"),

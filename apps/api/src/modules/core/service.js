@@ -5040,12 +5040,14 @@ export async function listMySignups(user) {
               AND review.user_id = signup.user_id
               AND review.status = 'active'
           ) AS has_review,
-          (
-            SELECT ${albumMediaCountSql("album_media")}
-            FROM session_album_photos album_media
-            WHERE album_media.session_id = signup.session_id
-              AND signup.status = 'approved'
-          ) AS album_media_count,
+          CASE
+            WHEN signup.status = 'approved' THEN (
+              SELECT ${albumMediaCountSql("album_media")}
+              FROM session_album_photos album_media
+              WHERE album_media.session_id = signup.session_id
+            )
+            ELSE 0
+          END AS album_media_count,
           (
             signup.review_eligible_at IS NOT NULL
             AND ${reviewWindowSql()}
