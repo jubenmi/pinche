@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { config, publicConfig } from "./config/env.js";
-import { checkDatabaseReadiness } from "./db/mysql.js";
+import { checkDatabaseReadiness, withDatabaseConnection, withTransaction } from "./db/mysql.js";
 import { AppError, badRequest, forbidden, notFound, unauthorized } from "./http/errors.js";
 import { updateUserPhone, updateUserProfile } from "./modules/auth/users.js";
 import {
@@ -46,6 +46,7 @@ import {
 import { cleanupAlbumVideoBeforeDelete } from "./modules/album-video/lifecycle.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
+  assertSessionAlbumImageUploadAllowed,
   assertSessionJoinInviteAllowed,
   assertSessionAlbumUploadAllowed,
   approveSignup,
@@ -128,6 +129,16 @@ import {
   upsertMySessionReview,
   upsertPerformerProfile
 } from "./modules/core/service.js";
+import { isAlbumImageKind } from "./modules/album-image/constants.js";
+import {
+  bindLegacyIntentByteSize,
+  findAlbumImageIntent,
+  findAlbumImageIntentByObjectKey,
+  insertAlbumImageIntent,
+  recordAlbumImageAuthorization
+} from "./modules/album-image/repository.js";
+import { createAlbumImageUploadService } from "./modules/album-image/upload-service.js";
+import { emitAlbumImageEvent } from "./modules/album-image/telemetry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "..");
@@ -165,6 +176,33 @@ const avatarMimeTypes = {
   "image/jpeg": ".jpg",
   "image/png": ".png"
 };
+
+const albumImageUploads = createAlbumImageUploadService({
+  cosConfig: config.cos,
+  directUploadRequired: config.albumMedia.directUploadRequired,
+  transaction: withTransaction,
+  access: assertSessionAlbumImageUploadAllowed,
+  repository: {
+    insert: insertAlbumImageIntent,
+    find: findAlbumImageIntent,
+    findByObjectKey: findAlbumImageIntentByObjectKey,
+    bindByteSize: bindLegacyIntentByteSize,
+    recordAuthorization: recordAlbumImageAuthorization
+  },
+  emit: emitAlbumImageEvent
+});
+
+async function isPersistedAlbumImageAuthorization(user, body) {
+  if (body.uploadId || body.upload_id) return true;
+  const key = String(body.key || body.Key || "");
+  if (!key) return false;
+  return withDatabaseConnection(async (connection) => Boolean(
+    await findAlbumImageIntentByObjectKey(connection, {
+      userId: Number(user.user.id),
+      objectKey: key
+    })
+  ));
+}
 
 function jsonResponse(response, statusCode, payload) {
   const body = JSON.stringify(payload);
@@ -2349,6 +2387,13 @@ async function route(request, response) {
   if (request.method === "POST" && sessionAlbumUploadId) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumUploadId);
+    if (config.albumMedia.directUploadRequired) {
+      throw new AppError(
+        409,
+        "DIRECT_UPLOAD_REQUIRED",
+        "Production album images must be uploaded directly to COS"
+      );
+    }
     const photoUrl = await saveUploadedSessionAlbumPhoto(
       request,
       user.user.id,
@@ -2368,6 +2413,13 @@ async function route(request, response) {
   if (request.method === "POST" && adminSessionAlbumUploadId) {
     const user = await getAuthUser(request);
     const session = await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumUploadId);
+    if (config.albumMedia.directUploadRequired) {
+      throw new AppError(
+        409,
+        "DIRECT_UPLOAD_REQUIRED",
+        "Production album images must be uploaded directly to COS"
+      );
+    }
     const photoUrl = await saveUploadedSessionAlbumPhoto(
       request,
       user.user.id,
@@ -2414,16 +2466,19 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/uploads/cos-intent") {
     const user = await getAuthUser(request);
-    jsonResponse(response, 200, {
-      ok: true,
-      data: {
-        upload: await createCosDirectUploadIntent({
+    const upload = isAlbumImageKind(body.kind)
+      ? await albumImageUploads.createIntent({ user, body })
+      : await createCosDirectUploadIntent({
           kind: body.kind,
           extension: body.extension,
           user,
           userId: user.user.id,
           sessionId: body.sessionId || body.session_id
-        })
+        });
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        upload
       }
     });
     return;
@@ -2431,13 +2486,44 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/uploads/cos-authorization") {
     const user = await getAuthUser(request);
+    const useAlbumImageAuthorization = await isPersistedAlbumImageAuthorization(user, body);
     jsonResponse(response, 200, {
       ok: true,
-      data: await authorizeCosDirectUpload({
-        body,
-        user
-      })
+      data: useAlbumImageAuthorization
+        ? await albumImageUploads.authorize({ body, user })
+        : await authorizeCosDirectUpload({ body, user })
     });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/telemetry/album-media") {
+    await getAuthUser(request);
+    const allowedEvents = new Set([
+      "upload_retry",
+      "upload_failure",
+      "media_refresh_success",
+      "media_refresh_failure"
+    ]);
+    const event = String(body.event || "");
+    if (!allowedEvents.has(event)) throw badRequest("unsupported album media event");
+    const sessionId = Number(body.sessionId ?? body.session_id ?? 0);
+    const retryCount = Number(body.retryCount ?? body.retry_count ?? 0);
+    if (
+      (sessionId && (!Number.isSafeInteger(sessionId) || sessionId < 0)) ||
+      (!Number.isSafeInteger(retryCount) || retryCount < 0)
+    ) {
+      throw badRequest("invalid album media telemetry fields");
+    }
+    const errorCode = body.errorCode ?? body.error_code;
+    if (errorCode !== undefined && !/^[A-Z0-9_]{1,64}$/.test(String(errorCode))) {
+      throw badRequest("invalid album media telemetry error code");
+    }
+    emitAlbumImageEvent(event, {
+      sessionId,
+      retryCount,
+      errorCode: errorCode ? String(errorCode) : undefined
+    });
+    jsonResponse(response, 202, { ok: true });
     return;
   }
 

@@ -185,6 +185,10 @@ export const config = {
     region: process.env.COS_REGION || "",
     ciCallbackToken: process.env.COS_CI_CALLBACK_TOKEN || ""
   },
+  albumMedia: {
+    directMediaUrls: booleanEnv("COS_DIRECT_MEDIA_URLS", false),
+    directUploadRequired: booleanEnv("COS_DIRECT_UPLOAD_REQUIRED", false)
+  },
   wechat: {
     mockLogin: booleanEnv("WECHAT_MOCK_LOGIN", true),
     appId: process.env.WECHAT_APP_ID || "wx-placeholder",
@@ -215,6 +219,10 @@ export function publicConfig() {
     nodeEnv: config.nodeEnv,
     port: config.port,
     redisEnabled: config.redis.enabled,
-    wechatMockLogin: config.wechat.mockLogin
+    wechatMockLogin: config.wechat.mockLogin,
+    albumMedia: {
+      directMediaUrls: config.albumMedia.directMediaUrls,
+      directUploadRequired: config.albumMedia.directUploadRequired
+    }
   };
 }

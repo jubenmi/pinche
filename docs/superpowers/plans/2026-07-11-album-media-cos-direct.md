@@ -1264,6 +1264,8 @@ git commit -m "feat: add album image intent repository"
 
 ## Task 6: Intent creation, strict PUT authorization, and feature flags
 
+执行状态：已完成（2026-07-11，9/9 意图、授权及遥测测试；D17、D42 创建回归与 API 语法检查通过）。
+
 **Files:**
 - Create: `apps/api/src/modules/album-image/upload-service.js`
 - Create: `apps/api/src/modules/album-image/telemetry.js`
@@ -1274,7 +1276,7 @@ git commit -m "feat: add album image intent repository"
 - Create: `apps/api/test/album-image-upload-intent.test.mjs`
 - Create: `apps/api/test/album-image-authorization.test.mjs`
 
-- [ ] **Step 1: Write failing intent and authorization tests**
+- [x] **Step 1: Write failing intent and authorization tests**
 
 Build the service with injected clock, UUID, database, access, and signer. Lock these cases:
 
@@ -1334,13 +1336,13 @@ test("required production mode fails closed when COS is unavailable", async () =
 
 Also test JPEG/PNG only, 4MB maximum, uploadId ownership, pending-only authorization, current access recheck, Bucket/Region/PUT equality, exact header-name set, exact Pic-Operations, one-time legacy length binding, and authorization expiry capped by `upload_expires_at`.
 
-- [ ] **Step 2: Run intent/authorization tests to verify RED**
+- [x] **Step 2: Run intent/authorization tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-upload-intent.test.mjs apps/api/test/album-image-authorization.test.mjs`
 
 Expected: FAIL because `createAlbumImageUploadService` does not exist.
 
-- [ ] **Step 3: Add feature flags and stable structured telemetry**
+- [x] **Step 3: Add feature flags and stable structured telemetry**
 
 Add config without exposing secrets:
 
@@ -1377,7 +1379,7 @@ export function emitAlbumImageEvent(event, fields = {}, sink = console.info) {
 }
 ```
 
-- [ ] **Step 4: Implement `createAlbumImageUploadService` create/authorize methods**
+- [x] **Step 4: Implement `createAlbumImageUploadService` create/authorize methods**
 
 The module initially exposes the two methods implemented and tested in this task:
 
@@ -1461,7 +1463,7 @@ const REQUIRED_HEADERS = Object.freeze([
 
 Require an empty Query, exact Bucket/Region/PUT/Key, exact source facts and Pic-Operations, server COS host, and overwrite value `true`. Sign for `Math.min(300, secondsUntilUploadExpiry)` and atomically record `last_authorization_expires_at` plus recomputed `cleanup_not_before` before returning `{ authorization, expiresAt }`.
 
-- [ ] **Step 5: Wire only album-image kinds through the service**
+- [x] **Step 5: Wire only album-image kinds through the service**
 
 In the existing `/api/uploads/cos-intent` route, delegate when `isAlbumImageKind(body.kind)` and preserve the current function for all other kinds:
 
@@ -1493,7 +1495,7 @@ if (config.albumMedia.directUploadRequired) {
 
 Keep this guard out of the album-video multipart route. Add authenticated `POST /api/telemetry/album-media` with an allowlist of `upload_retry`, `upload_failure`, `media_refresh_success`, and `media_refresh_failure`; accept only numeric session/retry fields plus a stable error code, pass them to `emitAlbumImageEvent`, and return 202. This endpoint carries no filenames, URLs, object keys, ETags, or image bytes.
 
-- [ ] **Step 6: Run new tests and non-goal regressions**
+- [x] **Step 6: Run new tests and non-goal regressions**
 
 Run: `node --test apps/api/test/album-image-upload-intent.test.mjs apps/api/test/album-image-authorization.test.mjs`
 
@@ -1503,7 +1505,7 @@ Run: `node scripts/d17-cos-storage-check.js && npm run d42:api-creation`
 
 Expected: avatar, review-photo, and video intent/authorization behavior remains green.
 
-- [ ] **Step 7: Commit intent creation and authorization**
+- [x] **Step 7: Commit intent creation and authorization**
 
 ```bash
 git add apps/api/src/modules/album-image/upload-service.js apps/api/src/modules/album-image/telemetry.js apps/api/src/config/env.js .env.example .env.production.example apps/api/src/server.js apps/api/test/album-image-upload-intent.test.mjs apps/api/test/album-image-authorization.test.mjs
