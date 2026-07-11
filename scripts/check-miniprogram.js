@@ -2330,7 +2330,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!uploadChosenPhotosSource.includes("preparePhotoForUpload(filePath)")) {
     fail("Album photo upload must prepare each image before uploading");
   }
-  if (!uploadChosenPhotosSource.includes("uploadSessionAlbumPhoto(this.sessionId, prepared.filePath)")) {
+  if (
+    !uploadChosenPhotosSource.includes("uploadAlbumPhoto({") ||
+    !uploadChosenPhotosSource.includes("filePath: prepared.filePath")
+  ) {
     fail("Album photo upload must send the compressed/prepared image path");
   }
   const deletePhotoSource = methodBody(albumSource, "deletePhoto");
@@ -2872,13 +2875,13 @@ if (!fs.existsSync(pagesJsonPath)) {
   assertBefore(
     albumOnShowSource,
     "consumePreviewReturnRefreshSkip",
-    "loadAlbum",
+    "albumMediaRefresh?.checkNow",
     "Album onShow must consume photo-preview return before refreshing the member album"
   );
   assertBefore(
     albumOnShowSource,
     "consumePreviewReturnRefreshSkip",
-    "loadPublicAlbum",
+    "albumMediaRefresh?.checkNow",
     "Album onShow must consume photo-preview return before refreshing the public album"
   );
   const albumPageConfig = pages.find((page) => page.path === "pages/session/album") || {};
@@ -2916,8 +2919,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     'variant: mediaVariantName(payload.variant || "preview")',
     'exp: tokenPositiveInteger(payload.exp, "exp")',
     "function sessionAlbumDirectMediaPath(photoId, album, userId, variant = \"preview\")",
-    'preview_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview")',
-    'thumbnail_load_url: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")',
+    'previewLoad: sessionAlbumDirectMediaPath(photo.id, album, userId, "preview")',
+    'thumbnailLoad: sessionAlbumDirectMediaPath(photo.id, album, userId, "thumbnail")',
     "data: attachSessionAlbumMediaUrls(album, user.user.id)",
     'const directMediaToken = url.searchParams.get("token") || ""',
     "if (directMediaToken)",

@@ -2453,12 +2453,14 @@ git commit -m "feat: upload mini program album images directly to COS"
 
 ## Task 11: Mini-program signed URL lifecycle, cache preservation, and real errors
 
+执行状态：已完成（2026-07-11，12/12 小程序 URL/上传测试；静态、维护、D31、D42 与生产构建通过）。
+
 **Files:**
 - Create: `apps/miniprogram/src/utils/albumMediaUrls.js`
 - Modify: `apps/miniprogram/src/pages/session/album.vue:594-950,1295-1765,1949-2015,2384-2531,2717-2750,3067-3127`
 - Create: `apps/miniprogram/test/albumMediaUrls.test.mjs`
 
-- [ ] **Step 1: Write failing URL normalization and refresh-controller tests**
+- [x] **Step 1: Write failing URL normalization and refresh-controller tests**
 
 ```js
 import assert from "node:assert/strict";
@@ -2509,13 +2511,13 @@ test("concurrent expiry and auth failures cause one full-album refresh", async (
 
 Add tests for a timer scheduled 30 seconds early, `onShow` immediate refresh after suspended expiry, `dispose` clearing timers, public-share reload closure, one current-media auth retry, second failure surfacing, and filters/scroll/selection/preview index untouched because only URL fields merge.
 
-- [ ] **Step 2: Run URL lifecycle tests to verify RED**
+- [x] **Step 2: Run URL lifecycle tests to verify RED**
 
 Run: `node --test apps/miniprogram/test/albumMediaUrls.test.mjs`
 
 Expected: FAIL because `albumMediaUrls.js` does not exist.
 
-- [ ] **Step 3: Implement URL selection and a single-flight controller**
+- [x] **Step 3: Implement URL selection and a single-flight controller**
 
 Create `albumMediaUrls.js` using shared `createSingleFlight`, `mergeAlbumMediaUrls`, and `shouldRefreshAlbumMedia`:
 
@@ -2568,7 +2570,7 @@ export function createAlbumMediaRefreshController({
 }
 ```
 
-- [ ] **Step 4: Integrate upload phases and remove the new-client two-step create**
+- [x] **Step 4: Integrate upload phases and remove the new-client two-step create**
 
 Replace the photo loop's `uploadSessionAlbumPhoto` then `createSessionAlbumPhoto` with `uploadAlbumPhoto`. Map phases exactly:
 
@@ -2597,7 +2599,7 @@ if (!result?.photo?.id) {
 
 Import `albumMediaError` from `@pinche/shared`. Do not POST `{ photoUrl }` on the v2 path. Use the exact prepared file size/type already produced by photo preparation, then use the existing end-of-batch album reload to display finalized rows.
 
-- [ ] **Step 5: Integrate member/public batch refresh without resetting page state**
+- [x] **Step 5: Integrate member/public batch refresh without resetting page state**
 
 Instantiate the controller after mode/session/share-token resolution with `reloadAlbum` pointing to the same member or public-share loader. The reload closure fetches album data but does not reset filters, scroll position, selections, preview index, or local preview paths. On `onShow`, call `checkNow`; after every full load, call `schedule`; on `onUnload`, call `dispose`.
 
@@ -2616,11 +2618,11 @@ async function retryCurrentMediaAfterAuthFailure(photo, failedUrl, loadCurrent) 
 
 Use it for member and public preview/download errors only when COS/API status is 401/403 or the normalized code is `MEDIA_URL_EXPIRED`, and only once per failed URL.
 
-- [ ] **Step 6: Preserve local preview files and prefer signed download URLs**
+- [x] **Step 6: Preserve local preview files and prefer signed download URLs**
 
 Keep valid `USER_DATA_PATH` files as the first preview source. URL refresh must not delete or redownload them. For save/download: use cached local preview first; otherwise use `download_url`, then the compatibility preview URL. Do not add Bearer authorization to COS URLs. Mark request/download failures with scoped errors and render `error.message` plus `[error.code]` when a code exists; never call `reLaunch` or global maintenance.
 
-- [ ] **Step 7: Run mini-program unit, static, and production build checks**
+- [x] **Step 7: Run mini-program unit, static, and production build checks**
 
 Run: `node --test apps/miniprogram/test/albumMediaUrls.test.mjs apps/miniprogram/test/albumPhotoUpload.test.mjs`
 
@@ -2634,7 +2636,7 @@ Run: `npm run build:mp-weixin`
 
 Expected: UniApp production build exits 0 and emits `apps/miniprogram/dist/build/mp-weixin`.
 
-- [ ] **Step 8: Commit mini-program URL lifecycle**
+- [x] **Step 8: Commit mini-program URL lifecycle**
 
 ```bash
 git add apps/miniprogram/src/utils/albumMediaUrls.js apps/miniprogram/src/pages/session/album.vue apps/miniprogram/test/albumMediaUrls.test.mjs
