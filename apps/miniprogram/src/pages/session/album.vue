@@ -27,13 +27,13 @@
       :class="{ floating: topActionsFloating }"
     >
       <view class="album-actions album-sticky-actions" :class="{ floating: topActionsFloating }">
-        <view v-if="canUpload" class="album-primary-actions" :class="{ 'has-video': canUploadVideo }">
+        <view v-if="canUpload" class="album-primary-actions">
           <t-button
             class="button album-action-primary"
             :class="{ disabled: albumBusy }"
             :custom-style="albumUploadButtonCustomStyle"
             :disabled="albumBusy"
-            @tap="choosePhotos"
+            @tap="chooseAlbumMedia"
           >
             <view class="album-upload-button-content">
               <text class="album-upload-label">{{ albumUploadButtonLabel }}</text>
@@ -42,16 +42,6 @@
                 src="/static/icons/upload-bold.png"
                 mode="aspectFit"
               />
-            </view>
-          </t-button>
-          <t-button
-            v-if="canUploadVideo"
-            class="button secondary album-video-upload-action"
-            :disabled="albumBusy"
-            @tap="chooseVideo"
-          >
-            <view class="album-privacy-button-content">
-              <text>短视频</text>
             </view>
           </t-button>
           <t-button
@@ -171,7 +161,7 @@
         :class="{ disabled: albumBusy }"
         :custom-style="albumUploadButtonCustomStyle"
         :disabled="albumBusy"
-        @tap="choosePhotos"
+        @tap="chooseAlbumMedia"
       >
         <view class="album-upload-button-content">
           <text class="album-upload-label">{{ albumUploadButtonLabel }}</text>
@@ -593,6 +583,8 @@ import {
   transitionAlbumVideoViewerFailure,
   videoUrlExpiresAt
 } from "../../utils/albumVideo";
+import { classifyAlbumMediaSelection } from "../../utils/albumMediaSelection";
+import { runExclusiveAlbumMediaTask } from "../../utils/albumMediaOperation";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
@@ -2416,6 +2408,40 @@ export default {
         date.getHours()
       )}:${pad(date.getMinutes())}`;
     },
+    chooseAlbumMedia() {
+      if (this.timelineMode || !this.canUpload || this.albumBusy) {
+        showToast({ title: "发车后同车成员可上传", icon: "none" });
+        return;
+      }
+      if (!this.canUploadVideo) {
+        this.choosePhotos();
+        return;
+      }
+      if (typeof wx === "undefined" || typeof wx.chooseMedia !== "function") {
+        showToast({ title: "当前微信版本仅支持选择图片", icon: "none" });
+        this.choosePhotos();
+        return;
+      }
+      wx.chooseMedia({
+        count: 9,
+        mediaType: ["image", "video"],
+        sourceType: ["album", "camera"],
+        sizeType: ["original"],
+        maxDuration: MAX_ALBUM_VIDEO_DURATION_SECONDS,
+        success: async (result) => {
+          const selection = classifyAlbumMediaSelection(result);
+          if (selection.kind === "invalid") {
+            showToast({ title: selection.message, icon: "none" });
+            return;
+          }
+          if (selection.kind === "video") {
+            await this.uploadChosenVideo(selection.file);
+            return;
+          }
+          await this.uploadChosenPhotos(selection.paths);
+        }
+      });
+    },
     choosePhotos() {
       if (this.timelineMode || !this.canUpload || this.albumBusy) {
         showToast({ title: "发车后同车成员可上传", icon: "none" });
@@ -2428,25 +2454,6 @@ export default {
         success: async (result) => {
           const photoItems = result.tempFiles || [];
           await this.uploadChosenPhotos(photoItems.length ? photoItems : result.tempFilePaths || []);
-        }
-      });
-    },
-    chooseVideo() {
-      if (!this.canUploadVideo || this.albumBusy) {
-        showToast({ title: "只有管理员可测试上传视频", icon: "none" });
-        return;
-      }
-      if (typeof wx === "undefined" || typeof wx.chooseMedia !== "function") {
-        showToast({ title: "当前微信版本不支持选择视频", icon: "none" });
-        return;
-      }
-      wx.chooseMedia({
-        count: 1,
-        mediaType: ["video"],
-        sourceType: ["album", "camera"],
-        success: async (result) => {
-          const file = (result.tempFiles || [])[0] || {};
-          await this.uploadChosenVideo(file);
         }
       });
     },
@@ -2738,89 +2745,97 @@ export default {
         showToast({ title: "没有可上传的视频", icon: "none" });
         return;
       }
-      const originalInfo = await this.getVideoFileInfo(originalPath);
-      const durationSeconds = Math.ceil(
-        Number(file.duration || originalInfo.duration || 0)
-      );
-      if (durationSeconds > MAX_ALBUM_VIDEO_DURATION_SECONDS) {
-        showToast({ title: "视频最长支持 60 秒，请先剪辑后再上传", icon: "none" });
-        return;
-      }
-      if (!durationSeconds) {
-        showToast({ title: "无法读取视频时长，请换一个视频", icon: "none" });
-        return;
-      }
-      const originalSize = Number(file.size || originalInfo.size || 0);
-      let uploadPath = originalPath;
-      let uploadSize = originalSize;
-      let uploadInfo = {
-        filePath: originalPath,
-        size: originalSize,
-        width: originalInfo.width || null,
-        height: originalInfo.height || null,
-        duration: durationSeconds
-      };
-      const shouldCompressVideo = this.shouldCompressVideoBeforeUpload(originalSize);
-      if (shouldCompressVideo) {
-        this.statusText = "正在压缩视频...";
-        const compressed = await this.compressVideoBeforeUpload(originalPath, uploadInfo);
-        const compressedSize = Number(compressed.size || 0);
-        const compressedUsable =
-          compressed.filePath !== originalPath &&
-          compressedSize > 0 &&
-          !this.isSuspiciousCompressedVideo(compressed, uploadInfo);
-        const useCompressed = compressedUsable && (!originalSize || compressedSize < originalSize);
-        if (useCompressed) {
-          uploadPath = compressed.filePath;
-          uploadSize = compressedSize;
-          uploadInfo = compressed;
-        } else if (originalSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
-          showToast({ title: "压缩后视频异常，请先剪辑或压缩后再上传", icon: "none" });
-          this.statusText = "压缩后视频异常，请先剪辑或压缩后再上传。";
-          return;
-        }
-      }
-      const finalUploadInfo = await this.getVideoFileInfo(uploadPath);
-      uploadSize = Number(finalUploadInfo.size || uploadSize || 0);
-      if (!uploadSize) {
-        showToast({ title: "无法确认视频大小", icon: "none" });
-        this.statusText = "无法读取最终视频大小，请换一个视频或先压缩后再上传。";
-        return;
-      }
-      uploadInfo = {
-        ...uploadInfo,
-        ...finalUploadInfo,
-        filePath: uploadPath,
-        size: uploadSize
-      };
-      if (uploadSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
-        showToast({ title: "视频文件过大，请压缩或剪辑后再上传", icon: "none" });
-        this.statusText = "";
-        return;
-      }
-      const confirmed = await this.confirmVideoUpload({ durationSeconds, uploadSize });
-      if (!confirmed || this.albumBusy) {
-        this.statusText = "";
-        return;
-      }
-      this.uploading = true;
-      this.statusText = "正在上传视频...";
       try {
-        const sourceUrl = await uploadSessionAlbumVideo(this.sessionId, uploadPath);
-        await createSessionAlbumVideo(this.sessionId, {
-          sourceUrl,
-          durationSeconds,
-          videoWidth: uploadInfo.width || originalInfo.width || null,
-          videoHeight: uploadInfo.height || originalInfo.height || null,
-          videoByteSize: uploadSize,
-          videoContentType: "video/mp4"
+        await runExclusiveAlbumMediaTask({
+          isBusy: () => this.albumBusy,
+          setBusy: (value) => {
+            this.uploading = value;
+          },
+          task: async () => {
+            this.statusText = "正在处理视频...";
+            const originalInfo = await this.getVideoFileInfo(originalPath);
+            const durationSeconds = Math.ceil(
+              Number(file.duration || originalInfo.duration || 0)
+            );
+            if (durationSeconds > MAX_ALBUM_VIDEO_DURATION_SECONDS) {
+              showToast({ title: "视频最长支持 60 秒，请先剪辑后再上传", icon: "none" });
+              this.statusText = "";
+              return;
+            }
+            if (!durationSeconds) {
+              showToast({ title: "无法读取视频时长，请换一个视频", icon: "none" });
+              this.statusText = "";
+              return;
+            }
+            const originalSize = Number(file.size || originalInfo.size || 0);
+            let uploadPath = originalPath;
+            let uploadSize = originalSize;
+            let uploadInfo = {
+              filePath: originalPath,
+              size: originalSize,
+              width: originalInfo.width || null,
+              height: originalInfo.height || null,
+              duration: durationSeconds
+            };
+            const shouldCompressVideo = this.shouldCompressVideoBeforeUpload(originalSize);
+            if (shouldCompressVideo) {
+              this.statusText = "正在压缩视频...";
+              const compressed = await this.compressVideoBeforeUpload(originalPath, uploadInfo);
+              const compressedSize = Number(compressed.size || 0);
+              const compressedUsable =
+                compressed.filePath !== originalPath &&
+                compressedSize > 0 &&
+                !this.isSuspiciousCompressedVideo(compressed, uploadInfo);
+              const useCompressed = compressedUsable && (!originalSize || compressedSize < originalSize);
+              if (useCompressed) {
+                uploadPath = compressed.filePath;
+                uploadSize = compressedSize;
+                uploadInfo = compressed;
+              } else if (originalSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
+                showToast({ title: "压缩后视频异常，请先剪辑或压缩后再上传", icon: "none" });
+                this.statusText = "压缩后视频异常，请先剪辑或压缩后再上传。";
+                return;
+              }
+            }
+            const finalUploadInfo = await this.getVideoFileInfo(uploadPath);
+            uploadSize = Number(finalUploadInfo.size || uploadSize || 0);
+            if (!uploadSize) {
+              showToast({ title: "无法确认视频大小", icon: "none" });
+              this.statusText = "无法读取最终视频大小，请换一个视频或先压缩后再上传。";
+              return;
+            }
+            uploadInfo = {
+              ...uploadInfo,
+              ...finalUploadInfo,
+              filePath: uploadPath,
+              size: uploadSize
+            };
+            if (uploadSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
+              showToast({ title: "视频文件过大，请压缩或剪辑后再上传", icon: "none" });
+              this.statusText = "";
+              return;
+            }
+            const confirmed = await this.confirmVideoUpload({ durationSeconds, uploadSize });
+            if (!confirmed) {
+              this.statusText = "";
+              return;
+            }
+            this.statusText = "正在上传视频...";
+            const sourceUrl = await uploadSessionAlbumVideo(this.sessionId, uploadPath);
+            await createSessionAlbumVideo(this.sessionId, {
+              sourceUrl,
+              durationSeconds,
+              videoWidth: uploadInfo.width || originalInfo.width || null,
+              videoHeight: uploadInfo.height || originalInfo.height || null,
+              videoByteSize: uploadSize,
+              videoContentType: "video/mp4"
+            });
+            this.statusText = "";
+            await this.loadAlbum();
+          }
         });
-        this.statusText = "";
-        await this.loadAlbum();
       } catch (error) {
         this.statusText = error?.userMessage || "相册视频上传失败，请稍后重试。";
-      } finally {
-        this.uploading = false;
       }
     },
     async uploadChosenPhotos(paths) {
@@ -3480,12 +3495,7 @@ export default {
   gap: 12rpx;
 }
 
-.album-primary-actions.has-video {
-  grid-template-columns: minmax(0, 1fr) 148rpx 148rpx;
-}
-
 .album-action-primary,
-.album-video-upload-action,
 .album-privacy-action {
   height: 78rpx;
   margin: 0;
@@ -3522,7 +3532,6 @@ export default {
   flex-shrink: 0;
 }
 
-.album-video-upload-action,
 .album-privacy-action {
   padding: 0 18rpx;
 }

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev:mp-weixin": "uni -p mp-weixin",
-    "build:mp-weixin": "uni build -p mp-weixin"
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "test:album-media": "node --test test/albumMediaSelection.test.mjs test/albumMediaOperation.test.mjs"
   },
   "dependencies": {
     "@jubenmi/talk": "file:../../packages/talk",
