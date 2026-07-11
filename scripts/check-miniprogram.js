@@ -1058,6 +1058,13 @@ if (!fs.existsSync(pagesJsonPath)) {
   const sessionCalendarSource = fs.existsSync(sessionCalendarPath)
     ? fs.readFileSync(sessionCalendarPath, "utf8")
     : "";
+  const sessionCalendarStripePath = path.join(srcRoot, "utils/sessionCalendarStripe.js");
+  if (!fs.existsSync(sessionCalendarStripePath)) {
+    fail("Session calendar stripe helper must exist: utils/sessionCalendarStripe.js");
+  }
+  const sessionCalendarStripeSource = fs.existsSync(sessionCalendarStripePath)
+    ? fs.readFileSync(sessionCalendarStripePath, "utf8")
+    : "";
   if (sessionCalendarSource.includes("{{ totalCount }} 场车局")) {
     fail("Session calendar hero must not repeat total count; the filter tabs already show counts");
   }
@@ -1181,12 +1188,16 @@ if (!fs.existsSync(pagesJsonPath)) {
     ".session-stripe.amber",
     ".session-stripe.green",
     ".session-stripe.red",
-    "return \"green\"",
-    "return \"amber\"",
-    "return \"red\""
+    "import { sessionCalendarStripeTone }",
+    "return sessionCalendarStripeTone({"
   ]) {
     if (!sessionCalendarSource.includes(requiredCalendarStripeText)) {
       fail(`Session calendar stripe must use traffic-light session status colors: ${requiredCalendarStripeText}`);
+    }
+  }
+  for (const requiredCalendarStripeTone of ['"green"', '"amber"', '"red"']) {
+    if (!sessionCalendarStripeSource.includes(requiredCalendarStripeTone)) {
+      fail(`Session calendar stripe helper must preserve traffic-light tone: ${requiredCalendarStripeTone}`);
     }
   }
   if (sessionCalendarSource.includes(".session-row.joined .session-stripe")) {
