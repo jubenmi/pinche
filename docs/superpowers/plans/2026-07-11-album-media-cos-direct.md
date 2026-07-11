@@ -88,13 +88,15 @@ Implementation references for the non-obvious COS contracts:
 
 ## Task 1: Shared album-media protocol and deterministic state machine
 
+执行状态：已完成（2026-07-11，6/6 共享协议测试通过）。
+
 **Files:**
 - Create: `packages/shared/src/albumMedia.js`
 - Modify: `packages/shared/src/index.js`
 - Modify: `packages/shared/package.json`
 - Create: `packages/shared/test/albumMedia.test.mjs`
 
-- [ ] **Step 1: Write failing classification and retry tests**
+- [x] **Step 1: Write failing classification and retry tests**
 
 Create `packages/shared/test/albumMedia.test.mjs` with deterministic fakes. Cover all decisions rather than testing SDK wording:
 
@@ -194,13 +196,13 @@ test("expiry, URL-only merge, and single flight preserve page state", async () =
 });
 ```
 
-- [ ] **Step 2: Run the shared test to verify RED**
+- [x] **Step 2: Run the shared test to verify RED**
 
 Run: `node --test packages/shared/test/albumMedia.test.mjs`
 
 Expected: FAIL with `ERR_MODULE_NOT_FOUND` for `packages/shared/src/albumMedia.js`.
 
-- [ ] **Step 3: Implement the pure shared protocol**
+- [x] **Step 3: Implement the pure shared protocol**
 
 Create `packages/shared/src/albumMedia.js` with these public names and fixed limits:
 
@@ -429,13 +431,13 @@ Add the focused script to `packages/shared/package.json`:
 }
 ```
 
-- [ ] **Step 4: Run the shared tests to verify GREEN**
+- [x] **Step 4: Run the shared tests to verify GREEN**
 
 Run: `npm --workspace packages/shared run test:album-media`
 
 Expected: all shared album-media tests pass; the conflict test reports exactly one PUT.
 
-- [ ] **Step 5: Commit the shared protocol**
+- [x] **Step 5: Commit the shared protocol**
 
 ```bash
 git add packages/shared/src/albumMedia.js packages/shared/src/index.js packages/shared/package.json packages/shared/test/albumMedia.test.mjs
