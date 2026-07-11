@@ -16,6 +16,113 @@ function block(source, start, end) {
   return source.slice(from, to);
 }
 
+function assertOrdered(source, tokens, label) {
+  let cursor = -1;
+  for (const token of tokens) {
+    const index = source.indexOf(token, cursor + 1);
+    assert.notEqual(index, -1, `${label} missing or out of order: ${token}`);
+    cursor = index;
+  }
+}
+
+function assertAlbumMediaEntryContract(source) {
+  assert.equal((source.match(/@tap="chooseAlbumMedia"/g) || []).length, 2);
+  assert.doesNotMatch(source, /@tap="chooseVideo"|album-video-upload-action|album-primary-actions\.has-video/);
+
+  const canUploadVideo = block(source, "canUploadVideo() {", "downloadablePhotos() {");
+  assert.match(
+    canUploadVideo,
+    /return\s+!this\.timelineMode\s*&&\s*this\.canUpload\s*&&\s*this\.isSystemAdmin\s*;/
+  );
+
+  const chooseAlbumMedia = block(source, "chooseAlbumMedia() {", "choosePhotos() {");
+  const firstGuardStart = "if (this.timelineMode || !this.canUpload || this.albumBusy) {";
+  assert.equal(
+    chooseAlbumMedia.search(/\bif\s*\(/),
+    chooseAlbumMedia.indexOf(firstGuardStart),
+    "chooseAlbumMedia must begin with the upload availability guard"
+  );
+  const firstGuard = block(chooseAlbumMedia, firstGuardStart, "if (!this.canUploadVideo) {");
+  assertOrdered(firstGuard, [firstGuardStart, "showToast(", "return;"], "chooseAlbumMedia availability guard");
+
+  const imageFallback = block(
+    chooseAlbumMedia,
+    "if (!this.canUploadVideo) {",
+    'if (typeof wx === "undefined" || typeof wx.chooseMedia !== "function") {'
+  );
+  assertOrdered(
+    imageFallback,
+    ["if (!this.canUploadVideo) {", "this.choosePhotos();", "return;"],
+    "chooseAlbumMedia image-only fallback"
+  );
+
+  const wxFallbackStart = 'if (typeof wx === "undefined" || typeof wx.chooseMedia !== "function") {';
+  const wxFallback = block(chooseAlbumMedia, wxFallbackStart, "wx.chooseMedia({");
+  assertOrdered(
+    wxFallback,
+    [wxFallbackStart, "当前微信版本仅支持选择图片", "this.choosePhotos();", "return;"],
+    "chooseAlbumMedia wx fallback"
+  );
+
+  const chooseMediaOptions = block(chooseAlbumMedia, "wx.chooseMedia({", "success: async (result) => {");
+  assertOrdered(
+    chooseMediaOptions,
+    [
+      "wx.chooseMedia({",
+      "count: 9,",
+      'mediaType: ["image", "video"],',
+      'sourceType: ["album", "camera"],',
+      'sizeType: ["original"],',
+      "maxDuration: MAX_ALBUM_VIDEO_DURATION_SECONDS,"
+    ],
+    "chooseAlbumMedia chooseMedia options"
+  );
+
+  const chooseMediaSuccess = block(
+    chooseAlbumMedia,
+    "success: async (result) => {",
+    "\n        }\n      });"
+  );
+  const invalidSelection = block(
+    chooseMediaSuccess,
+    'if (selection.kind === "invalid") {',
+    'if (selection.kind === "video") {'
+  );
+  assertOrdered(
+    invalidSelection,
+    [
+      'if (selection.kind === "invalid") {',
+      'showToast({ title: selection.message, icon: "none" });',
+      "return;"
+    ],
+    "chooseAlbumMedia invalid selection branch"
+  );
+  const videoSelection = block(
+    chooseMediaSuccess,
+    'if (selection.kind === "video") {',
+    "await this.uploadChosenPhotos(selection.paths);"
+  );
+  assertOrdered(
+    videoSelection,
+    [
+      'if (selection.kind === "video") {',
+      "await this.uploadChosenVideo(selection.file);",
+      "return;"
+    ],
+    "chooseAlbumMedia video selection branch"
+  );
+  assertOrdered(
+    chooseMediaSuccess,
+    [
+      "const selection = classifyAlbumMediaSelection(result);",
+      'if (selection.kind === "invalid") {',
+      'if (selection.kind === "video") {',
+      "await this.uploadChosenPhotos(selection.paths);"
+    ],
+    "chooseAlbumMedia selection routing"
+  );
+}
+
 const uploadCosObject = block(api, "async function uploadCosObject", "function normalizeAlbumCosError");
 assert.match(uploadCosObject, /Headers:\s*upload\.headers\s*\|\|\s*\{\}/);
 assert.doesNotMatch(uploadCosObject, /Authorization|Bearer/);
@@ -36,7 +143,56 @@ assert.ok(
 const compressVideo = block(album, "async compressVideoBeforeUpload", "shouldCompressVideoBeforeUpload");
 assert.match(compressVideo, /compressVideoSizeBytes\(result\.size\)/);
 assert.match(album, /if\s*\(!uploadSize\)[\s\S]*无法确认视频大小/);
-assert.doesNotMatch(block(album, "async uploadChosenVideo", "async uploadChosenPhotos"), /Math\.max\(1,/);
+const uploadChosenVideo = block(album, "async uploadChosenVideo(file) {", "async uploadChosenPhotos(paths) {");
+assert.doesNotMatch(uploadChosenVideo, /Math\.max\(1,/);
+assert.match(
+  album,
+  /import\s*\{\s*runExclusiveAlbumMediaTask\s*\}\s*from\s*["']\.\.\/\.\.\/utils\/albumMediaOperation["'];/
+);
+const exclusiveVideoTask = block(
+  uploadChosenVideo,
+  "await runExclusiveAlbumMediaTask({",
+  "\n        });\n      } catch (error) {"
+);
+assert.equal(
+  uploadChosenVideo.indexOf("await "),
+  uploadChosenVideo.indexOf("await runExclusiveAlbumMediaTask({"),
+  "video upload must acquire the exclusive lock before its first await"
+);
+assert.match(exclusiveVideoTask, /isBusy:\s*\(\)\s*=>\s*this\.albumBusy/);
+assert.match(
+  exclusiveVideoTask,
+  /setBusy:\s*\(?value\)?\s*=>\s*\{\s*this\.uploading\s*=\s*value;\s*\}/
+);
+const exclusiveTaskStart = exclusiveVideoTask.indexOf("task: async () => {");
+const firstExclusiveTaskAwait = exclusiveVideoTask.indexOf("await ", exclusiveTaskStart);
+assert.notEqual(exclusiveTaskStart, -1, "video upload must provide an exclusive async task");
+assert.equal(
+  firstExclusiveTaskAwait,
+  exclusiveVideoTask.indexOf("await this.getVideoFileInfo(originalPath)", exclusiveTaskStart),
+  "video metadata preprocessing must be the first await inside the exclusive task"
+);
+assertOrdered(
+  exclusiveVideoTask,
+  [
+    "await runExclusiveAlbumMediaTask({",
+    "isBusy: () => this.albumBusy",
+    "setBusy:",
+    "task: async () => {",
+    'this.statusText = "正在处理视频...";',
+    "await this.getVideoFileInfo(originalPath)"
+  ],
+  "exclusive album video preparation"
+);
+assert.doesNotMatch(uploadChosenVideo, /!confirmed\s*\|\|\s*this\.albumBusy/);
+assert.doesNotMatch(uploadChosenVideo, /this\.uploading\s*=\s*(?:true|false)/);
+assert.match(uploadChosenVideo, /if\s*\(!confirmed\)\s*\{/);
+assert.match(
+  uploadChosenVideo,
+  /catch\s*\(error\)\s*\{[\s\S]*error\?\.userMessage\s*\|\|\s*"相册视频上传失败，请稍后重试。"/
+);
+
+assertAlbumMediaEntryContract(album);
 
 assert.match(viewer, /:autoplay="false"/);
 assert.match(viewer, /\$emit\(\s*["']video-error["']/);
