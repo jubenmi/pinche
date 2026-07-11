@@ -42,7 +42,9 @@
     "d42:api-server": "node scripts/d42-album-video-server-check.js && node scripts/d42-album-video-stream-check.js",
     "d42:api-delete": "node scripts/d42-album-video-delete-integration-check.js",
     "d42:mini": "node scripts/d42-album-video-hardening-unit-check.js --scope=mini && node scripts/d42-miniprogram-album-video-check.js",
-    "d42:smoke": "node scripts/d42-album-video-hardening-smoke.js"
+    "d42:smoke": "node scripts/d42-album-video-hardening-smoke.js",
+    "d43:cos-contract": "node scripts/d43-cos-live-contract-check.js",
+    "d43:check": "node scripts/d43-album-media-cos-direct-check.js"
   },
   "engines": {
     "node": ">=20"

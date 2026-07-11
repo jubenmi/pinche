@@ -2985,6 +2985,8 @@ git commit -m "feat: refresh admin COS album URLs"
 
 ## Task 14: COS CORS, cleanup service, and real-bucket contract gate
 
+执行状态：已完成（2026-07-11，静态运维门禁与默认安全跳过路径通过；显式真实桶检查留待受控预发布）。
+
 **Files:**
 - Create: `deploy/cos/cors.production.xml`
 - Create: `deploy/cos/cors.development.xml`
@@ -2992,7 +2994,7 @@ git commit -m "feat: refresh admin COS album URLs"
 - Modify: `docker-compose.prod.example.yml`
 - Modify: `package.json`
 
-- [ ] **Step 1: Write a failing static operations contract**
+- [x] **Step 1: Write a failing static operations contract**
 
 Create assertions in `scripts/d43-album-media-cos-direct-check.js` for exact production origin, methods, headers, exposed diagnostics, compose worker, and opt-in live script:
 
@@ -3017,13 +3019,13 @@ assert.match(liveContract, /forbidOverwrite:\s*true/);
 assert.match(liveContract, /getCosImageInfo/);
 ```
 
-- [ ] **Step 2: Run the static operations check to verify RED**
+- [x] **Step 2: Run the static operations check to verify RED**
 
 Run: `node scripts/d43-album-media-cos-direct-check.js --scope=operations`
 
 Expected: FAIL because CORS files, worker service, and live contract do not exist.
 
-- [ ] **Step 3: Add exact production and local-development CORS documents**
+- [x] **Step 3: Add exact production and local-development CORS documents**
 
 Create `deploy/cos/cors.production.xml`:
 
@@ -3053,7 +3055,7 @@ Create `deploy/cos/cors.production.xml`:
 
 Create a separate development document with the same methods/headers and two explicit rules for `http://localhost:5173` and `http://127.0.0.1:5173`; do not use wildcard origins or metadata/ACL headers.
 
-- [ ] **Step 4: Add the continuously running cleanup service**
+- [x] **Step 4: Add the continuously running cleanup service**
 
 Change the API and migrate services to `image: ${PINCHE_API_IMAGE:-hkccr.ccs.tencentyun.com/murder/pinche:latest}`, then add the worker with that same variable so an operator can pin all three to one digest:
 
@@ -3076,7 +3078,7 @@ Change the API and migrate services to `image: ${PINCHE_API_IMAGE:-hkccr.ccs.ten
 
 The release runbook in Task 15 must pin API, migrate, and worker to the same publish artifact during a rollout; do not run a worker from a different schema version.
 
-- [ ] **Step 5: Implement the opt-in destructive-safe live bucket contract**
+- [x] **Step 5: Implement the opt-in destructive-safe live bucket contract**
 
 The script exits successfully with `D43 COS live contract skipped` unless `D43_COS_CONTRACT=1`. When enabled, require `COS_SECRET_ID`, `COS_SECRET_KEY`, `COS_BUCKET`, and `COS_REGION`. Use a unique key under `contract-tests/album-image/`, an embedded 1×1 PNG, and `finally` deletion.
 
@@ -3123,7 +3125,7 @@ Add root scripts:
 "d43:check": "node scripts/d43-album-media-cos-direct-check.js"
 ```
 
-- [ ] **Step 6: Run static checks and the opt-in skip path**
+- [x] **Step 6: Run static checks and the opt-in skip path**
 
 Run: `node scripts/d43-album-media-cos-direct-check.js --scope=operations && npm run d43:cos-contract`
 
@@ -3133,7 +3135,7 @@ Run during pre-production with approved test-bucket credentials: `D43_COS_CONTRA
 
 Expected: one processed JPEG object passes HEAD/ImageInfo/four signed URL checks, the second PUT is rejected, tampered URLs fail, and final cleanup succeeds.
 
-- [ ] **Step 7: Commit operations artifacts**
+- [x] **Step 7: Commit operations artifacts**
 
 ```bash
 git add deploy/cos/cors.production.xml deploy/cos/cors.development.xml scripts/d43-cos-live-contract-check.js scripts/d43-album-media-cos-direct-check.js docker-compose.prod.example.yml package.json
