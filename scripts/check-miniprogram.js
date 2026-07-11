@@ -25,6 +25,7 @@ const d35AdminCatalogCheckPath = path.join(root, "scripts/d35-miniprogram-admin-
 const albumImageViewerPath = path.join(srcRoot, "components", "AlbumImageViewer.vue");
 const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
 const productionWechatAppId = "wx2675a606d3bd242c";
+const requireBuiltWxml = process.argv.includes("--require-built-wxml");
 const mainPackageLimitBytes = Math.floor(1.5 * 1024 * 1024);
 const localMediaLimitBytes = 200 * 1024;
 const localFontLimitBytes = 200 * 1024;
@@ -2187,7 +2188,13 @@ if (!fs.existsSync(pagesJsonPath)) {
     "components",
     "AlbumImageViewer.wxml"
   );
-  if (fs.existsSync(builtAlbumImageViewerWxmlPath)) {
+  if (!fs.existsSync(builtAlbumImageViewerWxmlPath)) {
+    if (requireBuiltWxml) {
+      fail(
+        "Built AlbumImageViewer WXML is required; run npm run build:mp-weixin before this check"
+      );
+    }
+  } else {
     const builtAlbumImageViewerWxml = fs.readFileSync(builtAlbumImageViewerWxmlPath, "utf8");
     const builtAlbumViewerSwiperTag =
       builtAlbumImageViewerWxml.match(/<swiper(?=[\s>])[^>]*>/)?.[0] || "";

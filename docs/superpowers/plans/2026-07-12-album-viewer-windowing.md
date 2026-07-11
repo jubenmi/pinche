@@ -1908,12 +1908,23 @@ git commit -m "perf: narrow album preview media updates"
 
 ### Task 4: Deterministic Verification and Independent Review
 
+**Status:** Completed
+
+- **Deterministic verification:** D31, the 13-page static check, D42, and `npm run build:mp-weixin` all exited 0; the build printed `DONE  Build complete.` with Sass deprecation warnings only; `git diff --check f9937f4..HEAD` produced no output.
+- **Scope/hygiene:** `f9937f4..HEAD` contains only `AlbumImageViewer.vue`, `album.vue`, the three approved verification scripts, and this plan. Generated Mini Program output remains ignored; before the Task 4 plan update the source worktree was clean.
+- **Overall spec review:** `SPEC COMPLIANT`; no Critical, Important, or Minor findings across the approved state machine, parent hot path, executable checks, compiled WXML, and source scope.
+- **Overall quality review:** `CHANGES REQUESTED` for one Important test-workflow gap: `check-miniprogram.js` skipped compiled swiper guards when a clean checkout had no build output, and the documented command order did not inspect WXML again after building.
+- **Remediation RED:** With generated `AlbumImageViewer.wxml` temporarily absent, `node scripts/check-miniprogram.js --require-built-wxml` exited 1 with `Built AlbumImageViewer WXML is required; run npm run build:mp-weixin before this check`.
+- **Remediation GREEN:** D31, the ordinary 13-page source check, and D42 all exited 0; `npm run build:mp-weixin` printed `DONE  Build complete.`; the required post-build check exited 0 and inspected a generated swiper containing `wx:for`, `wx:key`, and `data-generation`; `git diff --check` exited 0.
+- **Overall quality re-review:** `APPROVED`; no Critical, Important, or Minor findings. The reviewer confirmed the opt-in mode closes the clean-checkout gap without changing the ordinary source-only check or expanding product scope.
+
 **Files:**
 - Read: all files changed since f9937f4
+- Modify: scripts/check-miniprogram.js
 - Update: docs/superpowers/plans/2026-07-12-album-viewer-windowing.md
 - Generated only: apps/miniprogram/dist/build/mp-weixin/**
 
-- [ ] **Step 1: Run the approved deterministic verification set from a clean shell**
+- [x] **Step 1: Run the approved deterministic verification set from a clean shell**
 
 Run:
 
@@ -1922,12 +1933,13 @@ node scripts/d31-album-viewer-sequence-check.js
 node scripts/check-miniprogram.js
 node scripts/d42-miniprogram-album-video-check.js
 npm run build:mp-weixin
+node scripts/check-miniprogram.js --require-built-wxml
 git diff --check f9937f4..HEAD
 ~~~
 
-Expected: all four executable commands exit zero, build prints Build complete, and diff check prints nothing.
+Expected: all five executable commands exit zero, build prints Build complete, the post-build check cannot skip the compiled swiper guard, and diff check prints nothing.
 
-- [ ] **Step 2: Verify scope and generated-file hygiene**
+- [x] **Step 2: Verify scope and generated-file hygiene**
 
 Run:
 
@@ -1939,7 +1951,7 @@ git status --short
 
 Expected: source changes are limited to the component, album page, three verification scripts, and this plan. Generated dist files remain ignored and uncommitted.
 
-- [ ] **Step 3: Request independent spec and code-quality reviews**
+- [x] **Step 3: Request independent spec and code-quality reviews**
 
 Give reviewers the approved design, this plan, and the exact f9937f4..HEAD diff. Require separate answers for:
 
@@ -1948,7 +1960,7 @@ Give reviewers the approved design, this plan, and the exact f9937f4..HEAD diff.
 
 Expected: no Critical or Important findings. A finding must be reproduced or demonstrated before changing code. Any necessary fix must map to this approved plan and receive its own RED/GREEN verification.
 
-- [ ] **Step 4: Record review evidence and re-run affected checks**
+- [x] **Step 4: Record review evidence and re-run affected checks**
 
 Add the review outcome below the relevant task in this plan. If no source fix is required, run:
 
@@ -2035,6 +2047,7 @@ node scripts/d31-album-viewer-sequence-check.js
 node scripts/check-miniprogram.js
 node scripts/d42-miniprogram-album-video-check.js
 npm run build:mp-weixin
+node scripts/check-miniprogram.js --require-built-wxml
 git diff --check
 git status --short --branch
 ~~~
