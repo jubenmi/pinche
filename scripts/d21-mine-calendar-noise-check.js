@@ -40,14 +40,11 @@ assert(
   "Mine calendar list must not render the redundant pull-to-refresh instruction"
 );
 assert(
-  ((calendar.includes('v-for="filter in visibleFilterTabs"') ||
-    ((calendar.includes(':options="visibleFilterSegmentOptions"') ||
-      calendar.includes(':options="safeVisibleFilterSegmentOptions"')) &&
-      calendar.includes("const visibleFilterSegmentOptions = computed") &&
-      calendar.includes("visibleFilterTabs.value.map"))) &&
-    calendar.includes("const visibleFilterTabs = computed") &&
-    calendar.includes("tab.count > 0")),
-  "Mine calendar filters must hide zero-count state tabs"
+  calendar.includes(':options="safeVisibleFilterSegmentOptions"') &&
+    calendar.includes('{ value: "mine", label: "我的"') &&
+    calendar.includes('{ value: "city", label: "同城"') &&
+    !calendar.includes("tab.count > 0"),
+  "D38 calendar must keep only the two stable mine/city domains visible at zero count"
 );
 assert(
   calendar.includes("if (pendingSignupCount > 0)") &&

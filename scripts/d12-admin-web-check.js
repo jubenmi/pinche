@@ -328,6 +328,7 @@ assert(
 
 const dockerWorkflow = read(".github/workflows/docker-publish.yml");
 const apiDockerfile = read("apps/api/Dockerfile");
+const adminDockerfile = read("apps/admin-web/Dockerfile");
 const apiEntrypoint = read("apps/api/docker-entrypoint.sh");
 assert(
   apiDockerfile.includes("docker-entrypoint.sh") && apiDockerfile.includes("ENTRYPOINT"),
@@ -352,6 +353,10 @@ assert(
 assert(
   dockerWorkflow.includes("file: apps/admin-web/Dockerfile"),
   "docker workflow should build admin-web Dockerfile"
+);
+assert(
+  /COPY packages\/shared(?:\s+packages\/shared|\/src\s+packages\/shared\/src)/.test(adminDockerfile),
+  "admin web Dockerfile should copy the shared package implementation before building"
 );
 assert(
   (dockerWorkflow.match(/docker\/build-push-action@v6/g) || []).length >= 2,
@@ -723,9 +728,11 @@ for (const token of [
   "/api/uploads/cos-authorization",
   "uploadCosBackedFile",
   "uploadCosObject",
+  "putAlbumPhotoToCos",
   "getCosClient",
   "client.putObject",
-  "fallbackUploadSessionAlbumPhoto",
+  "uploadSessionAlbumPhotoLocal",
+  "albumAuthorizationErrorsByKey",
   "adminSessionAlbumPhoto",
   "sessionReviewPhoto",
   "/api/admin/sessions/",
@@ -736,8 +743,18 @@ for (const token of [
 }
 assert(
   /async function uploadCosBackedFile\(\{ kind, file, fallbackUpload, intentData = \{\} \}\) \{[\s\S]*?return fallbackUpload\(file\);[\s\S]*?return await uploadCosObject\(upload, file\);[\s\S]*?return fallbackUpload\(file\);[\s\S]*?\n\}/.test(webApi),
-  "admin album upload should match the mini-program direct-COS-then-fallback strategy"
+  "generic admin media upload should preserve the existing video fallback strategy"
 );
+const adminAlbumMedia = read("apps/admin-web/src/albumMedia.js");
+for (const token of [
+  "uploadAdminAlbumPhoto",
+  "cos-direct-v2",
+  "fallbackAllowed === true",
+  "executeAlbumCosUpload",
+  "DIRECT_UPLOAD_REQUIRED"
+]) {
+  assert(adminAlbumMedia.includes(token), `admin image upload adapter must include ${token}`);
+}
 
 const miniAppWorkspace = read("apps/admin-web/src/components/MiniProgramWorkspace.vue");
 const miniAppMineTemplate = miniAppWorkspace.slice(

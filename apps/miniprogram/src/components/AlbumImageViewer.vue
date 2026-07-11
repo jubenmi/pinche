@@ -20,7 +20,7 @@
       >
         <view class="album-image-viewer__slide">
           <image
-            v-if="thumbnailUrl(photo) && !thumbnailFailed(photo)"
+            v-if="isImage(photo) && thumbnailUrl(photo) && !thumbnailFailed(photo)"
             class="album-image-viewer__image album-image-viewer__image--thumbnail"
             :src="thumbnailUrl(photo)"
             mode="aspectFit"
@@ -28,7 +28,7 @@
             @error="handleThumbnailError(photo)"
           />
           <image
-            v-if="previewCanLoad(photo) && !previewFailed(photo)"
+            v-if="isImage(photo) && previewCanLoad(photo) && !previewFailed(photo)"
             class="album-image-viewer__image album-image-viewer__image--preview"
             :class="{ loaded: previewLoaded(photo) }"
             :src="previewUrl(photo)"
@@ -36,7 +36,35 @@
             @load="handlePreviewLoad(photo)"
             @error="handlePreviewError(photo)"
           />
-          <view v-if="showLoading(photo)" class="album-image-viewer__loading">
+          <view v-if="isVideo(photo)" class="album-image-viewer__video-shell">
+            <image
+              v-if="videoPosterUrl(photo)"
+              class="album-image-viewer__video-poster"
+              :src="videoPosterUrl(photo)"
+              mode="aspectFit"
+            />
+            <video
+              v-if="isActiveVideo(index) && videoUrl(photo)"
+              :id="videoDomId(photo, index)"
+              class="album-image-viewer__video"
+              :src="videoUrl(photo)"
+              :controls="true"
+              :autoplay="false"
+              object-fit="contain"
+              @error="handleVideoError(photo)"
+            />
+            <view v-if="showVideoLoading(photo)" class="album-image-viewer__video-status">
+              视频加载中
+            </view>
+            <view
+              v-if="showVideoFailed(photo)"
+              class="album-image-viewer__fallback album-image-viewer__video-retry"
+              @tap.stop="retryVideo(photo)"
+            >
+              视频加载失败，点击重试
+            </view>
+          </view>
+          <view v-if="isImage(photo) && showLoading(photo)" class="album-image-viewer__loading">
             <view class="album-image-viewer__loading-card">
               <view class="album-image-viewer__loading-dot"></view>
               <view class="album-image-viewer__loading-text">{{ loadingProgressText(photo) }}</view>
@@ -48,10 +76,10 @@
               </view>
             </view>
           </view>
-          <view v-if="showPreviewFailed(photo)" class="album-image-viewer__status">
+          <view v-if="isImage(photo) && showPreviewFailed(photo)" class="album-image-viewer__status">
             展示图加载失败
           </view>
-          <view v-if="showFallback(photo)" class="album-image-viewer__fallback">
+          <view v-if="isImage(photo) && showFallback(photo)" class="album-image-viewer__fallback">
             图片加载失败
           </view>
         </view>
@@ -116,7 +144,8 @@ export default {
       previewLoadedById: {},
       previewFailedById: {},
       thumbnailLoadedById: {},
-      thumbnailFailedById: {}
+      thumbnailFailedById: {},
+      videoFailedById: {}
     };
   },
   computed: {
@@ -135,20 +164,24 @@ export default {
       if (nextValue && !previousValue) {
         this.resetImageStates();
         this.syncInitialIndex();
+        this.$nextTick(() => this.requestCurrentVideoIfNeeded());
       }
       if (!nextValue) {
         this.touchStartX = 0;
         this.touchStartY = 0;
+        this.pauseAllVideos();
       }
     },
     initialIndex() {
       if (this.visible) {
         this.syncInitialIndex();
+        this.$nextTick(() => this.requestCurrentVideoIfNeeded());
       }
     },
     photos() {
       if (this.visible) {
         this.syncCurrentIndexAfterPhotosChange();
+        this.$nextTick(() => this.requestCurrentVideoIfNeeded());
       }
     }
   },
@@ -179,6 +212,7 @@ export default {
       this.previewFailedById = {};
       this.thumbnailLoadedById = {};
       this.thumbnailFailedById = {};
+      this.videoFailedById = {};
     },
     photoKey(photo, index) {
       if (photo && photo.id !== undefined && photo.id !== null) {
@@ -192,13 +226,36 @@ export default {
       }
       return this.previewUrl(photo) || this.thumbnailUrl(photo) || "";
     },
+    isVideo(photo) {
+      return photo?.media_type === "video";
+    },
+    isImage(photo) {
+      return !this.isVideo(photo);
+    },
+    isActiveVideo(index) {
+      return index === this.currentIndex;
+    },
     thumbnailUrl(photo) {
+      if (this.isVideo(photo)) {
+        return photo?.thumbnail_display_url || photo?.cover_url || "";
+      }
       const thumbnail = photo?.thumbnail_display_url || "";
       const preview = this.previewUrl(photo);
       return thumbnail && thumbnail !== preview ? thumbnail : "";
     },
     previewUrl(photo) {
       return photo?.preview_display_url || "";
+    },
+    videoUrl(photo) {
+      return photo?.video_display_url || "";
+    },
+    videoPosterUrl(photo) {
+      return this.thumbnailUrl(photo) || "";
+    },
+    videoDomId(photo, index) {
+      const key =
+        photo && photo.id !== undefined && photo.id !== null ? String(photo.id) : String(index);
+      return `album-image-viewer-video-${key}`;
     },
     previewCanLoad(photo) {
       return Boolean(
@@ -268,6 +325,67 @@ export default {
     handleThumbnailError(photo) {
       this.setPhotoState("thumbnailFailedById", photo, true);
     },
+    handleVideoError(photo) {
+      this.$emit("video-error", {
+        index: this.currentIndex,
+        photo
+      });
+    },
+    showVideoLoading(photo) {
+      return Boolean(this.isVideo(photo) && !this.videoUrl(photo) && !this.showVideoFailed(photo));
+    },
+    showVideoFailed(photo) {
+      return Boolean(this.isVideo(photo) && (photo?.video_load_failed || this.videoFailedById[this.photoStateKey(photo)]));
+    },
+    retryVideo(photo) {
+      this.setPhotoState("videoFailedById", photo, false);
+      this.$emit("need-video", {
+        index: this.currentIndex,
+        photo,
+        retry: true
+      });
+    },
+    requestCurrentVideoIfNeeded() {
+      const photo = this.currentPhoto;
+      if (!this.isVideo(photo) || this.videoUrl(photo) || this.showVideoFailed(photo)) {
+        return;
+      }
+      this.$emit("need-video", {
+        index: this.currentIndex,
+        photo
+      });
+    },
+    createVideoContext(photo, index) {
+      const createVideoContext =
+        (typeof uni !== "undefined" && typeof uni.createVideoContext === "function" && uni.createVideoContext) ||
+        (typeof wx !== "undefined" && typeof wx.createVideoContext === "function" && wx.createVideoContext);
+      if (!createVideoContext) {
+        return null;
+      }
+      return createVideoContext(this.videoDomId(photo, index), this);
+    },
+    pauseVideoAt(index) {
+      const photo = this.photos[index];
+      if (!this.isVideo(photo) || !this.videoUrl(photo)) {
+        return;
+      }
+      const videoContext = this.createVideoContext(photo, index);
+      if (!videoContext || typeof videoContext.pause !== "function") {
+        return;
+      }
+      try {
+        videoContext.pause();
+      } catch (error) {
+        // Some mini program runtimes throw while the video node is being removed.
+      }
+    },
+    pauseAllVideos() {
+      this.photos.forEach((photo, index) => {
+        if (this.isVideo(photo)) {
+          this.pauseVideoAt(index);
+        }
+      });
+    },
     showLoading(photo) {
       const progress = this.activeProgressState(photo);
       const thumbnailReady =
@@ -298,13 +416,18 @@ export default {
       return thumbnailUnavailable && previewUnavailable;
     },
     handleSwiperChange(event) {
+      const previousIndex = this.currentIndex;
       const nextIndex = this.clampIndex(event?.detail?.current || 0);
+      if (previousIndex !== nextIndex) {
+        this.pauseVideoAt(previousIndex);
+      }
       this.currentIndex = nextIndex;
       this.swiperIndex = nextIndex;
       this.$emit("change", {
         index: nextIndex,
         photo: this.photos[nextIndex] || null
       });
+      this.$nextTick(() => this.requestCurrentVideoIfNeeded());
     },
     handleTouchStart(event) {
       const touch = event?.touches?.[0];
@@ -341,6 +464,7 @@ export default {
       });
     },
     close() {
+      this.pauseAllVideos();
       this.$emit("close");
     }
   }
@@ -394,6 +518,43 @@ export default {
 
 .album-image-viewer__image--preview.loaded {
   opacity: 1;
+}
+
+.album-image-viewer__video-shell,
+.album-image-viewer__video,
+.album-image-viewer__video-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.album-image-viewer__video-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #050505;
+}
+
+.album-image-viewer__video-poster {
+  opacity: 0.76;
+  filter: brightness(0.78);
+}
+
+.album-image-viewer__video {
+  z-index: 1;
+  background: #000000;
+}
+
+.album-image-viewer__video-status {
+  position: relative;
+  z-index: 2;
+  padding: 14rpx 20rpx;
+  border-radius: 999rpx;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 24rpx;
+  line-height: 1;
 }
 
 .album-image-viewer__loading,

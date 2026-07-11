@@ -59,7 +59,7 @@ assert.deepEqual(api.getBackendStatus(), {
 
 setRequestHandler((options) => {
   assert.equal(options.url, "https://api.pinche.test/health");
-  assert.equal(options.timeout, 3000);
+  assert.equal(options.timeout, 10000);
   options.success({
     statusCode: 200,
     data: { ok: true }

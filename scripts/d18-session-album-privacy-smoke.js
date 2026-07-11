@@ -554,6 +554,10 @@ async function main() {
   const ownerAlbum = await request("GET", `/api/sessions/${session.id}/album`, undefined, owner.token);
   assert(hasPhoto(ownerAlbum, photoId), "uploader should see untagged own photo");
   const ownerPhoto = photoInAlbum(ownerAlbum, photoId);
+  assert(
+    ownerPhoto.can_delete === true,
+    "uploader should be allowed to delete own uploaded photo"
+  );
   await rawRequest("GET", ownerPhoto.image_url, undefined, undefined, 401);
   await rawRequest("GET", ownerPhoto.image_url, undefined, playerA.token, 403);
   assert(true, "album media should require login");
@@ -606,6 +610,10 @@ async function main() {
   );
   assert(hasPhoto(playerTaggedAlbum, photoId), "tagged player should see photo containing them");
   const playerTaggedPhoto = photoInAlbum(playerTaggedAlbum, photoId);
+  assert(
+    playerTaggedPhoto.can_delete === false,
+    "visible non-uploader should not be allowed to delete another member's photo"
+  );
   const playerTaggedMedia = await rawRequest(
     "GET",
     playerTaggedPhoto.image_url,

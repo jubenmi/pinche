@@ -1,9 +1,9 @@
 <script>
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "https://api.pinche.jubenmi.com";
+const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
 
 export default {
   globalData: {
-    apiBaseUrl,
+    apiBaseUrl: productionApiBaseUrl,
     signupResultTemplateId: "",
     token: "",
     authBaseUrl: "",

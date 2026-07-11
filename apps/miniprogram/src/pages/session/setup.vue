@@ -97,6 +97,20 @@
           />
         </view>
       </view>
+      <view class="setting-switch-row">
+        <view class="setting-switch-copy">
+          <view class="setting-switch-title">同城展示</view>
+          <view class="section-note">开启后，同城玩家可以发现这辆车；关闭后仅通过分享链接加入。</view>
+        </view>
+        <view class="setting-switch-meta">
+          <view class="setting-switch-label">{{ cityVisible ? "已开启" : "已关闭" }}</view>
+          <t-switch
+            color="#1f7a68"
+            :value="cityVisible"
+            @change="setCityVisible($event.detail.value)"
+          />
+        </view>
+      </view>
     </view>
 
     <view class="section">
@@ -106,7 +120,7 @@
         :value="pinnedMessageText"
         class="textarea"
         maxlength="300"
-        :placeholder="defaultPinnedMessage"
+        :placeholder="defaultPinnedMessage || ''"
         placeholder-class="placeholder"
         @change="pinnedMessageText = $event.detail.value"
       />
@@ -188,6 +202,7 @@ export default {
       joinPolicy: "review_required",
       joinPhoneRequired: true,
       npcJoinEnabled: true,
+      cityVisible: true,
       statusText: "",
       busyAction: false
     };
@@ -233,6 +248,7 @@ export default {
     this.joinPhoneRequired =
       flow.joinPhoneRequired === undefined ? true : Boolean(flow.joinPhoneRequired);
     this.npcJoinEnabled = flow.npcJoinEnabled === undefined ? true : Boolean(flow.npcJoinEnabled);
+    this.cityVisible = flow.cityVisible === undefined ? true : Boolean(flow.cityVisible);
     if (flow.startAt) {
       this.dateValue = String(flow.startAt).slice(0, 10) || this.dateValue;
       this.timeValue = String(flow.startAt).slice(11, 16) || this.timeValue;
@@ -276,6 +292,10 @@ export default {
       this.npcJoinEnabled = Boolean(value);
       this.persistDraft();
     },
+    setCityVisible(value) {
+      this.cityVisible = Boolean(value);
+      this.persistDraft();
+    },
     persistDraft() {
       writeCreateFlow({
         startAt: this.startAt,
@@ -283,7 +303,8 @@ export default {
         pinnedMessageText: this.pinnedMessageText.trim(),
         joinPolicy: this.joinPolicy,
         joinPhoneRequired: this.joinPhoneRequired,
-        npcJoinEnabled: this.npcJoinEnabled
+        npcJoinEnabled: this.npcJoinEnabled,
+        cityVisible: this.cityVisible
       });
     },
     seatPayload(role) {
@@ -328,6 +349,7 @@ export default {
             joinPolicy: this.joinPolicy,
             joinPhoneRequired: this.joinPhoneRequired,
             npcJoinEnabled: this.npcJoinEnabled,
+            visibility: this.cityVisible ? "public" : "share_only",
             note: "剧本迷·拼车，一起沉浸好本。",
             pinnedMessageText
           }
@@ -377,6 +399,7 @@ export default {
           joinPolicy: this.joinPolicy,
           joinPhoneRequired: this.joinPhoneRequired,
           npcJoinEnabled: this.npcJoinEnabled,
+          cityVisible: this.cityVisible,
           note: "剧本迷·拼车，一起沉浸好本。"
         });
         uni.redirectTo({ url: `/pages/session/share?id=${session.id}` });

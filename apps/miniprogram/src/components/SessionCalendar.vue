@@ -1,8 +1,12 @@
 <template>
   <view class="session-calendar">
     <view class="calendar-shell">
-      <view v-if="showCalendarActions" class="calendar-action-bar">
-        <t-button v-if="showCreateButton" class="primary-quiet-button" @tap="$emit('create')">
+      <view
+        v-if="showCalendarActions"
+        class="calendar-action-bar"
+        :class="{ 'calendar-action-bar--single': !showAdminButton }"
+      >
+        <t-button v-if="showCreateButton" class="primary-quiet-button" @tap="requestCreate">
           <view class="primary-action-inner">
             <t-image class="primary-action-icon" src="/static/icons/user-plus-white.png" mode="aspectFit" />
             <text>{{ createButtonLabel }}</text>
@@ -13,14 +17,15 @@
           class="admin-icon-button"
           aria-label="管理"
           hover-class="admin-icon-button--active"
-          @tap="$emit('admin')"
+          @tap="requestAdmin"
         >
-          <t-image class="admin-action-icon" src="/static/icons/toolbox-light.svg" mode="aspectFit" />
+          <t-image class="admin-action-icon" src="/static/icons/settings-light.svg" mode="aspectFit" />
         </view>
       </view>
 
       <view class="calendar-controls">
         <t-segmented
+          v-if="safeVisibleFilterSegmentOptions.length > 0"
           class="filter-tabs"
           t-class-item="calendar-segmented-item"
           t-class-thumb="calendar-segmented-thumb"
@@ -31,10 +36,16 @@
           @change="setFilter($event.detail.value)"
         />
         <view class="calendar-tools">
-          <t-button class="today-reset-button" @tap="scrollToToday">归位</t-button>
-          <view class="date-picker-button" @tap="openCalendarDatePicker">
-            {{ selectedDateText }}
-          </view>
+          <t-button class="today-reset-button" aria-label="归位到今天" @tap="scrollToToday">
+            <t-image class="calendar-tool-icon" src="/static/icons/return-green.svg" mode="aspectFit" />
+          </t-button>
+          <t-button
+            class="date-picker-button"
+            aria-label="选择日期"
+            @tap="openCalendarDatePicker"
+          >
+            <t-image class="calendar-tool-icon" src="/static/icons/calendar-green.svg" mode="aspectFit" />
+          </t-button>
           <t-date-time-picker
             title="选择日期"
             mode="date"
@@ -63,16 +74,26 @@
         :scroll-with-animation="true"
         :show-scrollbar="false"
         :refresher-enabled="true"
-        :refresher-triggered="refreshing"
+        :refresher-triggered="activeRefreshing"
         upper-threshold="80"
         lower-threshold="80"
         @refresherrefresh="refreshCalendar"
         @scrolltolower="loadMoreDates"
       >
+        <view v-if="showCityLocationPrompt" class="city-location-prompt">
+          <view class="city-location-copy">
+            <text class="city-location-title">{{ cityLocationPromptTitle }}</text>
+            <text class="city-location-text">{{ cityLocationPromptText }}</text>
+          </view>
+          <t-button class="city-location-action" @tap="requestCityLocationAccess">
+            {{ cityLocationActionText }}
+          </t-button>
+        </view>
+
         <t-empty
           v-if="filteredCalendarItems.length === 0 && !isCalendarLoading"
           class="calendar-empty"
-          description="暂无符合条件的车局。你的拼车会按日期汇总在这里。"
+          :description="calendarEmptyText"
         />
 
         <view class="day-list">
@@ -167,9 +188,9 @@
                     </view>
                   </view>
 
-                  <view class="session-actions">
+                  <view v-if="item.canManage || item.canRemove" class="session-actions">
                     <t-button v-if="item.canManage" class="session-manage" @tap.stop="goManage(item.sessionId)">管理</t-button>
-                    <t-button class="session-delete" @tap.stop="hideCalendarItem(item)">
+                    <t-button v-if="item.canRemove" class="session-delete" @tap.stop="hideCalendarItem(item)">
                       {{ item.isOrganized ? organizedRemovalActionText(item.session) : "删除" }}
                     </t-button>
                   </view>
@@ -193,8 +214,15 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref } from "vue";
-import { request } from "../utils/api";
+import { computed, nextTick, ref, watch } from "vue";
+import { dataOf, request } from "../utils/api";
+import {
+  discoveryRequestBody,
+  getCityDiscoveryLocation,
+  locationFailureState,
+  readCityDiscoveryCache,
+  writeCityDiscoveryCache
+} from "../utils/cityDiscovery";
 import { showModal, showToast } from "../utils/tdesignFeedback";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -209,6 +237,14 @@ const props = defineProps({
   signups: {
     type: Array,
     default: () => []
+  },
+  guestSessions: {
+    type: Array,
+    default: () => []
+  },
+  calendarMode: {
+    type: String,
+    default: "member"
   },
   loading: {
     type: Boolean,
@@ -236,42 +272,74 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(["refresh", "create", "admin", "auth-expired"]);
+const emit = defineEmits(["refresh", "create", "admin", "identity-required", "auth-expired"]);
 
 const sessionStatusText = ref("");
 const signupStatusText = ref("");
-const activeFilter = ref("all");
+const activeFilter = ref("mine");
 const loadedCalendarCount = ref(CALENDAR_PAGE_SIZE);
 const collapsedDayKeys = ref([]);
 const scrollIntoViewId = ref("");
 const selectedDateKey = ref("");
 const calendarDatePickerVisible = ref(false);
+const citySessions = ref([]);
+const cityLoading = ref(false);
+const cityRefreshing = ref(false);
+const cityLoaded = ref(false);
+const cityMode = ref("");
+const cityName = ref("");
+const cityLocationState = ref("idle");
+const cityStatusText = ref("");
 
-const organizedCount = computed(
-  () => calendarItems.value.filter((item) => item.isOrganized).length
+const isGuestMode = computed(() => props.calendarMode === "guest");
+const mineCalendarItems = computed(() => mergeCalendarItems(props.sessions, props.signups));
+const cityCalendarItems = computed(() => createDiscoveryCalendarItems(citySessions.value));
+const guestCalendarItems = computed(() => createDiscoveryCalendarItems(props.guestSessions, "guest"));
+const activeCalendarFilter = computed(() => (isGuestMode.value ? "guest" : activeFilter.value));
+const filteredCalendarItems = computed(() => {
+  if (activeCalendarFilter.value === "guest") {
+    return guestCalendarItems.value;
+  }
+  return activeCalendarFilter.value === "city" ? cityCalendarItems.value : mineCalendarItems.value;
+});
+const isCalendarLoading = computed(() =>
+  activeCalendarFilter.value === "city" ? cityLoading.value : props.loading
 );
-const totalCount = computed(() => calendarItems.value.length);
-const pendingCount = computed(
-  () => calendarItems.value.filter((item) => item.isPending).length
+const activeRefreshing = computed(() =>
+  activeCalendarFilter.value === "city" ? cityRefreshing.value : props.refreshing
 );
-const isCalendarLoading = computed(() => props.loading);
 const showCalendarActions = computed(() => props.showCreateButton || props.showAdminButton);
 const calendarStatusText = computed(() => {
+  if (activeCalendarFilter.value === "guest") {
+    return isCalendarLoading.value ? "正在加载近期车局..." : props.statusText;
+  }
+  if (activeCalendarFilter.value === "city") {
+    if (cityLoading.value) {
+      return "正在查找可参加的同城车局...";
+    }
+    if (cityStatusText.value) {
+      return cityStatusText.value;
+    }
+    if (cityMode.value === "time_fallback") {
+      return "定位未开启，暂按开本时间推荐。";
+    }
+    return "";
+  }
   if (isCalendarLoading.value) {
     return "正在整理你的车局...";
   }
   return [props.statusText, sessionStatusText.value, signupStatusText.value].filter(Boolean).join(" ");
 });
-const filterTabs = computed(() => [
-  { value: "all", label: "全部", count: totalCount.value },
-  { value: "organized", label: "发起", count: organizedCount.value },
-  { value: "pending", label: "待处理", count: pendingCount.value }
-]);
-const visibleFilterTabs = computed(() =>
-  filterTabs.value.filter((tab) => tab.value === "all" || tab.count > 0)
+const filterTabs = computed(() =>
+  isGuestMode.value
+    ? [{ value: "guest", label: "近期车局", count: guestCalendarItems.value.length }]
+    : [
+        { value: "mine", label: "我的", count: mineCalendarItems.value.length },
+        { value: "city", label: "同城", count: cityCalendarItems.value.length }
+      ]
 );
 const visibleFilterSegmentOptions = computed(() =>
-  visibleFilterTabs.value.map((tab) => ({
+  filterTabs.value.map((tab) => ({
     value: tab.value,
     label: `${tab.label} ${tab.count}`
   }))
@@ -279,18 +347,35 @@ const visibleFilterSegmentOptions = computed(() =>
 const safeVisibleFilterSegmentOptions = computed(() =>
   Array.isArray(visibleFilterSegmentOptions.value) ? visibleFilterSegmentOptions.value : []
 );
-const activeCalendarFilter = computed(() =>
-  visibleFilterTabs.value.some((tab) => tab.value === activeFilter.value) ? activeFilter.value : "all"
+const showCityLocationPrompt = computed(
+  () =>
+    activeCalendarFilter.value === "city" &&
+    cityMode.value === "time_fallback" &&
+    ["denied", "unavailable"].includes(cityLocationState.value)
 );
-const calendarItems = computed(() => mergeCalendarItems(props.sessions, props.signups));
-const filteredCalendarItems = computed(() => {
-  if (activeCalendarFilter.value === "organized") {
-    return calendarItems.value.filter((item) => item.isOrganized);
+const cityLocationPromptTitle = computed(() =>
+  cityLocationState.value === "denied" ? "开启定位，查看同城车局" : "暂时无法识别所在城市"
+);
+const cityLocationPromptText = computed(() => {
+  if (cityLocationState.value === "denied") {
+    return "你尚未授权位置，当前先按开本时间展示最近 5 辆可报名车局。";
   }
-  if (activeCalendarFilter.value === "pending") {
-    return calendarItems.value.filter((item) => item.isPending);
+  return "当前先按开本时间展示最近 5 辆可报名车局，稍后可重试定位。";
+});
+const cityLocationActionText = computed(() =>
+  cityLocationState.value === "denied" ? "开启定位" : "重试定位"
+);
+const calendarEmptyText = computed(() => {
+  if (activeCalendarFilter.value === "guest") {
+    return "暂无近期车局。";
   }
-  return calendarItems.value;
+  if (activeCalendarFilter.value !== "city") {
+    return "暂无符合条件的车局。你的拼车会按日期汇总在这里。";
+  }
+  if (cityMode.value === "city" && cityName.value) {
+    return `${cityName.value}暂无可报名车局。`;
+  }
+  return "暂无可报名车局。";
 });
 const visibleCalendarItems = computed(() =>
   filteredCalendarItems.value.slice(0, loadedCalendarCount.value)
@@ -338,9 +423,30 @@ const calendarMoreHintText = computed(() => {
   return "已显示全部车局";
 });
 const selectedDatePickerValue = computed(() => selectedDateKey.value || dateKey(todayStart()));
-const selectedDateText = computed(() =>
-  selectedDateKey.value ? compactDateText(selectedDateKey.value) : "日期"
+
+watch(
+  () => props.calendarMode,
+  (mode) => {
+    activeFilter.value = mode === "guest" ? "guest" : "mine";
+    resetCalendarWindow();
+  }
 );
+
+function requestCreate() {
+  if (isGuestMode.value) {
+    emit("identity-required", "登录后可创建车局。");
+    return;
+  }
+  emit("create");
+}
+
+function requestAdmin() {
+  if (isGuestMode.value) {
+    emit("identity-required", "登录后可进入车包。");
+    return;
+  }
+  emit("admin");
+}
 
 function handleAuthExpired(error) {
   if (error?.statusCode !== 401) {
@@ -350,16 +456,114 @@ function handleAuthExpired(error) {
   return true;
 }
 
+async function loadCitySessions(options = {}) {
+  if (cityLoading.value || cityRefreshing.value) {
+    return;
+  }
+
+  const refreshing = Boolean(options.refreshing);
+  cityLoading.value = !refreshing;
+  cityRefreshing.value = refreshing;
+  cityStatusText.value = "";
+  let location = null;
+  let locationFromCache = false;
+
+  try {
+    if (!options.ignoreCache) {
+      location = readCityDiscoveryCache();
+      locationFromCache = Boolean(location);
+    }
+    if (location) {
+      cityLocationState.value = "located";
+    } else {
+      cityLocationState.value = "locating";
+      try {
+        location = await getCityDiscoveryLocation();
+        cityLocationState.value = "located";
+      } catch (error) {
+        cityLocationState.value = locationFailureState(error);
+      }
+    }
+
+    const response = await request({
+      url: "/api/sessions/discovery",
+      method: "POST",
+      data: discoveryRequestBody(location),
+      timeout: 12000
+    });
+    const payload = dataOf(response) || {};
+    citySessions.value = Array.isArray(payload.sessions) ? payload.sessions : [];
+    cityMode.value = payload.mode === "city" ? "city" : "time_fallback";
+    cityName.value = cityMode.value === "city" ? String(payload.city || "").trim() : "";
+    cityLoaded.value = true;
+
+    if (cityMode.value === "city") {
+      cityLocationState.value = "located";
+      if (cityName.value && location && !locationFromCache) {
+        writeCityDiscoveryCache({
+          city: cityName.value,
+          latitude: location.latitude,
+          longitude: location.longitude
+        });
+      }
+    } else if (cityLocationState.value !== "denied") {
+      cityLocationState.value = "unavailable";
+    }
+
+    if (activeCalendarFilter.value === "city") {
+      resetCalendarWindow();
+    }
+  } catch (error) {
+    if (handleAuthExpired(error)) {
+      return;
+    }
+    cityStatusText.value = "同城车局加载失败，请稍后重试。";
+    cityLoaded.value = citySessions.value.length > 0;
+  } finally {
+    cityLoading.value = false;
+    cityRefreshing.value = false;
+  }
+}
+
 async function refreshCalendar() {
+  if (activeCalendarFilter.value === "city") {
+    await loadCitySessions({ refreshing: true });
+    return;
+  }
   emit("refresh");
 }
 
 function setFilter(value) {
+  const allowedFilters = isGuestMode.value ? ["guest"] : ["mine", "city"];
+  if (!allowedFilters.includes(value)) {
+    return;
+  }
   activeFilter.value = value;
-  loadedCalendarCount.value = CALENDAR_PAGE_SIZE;
-  collapsedDayKeys.value = [];
-  selectedDateKey.value = "";
-  scrollIntoViewId.value = "";
+  resetCalendarWindow();
+  if (value === "city" && !cityLoaded.value) {
+    void loadCitySessions();
+  }
+}
+
+function requestCityLocationAccess() {
+  cityStatusText.value = "";
+  if (cityLocationState.value !== "denied" || typeof uni.openSetting !== "function") {
+    void loadCitySessions({ ignoreCache: true });
+    return;
+  }
+
+  uni.openSetting({
+    success(result = {}) {
+      if (result.authSetting?.["scope.userLocation"]) {
+        void loadCitySessions({ ignoreCache: true });
+        return;
+      }
+      cityLocationState.value = "denied";
+    },
+    fail() {
+      void loadCitySessions({ ignoreCache: true });
+    }
+  });
 }
 
 function resetCalendarWindow() {
@@ -454,6 +658,14 @@ function handleCalendarCardTap(item) {
 }
 
 function handleCalendarAction(item) {
+  if (item.type === "guest") {
+    goGuestDetail(item.sessionId);
+    return;
+  }
+  if (item.type === "city") {
+    goDetail(item.sessionId);
+    return;
+  }
   if (isCalendarItemPostStart(item)) {
     goAlbum(item.sessionId);
     return;
@@ -487,6 +699,14 @@ function goManage(id) {
 
 function goShare(id) {
   uni.navigateTo({ url: `/pages/session/share?id=${id}` });
+}
+
+function goDetail(id) {
+  uni.navigateTo({ url: `/pages/session/detail?id=${id}&entry=city` });
+}
+
+function goGuestDetail(id) {
+  uni.navigateTo({ url: `/pages/session/detail?id=${id}&entry=guest` });
 }
 
 function goAlbum(id) {
@@ -604,6 +824,70 @@ function hideJoinedSession(signup) {
   );
 }
 
+function createDiscoveryCalendarItems(rows = [], itemType = "city") {
+  return (rows || [])
+    .map((session) => {
+      const sessionId = session?.id;
+      const startDate = parseStartAt(session?.start_at);
+      if (!sessionId || !startDate) {
+        return null;
+      }
+      const availableSeatCount = Math.max(Number(session.available_seat_count || 0), 0);
+      return {
+        session: null,
+        signup: null,
+        sessionId,
+        key: `${itemType}-${sessionId}`,
+        isOrganized: false,
+        canManage: false,
+        canRemove: false,
+        isJoined: false,
+        type: itemType,
+        raw: session,
+        sessionStatus: session.status || "recruiting",
+        signupStatus: "",
+        title: session.script_name_snapshot || "未命名车局",
+        storeName: session.store_name_snapshot || "店家待定",
+        dateKey: dateKey(startDate),
+        sortValue: startDate.getTime(),
+        timeText: timeText(startDate),
+        roleText: `剩余 ${availableSeatCount} 位`,
+        metaText:
+          itemType === "guest"
+            ? [session.store_city, session.store_district].filter(Boolean).join(" · ") || "公开招募"
+            : discoveryDistanceText(session.distance_km),
+        statusText: "招募中",
+        statusTone: "amber",
+        postStart: false,
+        hasReview: false,
+        canReview: false,
+        identityTags: [],
+        isPending: false,
+        albumFirst: false,
+        albumCtaNote: "",
+        stripeTone: "amber"
+      };
+    })
+    .filter(Boolean);
+}
+
+function discoveryDistanceText(value) {
+  if (value === null || value === undefined || value === "") {
+    return "同城可报名";
+  }
+  const distance = Number(value);
+  if (!Number.isFinite(distance) || distance < 0) {
+    return "同城可报名";
+  }
+  if (distance < 0.1) {
+    return "距离 <100m";
+  }
+  if (distance < 1) {
+    return `距离 ${Math.round(distance * 1000)}m`;
+  }
+  return `距离 ${distance.toFixed(1)}km`;
+}
+
 function mergeCalendarItems(createdSessions = [], joinedSignups = []) {
   const itemsBySession = new Map();
 
@@ -651,6 +935,7 @@ function refreshCalendarItem(item) {
   item.key = `calendar-${item.sessionId}`;
   item.isOrganized = Boolean(item.session);
   item.canManage = item.isOrganized;
+  item.canRemove = true;
   item.isJoined = Boolean(item.signup);
   item.type = item.isOrganized ? "organized" : "joined";
   item.raw = item.session || item.signup || {};
@@ -859,9 +1144,11 @@ function dateTargetIndex(key) {
   if (exactIndex >= 0) {
     return exactIndex;
   }
-  const nearestOlderIndex = filteredCalendarItems.value.findIndex((item) => item.dateKey <= key);
-  if (nearestOlderIndex >= 0) {
-    return nearestOlderIndex;
+  const nearestIndex = filteredCalendarItems.value.findIndex((item) =>
+    activeCalendarFilter.value === "city" ? item.dateKey >= key : item.dateKey <= key
+  );
+  if (nearestIndex >= 0) {
+    return nearestIndex;
   }
   return filteredCalendarItems.value.length - 1;
 }
@@ -878,8 +1165,10 @@ function targetElementIdForDate(key) {
   }
 
   const dayBands = visibleDayBands.value.filter((band) => band.kind === "day");
-  const nearestOlderBand = dayBands.find((band) => band.dateKey <= key);
-  return nearestOlderBand?.elementId || dayBands[dayBands.length - 1]?.elementId || "";
+  const nearestBand = dayBands.find((band) =>
+    activeCalendarFilter.value === "city" ? band.dateKey >= key : band.dateKey <= key
+  );
+  return nearestBand?.elementId || dayBands[dayBands.length - 1]?.elementId || "";
 }
 
 function parseStartAt(value) {
@@ -930,11 +1219,6 @@ function dateKey(date) {
 function dateFromKey(key) {
   const [year, month, day] = key.split("-").map(Number);
   return new Date(year, month - 1, day);
-}
-
-function compactDateText(key) {
-  const date = dateFromKey(key);
-  return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
 function dayOffset(date, baseDate = todayStart()) {
@@ -1043,6 +1327,10 @@ function signupStatusLabel(status) {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12rpx;
   align-items: center;
+}
+
+.calendar-action-bar--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .primary-quiet-button {
@@ -1172,6 +1460,13 @@ function signupStatusLabel(status) {
   background: rgba(238, 247, 244, 0.96);
 }
 
+.calendar-tool-icon {
+  display: inline-block;
+  width: 34rpx;
+  height: 34rpx;
+  vertical-align: middle;
+}
+
 .calendar-notice {
   margin-top: 0;
 }
@@ -1179,6 +1474,53 @@ function signupStatusLabel(status) {
 .calendar-scroll {
   height: calc(100vh - 356rpx);
   min-height: 640rpx;
+}
+
+.city-location-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin: 12rpx 0 20rpx 64rpx;
+  padding: 22rpx 20rpx;
+  border-top: 1rpx solid rgba(213, 190, 145, 0.72);
+  border-bottom: 1rpx solid rgba(213, 190, 145, 0.72);
+  background: rgba(255, 249, 236, 0.82);
+}
+
+.city-location-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8rpx;
+}
+
+.city-location-title {
+  color: #4f4433;
+  font-size: 26rpx;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.city-location-text {
+  color: #81725c;
+  font-size: 22rpx;
+  line-height: 1.5;
+}
+
+.city-location-action {
+  flex: 0 0 148rpx;
+  width: 148rpx;
+  height: 60rpx;
+  margin: 0;
+  padding: 0 12rpx;
+  border: 1rpx solid rgba(36, 116, 95, 0.46);
+  border-radius: 10rpx;
+  background: #ffffff;
+  color: #24745f;
+  font-size: 23rpx;
+  line-height: 60rpx;
 }
 
 .load-more {

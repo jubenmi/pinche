@@ -34,10 +34,20 @@
         :visible="true"
         :content="copyStatusText"
       />
-      <view class="actions">
+      <t-notice-bar
+        v-if="isCityPreview"
+        class="notice"
+        theme="warning"
+        :visible="true"
+        content="同城发现仅供浏览。请先联系店家；收到店家或车友分享卡片后可选择角色上车。"
+      />
+      <view v-if="!isCityPreview" class="actions">
         <t-button v-if="isPostStart" class="button" @tap="goAlbum">{{ albumPrimaryText }}</t-button>
         <t-button v-else class="button" @tap="goShare">选择角色</t-button>
-        <t-button class="button secondary" open-type="share">分享</t-button>
+        <t-button v-if="guestNeedsLogin" class="button secondary" @tap="requestShareAction">
+          分享
+        </t-button>
+        <t-button v-else class="button secondary" open-type="share">分享</t-button>
         <t-button class="button secondary" @tap="goManage">车头管理</t-button>
         <t-button v-if="!isPostStart" class="button secondary" @tap="goAlbum">{{ albumButtonText }}</t-button>
         <t-button
@@ -81,7 +91,7 @@
       <view class="section-head">
         <view class="section-title">车友记录</view>
         <t-button
-          v-if="myReviewState.can_review"
+          v-if="!isCityPreview && myReviewState.can_review"
           class="review-edit"
           @tap="goReview"
         >
@@ -129,16 +139,18 @@
       </view>
     </view>
 
-    <ChatEntry
-      v-for="extension in sessionDetailExtensions"
-      :key="extension.id"
-      ref="sessionDetailExtensionRefs"
-      :session-id="sessionId"
-      :session="session"
-      :current-user-id="currentUserId"
-      :focus-chat-on-load="focusChatOnLoad"
-      :auth-tools="authTools"
-    />
+    <template v-if="!isCityPreview && (!isGuestPreview || currentUserId)">
+      <ChatEntry
+        v-for="extension in sessionDetailExtensions"
+        :key="extension.id"
+        ref="sessionDetailExtensionRefs"
+        :session-id="sessionId"
+        :session="session"
+        :current-user-id="currentUserId"
+        :focus-chat-on-load="focusChatOnLoad"
+        :auth-tools="authTools"
+      />
+    </template>
   </view>
 </template>
 
@@ -171,6 +183,8 @@ export default {
   data() {
     return {
       sessionId: "",
+      entry: "",
+      accessScope: "",
       shareCode: "",
       source: "",
       focusedSeatId: "",
@@ -188,6 +202,15 @@ export default {
     };
   },
   computed: {
+    isCityPreview() {
+      return this.entry === "city";
+    },
+    isGuestPreview() {
+      return this.entry === "guest";
+    },
+    guestNeedsLogin() {
+      return this.isGuestPreview && !this.currentUserId;
+    },
     summaryText() {
       if (!this.session.id) {
         return "基础信息、角色状态和车内留言。";
@@ -256,16 +279,18 @@ export default {
       return (this.session.seats || []).map((seat) => {
         const canApply = this.canApplySeat(seat);
         const actions = [];
-        if (canApply) {
-          actions.push({ key: "select", label: "选择此位" });
+        if (!this.isCityPreview) {
+          if (canApply) {
+            actions.push({ key: "select", label: "选择此位" });
+          }
+          actions.push({
+            key: "share",
+            label: "分享此位",
+            variant: "ghost",
+            openType: this.guestNeedsLogin ? "" : "share",
+            seatId: seat.id
+          });
         }
-        actions.push({
-          key: "share",
-          label: "分享此位",
-          variant: "ghost",
-          openType: "share",
-          seatId: seat.id
-        });
         return {
           id: seat.id,
           seatId: seat.id,
@@ -277,7 +302,9 @@ export default {
           avatarGender: seat.confirmed_user_gender || seat.role_gender || "unlimited",
           confirmedUserId: seat.confirmed_user_id || "",
           stateKind: canApply ? "available" : this.seatStateKind(seat),
-          stateLabel: canApply ? "可选" : this.seatStatusLabel(seat.status),
+          stateLabel: canApply
+            ? this.isCityPreview ? "需联系店家" : "可选"
+            : this.seatStatusLabel(seat.status),
           focused: this.isFocusedSeat(seat),
           actions
         };
@@ -291,15 +318,17 @@ export default {
     detailNpcRoleSummary() {
       const roles = this.session.session_npc_roles || [];
       const available = roles.filter((role) => this.canApplyNpcRole(role)).length;
-      const pending = roles.filter((role) => role.pending_signup_id).length;
-      const assigned = roles.filter((role) => role.bound_user_id).length;
+      const pending = roles.filter(
+        (role) => role.pending_signup_id || role.has_pending_signup
+      ).length;
+      const assigned = roles.filter((role) => role.bound_user_id || role.is_bound).length;
       return `${available} 个可选，${pending} 个待审，${assigned} 个已安排`;
     },
     detailNpcRoleCards() {
       return (this.session.session_npc_roles || []).map((role) => {
         const canApply = this.canApplyNpcRole(role);
         const stateKind = canApply ? "available" : this.npcRoleStateKind(role);
-        const actions = canApply
+        const actions = !this.isCityPreview && canApply
           ? [{ key: "selectNpc", label: "选择NPC" }]
           : [];
         return {
@@ -315,7 +344,9 @@ export default {
           boundUserId: role.bound_user_id || "",
           showGenderSymbol: true,
           stateKind,
-          stateLabel: canApply ? "可选" : this.npcRoleStatusLabel(role),
+          stateLabel: canApply
+            ? this.isCityPreview ? "需联系店家" : "可选"
+            : this.npcRoleStatusLabel(role),
           actions
         };
       });
@@ -344,24 +375,36 @@ export default {
   },
   async onLoad(options) {
     this.sessionId = options.id || "";
+    this.entry = options.entry || "";
     this.shareCode = options.shareCode || "";
     this.source = options.source || "";
     this.focusedSeatId = options.seatId || "";
     this.focusChatOnLoad = options.chat === "1";
+    if (this.isCityPreview && typeof uni.hideShareMenu === "function") {
+      uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
+    }
     this.hydrateUser();
+    if (this.guestNeedsLogin && typeof uni.hideShareMenu === "function") {
+      uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
+    }
     this.relinkSessionMembership();
-    this.loadSession();
-    this.loadSessionReviews();
-    this.loadMyReviewState();
-    this.loadShareStats();
-    this.trackShareView();
+    const loaded = await this.loadSession();
+    if (loaded) {
+      this.loadSessionReviews();
+      this.loadMyReviewState();
+      this.loadShareStats();
+      this.trackShareView();
+    }
   },
-  onShow() {
+  async onShow() {
     this.hydrateUser();
     this.relinkSessionMembership();
     if (this.sessionId) {
-      this.loadSessionReviews();
-      this.loadMyReviewState();
+      const loaded = await this.loadSession();
+      if (loaded) {
+        this.loadSessionReviews();
+        this.loadMyReviewState();
+      }
     }
   },
   onHide() {
@@ -396,6 +439,9 @@ export default {
       this.currentUserId = auth.user?.id || "";
     },
     async relinkSessionMembership() {
+      if (this.isCityPreview || this.isGuestPreview) {
+        return;
+      }
       if (!this.currentUserId || !this.sessionId || this.sessionId === "d1-demo") {
         return;
       }
@@ -408,31 +454,58 @@ export default {
         // Non-members can still view public session detail; relink only restores existing ties.
       }
     },
-    async ensureProtectedActionLogin() {
+    async ensureProtectedActionLogin(content = "登录后继续查看相册、选择角色或管理车局。") {
       const auth = await ensureLoggedIn({
-        content: "登录后继续查看相册、选择角色或管理车局。"
+        content
       });
       if (!auth?.user) {
         this.loadStatusText = "登录后可继续操作。";
         return null;
       }
       this.currentUserId = auth.user.id || "";
+      const loaded = await this.loadSession();
+      if (!loaded) {
+        return null;
+      }
+      if (!this.isCityPreview && typeof uni.showShareMenu === "function") {
+        uni.showShareMenu({
+          withShareTicket: true,
+          menus: ["shareAppMessage", "shareTimeline"]
+        });
+      }
       return auth;
+    },
+    clearProtectedDetail(message) {
+      this.stopDetailExtensions();
+      this.session = {};
+      this.accessScope = "";
+      this.shareStats = {};
+      this.reviews = [];
+      this.myReviewState = { can_review: false, review: null };
+      this.reviewStatusText = "";
+      this.loadStatusText = message;
     },
     async loadSession() {
       if (!this.sessionId || this.sessionId === "d1-demo") {
         this.loadStatusText = "请从已发布车进入详情。";
-        return;
+        return false;
       }
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
         this.session = dataOf(response) || {};
+        this.accessScope = this.session.access_scope || "";
         this.loadStatusText = "";
         if (this.focusedSeatId && this.focusedSeat) {
           this.loadStatusText = "已定位到分享指定座位。";
         }
+        return true;
       } catch (error) {
+        if (error?.statusCode === 404) {
+          this.clearProtectedDetail("车局已发车，仅同车成员可查看。");
+          return false;
+        }
         this.loadStatusText = "车详情加载失败，请稍后重试。";
+        return false;
       }
     },
     async loadShareStats() {
@@ -455,6 +528,7 @@ export default {
         this.reviews = dataOf(response) || [];
         this.reviewStatusText = "";
       } catch (error) {
+        this.reviews = [];
         this.reviewStatusText = "车友记录加载失败，请稍后重试。";
       }
     },
@@ -506,7 +580,10 @@ export default {
         .catch(() => {});
     },
     async goShare(seat) {
-      const auth = await this.ensureProtectedActionLogin();
+      if (this.isCityPreview) {
+        return;
+      }
+      const auth = await this.ensureProtectedActionLogin("登录后可选择角色上车。");
       if (!auth) {
         return;
       }
@@ -521,16 +598,32 @@ export default {
       uni.navigateTo({ url: `/pages/session/share${query}` });
     },
     async goManage() {
-      const auth = await this.ensureProtectedActionLogin();
+      if (this.isCityPreview) {
+        return;
+      }
+      const auth = await this.ensureProtectedActionLogin("登录后可管理车局。");
       if (!auth) {
         return;
       }
       const id = this.sessionId || "d1-demo";
       uni.navigateTo({ url: `/pages/session/manage?id=${id}` });
     },
-    goReview() {
+    async goReview() {
+      if (this.isCityPreview) {
+        return;
+      }
+      const auth = await this.ensureProtectedActionLogin("登录后可写车友记录。");
+      if (!auth) {
+        return;
+      }
       const id = this.sessionId || "d1-demo";
       uni.navigateTo({ url: `/pages/session/review?id=${id}` });
+    },
+    async requestShareAction() {
+      const auth = await this.ensureProtectedActionLogin("登录后可分享车局。");
+      if (auth) {
+        showToast({ title: "已登录，请再次点击分享", icon: "none" });
+      }
     },
     openStoreMap() {
       if (!this.hasStoreLocation || typeof uni.openLocation !== "function") {
@@ -547,7 +640,10 @@ export default {
       });
     },
     async goAlbum() {
-      const auth = await this.ensureProtectedActionLogin();
+      if (this.isCityPreview) {
+        return;
+      }
+      const auth = await this.ensureProtectedActionLogin("登录后可查看车局相册。");
       if (!auth) {
         return;
       }
@@ -595,12 +691,20 @@ export default {
       if (role.status && role.status !== "active") {
         return false;
       }
-      if (role.bound_user_id || role.pending_signup_id) {
+      if (
+        role.bound_user_id ||
+        role.pending_signup_id ||
+        role.is_bound ||
+        role.has_pending_signup
+      ) {
         return false;
       }
       return this.session.status === "recruiting";
     },
     handleDetailSeatTap(payload) {
+      if (this.isCityPreview) {
+        return;
+      }
       if (payload.item?.boardType === "npc" || payload.sectionKey === "npc") {
         if (this.canApplyNpcRole(payload.item.raw)) {
           this.goShare();
@@ -613,10 +717,17 @@ export default {
       }
     },
     handleDetailSeatAction(payload) {
+      if (this.isCityPreview) {
+        return;
+      }
       if (payload.item?.boardType === "npc" || payload.sectionKey === "npc") {
         if (payload.action.key === "selectNpc") {
           this.goShare();
         }
+        return;
+      }
+      if (payload.action.key === "share" && this.guestNeedsLogin) {
+        this.requestShareAction();
         return;
       }
       const seat = payload.item.raw;
@@ -638,10 +749,10 @@ export default {
       if (this.currentUserId && Number(role.bound_user_id || 0) === Number(this.currentUserId)) {
         return "mine";
       }
-      if (role.bound_user_id) {
+      if (role.bound_user_id || role.is_bound) {
         return "taken";
       }
-      if (role.pending_signup_id) {
+      if (role.pending_signup_id || role.has_pending_signup) {
         return "pendingReview";
       }
       if (role.status && role.status !== "active") {

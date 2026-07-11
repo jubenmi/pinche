@@ -284,6 +284,10 @@ async function main() {
 
   const signed = await request("GET", readyVideo.video_url, undefined, admin.token);
   assert(signed.data.url, "ready video should return a playback URL");
+  assert(
+    readyVideo.can_delete === true,
+    "video uploader should be allowed to delete own uploaded video"
+  );
 
   await request(
     "PUT",
@@ -297,8 +301,44 @@ async function main() {
   );
   assert(memberVideo?.media_type === "video", "non-admin member should see tagged ready video");
   assert(memberVideo.video_url, "non-admin member should receive video-url path");
+  assert(
+    memberVideo.can_delete === false,
+    "visible non-uploader should not be allowed to delete another member's video"
+  );
   const memberSigned = await request("GET", memberVideo.video_url, undefined, member.token);
   assert(memberSigned.data.url, "non-admin member should receive a playback URL");
+
+  const deletionVideo = await request(
+    "POST",
+    `/api/admin/sessions/${session.id}/album/videos`,
+    {
+      sourceUrl: fakeVideoSourceUrl(session.id, admin.user.id, 4),
+      durationSeconds: 12,
+      videoWidth: 1280,
+      videoHeight: 720,
+      videoByteSize: 1200000,
+      videoContentType: "video/mp4"
+    },
+    admin.token,
+    201
+  );
+  assert(
+    deletionVideo.data.can_delete === true,
+    "created video should be deletable by its uploader"
+  );
+  await request(
+    "DELETE",
+    `/api/session-album/photos/${deletionVideo.data.id}`,
+    undefined,
+    member.token,
+    403
+  );
+  await request(
+    "DELETE",
+    `/api/session-album/photos/${deletionVideo.data.id}`,
+    undefined,
+    admin.token
+  );
 
   const shareToken = await request(
     "POST",
