@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
+import { albumMediaCountSql } from "../apps/api/src/modules/core/session-album-media-count.js";
 import { sessionCalendarStripeTone } from "../apps/miniprogram/src/utils/sessionCalendarStripe.js";
 
 const stripeCases = [
@@ -42,5 +44,35 @@ for (const testCase of stripeCases) {
     testCase.name
   );
 }
+
+const expectedAlbumMediaCountSql =
+  "COUNT(DISTINCT CASE WHEN album_media.status = 'active' " +
+  "AND (album_media.media_type = 'image' OR " +
+  "(album_media.media_type = 'video' AND album_media.processing_status <> 'failed')) " +
+  "THEN album_media.id END)";
+
+assert.equal(albumMediaCountSql("album_media"), expectedAlbumMediaCountSql);
+assert.throws(
+  () => albumMediaCountSql("album media"),
+  /safe SQL identifier/,
+  "SQL aliases must not allow injected syntax"
+);
+
+const serviceSource = readFileSync(
+  new URL("../apps/api/src/modules/core/service.js", import.meta.url),
+  "utf8"
+);
+assert(
+  serviceSource.includes('${albumMediaCountSql("album_photo")} AS album_media_count'),
+  "listMySessions must select album_media_count"
+);
+assert(
+  serviceSource.includes('SELECT ${albumMediaCountSql("album_media")}'),
+  "listMySignups must select album_media_count"
+);
+assert(
+  serviceSource.match(/album_media_count: Number\(row\.album_media_count \|\| 0\)/g)?.length >= 2,
+  "both list responses must normalize album_media_count to a number"
+);
 
 console.log("D43 post-session media stripe checks passed");

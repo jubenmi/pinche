@@ -15,6 +15,7 @@ import {
   notifySignupReviewed
 } from "../wechat/subscribe-message.js";
 import { createIdempotentAlbumVideo } from "../album-video/lifecycle.js";
+import { albumMediaCountSql } from "./session-album-media-count.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -3682,7 +3683,8 @@ export async function listMySessions(user, filters = {}) {
             THEN seat.confirmed_user_id
           END) AS other_onboard_member_count,
           COUNT(DISTINCT album_photo.id) AS active_album_photo_count,
-          COUNT(DISTINCT album_photo.id) AS photo_count
+          COUNT(DISTINCT album_photo.id) AS photo_count,
+          ${albumMediaCountSql("album_photo")} AS album_media_count
         FROM sessions session
         LEFT JOIN session_seats seat ON seat.session_id = session.id
         LEFT JOIN signups signup ON signup.session_id = session.id
@@ -3696,7 +3698,10 @@ export async function listMySessions(user, filters = {}) {
       `,
       values
     );
-    return rows;
+    return rows.map((row) => ({
+      ...row,
+      album_media_count: Number(row.album_media_count || 0)
+    }));
   });
 }
 
@@ -5033,6 +5038,11 @@ export async function listMySignups(user) {
               AND review.status = 'active'
           ) AS has_review,
           (
+            SELECT ${albumMediaCountSql("album_media")}
+            FROM session_album_photos album_media
+            WHERE album_media.session_id = signup.session_id
+          ) AS album_media_count,
+          (
             signup.review_eligible_at IS NOT NULL
             AND ${reviewWindowSql()}
           ) AS can_review
@@ -5049,6 +5059,7 @@ export async function listMySignups(user) {
     );
     return rows.map((row) => ({
       ...row,
+      album_media_count: Number(row.album_media_count || 0),
       can_review: Boolean(row.can_review),
       has_review: Boolean(row.has_review)
     }));
