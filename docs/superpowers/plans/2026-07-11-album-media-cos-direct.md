@@ -1859,13 +1859,15 @@ git commit -m "feat: finalize album images from COS metadata"
 
 ## Task 8: Signed album responses with legacy/local compatibility
 
+执行状态：已完成（2026-07-11，8/8 响应、隐私及路由测试；D18/D23/D31 回归通过）。
+
 **Files:**
 - Modify: `apps/api/src/server.js:1420-1735,3110-3265`
 - Modify: `apps/api/src/modules/core/service.js:809-875,5711-5857`
 - Create: `apps/api/test/album-image-response-urls.test.mjs`
 - Create: `apps/api/test/album-image-privacy-integration.test.mjs`
 
-- [ ] **Step 1: Write failing response URL and privacy tests**
+- [x] **Step 1: Write failing response URL and privacy tests**
 
 Use fixed time and injected signer. Cover member, admin, public share, legacy COS row, local row, and video:
 
@@ -1901,13 +1903,13 @@ test("local or unbackfilled image exposes new fields through the old API and no 
 
 The integration test seeds one visible and one hidden photo for each existing privacy rule, calls member/admin/public-share list paths, and records signer calls. Assert no signer call occurs for a filtered photo and no endpoint accepts arbitrary photo IDs for bulk signing.
 
-- [ ] **Step 2: Run response tests to verify RED**
+- [x] **Step 2: Run response tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-response-urls.test.mjs apps/api/test/album-image-privacy-integration.test.mjs`
 
 Expected: FAIL because the new fields are absent and storage facts are not consumed.
 
-- [ ] **Step 3: Add one image attachment function and strip internals**
+- [x] **Step 3: Add one image attachment function and strip internals**
 
 Refactor the duplicated `photos`/`media` mapping through one function. Preserve existing video branches byte-for-byte:
 
@@ -1947,11 +1949,11 @@ Use one `nowSeconds` captured at the start of each album response so all image v
 
 Emit one `media_urls_signed` event per album response with route kind and signed image count, not one event per URL. In the retained legacy image proxy routes, emit `legacy_proxy_read` with variant, response byte count, and outcome so rollout dashboards can measure proxy calls and API image egress.
 
-- [ ] **Step 4: Add signed URLs to finalize responses without a new lookup endpoint**
+- [x] **Step 4: Add signed URLs to finalize responses without a new lookup endpoint**
 
 Pass a finalized photo through the same attachment helper using current authenticated/member context. If direct reads are off, return new fields pointing to legacy API URLs. Duplicate finalize after revocation still fails before this helper executes.
 
-- [ ] **Step 5: Run response, privacy, and compatibility tests**
+- [x] **Step 5: Run response, privacy, and compatibility tests**
 
 Run: `node --test apps/api/test/album-image-response-urls.test.mjs apps/api/test/album-image-privacy-integration.test.mjs`
 
@@ -1961,7 +1963,7 @@ Run: `node scripts/d18-session-album-privacy-check.js && node scripts/d23-album-
 
 Expected: existing privacy, share-seat, and viewer-order behavior remains green.
 
-- [ ] **Step 6: Commit signed album responses**
+- [x] **Step 6: Commit signed album responses**
 
 ```bash
 git add apps/api/src/server.js apps/api/src/modules/core/service.js apps/api/test/album-image-response-urls.test.mjs apps/api/test/album-image-privacy-integration.test.mjs

@@ -834,6 +834,8 @@ function albumMediaResponse(media, tags = [], options = {}) {
     }
     return {
       ...base,
+      storage_object_key: media.object_key || null,
+      storage_object_etag: media.object_etag || null,
       image_width: media.image_width ? Number(media.image_width) : null,
       image_height: media.image_height ? Number(media.image_height) : null,
       image_byte_size: media.image_byte_size ? Number(media.image_byte_size) : null,

@@ -15,6 +15,6 @@ test("authenticated status and finalize routes are wired before generic album ro
 
 test("legacy COS create delegates exact-key finalize and strips storage facts", () => {
   assert.match(server, /albumImageUploads\.finalizeLegacy/);
-  assert.match(server, /storage_object_key:\s*ignoredObjectKey/);
-  assert.match(server, /storage_object_etag:\s*ignoredObjectEtag/);
+  assert.match(server, /storage_object_key:\s*objectKey/);
+  assert.match(server, /storage_object_etag:\s*ignoredEtag/);
 });

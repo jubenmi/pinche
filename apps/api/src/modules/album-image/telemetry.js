@@ -7,6 +7,11 @@ export function emitAlbumImageEvent(event, fields = {}, sink = console.info) {
     mediaId: Number(fields.mediaId || 0) || undefined,
     outcome: fields.outcome || undefined,
     errorCode: fields.errorCode || undefined,
-    retryCount: Number.isInteger(fields.retryCount) ? fields.retryCount : undefined
+    retryCount: Number.isInteger(fields.retryCount) ? fields.retryCount : undefined,
+    signedImageCount: Number.isInteger(fields.signedImageCount)
+      ? fields.signedImageCount
+      : undefined,
+    byteCount: Number.isInteger(fields.byteCount) ? fields.byteCount : undefined,
+    variant: ["preview", "thumbnail"].includes(fields.variant) ? fields.variant : undefined
   }));
 }
