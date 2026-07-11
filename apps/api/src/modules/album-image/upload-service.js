@@ -253,6 +253,189 @@ async function authorize(deps, { user, body = {} }) {
   });
 }
 
+function uploadNotFound() {
+  return serviceError(404, "UPLOAD_INTENT_NOT_FOUND", "Upload intent was not found");
+}
+
+async function inspectUpload(deps, { user, uploadId }) {
+  const intent = await deps.withDatabaseConnection(async (connection) => {
+    const row = await deps.repository.find(connection, uploadId);
+    if (!row || Number(row.user_id) !== Number(user.user.id)) throw uploadNotFound();
+    await checkedAccess(deps, connection, user, row);
+    return row;
+  });
+  if (intent.status === "finalized") return { intent, validation: null };
+
+  if (deps.now() > new Date(intent.finalize_deadline_at).getTime()) {
+    const changed = await deps.withDatabaseConnection((connection) =>
+      deps.repository.markState(connection, {
+        uploadId: intent.id,
+        fromStatuses: ["pending", "processing"],
+        toStatus: "expired",
+        errorCode: "UPLOAD_INTENT_EXPIRED"
+      })
+    );
+    if (changed) deps.emit?.("intent_expired", {
+      sessionId: Number(intent.session_id), outcome: "expired", errorCode: "UPLOAD_INTENT_EXPIRED"
+    });
+    throw serviceError(410, "UPLOAD_INTENT_EXPIRED", "Upload intent expired");
+  }
+  if (!["pending", "processing"].includes(intent.status)) {
+    throw serviceError(409, "UPLOAD_INTENT_NOT_FINALIZABLE", "Upload intent cannot be finalized");
+  }
+
+  const validation = {
+    ...(await deps.validateStoredImage(intent)),
+    objectKey: intent.object_key
+  };
+  if (validation.validationState === "processing" && intent.status === "pending") {
+    await deps.withDatabaseConnection((connection) => deps.repository.markState(connection, {
+      uploadId: intent.id,
+      fromStatuses: ["pending"],
+      toStatus: "processing"
+    }));
+  }
+  if (validation.validationState === "invalid") {
+    const changed = await deps.withDatabaseConnection((connection) =>
+      deps.repository.markState(connection, {
+        uploadId: intent.id,
+        fromStatuses: ["pending", "processing"],
+        toStatus: "rejected",
+        errorCode: validation.errorCode
+      })
+    );
+    if (changed) deps.emit?.("intent_rejected", {
+      sessionId: Number(intent.session_id),
+      outcome: "rejected",
+      errorCode: validation.errorCode
+    });
+  }
+  return { intent, validation };
+}
+
+function publicUploadStatus({ intent, validation }) {
+  if (intent.status === "finalized") {
+    return {
+      uploadId: intent.id,
+      status: "finalized",
+      validationState: "ready",
+      objectPresent: true,
+      etag: intent.object_etag || "",
+      canFinalize: false,
+      mediaId: Number(intent.media_id),
+      finalizeDeadlineAt: new Date(intent.finalize_deadline_at).toISOString()
+    };
+  }
+  return {
+    uploadId: intent.id,
+    status: validation.validationState === "processing" ? "processing" : intent.status,
+    validationState: validation.validationState,
+    objectPresent: validation.objectPresent,
+    etag: validation.etag || "",
+    canFinalize: validation.canFinalize === true,
+    ...(validation.errorCode ? { errorCode: validation.errorCode } : {}),
+    finalizeDeadlineAt: new Date(intent.finalize_deadline_at).toISOString()
+  };
+}
+
+async function status(deps, input) {
+  return publicUploadStatus(await inspectUpload(deps, input));
+}
+
+async function finalizedPhoto(deps, connection, intent, user) {
+  try {
+    return await deps.getFinalizedImage(connection, { mediaId: intent.media_id, user });
+  } catch (error) {
+    if (Number(error?.statusCode) === 404) {
+      throw serviceError(409, "FINALIZED_MEDIA_MISSING", "Finalized album image is missing");
+    }
+    throw error;
+  }
+}
+
+async function finalize(deps, { user, uploadId }) {
+  const inspected = await inspectUpload(deps, { user, uploadId });
+  const { validation } = inspected;
+  if (validation?.validationState === "invalid") {
+    throw serviceError(422, validation.errorCode, "Album image processing result is invalid");
+  }
+  if (inspected.intent.status !== "finalized" && !validation?.canFinalize) {
+    throw serviceError(409, "MEDIA_PROCESSING_PENDING", "Album image is still processing");
+  }
+
+  let newlyFinalized = false;
+  const result = await deps.transaction(async (connection) => {
+    const intent = await deps.repository.find(connection, uploadId, { forUpdate: true });
+    if (!intent || Number(intent.user_id) !== Number(user.user.id)) throw uploadNotFound();
+    await checkedAccess(deps, connection, user, intent);
+    if (intent.status === "finalized") {
+      const photo = await finalizedPhoto(deps, connection, intent, user);
+      return { uploadId: intent.id, photo: deps.serializeImage(photo, user.user.id) };
+    }
+    if (
+      !["pending", "processing"].includes(intent.status) ||
+      deps.now() > new Date(intent.finalize_deadline_at).getTime() ||
+      intent.object_key !== validation.objectKey
+    ) {
+      throw serviceError(409, "UPLOAD_INTENT_NOT_FINALIZABLE", "Upload intent cannot be finalized");
+    }
+    const photoRow = await deps.insertFinalizedImage(connection, { intent, metadata: validation });
+    const [updated] = await connection.query(
+      `UPDATE session_album_upload_intents
+       SET status = 'finalized', media_id = ?, stored_content_type = ?,
+           stored_byte_size = ?, stored_width = ?, stored_height = ?,
+           object_etag = ?, finalized_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status IN ('pending', 'processing')`,
+      [
+        photoRow.id,
+        validation.contentType,
+        validation.byteSize,
+        validation.width,
+        validation.height,
+        validation.etag,
+        intent.id
+      ]
+    );
+    if (Number(updated.affectedRows || 0) !== 1) {
+      throw serviceError(409, "UPLOAD_FINALIZE_RACE", "Upload finalize raced with another state transition");
+    }
+    newlyFinalized = true;
+    return {
+      uploadId: intent.id,
+      photo: deps.serializeImage(photoRow, user.user.id)
+    };
+  });
+  if (newlyFinalized) deps.emit?.("intent_finalized", {
+    sessionId: Number(inspected.intent.session_id),
+    mediaId: Number(result.photo.id),
+    outcome: "finalized"
+  });
+  return result;
+}
+
+async function finalizeLegacy(deps, { user, sessionId, kind, photoUrl }) {
+  const path = String(photoUrl || "");
+  if (!/^\/uploads\/session-album\/display\/[A-Za-z0-9._-]+$/.test(path)) {
+    throw uploadNotFound();
+  }
+  const objectKey = path.slice(1);
+  const intent = await deps.withDatabaseConnection((connection) =>
+    deps.repository.findByObjectKey(connection, {
+      userId: Number(user.user.id), objectKey
+    })
+  );
+  if (
+    !intent ||
+    Number(intent.user_id) !== Number(user.user.id) ||
+    Number(intent.session_id) !== Number(sessionId) ||
+    intent.kind !== kind ||
+    intent.object_key !== objectKey
+  ) {
+    throw uploadNotFound();
+  }
+  return finalize(deps, { user, uploadId: intent.id });
+}
+
 export function createAlbumImageUploadService(dependencies) {
   const deps = {
     now: () => Date.now(),
@@ -264,6 +447,9 @@ export function createAlbumImageUploadService(dependencies) {
   };
   return {
     createIntent: (input) => createIntent(deps, input),
-    authorize: (input) => authorize(deps, input)
+    authorize: (input) => authorize(deps, input),
+    status: (input) => status(deps, input),
+    finalize: (input) => finalize(deps, input),
+    finalizeLegacy: (input) => finalizeLegacy(deps, input)
   };
 }

@@ -27,6 +27,7 @@ import {
   cosStorageEnabled,
   deleteCosObject,
   getCosObject,
+  getCosImageInfo,
   headCosObject,
   isTrustedCosStorageError,
   readCosObjectRange,
@@ -82,6 +83,7 @@ import {
   getMySessionReview,
   getVisibleSessionAlbumPhotoForMedia,
   getVisibleSessionAlbumVideoForPlayback,
+  getFinalizedSessionAlbumImage,
   hideMySignup,
   kickSessionSeat,
   leaveSessionOrganizer,
@@ -127,7 +129,9 @@ import {
   updateSessionNpcRole,
   updateStore,
   upsertMySessionReview,
-  upsertPerformerProfile
+  upsertPerformerProfile,
+  insertFinalizedSessionAlbumImage,
+  serializeSessionAlbumImage
 } from "./modules/core/service.js";
 import { isAlbumImageKind } from "./modules/album-image/constants.js";
 import {
@@ -135,10 +139,12 @@ import {
   findAlbumImageIntent,
   findAlbumImageIntentByObjectKey,
   insertAlbumImageIntent,
+  markAlbumImageIntentState,
   recordAlbumImageAuthorization
 } from "./modules/album-image/repository.js";
 import { createAlbumImageUploadService } from "./modules/album-image/upload-service.js";
 import { emitAlbumImageEvent } from "./modules/album-image/telemetry.js";
+import { validateStoredAlbumImage } from "./modules/album-image/validator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "..");
@@ -187,8 +193,27 @@ const albumImageUploads = createAlbumImageUploadService({
     find: findAlbumImageIntent,
     findByObjectKey: findAlbumImageIntentByObjectKey,
     bindByteSize: bindLegacyIntentByteSize,
-    recordAuthorization: recordAlbumImageAuthorization
+    recordAuthorization: recordAlbumImageAuthorization,
+    markState: markAlbumImageIntentState
   },
+  withDatabaseConnection,
+  validateStoredImage: (intent) => validateStoredAlbumImage({
+    intent,
+    storage: {
+      head: async (key) => {
+        const response = await headCosObject({ key, config: config.cos });
+        return {
+          etag: response.headers.etag || "",
+          byteSize: Number(response.headers["content-length"] || 0),
+          contentType: String(response.headers["content-type"] || "")
+        };
+      },
+      imageInfo: ({ key, etag }) => getCosImageInfo({ key, etag, config: config.cos })
+    }
+  }),
+  insertFinalizedImage: insertFinalizedSessionAlbumImage,
+  getFinalizedImage: getFinalizedSessionAlbumImage,
+  serializeImage: serializeSessionAlbumImage,
   emit: emitAlbumImageEvent
 });
 
@@ -1198,6 +1223,25 @@ function sessionAlbumMediaPath(photoId, variant = "preview") {
   return variant === "thumbnail" ? `${path}&variant=thumbnail` : path;
 }
 
+function attachLegacyFinalizedAlbumImageUrls(finalized) {
+  const {
+    storage_object_key: ignoredObjectKey,
+    storage_object_etag: ignoredObjectEtag,
+    ...photo
+  } = finalized.photo;
+  void ignoredObjectKey;
+  void ignoredObjectEtag;
+  return {
+    uploadId: finalized.uploadId,
+    photo: {
+      ...photo,
+      image_url: sessionAlbumMediaPath(photo.id),
+      preview_url: sessionAlbumMediaPath(photo.id, "preview"),
+      thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail")
+    }
+  };
+}
+
 function sessionAlbumVideoUrlPath(mediaId) {
   return `/api/session-album/media/${mediaId}/video-url`;
 }
@@ -2182,6 +2226,11 @@ async function getSessionAlbumDisplayMetadata(photoUrl) {
 function idMatch(pathname, pattern) {
   const match = pathname.match(pattern);
   return match ? Number(match[1]) : null;
+}
+
+function stringMatch(pathname, pattern) {
+  const match = pathname.match(pattern);
+  return match ? match[1] : null;
 }
 
 async function getAuthUser(request) {
@@ -3210,6 +3259,36 @@ async function route(request, response) {
     return;
   }
 
+  const albumUploadStatusId = stringMatch(
+    url.pathname,
+    /^\/api\/uploads\/([0-9a-f-]{36})\/status$/i
+  );
+  if (request.method === "GET" && albumUploadStatusId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await albumImageUploads.status({ user, uploadId: albumUploadStatusId })
+    });
+    return;
+  }
+
+  const albumUploadFinalizeId = stringMatch(
+    url.pathname,
+    /^\/api\/uploads\/([0-9a-f-]{36})\/finalize$/i
+  );
+  if (request.method === "POST" && albumUploadFinalizeId) {
+    const user = await getAuthUser(request);
+    const finalized = await albumImageUploads.finalize({
+      user,
+      uploadId: albumUploadFinalizeId
+    });
+    jsonResponse(response, 200, {
+      ok: true,
+      data: attachLegacyFinalizedAlbumImageUrls(finalized)
+    });
+    return;
+  }
+
   const sessionAlbumId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/album$/);
   if (request.method === "GET" && sessionAlbumId) {
     const user = await getAuthUser(request);
@@ -3292,6 +3371,18 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumPhotosId);
     const photoUrl = body.photoUrl || body.photo_url;
+    if (isCosUploadStorageEnabled()) {
+      const finalized = attachLegacyFinalizedAlbumImageUrls(
+        await albumImageUploads.finalizeLegacy({
+          user,
+          sessionId: sessionAlbumPhotosId,
+          kind: "sessionAlbumPhoto",
+          photoUrl
+        })
+      );
+      jsonResponse(response, 201, { ok: true, data: finalized.photo });
+      return;
+    }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
     const photo = await createSessionAlbumPhoto(user, sessionAlbumPhotosId, {
       ...body,
@@ -3318,6 +3409,18 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumPhotosId);
     const photoUrl = body.photoUrl || body.photo_url;
+    if (isCosUploadStorageEnabled()) {
+      const finalized = attachLegacyFinalizedAlbumImageUrls(
+        await albumImageUploads.finalizeLegacy({
+          user,
+          sessionId: adminSessionAlbumPhotosId,
+          kind: "adminSessionAlbumPhoto",
+          photoUrl
+        })
+      );
+      jsonResponse(response, 201, { ok: true, data: finalized.photo });
+      return;
+    }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
     const photo = await createSessionAlbumPhoto(user, adminSessionAlbumPhotosId, {
       ...body,

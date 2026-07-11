@@ -1514,6 +1514,8 @@ git commit -m "feat: issue strict album image upload intents"
 
 ## Task 7: Status reconciliation, idempotent finalize, and legacy create adapter
 
+执行状态：已完成（2026-07-11，9/9 finalize/路由测试；D18 与 D42 创建、生命周期回归通过）。
+
 **Files:**
 - Modify: `apps/api/src/modules/album-image/upload-service.js`
 - Modify: `apps/api/src/modules/album-image/repository.js`
@@ -1522,7 +1524,7 @@ git commit -m "feat: issue strict album image upload intents"
 - Create: `apps/api/test/album-image-finalize.test.mjs`
 - Create: `apps/api/test/album-image-routes.test.mjs`
 
-- [ ] **Step 1: Write failing status/finalize tests**
+- [x] **Step 1: Write failing status/finalize tests**
 
 Cover external validation, the short transaction, and current authorization separately:
 
@@ -1593,13 +1595,13 @@ Add explicit cases for another user, closed album, admin-owner revocation, deadl
 
 For routes, assert `GET /api/uploads/:uploadId/status` and `POST /api/uploads/:uploadId/finalize` require auth. Assert old photo-create routes call `finalizeLegacy` for a persisted COS key and never call `getSessionAlbumDisplayMetadata` or `getCosObject`.
 
-- [ ] **Step 2: Run finalize tests to verify RED**
+- [x] **Step 2: Run finalize tests to verify RED**
 
 Run: `node --test apps/api/test/album-image-finalize.test.mjs apps/api/test/album-image-routes.test.mjs`
 
 Expected: FAIL because status/finalize are not exported or routed.
 
-- [ ] **Step 3: Implement status with current-access reauthorization**
+- [x] **Step 3: Implement status with current-access reauthorization**
 
 Extend the service factory:
 
@@ -1703,7 +1705,7 @@ async function status(deps, input) {
 
 Conditional repository updates may move pending to processing or pending/processing to rejected. They cannot move finalized, expired, cleanup_pending, cleanup_failed, or cleaned rows.
 
-- [ ] **Step 4: Implement the short idempotent finalize transaction**
+- [x] **Step 4: Implement the short idempotent finalize transaction**
 
 Inspect outside the transaction, then lock and commit only when ready:
 
@@ -1776,7 +1778,7 @@ Emit `intent_finalized` only after transaction commit, with session/media IDs an
 
 Construct the server dependencies with `withDatabaseConnection`, `withTransaction`, repository functions, `assertSessionAlbumImageUploadAllowed`, `validateStoredAlbumImage`, `insertFinalizedSessionAlbumImage`, `getFinalizedSessionAlbumImage`, `serializeSessionAlbumImage`, `Date.now`, and the COS storage adapter. `validation.etag` is the validator's second-HEAD ETag; no client-supplied ETag reaches this path. If a finalized intent's media row no longer exists, return `FINALIZED_MEDIA_MISSING` without creating a replacement.
 
-- [ ] **Step 5: Implement exact-key legacy adaptation and HTTP routes**
+- [x] **Step 5: Implement exact-key legacy adaptation and HTTP routes**
 
 `finalizeLegacy` accepts only a root-relative display URL, converts it to an exact object key, finds the current user's persisted intent, and checks session/kind equality before calling `finalize`. It ignores all client metadata.
 
@@ -1838,7 +1840,7 @@ If no existing `stringMatch` helper exists, add one next to `idMatch` that retur
 
 For the two old `{ photoUrl }` create routes: when COS is enabled, call `finalizeLegacy` and return its one photo; when COS is disabled, retain the local metadata/create path. A COS key without a matching persisted intent returns `UPLOAD_INTENT_NOT_FOUND` and never invokes full-object Sharp inspection.
 
-- [ ] **Step 6: Run finalize, route, privacy, and video regression tests**
+- [x] **Step 6: Run finalize, route, privacy, and video regression tests**
 
 Run: `node --test apps/api/test/album-image-finalize.test.mjs apps/api/test/album-image-routes.test.mjs`
 
@@ -1848,7 +1850,7 @@ Run: `node scripts/d18-session-album-privacy-check.js && npm run d42:api-creatio
 
 Expected: image privacy and the entire video creation/lifecycle suite remain green.
 
-- [ ] **Step 7: Commit finalize and reconciliation**
+- [x] **Step 7: Commit finalize and reconciliation**
 
 ```bash
 git add apps/api/src/modules/album-image/upload-service.js apps/api/src/modules/album-image/repository.js apps/api/src/modules/core/service.js apps/api/src/server.js apps/api/test/album-image-finalize.test.mjs apps/api/test/album-image-routes.test.mjs
