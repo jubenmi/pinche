@@ -188,6 +188,12 @@ function swipeOneLogicalStep(instance, emitted, direction) {
     );
     assert.equal(instance.swiperGeneration, generation + 1);
     assert.equal(instance.currentIndex, expectedIndex);
+    instance.handleSwiperAnimationFinish(
+      nativeSwiperEvent(instance, instance.activeWindowIndex, {
+        generation: instance.swiperGeneration,
+        source: ""
+      })
+    );
     instance.handleSwiperChange(
       nativeSwiperEvent(instance, instance.activeWindowIndex, { source: "" })
     );
