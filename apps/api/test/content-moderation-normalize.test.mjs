@@ -18,7 +18,7 @@ test("moderation constants expose only the spec states and providers", () => {
   assert.deepEqual(MODERATION_JOB_STATUSES, [
     "pending", "processing", "approved", "review", "rejected", "error"
   ]);
-  assert.deepEqual(MODERATION_PROVIDERS, ["tencent_ci", "tencent_tms"]);
+  assert.deepEqual(MODERATION_PROVIDERS, ["wechat_sec_check", "tencent_ci_video"]);
 });
 
 test("provider suggestions map case-insensitively and unknown values fail closed", () => {

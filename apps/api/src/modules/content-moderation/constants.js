@@ -9,7 +9,7 @@ export const MODERATION_JOB_STATUSES = Object.freeze([
   "error"
 ]);
 
-export const MODERATION_PROVIDERS = Object.freeze(["tencent_ci", "tencent_tms"]);
+export const MODERATION_PROVIDERS = Object.freeze(["wechat_sec_check", "tencent_ci_video"]);
 
 export const MODERATION_MEDIA_VISIBLE_STATUSES = Object.freeze([
   "approved",
@@ -25,4 +25,3 @@ export const MODERATION_ERROR_CODES = Object.freeze({
   callbackStale: "CONTENT_MODERATION_CALLBACK_STALE",
   invalidTransition: "CONTENT_MODERATION_INVALID_TRANSITION"
 });
-

@@ -147,19 +147,32 @@ import { emitAlbumImageEvent } from "./modules/album-image/telemetry.js";
 import { validateStoredAlbumImage } from "./modules/album-image/validator.js";
 import { buildAlbumImageUrls } from "./modules/album-image/signed-urls.js";
 import {
+  authenticateTencentCallback,
+  parseTencentCallbackPayload
+} from "./modules/content-moderation/callback.js";
+import {
   createModerationJob,
+  createTextProposal,
   enqueueRejectedMediaCleanup,
+  findTextProposalByJobId,
   findModerationJobById,
+  findModerationJobByDataId,
+  findModerationJobByProviderJobId,
   findModerationMedia,
   recordModerationSubmission,
+  markTextProposalStatus,
+  createAuditLog,
+  getAdminModerationJob,
+  listAdminModerationJobs,
+  requeueModerationJob,
   transitionMediaModeration,
   transitionModerationJob
 } from "./modules/content-moderation/repository.js";
 import { createContentModerationService } from "./modules/content-moderation/service.js";
 import {
-  createTencentModerationClient,
-  createTencentModerationTransport
-} from "./modules/content-moderation/tencent-client.js";
+  createTencentVideoModerationClient,
+  createTencentVideoModerationTransport
+} from "./modules/content-moderation/tencent-video-client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "..");
@@ -198,10 +211,10 @@ const avatarMimeTypes = {
   "image/png": ".png"
 };
 
-const moderationTransport = createTencentModerationTransport({
+const moderationTransport = createTencentVideoModerationTransport({
   config: config.contentModeration
 });
-const moderationClient = createTencentModerationClient({
+const moderationClient = createTencentVideoModerationClient({
   config: config.contentModeration,
   transport: moderationTransport
 });
@@ -212,10 +225,15 @@ const contentModeration = createContentModerationService({
   withDatabaseConnection,
   repository: {
     createModerationJob,
+    createTextProposal,
     enqueueRejectedMediaCleanup,
+    findTextProposalByJobId,
     findModerationJobById,
     findModerationMedia,
     recordModerationSubmission,
+    markTextProposalStatus,
+    createAuditLog,
+    requeueModerationJob,
     transitionMediaModeration,
     transitionModerationJob
   },
@@ -226,6 +244,27 @@ const contentModeration = createContentModerationService({
     ...fields
   }))
 });
+
+async function applyApprovedTextProposal(connection, { job, proposal }) {
+  const payload = typeof proposal.normalized_payload_json === "string"
+    ? JSON.parse(proposal.normalized_payload_json)
+    : proposal.normalized_payload_json;
+  if (job.subject_type !== "user_nickname") {
+    const error = new AppError(409, "CONTENT_MODERATION_PROPOSAL_STALE", "text proposal requires a current business applicator");
+    throw error;
+  }
+  const nickname = String(payload?.body?.nickname || "").trim();
+  if (!nickname) throw badRequest("nickname is required");
+  const [result] = await connection.query(
+    `UPDATE users SET nickname = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND (CAST(updated_at AS CHAR) = ? OR nickname = ?)`,
+    [nickname, Number(job.subject_id), String(proposal.base_version), String(proposal.base_version)]
+  );
+  if (Number(result.affectedRows || 0) !== 1) {
+    const error = new AppError(409, "CONTENT_MODERATION_PROPOSAL_STALE", "text proposal base version changed");
+    throw error;
+  }
+}
 
 const albumImageUploads = createAlbumImageUploadService({
   cosConfig: config.cos,
@@ -256,9 +295,6 @@ const albumImageUploads = createAlbumImageUploadService({
     }
   }),
   insertFinalizedImage: insertFinalizedSessionAlbumImage,
-  createImageModerationJob: (connection, input) =>
-    contentModeration.createImageJob(connection, input),
-  submitImageModeration: (job) => contentModeration.submitImageJob(job),
   getFinalizedImage: getFinalizedSessionAlbumImage,
   serializeImage: serializeSessionAlbumImage,
   emit: emitAlbumImageEvent
@@ -2620,6 +2656,50 @@ async function route(request, response) {
     return;
   }
 
+  if (
+    request.method === "POST" &&
+    url.pathname === "/api/internal/content-moderation/tencent-video/callback"
+  ) {
+    const providedToken =
+      url.searchParams.get("token") || request.headers["x-content-moderation-token"] || "";
+    if (!authenticateTencentCallback(
+      providedToken,
+          config.contentModeration.tencentVideoCallbackToken
+    )) {
+      throw new AppError(
+        401,
+        "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED",
+        "content moderation callback is unauthorized"
+      );
+    }
+    const rawCallback = await readRawBody(request, 256 * 1024);
+    const callback = parseTencentCallbackPayload(rawCallback);
+    const job = await withDatabaseConnection(async (connection) => {
+      const byDataId = await findModerationJobByDataId(connection, callback.dataId);
+      const byProviderJobId = await findModerationJobByProviderJobId(
+        connection,
+        "tencent_ci_video",
+        callback.providerJobId
+      );
+      if (!byDataId || !byProviderJobId || Number(byDataId.id) !== Number(byProviderJobId.id)) {
+        throw new AppError(
+          409,
+          "CONTENT_MODERATION_CALLBACK_STALE",
+          "content moderation callback does not match a current job"
+        );
+      }
+      return byDataId;
+    });
+    const callbackResult = await contentModeration.applyMediaResult({
+      jobId: job.id,
+      subjectVersion: job.subject_version,
+      objectKey: callback.objectKey,
+      result: callback.result
+    });
+    jsonResponse(response, 200, { ok: true, data: callbackResult });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/cos/ci/session-album-video-callback") {
     const callbackResult = await handleSessionAlbumVideoProcessingCallback(url, request);
     jsonResponse(response, 200, {
@@ -3660,6 +3740,21 @@ async function route(request, response) {
       data: await upsertMySessionReview(user, mySessionReviewId, body)
     });
     return;
+  }
+
+  const moderatedSessionMessageId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/messages$/
+  );
+  if (request.method === "POST" && moderatedSessionMessageId) {
+    await getAuthUser(request);
+  }
+  const moderatedPinnedMessageId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/chat\/pin$/
+  );
+  if (request.method === "PATCH" && moderatedPinnedMessageId) {
+    await getAuthUser(request);
   }
 
   if (

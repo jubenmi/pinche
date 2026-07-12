@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 
-import { createResponseSummary } from "./normalize.js";
+import {
+  createResponseSummary
+} from "./normalize.js";
 import { moderationStatusForDecision } from "./state-machine.js";
 
 export function createContentModerationService(dependencies) {
@@ -10,32 +12,27 @@ export function createContentModerationService(dependencies) {
     ...dependencies
   };
 
-  async function createMediaJob(connection, kind, input) {
-    const subjectType = kind === "image" ? "album_image" : "album_video";
-    const policyId = kind === "image"
-      ? deps.config.imagePolicyId
-      : deps.config.videoPolicyId;
+  async function createVideoJob(connection, input) {
     const job = await deps.repository.createModerationJob(connection, {
-      subjectType,
+      subjectType: "album_video",
       subjectId: String(input.media.id),
       subjectVersion: String(input.subjectVersion),
-      provider: "tencent_ci",
+      provider: "tencent_ci_video",
       dataId: deps.randomUUID(),
-      policyId
+      policyId: deps.config.tencentVideoPolicyId
     });
     return {
       ...job,
-      kind,
+      kind: "video",
       objectKey: String(input.objectKey),
       dataId: job.data_id || job.dataId,
       status: job.status || "pending"
     };
   }
 
-  async function submitMediaJob(kind, job) {
-    const method = kind === "image" ? "submitImage" : "submitVideo";
+  async function submitVideoJob(job) {
     try {
-      const response = await deps.client[method]({
+      const response = await deps.client.submitVideo({
         objectKey: job.objectKey,
         dataId: job.data_id || job.dataId
       });
@@ -47,7 +44,7 @@ export function createContentModerationService(dependencies) {
         })
       );
       deps.emit("moderation_submission_success", {
-        subjectType: kind === "image" ? "album_image" : "album_video",
+        subjectType: "album_video",
         outcome: "processing"
       });
       return response;
@@ -62,7 +59,7 @@ export function createContentModerationService(dependencies) {
         })
       );
       deps.emit("moderation_submission_failure", {
-        subjectType: kind === "image" ? "album_image" : "album_video",
+        subjectType: "album_video",
         outcome: "hidden_retryable",
         errorCode: error?.code || "CONTENT_MODERATION_UNAVAILABLE"
       });
@@ -89,6 +86,12 @@ export function createContentModerationService(dependencies) {
       }
       const media = await deps.repository.findModerationMedia(connection, job, { forUpdate: true });
       if (!media || media.status !== "active") throw staleCallback("moderation media is stale");
+      if (
+        media.moderation_object_version &&
+        String(media.moderation_object_version) !== String(job.subject_version)
+      ) {
+        throw staleCallback("moderation media object version is stale");
+      }
       const currentObjectKey = String(
         job.subject_type === "album_image" ? media.object_key : media.source_url
       ).replace(/^\//, "");
@@ -128,11 +131,106 @@ export function createContentModerationService(dependencies) {
     });
   }
 
+  function publicModerationError(statusCode, code, message) {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    error.code = code;
+    return error;
+  }
+
+  async function decideAsAdmin(input) {
+    if (!input.admin?.roles?.includes("system_admin")) {
+      throw publicModerationError(403, "FORBIDDEN", "system_admin role required");
+    }
+    const action = String(input.action || "");
+    if (!["approve", "reject", "retry"].includes(action)) {
+      throw publicModerationError(400, "BAD_REQUEST", "unsupported moderation action");
+    }
+    const reason = String(input.reason || "").trim();
+    if (action === "reject" && !reason) {
+      throw publicModerationError(400, "BAD_REQUEST", "rejection reason is required");
+    }
+    return deps.transaction(async (connection) => {
+      const job = await deps.repository.findModerationJobById(
+        connection,
+        input.jobId,
+        { forUpdate: true }
+      );
+      if (!job || !["review", "error"].includes(job.status)) {
+        throw publicModerationError(409, "CONTENT_MODERATION_INVALID_TRANSITION", "job is not reviewable");
+      }
+      if (action === "retry") {
+        if (job.status !== "error") {
+          throw publicModerationError(409, "CONTENT_MODERATION_INVALID_TRANSITION", "only error jobs can retry");
+        }
+        await deps.repository.requeueModerationJob(connection, { jobId: job.id });
+        await deps.repository.createAuditLog(connection, {
+          jobId: job.id,
+          adminUserId: input.admin.user.id,
+          action,
+          previousStatus: "error",
+          nextStatus: "pending",
+          reason: reason || null
+        });
+        return { id: Number(job.id), status: "pending" };
+      }
+
+      const nextStatus = action === "approve" ? "approved" : "rejected";
+      const isMedia = ["album_image", "album_video"].includes(job.subject_type);
+      if (isMedia) {
+        const media = await deps.repository.findModerationMedia(connection, job, { forUpdate: true });
+        if (!media) throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "media is stale");
+        await deps.repository.transitionMediaModeration(connection, {
+          mediaId: media.id,
+          fromStatuses: [job.status],
+          toStatus: nextStatus
+        });
+        if (nextStatus === "rejected") {
+          await deps.repository.enqueueRejectedMediaCleanup(connection, media);
+        }
+      } else {
+        const proposal = await deps.repository.findTextProposalByJobId(
+          connection,
+          job.id,
+          { forUpdate: true }
+        );
+        if (!proposal) throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "proposal is stale");
+        if (nextStatus === "approved") {
+          if (typeof input.applyTextProposal !== "function") {
+            throw publicModerationError(500, "CONTENT_MODERATION_CONFIGURATION_ERROR", "text applicator missing");
+          }
+          await input.applyTextProposal(connection, { job, proposal });
+        }
+        await deps.repository.markTextProposalStatus(connection, {
+          jobId: job.id,
+          fromStatus: job.status,
+          toStatus: nextStatus
+        });
+      }
+      await deps.repository.transitionModerationJob(connection, {
+        jobId: job.id,
+        fromStatus: job.status,
+        toStatus: nextStatus,
+        source: "admin",
+        adminUserId: input.admin.user.id,
+        reason
+      });
+      await deps.repository.createAuditLog(connection, {
+        jobId: job.id,
+        adminUserId: input.admin.user.id,
+        action,
+        previousStatus: job.status,
+        nextStatus,
+        reason: reason || null
+      });
+      return { id: Number(job.id), status: nextStatus };
+    });
+  }
+
   return {
-    createImageJob: (connection, input) => createMediaJob(connection, "image", input),
-    createVideoJob: (connection, input) => createMediaJob(connection, "video", input),
-    submitImageJob: (job) => submitMediaJob("image", job),
-    submitVideoJob: (job) => submitMediaJob("video", job),
-    applyMediaResult
+    createVideoJob,
+    submitVideoJob,
+    applyMediaResult,
+    decideAsAdmin
   };
 }

@@ -64,7 +64,7 @@ test("job creation is idempotent on immutable subject version", async () => {
     subjectType: "album_image",
     subjectId: "7",
     subjectVersion: "etag-1",
-    provider: "tencent_ci",
+    provider: "tencent_ci_video",
     dataId: "data-1",
     policyId: "policy-1"
   });
@@ -80,9 +80,9 @@ test("job lookup methods can lock exact identifiers", async () => {
   ]);
   await findModerationJobById(connection, 1, { forUpdate: true });
   await findModerationJobByDataId(connection, "data", { forUpdate: true });
-  await findModerationJobByProviderJobId(connection, "tencent_ci", "job", { forUpdate: true });
+  await findModerationJobByProviderJobId(connection, "tencent_ci_video", "job", { forUpdate: true });
   assert.equal(connection.calls.every(({ sql }) => /FOR UPDATE/.test(sql)), true);
-  assert.deepEqual(connection.calls.map(({ params }) => params), [[1], ["data"], ["tencent_ci", "job"]]);
+  assert.deepEqual(connection.calls.map(({ params }) => params), [[1], ["data"], ["tencent_ci_video", "job"]]);
 });
 
 test("provider transitions are conditional and do not overwrite admin decisions", async () => {
@@ -123,4 +123,3 @@ test("text proposal and audit inserts preserve base version and decision trail",
   assert.match(connection.calls[1].sql, /content_moderation_audit_logs/);
   assert.equal(connection.calls[1].params.at(-1), "违规");
 });
-

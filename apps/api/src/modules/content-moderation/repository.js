@@ -214,3 +214,124 @@ export async function enqueueRejectedMediaCleanup(connection, media) {
   );
   return result.insertId;
 }
+
+export async function claimModerationRetryJobs(connection, input) {
+  const [rows] = await connection.query(
+    `SELECT job.*,
+            media.object_key AS media_object_key,
+            media.source_url AS media_source_url,
+            proposal.normalized_payload_json AS proposal_payload_json
+     FROM content_moderation_jobs job
+     LEFT JOIN session_album_photos media
+       ON job.subject_type IN ('album_image', 'album_video')
+      AND media.id = CAST(job.subject_id AS UNSIGNED)
+     LEFT JOIN content_moderation_text_proposals proposal
+       ON proposal.moderation_job_id = job.id
+     WHERE job.status IN ('pending', 'error')
+       AND job.attempt_count < ?
+       AND job.decided_by_admin_user_id IS NULL
+       AND (job.next_retry_at IS NULL OR job.next_retry_at <= ?)
+       AND (job.lease_expires_at IS NULL OR job.lease_expires_at <= ?)
+     ORDER BY job.created_at
+     LIMIT ? FOR UPDATE SKIP LOCKED`,
+    [Number(input.retryLimit), input.now, input.now, Number(input.limit)]
+  );
+  for (const row of rows) {
+    await connection.query(
+      `UPDATE content_moderation_jobs
+       SET lease_token = ?, lease_expires_at = ?
+       WHERE id = ? AND decided_by_admin_user_id IS NULL`,
+      [input.leaseToken, input.leaseExpiresAt, row.id]
+    );
+  }
+  return rows;
+}
+
+export async function failModerationJob(connection, input) {
+  const [result] = await connection.query(
+    `UPDATE content_moderation_jobs
+     SET status = 'error', attempt_count = ?, next_retry_at = ?,
+         last_error_code = ?, lease_token = NULL, lease_expires_at = NULL
+     WHERE id = ? AND lease_token = ? AND decided_by_admin_user_id IS NULL`,
+    [
+      Number(input.attempts),
+      input.exhausted ? null : input.nextRetryAt,
+      String(input.errorCode || "CONTENT_MODERATION_UNAVAILABLE").slice(0, 128),
+      Number(input.jobId),
+      input.leaseToken
+    ]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function findTextProposalByJobId(
+  connection,
+  jobId,
+  { forUpdate = false } = {}
+) {
+  const [rows] = await connection.query(
+    `SELECT * FROM content_moderation_text_proposals
+     WHERE moderation_job_id = ? LIMIT 1${lockClause(forUpdate)}`,
+    [Number(jobId)]
+  );
+  return rows[0] || null;
+}
+
+export async function requeueModerationJob(connection, { jobId, fromStatus = "error" }) {
+  const [result] = await connection.query(
+    `UPDATE content_moderation_jobs
+     SET status = 'pending', next_retry_at = CURRENT_TIMESTAMP,
+         lease_token = NULL, lease_expires_at = NULL, last_error_code = NULL
+     WHERE id = ? AND status = ? AND decided_by_admin_user_id IS NULL`,
+    [Number(jobId), fromStatus]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function listAdminModerationJobs(
+  connection,
+  { status, subjectType, label, dateFrom, dateTo, limit = 100 } = {}
+) {
+  const where = ["job.status IN ('review', 'error')"];
+  const values = [];
+  if (status) { where.push("job.status = ?"); values.push(String(status)); }
+  if (subjectType) { where.push("job.subject_type = ?"); values.push(String(subjectType)); }
+  if (label) { where.push("job.label = ?"); values.push(String(label)); }
+  if (dateFrom) { where.push("job.created_at >= ?"); values.push(dateFrom); }
+  if (dateTo) { where.push("job.created_at <= ?"); values.push(dateTo); }
+  values.push(Math.max(1, Math.min(200, Number(limit) || 100)));
+  const [rows] = await connection.query(
+    `SELECT job.*, proposal.normalized_payload_json, proposal.base_version,
+            media.session_id, media.uploader_user_id, media.media_type,
+            media.processing_status, media.moderation_status
+     FROM content_moderation_jobs job
+     LEFT JOIN content_moderation_text_proposals proposal
+       ON proposal.moderation_job_id = job.id
+     LEFT JOIN session_album_photos media
+       ON job.subject_type IN ('album_image', 'album_video')
+      AND media.id = CAST(job.subject_id AS UNSIGNED)
+     WHERE ${where.join(" AND ")}
+     ORDER BY job.created_at DESC LIMIT ?`,
+    values
+  );
+  return rows;
+}
+
+export async function getAdminModerationJob(connection, jobId) {
+  const [rows] = await connection.query(
+    `SELECT job.*, proposal.normalized_payload_json, proposal.base_version,
+            proposal.status AS proposal_status, proposal.created_by_user_id,
+            media.session_id, media.uploader_user_id, media.media_type,
+            media.processing_status, media.moderation_status,
+            media.object_key, media.source_url, media.display_url, media.cover_url
+     FROM content_moderation_jobs job
+     LEFT JOIN content_moderation_text_proposals proposal
+       ON proposal.moderation_job_id = job.id
+     LEFT JOIN session_album_photos media
+       ON job.subject_type IN ('album_image', 'album_video')
+      AND media.id = CAST(job.subject_id AS UNSIGNED)
+     WHERE job.id = ? LIMIT 1`,
+    [Number(jobId)]
+  );
+  return rows[0] || null;
+}

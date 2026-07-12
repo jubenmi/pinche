@@ -1628,7 +1628,8 @@ test("video creation ignores client metadata claims and stores inspected facts",
       654321,
       "video/mp4",
       null,
-      "ready"
+      "ready",
+      `local:${CREATION_SOURCE_URL}:654321`
     ]);
     assert.deepEqual(result, expectedCreationResponse(row));
   }

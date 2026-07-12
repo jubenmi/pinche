@@ -71,6 +71,7 @@ CREATE TABLE content_moderation_audit_logs (
 
 ALTER TABLE session_album_photos
   ADD COLUMN moderation_status VARCHAR(32) NOT NULL DEFAULT 'approved_legacy' AFTER processing_status,
+  ADD COLUMN moderation_object_version VARCHAR(128) NULL AFTER moderation_status,
   ADD INDEX idx_album_moderation (session_id, status, moderation_status, created_at);
 
 ALTER TABLE session_album_object_cleanup_jobs
