@@ -90,11 +90,34 @@
           </t-button>
         </view>
 
-        <t-empty
+        <view
           v-if="filteredCalendarItems.length === 0 && !isCalendarLoading"
-          class="calendar-empty"
-          :description="calendarEmptyText"
-        />
+          class="day-band today calendar-empty-day-band"
+        >
+          <view class="timeline-rail"></view>
+          <view class="day-marker">今</view>
+          <view class="day-card calendar-empty-day-card">
+            <t-image
+              class="calendar-empty-day-art"
+              src="/static/art/ink-home-landscape.jpg"
+              mode="aspectFill"
+            />
+            <view class="calendar-empty-day-content">
+              <view class="calendar-empty-day-title">{{ calendarEmptyTitle }}</view>
+              <view class="calendar-empty-day-text">{{ calendarEmptyBody }}</view>
+              <t-button class="calendar-empty-day-refresh" @tap="refreshCalendar">
+                <view class="calendar-empty-day-action-inner">
+                  <t-image
+                    class="calendar-empty-day-action-icon"
+                    src="/static/icons/return-green.svg"
+                    mode="aspectFit"
+                  />
+                  <text>刷新车局</text>
+                </view>
+              </t-button>
+            </view>
+          </view>
+        </view>
 
         <view class="day-list">
           <view
@@ -201,6 +224,7 @@
         </view>
 
         <view
+          v-if="filteredCalendarItems.length > 0"
           class="load-more"
           :class="{ disabled: !hasOlderCalendarItems }"
           @tap="loadMoreDates"
@@ -366,17 +390,26 @@ const cityLocationPromptText = computed(() => {
 const cityLocationActionText = computed(() =>
   cityLocationState.value === "denied" ? "开启定位" : "重试定位"
 );
-const calendarEmptyText = computed(() => {
+const calendarEmptyTitle = computed(() => {
   if (activeCalendarFilter.value === "guest") {
-    return "暂无近期车局。";
+    return "暂无公开车局";
   }
   if (activeCalendarFilter.value !== "city") {
-    return "暂无符合条件的车局。你的拼车会按日期汇总在这里。";
+    return "今天还没有你的车局";
   }
   if (cityMode.value === "city" && cityName.value) {
-    return `${cityName.value}暂无可报名车局。`;
+    return `${cityName.value}暂时没有可报名车局`;
   }
-  return "暂无可报名车局。";
+  return "附近暂时没有可报名车局";
+});
+const calendarEmptyBody = computed(() => {
+  if (activeCalendarFilter.value === "guest") {
+    return "新的公开车局发布后，会显示在这里";
+  }
+  if (activeCalendarFilter.value === "mine") {
+    return "创建或加入车局后，会按日期出现在这里";
+  }
+  return "新的同城车局发布后，会按日期出现在这里";
 });
 const visibleCalendarItems = computed(() =>
   filteredCalendarItems.value.slice(0, loadedCalendarCount.value)
@@ -1537,26 +1570,90 @@ function signupStatusLabel(status) {
   opacity: 0.72;
 }
 
-.calendar-empty {
-  margin: 12rpx 0 22rpx 64rpx;
-  padding: 30rpx 28rpx;
-  border: 1rpx solid rgba(226, 217, 204, 0.9);
-  border-radius: 16rpx;
-  background: rgba(255, 255, 252, 0.84);
+.calendar-empty-day-band {
+  position: relative;
+  min-height: 680rpx;
+  margin-top: 14rpx;
+}
+
+.calendar-empty-day-band .timeline-rail {
+  bottom: 0;
+}
+
+.day-card.calendar-empty-day-card {
+  position: relative;
+  overflow: hidden;
+  min-height: 640rpx;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.calendar-empty-day-art {
+  position: absolute;
+  right: -48rpx;
+  bottom: -20rpx;
+  width: 660rpx;
+  height: 330rpx;
+  opacity: 0.1;
+}
+
+.calendar-empty-day-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  min-height: 640rpx;
+  padding: 72rpx 12rpx 150rpx 30rpx;
+  box-sizing: border-box;
   text-align: center;
 }
 
-.calendar-empty-title {
-  color: #23483e;
-  font-size: 28rpx;
+.calendar-empty-day-title {
+  color: #175f4d;
+  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
+  font-size: 40rpx;
   font-weight: 700;
+  line-height: 1.36;
+  letter-spacing: 1rpx;
 }
 
-.calendar-empty-text {
-  margin-top: 10rpx;
-  color: #708090;
-  font-size: 24rpx;
-  line-height: 1.55;
+.calendar-empty-day-text {
+  width: 100%;
+  margin-top: 20rpx;
+  color: #746f67;
+  font-size: 22rpx;
+  line-height: 1.65;
+  white-space: nowrap;
+}
+
+.calendar-empty-day-refresh {
+  width: 268rpx;
+  height: 72rpx;
+  margin: 48rpx 0 0;
+  padding: 0 20rpx;
+  border: 1rpx solid rgba(36, 116, 95, 0.52);
+  border-radius: 12rpx;
+  background: rgba(255, 255, 252, 0.92);
+  color: #1f6f5b;
+  font-size: 25rpx;
+  font-weight: 600;
+  line-height: 72rpx;
+}
+
+.calendar-empty-day-action-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14rpx;
+}
+
+.calendar-empty-day-action-icon {
+  width: 30rpx;
+  height: 30rpx;
 }
 
 .day-list {
