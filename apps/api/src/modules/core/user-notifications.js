@@ -72,15 +72,12 @@ export async function listMyNotifications(connection, userId, requestedLimit = 5
 }
 
 export async function markMyNotificationRead(connection, userId, notificationId) {
-  const [result] = await connection.query(
+  await connection.query(
     `UPDATE user_notifications
      SET read_at = CURRENT_TIMESTAMP
      WHERE id = ? AND user_id = ?`,
     [notificationId, userId]
   );
-  if (Number(result.affectedRows || 0) === 0) {
-    throw notFound("Notification not found");
-  }
   const [rows] = await connection.query(
     `SELECT id, type, session_id, title, payload_json, read_at, created_at
      FROM user_notifications

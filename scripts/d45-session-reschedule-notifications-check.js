@@ -192,6 +192,19 @@ assert(
   "read update must constrain both notification and owner"
 );
 
+const unchangedOwnedRead = await markMyNotificationRead(
+  {
+    async query(sql) {
+      return sql.includes("UPDATE user_notifications")
+        ? [{ affectedRows: 0 }]
+        : [notificationRows.map((row) => ({ ...row, read_at: "2026-07-12 10:01:00" }))];
+    }
+  },
+  7,
+  11
+);
+assert.equal(unchangedOwnedRead.id, 11, "repeated mark-read must be idempotent");
+
 await assert.rejects(
   () =>
     markMyNotificationRead(
