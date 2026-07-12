@@ -28,6 +28,7 @@ import {
   visibleSignupAlbumMediaCount
 } from "./session-album-media-count.js";
 import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
+import { isModerationPublished } from "@pinche/shared";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -514,13 +515,10 @@ function sessionAlbumVideoSourceUrl(sessionId, userId, value) {
   return text;
 }
 
+export { isModerationPublished };
+
 function albumMediaType(row = {}) {
   return row.media_type === "video" ? "video" : "image";
-}
-
-export function isAlbumMediaModerationApproved(row = {}) {
-  const status = row.moderation_status || "approved_legacy";
-  return status === "approved" || status === "approved_legacy";
 }
 
 function albumMediaProcessingStatus(row = {}) {
@@ -697,7 +695,8 @@ function canViewAlbumVideoProcessingState(user, session, media) {
 
 function albumMediaResponse(media, tags = [], options = {}) {
   const mediaType = albumMediaType(media);
-  const moderationStatus = media.moderation_status || "approved_legacy";
+  const moderationStatus = String(media.moderation_status || "");
+  const published = isModerationPublished(moderationStatus);
   const base = {
     id: Number(media.id),
     session_id: Number(media.session_id),
@@ -709,6 +708,14 @@ function albumMediaResponse(media, tags = [], options = {}) {
   };
 
   if (options.publicShare) {
+    if (!published) {
+      return {
+        ...base,
+        tags: [],
+        has_cover: false,
+        video_cover_source_url: null
+      };
+    }
     if (mediaType === "video") {
       const snapshotSourceUrl =
         albumMediaProcessingStatus(media) === "ready" ? albumVideoSnapshotSourceUrl(media) : null;
@@ -740,12 +747,13 @@ function albumMediaResponse(media, tags = [], options = {}) {
     uploader_name: media.uploader_nickname || media.uploader_open_id || "车友",
     is_mine: Number(media.uploader_user_id) === Number(options.userId),
     can_delete: Number(media.uploader_user_id) === Number(options.userId),
-    can_tag: Number(media.uploader_user_id) === Number(options.userId)
+    can_tag: published && Number(media.uploader_user_id) === Number(options.userId)
   };
 
-  if (!isAlbumMediaModerationApproved(media)) {
+  if (!published) {
     return {
       ...common,
+      tags: [],
       moderation_message: moderationStatus === "review"
         ? "内容需要进一步审核"
         : moderationStatus === "rejected"
@@ -3595,8 +3603,8 @@ export async function listMySessions(user, filters = {}) {
               AND seat.confirmed_user_id <> session.organizer_user_id
             THEN seat.confirmed_user_id
           END) AS other_onboard_member_count,
-          COUNT(DISTINCT album_photo.id) AS active_album_photo_count,
-          COUNT(DISTINCT album_photo.id) AS photo_count,
+          COUNT(DISTINCT CASE WHEN album_photo.moderation_status IN ('approved', 'approved_legacy') THEN album_photo.id END) AS active_album_photo_count,
+          COUNT(DISTINCT CASE WHEN album_photo.moderation_status IN ('approved', 'approved_legacy') THEN album_photo.id END) AS photo_count,
           ${albumMediaCountSql("album_photo")} AS album_media_count
         FROM sessions session
         LEFT JOIN session_seats seat ON seat.session_id = session.id
@@ -5722,9 +5730,13 @@ export async function listSessionAlbum(user, sessionId) {
         JOIN users user ON user.id = photo.uploader_user_id
         WHERE photo.session_id = ?
           AND photo.status = 'active'
+          AND (
+            photo.moderation_status IN ('approved', 'approved_legacy')
+            OR photo.uploader_user_id = ?
+          )
         ORDER BY photo.created_at DESC, photo.id DESC
       `,
-      [id]
+      [id, user.user.id]
     );
     const photoIds = photoRows.map((photo) => Number(photo.id));
     const tagsMap = await albumTagsForPhotos(connection, photoIds);
@@ -5745,7 +5757,7 @@ export async function listSessionAlbum(user, sessionId) {
       const tags = tagsMap.get(Number(photo.id)) || [];
       const mediaType = albumMediaType(photo);
       const processingStatus = albumMediaProcessingStatus(photo);
-      if (!isAlbumMediaModerationApproved(photo)) {
+      if (!isModerationPublished(photo.moderation_status)) {
         if (Number(photo.uploader_user_id) !== Number(user.user.id)) continue;
         photos.push(albumMediaResponse(photo, [], { userId: user.user.id }));
         continue;
@@ -5788,7 +5800,7 @@ export async function listSessionAlbum(user, sessionId) {
       start_at: session.start_at,
       can_upload: true,
       privacy,
-      visible_count: photos.length,
+      visible_count: photos.filter((photo) => isModerationPublished(photo.moderation_status)).length,
       hidden_count: hiddenCount,
       untagged_count: untaggedCount,
       photos,
@@ -5909,22 +5921,7 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
       ]
     );
     const photo = await findById(connection, "session_album_photos", result.insertId);
-    return {
-      id: Number(photo.id),
-      session_id: Number(photo.session_id),
-      media_type: "image",
-      processing_status: "ready",
-      uploader_user_id: Number(photo.uploader_user_id),
-      is_mine: true,
-      can_delete: true,
-      can_tag: true,
-      image_width: photo.image_width ? Number(photo.image_width) : null,
-      image_height: photo.image_height ? Number(photo.image_height) : null,
-      image_byte_size: photo.image_byte_size ? Number(photo.image_byte_size) : null,
-      image_content_type: photo.image_content_type || "image/jpeg",
-      created_at: photo.created_at,
-      tags: []
-    };
+    return albumMediaResponse(photo, [], { userId: user.user.id });
   });
 }
 
@@ -5980,7 +5977,7 @@ function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId
     uploader_user_id: Number(media.uploader_user_id),
     is_mine: isMine,
     can_delete: isMine,
-    can_tag: isMine,
+    can_tag: false,
     duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
     video_width: media.video_width ? Number(media.video_width) : null,
     video_height: media.video_height ? Number(media.video_height) : null,
@@ -6271,7 +6268,7 @@ export async function updateSessionAlbumPhotoTags(user, photoId, body = {}) {
   const tagKeys = normalizeAlbumTagKeys(body);
   return withTransaction(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
-    if (!photo || photo.status !== "active" || !isAlbumMediaModerationApproved(photo)) {
+    if (!photo || photo.status !== "active" || !isModerationPublished(photo.moderation_status)) {
       throw notFound("Album photo not found");
     }
     if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
@@ -6457,7 +6454,7 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
   const currentUserId = positiveId(userId, "userId");
   return withDatabaseConnection(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
-    if (!photo || photo.status !== "active" || !isAlbumMediaModerationApproved(photo)) {
+    if (!photo || photo.status !== "active" || !isModerationPublished(photo.moderation_status)) {
       throw notFound("Album photo not found");
     }
     if (albumMediaType(photo) !== "image") {
@@ -6490,7 +6487,7 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
   const normalizedClaims = normalizeAlbumShareClaims(claims);
   return withDatabaseConnection(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
-    if (!photo || photo.status !== "active" || !isAlbumMediaModerationApproved(photo)) {
+    if (!photo || photo.status !== "active" || !isModerationPublished(photo.moderation_status)) {
       throw notFound("Album photo not found");
     }
     if (albumMediaType(photo) !== "image") {
@@ -6524,7 +6521,7 @@ export async function getVisibleSessionAlbumVideoForPlayback(user, mediaId) {
     const media = await findById(connection, "session_album_photos", id);
     if (
       !media || media.status !== "active" || albumMediaType(media) !== "video" ||
-      !isAlbumMediaModerationApproved(media)
+      !isModerationPublished(media.moderation_status)
     ) {
       throw notFound("Album video not found");
     }
@@ -6560,7 +6557,7 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
     const media = await findById(connection, "session_album_photos", id);
     if (
       !media || media.status !== "active" || albumMediaType(media) !== "video" ||
-      !isAlbumMediaModerationApproved(media)
+      !isModerationPublished(media.moderation_status)
     ) {
       throw notFound("Album video not found");
     }

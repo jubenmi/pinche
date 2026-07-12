@@ -32,6 +32,7 @@ test("video creation response is a metadata-only pending placeholder", async () 
     service.indexOf("export async function createSessionAlbumVideo")
   );
   assert.match(response, /moderation_status/);
+  assert.match(response, /can_tag:\s*false/);
   assert.doesNotMatch(response, /source_url:/);
   assert.doesNotMatch(response, /display_url:/);
   assert.doesNotMatch(response, /cover_url:/);

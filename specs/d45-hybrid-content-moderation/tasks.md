@@ -84,12 +84,13 @@
   - [x] Block 幂等清理源、展示和封面对象。
   - [x] 已拒绝视频的迟到转码输出原子合并至同一清理任务；同 key 重写也重新排队、撤销旧租约，且不恢复媒体字段。
 
-- [ ] D45.9 封闭全部媒体读取路径。
-  - [ ] 普通列表、公开分享、计数、标签和批量下载只包含 approved/approved_legacy。
-  - [ ] 图片预览、缩略图、下载独立校验。
-  - [ ] 视频 range、封面、播放和下载独立校验。
-  - [ ] 只有 approved/approved_legacy 生成短时签名 URL。
-  - [ ] 上传者只收到无 URL 状态占位。
+- [x] D45.9 封闭全部媒体读取路径。
+  - 已完成：统一复用严格的 `isModerationPublished`；刷新后的服务端列表为权威状态，审核撤销时同步清除小程序本地缓存、预览、瀑布流与异步回写。
+  - [x] 普通列表、公开分享、计数、标签和批量下载只包含 approved/approved_legacy。
+  - [x] 图片预览、缩略图、下载独立校验。
+  - [x] 视频 range、封面、播放和下载独立校验。
+  - [x] 只有 approved/approved_legacy 生成短时签名 URL。
+  - [x] 上传者只收到无 URL 状态占位。
 
 - [ ] D45.10 实现混合审核重试 Worker。
   - [ ] 使用 `FOR UPDATE SKIP LOCKED` 和租约令牌。
@@ -176,3 +177,6 @@
 - 2026-07-12：完成 D45.6/D45.7。图片 finalize 在事务内创建 `wechat_sec_check` 任务，提交后以 60 秒 GET 签名 URL、上传者数据库 openid 和 `scene=4` 调用微信；仅 trace_id 作为当前 attempt 持久化，缺 openid/上游失败保持隐藏 error。旧 retry Worker 只认领当前支持的腾讯视频，防止在 D45.10 实现微信分发前抢占微信图片任务。安全回调仅接受本期约定的加密 JSON 事件，验证 SHA-1 签名、AES-256-CBC/PKCS#7/AppID、256KiB 上限，以 trace_id 关联并从锁定媒体读取对象 Key/ETag；重复、旧、删除、版本变化和管理员事件均 200 幂等且不覆盖。独立规格/安全/质量复核通过；新鲜图片+审核+微信回归 262/262、API 语法 49 files、环境和差异检查通过。微信控制台 URL 验证与真实回调协议在 D45.18 非生产联调中确认。
 - 2026-07-12：完成 D45.7。新增微信安全模式 JSON 事件接收：`msg_signature` 验签、43 位 EncodingAESKey 的 AES-256-CBC/PKCS#7 解密、AppID 校验和严格 `wxa_media_check` 结构归一化；未知 suggestion 关闭式写 error。回调只通过 trace_id 定位 provider attempt/任务，媒体 ETag、对象 Key、当前尝试和管理员优先级在事务锁内重验，重复、旧、未知、删除或过期事件均 200 幂等且不放行。独立安全复核未发现 P0/P1；回调/服务/配置定向 40/40、内容审核与微信回归 196/196、相册图片 66/66、API 语法与差异检查通过。未实现 GET handshake：当前已确认范围仅为微信安全模式 POST JSON 事件，未引入未定义的握手协议。
 - 2026-07-13：完成 D45.8。腾讯视频请求仅接受 `videos/source/*.mp4`，明确 Average 100 帧、画面+音轨、Detail 回调，提交响应严格要求 `JobId`/`DataId`/允许状态；Detail 回调严格按 `State=Success` 与 `Result=0/1/2` 映射，未知或失败保持 hidden error。当前/上一枚回调令牌可轮换，任何单独 provider 开关均不能绕过生产配置校验；已记录的旧 attempt 返回 200 stale，仅尚未记录 attempt 的已知 pending/error 任务返回 503 重试。腾讯 Detail raw body 独立上限为 1 MiB，微信保持 256 KiB。本地/COS 拒绝清理覆盖视频 source/display/cover，拒绝后转码回调不再恢复展示或封面。质量复核曾发现“迟到转码同 key 重写”会遗留对象的 P1；现已在媒体行锁内将经校验输出合并/重排同一清理任务，撤销旧 lease、保留对象与重试历史，普通重复 Block 不重排，修复后独立复审通过。D42 COS inspection 断言已补齐既有的 ETag 返回值，未修改生产行为。本轮 P1 聚焦 47/47、内容审核 210/210、相册 72/72、D42 API server 14/14 与 stream 10/10、环境/API 语法/差异检查通过。根 `npm run check` 仍仅由未改动 D14 静态断言（期望 `config.subscribeMessage.enabled`，实现为既有 `runtimeConfig.subscribeMessage.enabled`）失败。
+- 2026-07-13：完成 D45.9。所有服务端读取、列表/计数/标签、创建响应与签名 URL 统一以 `approved`/`approved_legacy` 为发布条件；未批准上传者仅收到无 URL 占位。小程序同时收紧批量下载、预览和异步回写，并在 `onShow` 强制回源，使审核撤销后清除图片/视频本地缓存并关闭失效预览。独立安全复核未发现 P0/P1；内容审核/相册/API/后台回归 295/295、小程序与共享媒体回归 35/35、API 语法检查、小程序构建和差异检查通过。
+- 2026-07-13：完成 D45.9 质量修正。成员直读、公开直读与 `onShow` 刷新共享不透明列表代次，旧 approved 响应在写入前二次验代次后不得回写；当前代次 401/403 统一写入空列表并清除缓存、请求状态和预览。新增 deferred 乱序、写入间隙和访问失效回归；独立复审未发现 P0/P1。小程序/共享媒体 41/41、内容审核/相册/API/后台 295/295、API 语法检查、小程序构建和差异检查通过。
+- 2026-07-12：完成 D45.9 最终复核与修正。上传者未批准占位不再计入 `visible_count`；车头首页的 `active_album_photo_count`/`photo_count` 仅统计已发布媒体且保持原有失败视频计数口径。瀑布流以渲染代次和 `filteredPhotos` 当前规范行拒绝迟到 approved 事件，避免审核撤销或筛选切换后回写旧媒体；旧请求的 finally 也不能清除新请求槽位。两轮独立规格/质量复审均无 P0/P1；新鲜审核/相册 API 回归、小程序全部测试、后台共享测试、API 语法检查、小程序构建和差异检查均通过（构建仅有现有第三方 Sass 弃用提示）。

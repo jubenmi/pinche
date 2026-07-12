@@ -5,6 +5,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import { isModerationPublished } from "@pinche/shared";
 import { config, publicConfig } from "./config/env.js";
 import { checkDatabaseReadiness, withDatabaseConnection, withTransaction } from "./db/mysql.js";
 import {
@@ -2186,10 +2187,26 @@ function sessionAlbumMediaPath(photoId, variant = "preview") {
 }
 
 function attachAlbumImageUrls(photo, legacyUrls, options) {
-  const { storage_object_key: objectKey, storage_object_etag: ignoredEtag, ...safePhoto } = photo;
+  const {
+    storage_object_key: objectKey,
+    storage_object_etag: ignoredEtag,
+    photo_url: ignoredPhotoUrl,
+    source_url: ignoredSourceUrl,
+    display_url: ignoredDisplayUrl,
+    cover_url: ignoredCoverUrl,
+    object_key: ignoredObjectKey,
+    object_etag: ignoredObjectEtag,
+    ...safePhoto
+  } = photo;
   void ignoredEtag;
-  const moderationStatus = String(photo.moderation_status || "approved_legacy");
-  if (!["approved", "approved_legacy"].includes(moderationStatus)) {
+  void ignoredPhotoUrl;
+  void ignoredSourceUrl;
+  void ignoredDisplayUrl;
+  void ignoredCoverUrl;
+  void ignoredObjectKey;
+  void ignoredObjectEtag;
+  const moderationStatus = String(photo.moderation_status || "");
+  if (!isModerationPublished(moderationStatus)) {
     return {
       ...safePhoto,
       moderation_status: moderationStatus,
@@ -2244,6 +2261,12 @@ function albumImageUrlOptions(options = {}) {
 
 function attachLegacyFinalizedAlbumImageUrls(finalized, options = {}) {
   const resolved = albumImageUrlOptions(options);
+  if (!isModerationPublished(finalized.photo.moderation_status)) {
+    return {
+      uploadId: finalized.uploadId,
+      photo: attachAlbumImageUrls(finalized.photo, {}, resolved)
+    };
+  }
   const preview = sessionAlbumMediaPath(finalized.photo.id, "preview");
   const thumbnail = sessionAlbumMediaPath(finalized.photo.id, "thumbnail");
   return {
@@ -2458,13 +2481,28 @@ function signedPublicAlbumVideoSnapshotUrl(media, claims, albumShareToken) {
 }
 
 function stripAlbumVideoInternalFields(photo) {
-  const { video_cover_source_url, ...safePhoto } = photo;
+  const {
+    video_cover_source_url,
+    photo_url,
+    source_url,
+    display_url,
+    cover_url,
+    object_key,
+    object_etag,
+    storage_object_key,
+    storage_object_etag,
+    ...safePhoto
+  } = photo;
+  void video_cover_source_url;
+  void photo_url;
+  void source_url;
+  void display_url;
+  void cover_url;
+  void object_key;
+  void object_etag;
+  void storage_object_key;
+  void storage_object_etag;
   return safePhoto;
-}
-
-function isAlbumMediaApprovedForUrls(photo) {
-  const status = photo.moderation_status || "approved_legacy";
-  return status === "approved" || status === "approved_legacy";
 }
 
 function mediaVariant(query) {
@@ -2558,7 +2596,7 @@ export function attachSessionAlbumMediaUrls(album, userId, options = {}) {
   const photos = album.photos.map((photo) => {
       if (photo.media_type === "video") {
         const safePhoto = stripAlbumVideoInternalFields(photo);
-        const approved = isAlbumMediaApprovedForUrls(photo);
+        const approved = isModerationPublished(photo.moderation_status);
         return {
           ...safePhoto,
           cover_url: approved && photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
@@ -2566,6 +2604,9 @@ export function attachSessionAlbumMediaUrls(album, userId, options = {}) {
             ? sessionAlbumVideoUrlPath(photo.id)
             : ""
         };
+      }
+      if (!isModerationPublished(photo.moderation_status)) {
+        return attachAlbumImageUrls(photo, {}, resolved);
       }
       const preview = sessionAlbumMediaPath(photo.id, "preview");
       const thumbnail = sessionAlbumMediaPath(photo.id, "thumbnail");
@@ -2769,13 +2810,16 @@ export function attachPublicSessionAlbumMediaUrls(
   const photos = album.photos.map((photo) => {
       if (photo.media_type === "video") {
         const safePhoto = stripAlbumVideoInternalFields(photo);
-        const approved = isAlbumMediaApprovedForUrls(photo);
+        const approved = isModerationPublished(photo.moderation_status);
         return {
           ...safePhoto,
           cover_url: approved && photo.has_cover
             ? signedPublicAlbumVideoSnapshotUrl(photo, claims, albumShareToken)
             : ""
         };
+      }
+      if (!isModerationPublished(photo.moderation_status)) {
+        return attachAlbumImageUrls(photo, {}, resolved);
       }
       const preview = sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken, "preview");
       const thumbnail = sessionAlbumPublicMediaPath(photo.id, claims, albumShareToken, "thumbnail");
@@ -4552,12 +4596,7 @@ async function route(request, response) {
     });
     jsonResponse(response, 201, {
       ok: true,
-      data: {
-        ...photo,
-        image_url: sessionAlbumMediaPath(photo.id),
-        preview_url: sessionAlbumMediaPath(photo.id, "preview"),
-        thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail")
-      }
+      data: photo
     });
     return;
   }
@@ -4590,12 +4629,7 @@ async function route(request, response) {
     });
     jsonResponse(response, 201, {
       ok: true,
-      data: {
-        ...photo,
-        image_url: sessionAlbumMediaPath(photo.id),
-        preview_url: sessionAlbumMediaPath(photo.id, "preview"),
-        thumbnail_url: sessionAlbumMediaPath(photo.id, "thumbnail")
-      }
+      data: photo
     });
     return;
   }
@@ -4620,11 +4654,7 @@ async function route(request, response) {
     });
     jsonResponse(response, 201, {
       ok: true,
-      data: {
-        ...video,
-        cover_url: "",
-        video_url: video.processing_status === "ready" ? sessionAlbumVideoUrlPath(video.id) : ""
-      }
+      data: video
     });
     return;
   }
