@@ -60,6 +60,23 @@ assertIncludes(productionEnvExample, "WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPL
 assertIncludes(subscribeMessage, "export async function notifySessionRescheduled");
 assertIncludes(subscribeMessage, 'scene: "session_rescheduled"');
 assertIncludes(subscribeMessage, "rescheduleMessageData");
+assertIncludes(
+  subscribeMessage,
+  'thing1: { value: valueOrFallback(payload.scriptName, "拼车车局").slice(0, 20) }'
+);
+assertIncludes(
+  subscribeMessage,
+  'thing2: { value: valueOrFallback(payload.seatName, "角色位").slice(0, 20) }'
+);
+assertIncludes(subscribeMessage, 'phrase3: { value: resultText.slice(0, 5) }');
+assertIncludes(
+  subscribeMessage,
+  'date4: { value: valueOrFallback(payload.startAt, "时间待定").slice(0, 20) }'
+);
+assertIncludes(
+  subscribeMessage,
+  'thing5: { value: valueOrFallback(payload.actorName, "新申请").slice(0, 20) }'
+);
 assertIncludes(subscribeMessage, 'valueOrFallback(payload.scriptName, "拼车车局")');
 assertIncludes(subscribeMessage, 'formatSessionRescheduleTime(payload.oldStartAt, "原时间待定")');
 assertIncludes(subscribeMessage, 'formatSessionRescheduleTime(payload.newStartAt, "新时间待定")');

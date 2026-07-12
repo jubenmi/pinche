@@ -84,11 +84,11 @@ function truncateCodePoints(value, maxLength) {
 
 function messageData(payload, resultText = "待审核") {
   return {
-    thing1: { value: truncateCodePoints(valueOrFallback(payload.scriptName, "拼车车局"), 20) },
-    thing2: { value: truncateCodePoints(valueOrFallback(payload.seatName, "角色位"), 20) },
-    phrase3: { value: truncateCodePoints(resultText, 5) },
-    date4: { value: truncateCodePoints(valueOrFallback(payload.startAt, "时间待定"), 20) },
-    thing5: { value: truncateCodePoints(valueOrFallback(payload.actorName, "新申请"), 20) }
+    thing1: { value: valueOrFallback(payload.scriptName, "拼车车局").slice(0, 20) },
+    thing2: { value: valueOrFallback(payload.seatName, "角色位").slice(0, 20) },
+    phrase3: { value: resultText.slice(0, 5) },
+    date4: { value: valueOrFallback(payload.startAt, "时间待定").slice(0, 20) },
+    thing5: { value: valueOrFallback(payload.actorName, "新申请").slice(0, 20) }
   };
 }
 
