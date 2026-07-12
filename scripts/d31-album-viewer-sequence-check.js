@@ -364,6 +364,33 @@ function runGenerationSafeEdgeRebaseCheck(component) {
   assert.equal(changeEvents(emitted).length, 3, "old native events must not emit business changes");
 }
 
+function runRapidRebaseDurationCheck(component) {
+  const { instance, emitted } = openViewer(component, 30, 2);
+  const oldGeneration = instance.swiperGeneration;
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 4, { generation: oldGeneration }));
+  const changesAfterSwipe = changeEvents(emitted).length;
+  instance.handleSwiperAnimationFinish(
+    nativeSwiperEvent(instance, 4, { generation: oldGeneration })
+  );
+  const rebaseGeneration = instance.swiperGeneration;
+  assert.equal(instance.swiperDuration, 0);
+
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 0, { generation: oldGeneration }));
+  instance.handleSwiperAnimationFinish(
+    nativeSwiperEvent(instance, 0, { generation: oldGeneration })
+  );
+  assert.equal(changeEvents(emitted).length, changesAfterSwipe);
+  assert.equal(instance.currentIndex, 4);
+
+  instance.handleSwiperAnimationFinish(
+    nativeSwiperEvent(instance, instance.activeWindowIndex, {
+      generation: rebaseGeneration,
+      source: ""
+    })
+  );
+  assert.equal(instance.swiperDuration, 220);
+}
+
 function runReopenGenerationCheck(component) {
   const { instance, emitted } = openViewer(component, 263, 0);
   const oldGeneration = instance.swiperGeneration;
@@ -805,6 +832,7 @@ function runSequenceCheck() {
   runOpeningPositionCheck(component);
   runNonEdgeChangeCheck(component);
   runGenerationSafeEdgeRebaseCheck(component);
+  runRapidRebaseDurationCheck(component);
   runReopenGenerationCheck(component);
   runDynamicInitialIndexCheck(component);
   runFullTraversalCheck(component);
