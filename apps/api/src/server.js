@@ -167,6 +167,7 @@ import { emitAlbumImageEvent } from "./modules/album-image/telemetry.js";
 import { validateStoredAlbumImage } from "./modules/album-image/validator.js";
 import {
   buildAlbumImageUrls,
+  buildSignedCosImageUrl,
   buildWechatImageModerationUrl
 } from "./modules/album-image/signed-urls.js";
 import {
@@ -191,6 +192,7 @@ import {
   findModerationJobById,
   findModerationJobByDataId,
   findModerationMedia,
+  retireCurrentModerationAttempt,
   recordModerationSubmission,
   renewModerationLease,
   markTextProposalStatus,
@@ -203,6 +205,8 @@ import {
   transitionModerationJob
 } from "./modules/content-moderation/repository.js";
 import { createContentModerationService } from "./modules/content-moderation/service.js";
+import { createAdminModerationApi } from "./modules/content-moderation/admin-api.js";
+import { createAdminModerationPreviewBuilder } from "./modules/content-moderation/admin-preview.js";
 import {
   createTextBaseline,
   requireInitialTextModerationTarget
@@ -1088,6 +1092,7 @@ export const contentModeration = createContentModerationService({
     findModerationAttemptByProviderJobId,
     findModerationJobById,
     findModerationMedia,
+    retireCurrentModerationAttempt,
     recordModerationSubmission,
     renewModerationLease,
     markTextProposalStatus,
@@ -1131,6 +1136,38 @@ export const contentModeration = createContentModerationService({
 async function applyApprovedTextProposal(connection, { job, proposal }) {
   return textProposalApplicator.apply(connection, { job, proposal });
 }
+
+const buildAdminModerationPreview = createAdminModerationPreviewBuilder({
+  cosConfig: config.cos,
+  buildImageUrl: ({ objectKey, nowSeconds, expiresInSeconds }) => buildSignedCosImageUrl({
+    objectKey,
+    nowSeconds,
+    expiresInSeconds,
+    config: config.cos
+  }),
+  buildVideoUrl: ({ uploadPath, expiresInSeconds }) => signedCosAlbumVideoUrl(
+    { display_url: uploadPath },
+    "GET",
+    expiresInSeconds
+  )
+});
+
+const adminModerationApi = createAdminModerationApi({
+  authorize: async (request) => {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    return user;
+  },
+  listJobs: (filters) => withDatabaseConnection((connection) =>
+    listAdminModerationJobs(connection, filters)
+  ),
+  getJob: (jobId) => withDatabaseConnection((connection) =>
+    getAdminModerationJob(connection, jobId)
+  ),
+  decide: (input) => contentModeration.decideAsAdmin(input),
+  buildPreview: buildAdminModerationPreview,
+  applyTextProposal: applyApprovedTextProposal
+});
 
 const albumImageUploads = createAlbumImageUploadService({
   cosConfig: config.cos,
@@ -1184,9 +1221,10 @@ async function isPersistedAlbumImageAuthorization(user, body) {
   ));
 }
 
-function jsonResponse(response, statusCode, payload) {
+function jsonResponse(response, statusCode, payload, headers = {}) {
   const body = JSON.stringify(payload);
   response.writeHead(statusCode, {
+    ...headers,
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body)
   });
@@ -1248,6 +1286,7 @@ export function normalizeError(error) {
     CONTENT_MODERATION_PROPOSAL_STALE: [409, "Content moderation proposal is stale"],
     CONTENT_MODERATION_IDEMPOTENCY_CONFLICT: [409, "Content moderation request conflicts with an existing request"],
     CONTENT_MODERATION_INVALID_TRANSITION: [409, "Content moderation state changed"],
+    CONTENT_MODERATION_CALLBACK_STALE: [409, "Content moderation state changed"],
     CONTENT_MODERATION_CONFIGURATION_ERROR: [500, "Content moderation is not configured"],
     CONTENT_MODERATION_CALLBACK_UNAUTHORIZED: [401, "Content moderation callback is unauthorized"],
     CONTENT_MODERATION_INVALID_CALLBACK: [400, "Content moderation callback is invalid"]
@@ -2422,13 +2461,16 @@ function albumVideoObjectKey(uploadPath) {
   return cosObjectKeyFromUploadPath(pathText, prefix);
 }
 
-function signedCosAlbumVideoUrl(media, method = "GET") {
+function signedCosAlbumVideoUrl(media, method = "GET", expiresInSeconds) {
   const key = albumVideoObjectKey(media.display_url || media.source_url);
   const host = cosHost(config.cos);
   const authorization = buildCosAuthorization({
     method,
     key,
     headers: { host },
+    ...(Number.isSafeInteger(expiresInSeconds) && expiresInSeconds > 0
+      ? { expiresInSeconds }
+      : {}),
     config: config.cos
   });
   return `https://${host}/${encodeCosObjectKey(key)}?${authorization}`;
@@ -3680,6 +3722,23 @@ async function route(request, response) {
   }
 
   const body = await bodyFor(request);
+
+  const adminModerationRoute = await adminModerationApi({
+    request,
+    method: request.method,
+    pathname: url.pathname,
+    searchParams: url.searchParams,
+    body
+  });
+  if (adminModerationRoute) {
+    jsonResponse(response, adminModerationRoute.statusCode, {
+      ok: true,
+      data: adminModerationRoute.data
+    }, {
+      "cache-control": "private, no-store"
+    });
+    return;
+  }
 
   if (request.method === "POST" && url.pathname === "/api/uploads/cos-intent") {
     const user = await getAuthUser(request);

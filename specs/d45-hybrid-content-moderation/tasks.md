@@ -100,12 +100,13 @@
   - [x] 重试耗尽后保持 error 并停止自动认领。
   - [x] 提供生产 Worker 命令与运行配置。
 
-- [ ] D45.11 实现管理员审核 API。
-  - [ ] 普通用户 403；队列支持 provider、类型、状态、标签和时间筛选。
-  - [ ] 提供详情、approve、reject、retry。
-  - [ ] reject 必填原因，所有动作写审计。
-  - [ ] 文本批准原子校验基线，变化时 stale。
-  - [ ] retry 不改变内容可见性。
+- [x] D45.11 实现管理员审核 API。
+  - 已完成：所有管理员路由先验证 `system_admin`，列表/详情只消费 `review`/`error`，并通过显式 DTO 隔离 provider job、租约、对象键和原始 URL。
+  - [x] 普通用户 403；队列支持 provider、类型、状态、标签和时间筛选。
+  - [x] 提供详情、approve、reject、retry。
+  - [x] reject 必填原因，所有动作写审计。
+  - [x] 文本批准原子校验基线，变化时 stale。
+  - [x] retry 不改变内容可见性；条件重入成功后同一事务退役旧 provider attempt，迟到回调只能 stale。
 
 - [ ] D45.12 实现管理后台最小复核页面。
   - [ ] 增加内容审核导航、筛选队列、详情和操作。
@@ -182,3 +183,4 @@
 - 2026-07-13：完成 D45.9 质量修正。成员直读、公开直读与 `onShow` 刷新共享不透明列表代次，旧 approved 响应在写入前二次验代次后不得回写；当前代次 401/403 统一写入空列表并清除缓存、请求状态和预览。新增 deferred 乱序、写入间隙和访问失效回归；独立复审未发现 P0/P1。小程序/共享媒体 41/41、内容审核/相册/API/后台 295/295、API 语法检查、小程序构建和差异检查通过。
 - 2026-07-12：完成 D45.9 最终复核与修正。上传者未批准占位不再计入 `visible_count`；车头首页的 `active_album_photo_count`/`photo_count` 仅统计已发布媒体且保持原有失败视频计数口径。瀑布流以渲染代次和 `filteredPhotos` 当前规范行拒绝迟到 approved 事件，避免审核撤销或筛选切换后回写旧媒体；旧请求的 finally 也不能清除新请求槽位。两轮独立规格/质量复审均无 P0/P1；新鲜审核/相册 API 回归、小程序全部测试、后台共享测试、API 语法检查、小程序构建和差异检查均通过（构建仅有现有第三方 Sass 弃用提示）。
 - 2026-07-12：完成 D45.10。Worker 仅认领明确的微信文本、微信图片和腾讯视频路由，使用 `FOR UPDATE SKIP LOCKED`、任务级 token 租约、有限指数退避/抖动、运营错误高优告警与耗尽排除。初始和重试的三类 provider 调用均在数据库 `CURRENT_TIMESTAMP` 下原子续租 90 秒；Redis/token、微信请求/正文及腾讯视频请求/正文均有有界 deadline。图片 URL 在续租后才生成，为单对象私有 GET、5 分钟有效且不写库/日志/响应，覆盖完整提交链及至少两分钟异步抓取余量。两轮独立规格与安全复核均无 P0/P1；内容审核/微信回归、相册签名 URL 回归、API 语法、环境与差异检查通过。根 `npm run check` 的其余链路通过，仍仅在未改动的 D14 静态断言（期望 `config.subscribeMessage.enabled`，现有实现为 `runtimeConfig.subscribeMessage.enabled`）处停止。
+- 2026-07-12：完成 D45.11。新增 `system_admin` 管理员审核 API（列表、详情、批准、拒绝、重试），筛选参数和决定 body 均严格白名单；SQL 仅查询 review/error，详情用 DTO 脱敏 provider attempt、租约、对象键、原始 URL 与响应摘要。媒体预览只会在当前 active 媒体、provider/类型/不可变版本和受控私有路径均匹配时签发 60 秒 COS URL，响应禁止缓存。管理员媒体决定在行锁内校验对象版本和条件更新；重试在条件 requeue 成功后同一事务退役旧 attempt，使迟到 Pass/Review/Block 回调保持 stale。`CONTENT_MODERATION_CALLBACK_STALE` 对外稳定为 409。两轮独立规格/安全复核无未解决 P0/P1/P2；管理员定向回归 41/41、API 全量测试、内容审核/签名 URL/微信 token 回归、API 语法（53 files）、环境与差异检查通过。

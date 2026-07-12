@@ -13,15 +13,23 @@ test("public moderation outcomes preserve only stable codes and safe messages", 
     code: "CONTENT_MODERATION_REJECTED",
     statusCode: 422
   });
+  const callbackStale = Object.assign(new Error("locked media changed while deciding"), {
+    code: "CONTENT_MODERATION_CALLBACK_STALE",
+    statusCode: 409
+  });
 
   const normalizedOpenid = normalizeError(openidRequired);
   const normalizedRejected = normalizeError(rejected);
+  const normalizedCallbackStale = normalizeError(callbackStale);
   assert.equal(normalizedOpenid.statusCode, 422);
   assert.equal(normalizedOpenid.code, "CONTENT_MODERATION_OPENID_REQUIRED");
   assert.equal(normalizedRejected.statusCode, 422);
   assert.equal(normalizedRejected.code, "CONTENT_MODERATION_REJECTED");
+  assert.equal(normalizedCallbackStale.statusCode, 409);
+  assert.equal(normalizedCallbackStale.code, "CONTENT_MODERATION_CALLBACK_STALE");
   assert.equal(normalizedOpenid.message.includes("private producer text"), false);
   assert.equal(normalizedRejected.message.includes("provider labels"), false);
+  assert.equal(normalizedCallbackStale.message.includes("locked media"), false);
 });
 
 test("server routes all D45.5 text mutations through the shared WeChat moderation boundary", async () => {

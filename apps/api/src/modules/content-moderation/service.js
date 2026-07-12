@@ -1078,7 +1078,18 @@ export function createContentModerationService(dependencies) {
         if (job.status !== "error") {
           throw publicModerationError(409, "CONTENT_MODERATION_INVALID_TRANSITION", "only error jobs can retry");
         }
-        await deps.repository.requeueModerationJob(connection, { jobId: job.id });
+        const requeued = await deps.repository.requeueModerationJob(connection, { jobId: job.id });
+        if (!requeued) {
+          throw publicModerationError(
+            409,
+            "CONTENT_MODERATION_CALLBACK_STALE",
+            "moderation job changed concurrently"
+          );
+        }
+        // The requeue and retirement share the job row lock and transaction.
+        // A callback that was already in flight cannot see pending with its old
+        // provider attempt still current after this transaction commits.
+        await deps.repository.retireCurrentModerationAttempt(connection, { jobId: job.id });
         await deps.repository.createAuditLog(connection, {
           jobId: job.id,
           adminUserId: input.admin.user.id,
@@ -1094,12 +1105,26 @@ export function createContentModerationService(dependencies) {
       const isMedia = ["album_image", "album_video"].includes(job.subject_type);
       if (isMedia) {
         const media = await deps.repository.findModerationMedia(connection, job, { forUpdate: true });
-        if (!media) throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "media is stale");
-        await deps.repository.transitionMediaModeration(connection, {
+        const expectedMediaType = job.subject_type === "album_image" ? "image" : "video";
+        const mediaFromStatuses = job.status === "review" ? ["review"] : ["pending", "error"];
+        if (
+          !media ||
+          Number(media.id) !== Number(job.subject_id) ||
+          String(media.status) !== "active" ||
+          String(media.media_type) !== expectedMediaType ||
+          String(media.moderation_object_version || "") !== String(job.subject_version || "") ||
+          !mediaFromStatuses.includes(String(media.moderation_status || ""))
+        ) {
+          throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "media is stale");
+        }
+        const mediaChanged = await deps.repository.transitionMediaModeration(connection, {
           mediaId: media.id,
-          fromStatuses: [job.status],
+          fromStatuses: mediaFromStatuses,
           toStatus: nextStatus
         });
+        if (!mediaChanged) {
+          throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "media changed concurrently");
+        }
         if (nextStatus === "rejected") {
           await deps.repository.enqueueRejectedMediaCleanup(connection, media);
         }
@@ -1156,7 +1181,7 @@ export function createContentModerationService(dependencies) {
           appliedResult: safeAppliedResult
         });
       }
-      await deps.repository.transitionModerationJob(connection, {
+      const jobChanged = await deps.repository.transitionModerationJob(connection, {
         jobId: job.id,
         fromStatus: job.status,
         toStatus: nextStatus,
@@ -1164,6 +1189,9 @@ export function createContentModerationService(dependencies) {
         adminUserId: input.admin.user.id,
         reason
       });
+      if (!jobChanged) {
+        throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "moderation job changed concurrently");
+      }
       await deps.repository.createAuditLog(connection, {
         jobId: job.id,
         adminUserId: input.admin.user.id,

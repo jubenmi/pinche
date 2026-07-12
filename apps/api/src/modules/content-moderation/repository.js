@@ -845,20 +845,21 @@ export async function requeueModerationJob(connection, { jobId, fromStatus = "er
 
 export async function listAdminModerationJobs(
   connection,
-  { status, subjectType, label, dateFrom, dateTo, limit = 100 } = {}
+  { provider, status, subjectType, label, dateFrom, dateTo, limit = 100 } = {}
 ) {
   const where = ["job.status IN ('review', 'error')"];
   const values = [];
-  if (status) { where.push("job.status = ?"); values.push(String(status)); }
+  if (provider) { where.push("job.provider = ?"); values.push(String(provider)); }
   if (subjectType) { where.push("job.subject_type = ?"); values.push(String(subjectType)); }
+  if (status) { where.push("job.status = ?"); values.push(String(status)); }
   if (label) { where.push("job.label = ?"); values.push(String(label)); }
   if (dateFrom) { where.push("job.created_at >= ?"); values.push(dateFrom); }
-  if (dateTo) { where.push("job.created_at <= ?"); values.push(dateTo); }
+  if (dateTo) { where.push("job.created_at < DATE_ADD(?, INTERVAL 1 DAY)"); values.push(dateTo); }
   values.push(Math.max(1, Math.min(200, Number(limit) || 100)));
   const [rows] = await connection.query(
-    `SELECT job.*, proposal.normalized_payload_json, proposal.base_version,
-            media.session_id, media.uploader_user_id, media.media_type,
-            media.processing_status, media.moderation_status
+    `SELECT job.*, proposal.created_by_user_id,
+            media.id AS media_id, media.session_id, media.uploader_user_id,
+            media.media_type, media.processing_status, media.moderation_status
      FROM content_moderation_jobs job
      LEFT JOIN content_moderation_text_proposals proposal
        ON proposal.moderation_job_id = job.id
@@ -875,9 +876,11 @@ export async function listAdminModerationJobs(
 export async function getAdminModerationJob(connection, jobId) {
   const [rows] = await connection.query(
     `SELECT job.*, proposal.normalized_payload_json, proposal.base_version,
-            proposal.status AS proposal_status, proposal.created_by_user_id,
-            media.session_id, media.uploader_user_id, media.media_type,
-            media.processing_status, media.moderation_status,
+            proposal.status AS proposal_status, proposal.action AS proposal_action,
+            proposal.created_by_user_id, proposal.idempotency_key,
+            media.id AS media_id, media.session_id, media.uploader_user_id,
+            media.media_type, media.status AS media_record_status,
+            media.processing_status, media.moderation_status, media.moderation_object_version,
             media.object_key, media.source_url, media.display_url, media.cover_url
      FROM content_moderation_jobs job
      LEFT JOIN content_moderation_text_proposals proposal
@@ -885,7 +888,7 @@ export async function getAdminModerationJob(connection, jobId) {
      LEFT JOIN session_album_photos media
        ON job.subject_type IN ('album_image', 'album_video')
       AND media.id = CAST(job.subject_id AS UNSIGNED)
-     WHERE job.id = ? LIMIT 1`,
+     WHERE job.id = ? AND job.status IN ('review', 'error') LIMIT 1`,
     [Number(jobId)]
   );
   return rows[0] || null;

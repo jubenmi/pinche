@@ -19,6 +19,8 @@ import {
   findModerationJobByDataId,
   findModerationJobById,
   findModerationJobByProviderJobId,
+  getAdminModerationJob,
+  listAdminModerationJobs,
   markTextProposalStatus,
   markTextProposalStale,
   recordModerationSubmission,
@@ -69,6 +71,66 @@ test("text proposals allow a terminal stale transition without adding stale to j
 
 test("proposal stale has a stable moderation error code without expanding job statuses", () => {
   assert.equal(MODERATION_ERROR_CODES.proposalStale, "CONTENT_MODERATION_PROPOSAL_STALE");
+});
+
+test("administrator moderation queue filters only review/error rows by exact provider/type/label and inclusive days", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql: String(sql), params });
+      return [[{ id: 41 }]];
+    }
+  };
+
+  const rows = await listAdminModerationJobs(connection, {
+    provider: "wechat_sec_check",
+    subjectType: "album_image",
+    status: "review",
+    label: "100",
+    dateFrom: "2026-07-01",
+    dateTo: "2026-07-31",
+    limit: 25
+  });
+
+  assert.deepEqual(rows, [{ id: 41 }]);
+  assert.match(calls[0].sql, /job\.status IN \('review', 'error'\)/);
+  assert.match(calls[0].sql, /job\.provider = \?/);
+  assert.match(calls[0].sql, /job\.subject_type = \?/);
+  assert.match(calls[0].sql, /job\.label = \?/);
+  assert.match(calls[0].sql, /job\.created_at >= \?/);
+  assert.match(calls[0].sql, /job\.created_at < DATE_ADD\(\?, INTERVAL 1 DAY\)/);
+  assert.match(calls[0].sql, /proposal\.created_by_user_id/);
+  assert.doesNotMatch(calls[0].sql, /proposal\.normalized_payload_json/);
+  assert.deepEqual(calls[0].params, [
+    "wechat_sec_check",
+    "album_image",
+    "review",
+    "100",
+    "2026-07-01",
+    "2026-07-31",
+    25
+  ]);
+});
+
+test("administrator moderation detail retains only controlled internal fields for server-side preview and safe text projection", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql: String(sql), params });
+      return [[{ id: 41 }]];
+    }
+  };
+
+  const row = await getAdminModerationJob(connection, 41);
+
+  assert.deepEqual(row, { id: 41 });
+  assert.match(calls[0].sql, /job\.status IN \('review', 'error'\)/);
+  assert.match(calls[0].sql, /proposal\.action AS proposal_action/);
+  assert.match(calls[0].sql, /proposal\.created_by_user_id/);
+  assert.match(calls[0].sql, /media\.id AS media_id/);
+  assert.match(calls[0].sql, /media\.moderation_object_version/);
+  assert.match(calls[0].sql, /media\.object_key/);
+  assert.deepEqual(calls[0].params, [41]);
 });
 
 function recordingConnection(rows = []) {

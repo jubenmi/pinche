@@ -4,9 +4,29 @@ import test from "node:test";
 
 import { createContentModerationService } from "../src/modules/content-moderation/service.js";
 
-function harness({ subjectType = "album_image", status = "review", applyTextProposal } = {}) {
+function harness({
+  subjectType = "album_image",
+  status = "review",
+  mediaStatus = status,
+  mediaActive = true,
+  mediaType = subjectType === "album_video" ? "video" : "image",
+  mediaObjectVersion = "v1",
+  mediaTransitionResult,
+  requeueResult = true,
+  applyTextProposal
+} = {}) {
   const state = {
     jobStatus: status,
+    mediaStatus,
+    cleanupCalls: 0,
+    retiredAttempts: 0,
+    currentAttempt: {
+      id: 19,
+      moderation_job_id: 7,
+      provider: subjectType === "album_video" ? "tencent_ci_video" : "wechat_sec_check",
+      provider_job_id: "old-attempt",
+      is_current: 1
+    },
     decidedByAdminUserId: null,
     proposalStatus: "pending",
     proposalAppliedResult: null,
@@ -21,6 +41,7 @@ function harness({ subjectType = "album_image", status = "review", applyTextProp
     subject_type: subjectType,
     subject_id: "91",
     subject_version: "v1",
+    provider: subjectType === "album_video" ? "tencent_ci_video" : "wechat_sec_check",
     status,
     decided_by_admin_user_id: null
   };
@@ -41,8 +62,13 @@ function harness({ subjectType = "album_image", status = "review", applyTextProp
       decided_by_admin_user_id: state.decidedByAdminUserId
     }),
     findModerationMedia: async () => ({
-      id: 91, status: "active", moderation_status: state.jobStatus,
-      media_type: "image", object_key: "a.jpg", session_id: 8
+      id: 91,
+      status: mediaActive ? "active" : "deleted",
+      moderation_status: state.mediaStatus,
+      moderation_object_version: mediaObjectVersion,
+      media_type: mediaType,
+      object_key: "uploads/session-album/display/a.jpg",
+      session_id: 8
     }),
     findTextProposalByJobId: async () => ({
       ...proposal,
@@ -69,9 +95,16 @@ function harness({ subjectType = "album_image", status = "review", applyTextProp
     },
     transitionMediaModeration: async (_connection, input) => {
       state.media.push(input);
-      return true;
+      const changed = mediaTransitionResult === undefined
+        ? input.fromStatuses.includes(state.mediaStatus)
+        : mediaTransitionResult;
+      if (changed) state.mediaStatus = input.toStatus;
+      return changed;
     },
-    enqueueRejectedMediaCleanup: async () => 99,
+    enqueueRejectedMediaCleanup: async () => {
+      state.cleanupCalls += 1;
+      return 99;
+    },
     markTextProposalStatus: async (_connection, input) => {
       state.proposals.push(input);
       state.proposalStatus = input.toStatus;
@@ -84,10 +117,28 @@ function harness({ subjectType = "album_image", status = "review", applyTextProp
     },
     createAuditLog: async (_connection, input) => state.audits.push(input),
     requeueModerationJob: async () => {
+      if (!requeueResult) return false;
       state.jobStatus = "pending";
       return true;
+    },
+    retireCurrentModerationAttempt: async () => {
+      state.retiredAttempts += 1;
+      state.currentAttempt = state.currentAttempt
+        ? { ...state.currentAttempt, is_current: 0 }
+        : null;
+      return 1;
     }
   };
+  repository.findModerationAttemptByProviderJobId = async (_connection, provider, providerJobId) => (
+    state.currentAttempt &&
+    state.currentAttempt.provider === provider &&
+    state.currentAttempt.provider_job_id === providerJobId
+      ? { ...state.currentAttempt }
+      : null
+  );
+  repository.findCurrentModerationAttempt = async () => (
+    state.currentAttempt?.is_current === 1 ? { ...state.currentAttempt } : null
+  );
   const service = createContentModerationService({
     config: { enabled: true, wechatTextEnabled: true },
     client: { checkText: async () => ({ suggestion: "pass" }) },
@@ -114,6 +165,60 @@ test("administrator approval publishes media and records an audit", async () => 
   assert.equal(result.status, "approved");
   assert.equal(state.media[0].toStatus, "approved");
   assert.equal(state.audits[0].action, "approve");
+});
+
+test("administrator approval promotes a pending medium after its initial submission failed", async () => {
+  const { service, state } = harness({ status: "error", mediaStatus: "pending" });
+
+  const result = await service.decideAsAdmin({
+    admin: { user: { id: 2 }, roles: ["system_admin"] }, jobId: 7, action: "approve"
+  });
+
+  assert.equal(result.status, "approved");
+  assert.deepEqual(state.media[0].fromStatuses, ["pending", "error"]);
+  assert.equal(state.mediaStatus, "approved");
+  assert.equal(state.jobStatus, "approved");
+});
+
+test("administrator media decision rejects an obsolete immutable media version before changing the job", async () => {
+  const { service, state } = harness({ mediaObjectVersion: "v2" });
+
+  await assert.rejects(service.decideAsAdmin({
+    admin: { user: { id: 2 }, roles: ["system_admin"] }, jobId: 7, action: "approve"
+  }), { code: "CONTENT_MODERATION_CALLBACK_STALE" });
+
+  assert.deepEqual(state.media, []);
+  assert.deepEqual(state.transitions, []);
+  assert.deepEqual(state.audits, []);
+});
+
+test("administrator media decision requires an active medium of the matching subject type", async () => {
+  for (const options of [{ mediaActive: false }, { mediaType: "video" }]) {
+    const { service, state } = harness(options);
+
+    await assert.rejects(service.decideAsAdmin({
+      admin: { user: { id: 2 }, roles: ["system_admin"] }, jobId: 7, action: "approve"
+    }), { code: "CONTENT_MODERATION_CALLBACK_STALE" });
+
+    assert.deepEqual(state.media, []);
+    assert.deepEqual(state.transitions, []);
+  }
+});
+
+test("administrator rejection does not finalize its job or enqueue cleanup when the media transition changes zero rows", async () => {
+  const { service, state } = harness({ mediaTransitionResult: false });
+
+  await assert.rejects(service.decideAsAdmin({
+    admin: { user: { id: 2 }, roles: ["system_admin"] },
+    jobId: 7,
+    action: "reject",
+    reason: "违规内容"
+  }), { code: "CONTENT_MODERATION_CALLBACK_STALE" });
+
+  assert.equal(state.media.length, 1);
+  assert.deepEqual(state.transitions, []);
+  assert.equal(state.cleanupCalls, 0);
+  assert.deepEqual(state.audits, []);
 });
 
 test("administrator rejection requires a reason and schedules media cleanup", async () => {
@@ -251,12 +356,40 @@ test("a stale text proposal is terminal and closes its job without adding a stal
   assert.equal(state.audits[0].action, "stale");
 });
 
-test("retry leaves content hidden and requeues only error jobs", async () => {
-  const { service } = harness({ status: "error" });
-  const result = await service.decideAsAdmin({
+test("retry retires the old provider attempt so delayed callbacks stay stale", async () => {
+  for (const decision of ["pass", "review", "block"]) {
+    const { service, state } = harness({ status: "error", mediaStatus: "error" });
+    const result = await service.decideAsAdmin({
+      admin: { user: { id: 2 }, roles: ["system_admin"] }, jobId: 7, action: "retry"
+    });
+
+    assert.equal(result.status, "pending");
+    assert.equal(state.retiredAttempts, 1);
+
+    const delayed = await service.applyMediaResult({
+      jobId: 7,
+      provider: "wechat_sec_check",
+      providerJobId: "old-attempt",
+      subjectVersion: "v1",
+      result: { decision, suggestion: decision }
+    });
+
+    assert.equal(delayed.stale, true, decision);
+    assert.equal(state.jobStatus, "pending", decision);
+    assert.equal(state.media.length, 0, decision);
+  }
+});
+
+test("retry does not retire an attempt or audit when its conditional requeue loses a race", async () => {
+  const { service, state } = harness({ status: "error", requeueResult: false });
+
+  await assert.rejects(service.decideAsAdmin({
     admin: { user: { id: 2 }, roles: ["system_admin"] }, jobId: 7, action: "retry"
-  });
-  assert.equal(result.status, "pending");
+  }), { code: "CONTENT_MODERATION_CALLBACK_STALE" });
+
+  assert.equal(state.retiredAttempts, 0);
+  assert.deepEqual(state.audits, []);
+  assert.equal(state.jobStatus, "error");
 });
 
 test("server injects provider attempts and stale proposal transition into the moderation service", async () => {
@@ -271,6 +404,7 @@ test("server injects provider attempts and stale proposal transition into the mo
     "renewModerationLease",
     "findModerationAttemptByProviderJobId",
     "findCurrentModerationAttempt",
+    "retireCurrentModerationAttempt",
     "markTextProposalStale"
   ]) {
     assert.match(source, new RegExp(`${name},`));
