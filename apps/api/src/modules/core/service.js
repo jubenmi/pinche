@@ -22,7 +22,9 @@ import {
 } from "./session-album-media-count.js";
 import {
   USER_NOTIFICATION_TYPES,
-  insertUserNotification
+  insertUserNotification,
+  listMyNotifications as listMyNotificationsFromConnection,
+  markMyNotificationRead as markMyNotificationReadFromConnection
 } from "./user-notifications.js";
 import {
   createSessionRescheduleDedupeKey,
@@ -4683,6 +4685,7 @@ async function signupNotificationPayload(connection, signupId) {
         signup.session_id,
         signup.status,
         session.script_name_snapshot,
+        session.store_name_snapshot,
         session.start_at,
         seat.name AS seat_name,
         seat.role_name,
@@ -4710,12 +4713,50 @@ async function signupNotificationPayload(connection, signupId) {
     sessionId: Number(row.session_id),
     status: row.status,
     scriptName: row.script_name_snapshot,
+    storeName: row.store_name_snapshot,
     seatName: row.role_name || row.seat_name || row.npc_role_name || "NPC角色",
     startAt: row.start_at,
     organizerOpenId: row.organizer_open_id,
     applicantOpenId: row.applicant_open_id,
     actorName: row.applicant_nickname || "新申请"
   };
+}
+
+async function insertSignupReviewedNotification(connection, signup, notification, result) {
+  const signupId = signup.id;
+  await insertUserNotification(connection, {
+    userId: signup.user_id,
+    type: USER_NOTIFICATION_TYPES.SIGNUP_REVIEWED,
+    sessionId: signup.session_id,
+    title: result === "approved" ? "报名审核已通过" : "报名审核未通过",
+    payload: {
+      result,
+      target_label: notification.seatName,
+      session: {
+        id: notification.sessionId,
+        script_name_snapshot: notification.scriptName,
+        store_name_snapshot: notification.storeName,
+        start_at: notification.startAt
+      }
+    },
+    dedupeKey:
+      result === "approved"
+        ? `signup-reviewed:${signupId}:approved`
+        : `signup-reviewed:${signupId}:rejected`
+  });
+}
+
+export async function listMyNotifications(user, filters = {}) {
+  return withDatabaseConnection((connection) =>
+    listMyNotificationsFromConnection(connection, user.user.id, filters.limit)
+  );
+}
+
+export async function markMyNotificationRead(user, notificationId) {
+  const id = positiveId(notificationId, "notificationId");
+  return withDatabaseConnection((connection) =>
+    markMyNotificationReadFromConnection(connection, user.user.id, id)
+  );
 }
 
 async function tryNotify(label, sendNotification) {
@@ -5388,12 +5429,19 @@ export async function approveSignup(user, signupId) {
       ]);
       await markSignupReviewEligible(connection, signupId);
       const approvedSignup = await findById(connection, "signups", signupId);
+      const notification = {
+        ...(await signupNotificationPayload(connection, signupId)),
+        resultText: "已通过"
+      };
+      await insertSignupReviewedNotification(
+        connection,
+        approvedSignup,
+        notification,
+        "approved"
+      );
       return {
         signup: approvedSignup,
-        notification: {
-          ...(await signupNotificationPayload(connection, signupId)),
-          resultText: "已通过"
-        }
+        notification
       };
     }
 
@@ -5452,12 +5500,19 @@ export async function approveSignup(user, signupId) {
     );
 
     const approvedSignup = await findById(connection, "signups", signupId);
+    const notification = {
+      ...(await signupNotificationPayload(connection, signupId)),
+      resultText: "已通过"
+    };
+    await insertSignupReviewedNotification(
+      connection,
+      approvedSignup,
+      notification,
+      "approved"
+    );
     return {
       signup: approvedSignup,
-      notification: {
-        ...(await signupNotificationPayload(connection, signupId)),
-        resultText: "已通过"
-      }
+      notification
     };
   });
   await tryNotify("notifySignupReviewed", () => notifySignupReviewed(notification));
@@ -5473,12 +5528,19 @@ export async function rejectSignup(user, signupId) {
 
     if ((signup.signup_type || "seat") === "session_npc_role") {
       const rejectedSignup = await findById(connection, "signups", signupId);
+      const notification = {
+        ...(await signupNotificationPayload(connection, signupId)),
+        resultText: "已拒绝"
+      };
+      await insertSignupReviewedNotification(
+        connection,
+        rejectedSignup,
+        notification,
+        "rejected"
+      );
       return {
         signup: rejectedSignup,
-        notification: {
-          ...(await signupNotificationPayload(connection, signupId)),
-          resultText: "已拒绝"
-        }
+        notification
       };
     }
 
@@ -5502,12 +5564,19 @@ export async function rejectSignup(user, signupId) {
     }
 
     const rejectedSignup = await findById(connection, "signups", signupId);
+    const notification = {
+      ...(await signupNotificationPayload(connection, signupId)),
+      resultText: "已拒绝"
+    };
+    await insertSignupReviewedNotification(
+      connection,
+      rejectedSignup,
+      notification,
+      "rejected"
+    );
     return {
       signup: rejectedSignup,
-      notification: {
-        ...(await signupNotificationPayload(connection, signupId)),
-        resultText: "已拒绝"
-      }
+      notification
     };
   });
   await tryNotify("notifySignupReviewed", () => notifySignupReviewed(notification));

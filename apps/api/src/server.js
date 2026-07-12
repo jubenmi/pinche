@@ -96,6 +96,7 @@ import {
   listActiveStores,
   listCatalogRequests,
   listMyCatalogReviewItems,
+  listMyNotifications,
   listDiscoverableSessions,
   listPublicUpcomingSessions,
   listPublicSessionAlbumShare,
@@ -108,6 +109,7 @@ import {
   listSessionSignups,
   listStoreScripts,
   lockSeat,
+  markMyNotificationRead,
   markCatalogReviewItemNeedsChanges,
   mergeCatalogReviewItem,
   publishSession,
@@ -2707,6 +2709,28 @@ async function route(request, response) {
   if (request.method === "GET" && url.pathname === "/api/users/me") {
     const user = await getAuthUser(request);
     jsonResponse(response, 200, { ok: true, data: user });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/users/me/notifications") {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listMyNotifications(user, Object.fromEntries(url.searchParams))
+    });
+    return;
+  }
+
+  const notificationReadId = idMatch(
+    url.pathname,
+    /^\/api\/users\/me\/notifications\/(\d+)\/read$/
+  );
+  if (request.method === "POST" && notificationReadId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await markMyNotificationRead(user, notificationReadId)
+    });
     return;
   }
 

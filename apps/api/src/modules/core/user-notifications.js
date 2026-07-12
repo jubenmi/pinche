@@ -1,3 +1,5 @@
+import { notFound } from "../../http/errors.js";
+
 export const USER_NOTIFICATION_TYPES = Object.freeze({
   SIGNUP_REVIEWED: "signup_reviewed",
   SESSION_RESCHEDULED: "session_rescheduled"
@@ -44,4 +46,49 @@ export function userNotificationResponse(row) {
     read_at: row.read_at,
     created_at: row.created_at
   };
+}
+
+export async function listMyNotifications(connection, userId, requestedLimit = 50) {
+  const parsedLimit = Number.parseInt(requestedLimit, 10);
+  const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 50;
+  const [rows] = await connection.query(
+    `SELECT id, type, session_id, title, payload_json, read_at, created_at
+     FROM user_notifications
+     WHERE user_id = ?
+     ORDER BY (read_at IS NULL) DESC, created_at DESC, id DESC
+     LIMIT ${limit}`,
+    [userId]
+  );
+  const [countRows] = await connection.query(
+    `SELECT COUNT(*) AS unread_count
+     FROM user_notifications
+     WHERE user_id = ? AND read_at IS NULL`,
+    [userId]
+  );
+  return {
+    items: rows.map(userNotificationResponse),
+    unread_count: Number(countRows[0]?.unread_count || 0)
+  };
+}
+
+export async function markMyNotificationRead(connection, userId, notificationId) {
+  const [result] = await connection.query(
+    `UPDATE user_notifications
+     SET read_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+    [notificationId, userId]
+  );
+  if (Number(result.affectedRows || 0) === 0) {
+    throw notFound("Notification not found");
+  }
+  const [rows] = await connection.query(
+    `SELECT id, type, session_id, title, payload_json, read_at, created_at
+     FROM user_notifications
+     WHERE id = ? AND user_id = ?`,
+    [notificationId, userId]
+  );
+  if (!rows[0]) {
+    throw notFound("Notification not found");
+  }
+  return userNotificationResponse(rows[0]);
 }

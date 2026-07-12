@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import {
+  listMyNotifications,
+  markMyNotificationRead
+} from "../apps/api/src/modules/core/user-notifications.js";
 
 function assertIncludes(source, token) {
   assert(source.includes(token), `expected source to include: ${token}`);
@@ -44,6 +48,8 @@ assertIncludes(
 assertIncludes(helper, "export const USER_NOTIFICATION_TYPES");
 assertIncludes(helper, "export async function insertUserNotification");
 assertIncludes(helper, "export function userNotificationResponse");
+assertIncludes(helper, "export async function listMyNotifications");
+assertIncludes(helper, "export async function markMyNotificationRead");
 assertIncludes(service, "export async function rescheduleSession");
 assertIncludes(service, "export async function rescheduleSessionInTransaction");
 assertIncludes(service, "(start_at <= CURRENT_TIMESTAMP) AS session_started");
@@ -114,5 +120,124 @@ assert(
   server.indexOf(rescheduleRoute) < server.indexOf(updateRoute),
   "expected reschedule route before generic session update route"
 );
+
+const notificationRows = [
+  {
+    id: 11,
+    type: "signup_reviewed",
+    session_id: 22,
+    title: "报名审核已通过",
+    payload_json: '{"result":"approved"}',
+    read_at: null,
+    created_at: "2026-07-12 10:00:00"
+  }
+];
+const listQueries = [];
+const listResult = await listMyNotifications(
+  {
+    async query(sql, values) {
+      listQueries.push({ sql, values });
+      if (sql.includes("COUNT(*)")) {
+        return [[{ unread_count: 1 }]];
+      }
+      return [notificationRows];
+    }
+  },
+  7,
+  500
+);
+assert.deepEqual(listResult, {
+  items: [
+    {
+      id: 11,
+      type: "signup_reviewed",
+      session_id: 22,
+      title: "报名审核已通过",
+      payload: { result: "approved" },
+      read_at: null,
+      created_at: "2026-07-12 10:00:00"
+    }
+  ],
+  unread_count: 1
+});
+assert(listQueries.every(({ values }) => values.includes(7)), "inbox SQL must be owner scoped");
+assert(
+  listQueries.some(({ sql }) =>
+    sql.includes("ORDER BY (read_at IS NULL) DESC, created_at DESC") && sql.includes("LIMIT 50")
+  ),
+  "inbox must cap at 50 and order unread first, then newest"
+);
+
+const readQueries = [];
+const readResult = await markMyNotificationRead(
+  {
+    async query(sql, values) {
+      readQueries.push({ sql, values });
+      if (sql.includes("UPDATE user_notifications")) {
+        return [{ affectedRows: 1 }];
+      }
+      return [notificationRows.map((row) => ({ ...row, read_at: "2026-07-12 10:01:00" }))];
+    }
+  },
+  7,
+  11
+);
+assert.equal(readResult.id, 11);
+assert(
+  readQueries.every(({ values }) => values.includes(7) && values.includes(11)),
+  "read update and fetch must both be owner scoped"
+);
+assert(
+  readQueries.some(({ sql }) => sql.includes("WHERE id = ? AND user_id = ?")),
+  "read update must constrain both notification and owner"
+);
+
+await assert.rejects(
+  () =>
+    markMyNotificationRead(
+      {
+        async query(sql) {
+          return sql.includes("UPDATE user_notifications") ? [{ affectedRows: 0 }] : [[]];
+        }
+      },
+      8,
+      11
+    ),
+  (error) => error?.statusCode === 404
+);
+
+assertIncludes(server, 'url.pathname === "/api/users/me/notifications"');
+assertIncludes(server, "/^\\/api\\/users\\/me\\/notifications\\/(\\d+)\\/read$/");
+assertIncludes(service, "USER_NOTIFICATION_TYPES.SIGNUP_REVIEWED");
+assertIncludes(service, "signup-reviewed:${signupId}:approved");
+assertIncludes(service, "signup-reviewed:${signupId}:rejected");
+const approveBody = service.slice(
+  service.indexOf("export async function approveSignup"),
+  service.indexOf("export async function rejectSignup")
+);
+const rejectBody = service.slice(
+  service.indexOf("export async function rejectSignup"),
+  service.indexOf("export async function updateDeposit")
+);
+assert.equal(
+  approveBody.match(/await insertSignupReviewedNotification\(/g)?.length,
+  2,
+  "approve must persist review notifications for seat and NPC paths"
+);
+assert.equal(
+  rejectBody.match(/await insertSignupReviewedNotification\(/g)?.length,
+  2,
+  "reject must persist review notifications for seat and NPC paths"
+);
+for (const [name, body] of [
+  ["approve", approveBody],
+  ["reject", rejectBody]
+]) {
+  assert(
+    body.indexOf("requireSignupOwner") < body.indexOf("insertSignupReviewedNotification") &&
+      body.lastIndexOf("insertSignupReviewedNotification") < body.indexOf("await tryNotify"),
+    `${name} must validate the signup, insert inside the transaction, then notify WeChat post-commit`
+  );
+}
 
 console.log("D45 session reschedule notification checks passed");
