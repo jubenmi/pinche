@@ -23,6 +23,10 @@ import {
   USER_NOTIFICATION_TYPES,
   insertUserNotification
 } from "./user-notifications.js";
+import {
+  createSessionRescheduleDedupeKey,
+  normalizeSessionRescheduleStartAt
+} from "./session-reschedule.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -4283,24 +4287,30 @@ export async function rescheduleSession(user, sessionId, body = {}) {
     if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the session organizer can reschedule this session");
     }
+    if (session.status === "cancelled") {
+      throw conflict("Cancelled sessions cannot be rescheduled");
+    }
 
     const now = Date.now();
-    const oldStartTime = new Date(session.start_at).getTime();
+    const oldStartTime = Math.floor(new Date(session.start_at).getTime() / 1000) * 1000;
     if (!Number.isFinite(oldStartTime) || oldStartTime <= now) {
       throw conflict("Past or started sessions cannot be rescheduled");
     }
 
-    const newStart = new Date(body.startAt);
-    const newStartTime = newStart.getTime();
-    if (!body.startAt || !Number.isFinite(newStartTime)) {
-      throw badRequest("startAt must be a valid date");
+    let normalizedStart;
+    try {
+      normalizedStart = normalizeSessionRescheduleStartAt(body.startAt, session.start_at, now);
+    } catch (error) {
+      if (["INVALID_START_AT", "PAST_START_AT", "UNCHANGED_START_AT"].includes(error.code)) {
+        throw badRequest(error.message);
+      }
+      throw error;
     }
-    if (newStartTime <= now) {
-      throw badRequest("startAt must be in the future");
-    }
-    if (newStartTime === oldStartTime) {
-      throw badRequest("startAt must be different from the current start time");
-    }
+
+    // Lock order is always parent session, all seats, then all NPC roles. The indexed
+    // child ranges also serialize inserts/changes to the membership snapshot until commit.
+    await connection.query("SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE", [id]);
+    await connection.query("SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE", [id]);
 
     const [recipientRows] = await connection.query(
       `
@@ -4331,15 +4341,18 @@ export async function rescheduleSession(user, sessionId, body = {}) {
       throw conflict("Member confirmation is required before rescheduling");
     }
 
-    const normalizedStartAt = newStart.toISOString();
-    await connection.query("UPDATE sessions SET start_at = ? WHERE id = ?", [newStart, id]);
+    const normalizedStartAt = normalizedStart.canonical;
+    await connection.query("UPDATE sessions SET start_at = ? WHERE id = ?", [
+      normalizedStart.date,
+      id
+    ]);
 
     const payload = {
       script_name: session.script_name_snapshot,
       old_start_at: new Date(session.start_at).toISOString(),
       new_start_at: normalizedStartAt
     };
-    const dedupeKey = `session-rescheduled:${id}:${normalizedStartAt}`;
+    const dedupeKey = createSessionRescheduleDedupeKey(id);
     for (const recipient of recipients) {
       await insertUserNotification(connection, {
         userId: recipient.userId,

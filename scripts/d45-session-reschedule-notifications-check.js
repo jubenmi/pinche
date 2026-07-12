@@ -36,12 +36,38 @@ assertIncludes(helper, "export async function insertUserNotification");
 assertIncludes(helper, "export function userNotificationResponse");
 assertIncludes(service, "export async function rescheduleSession");
 assertIncludes(service, "SELECT * FROM sessions WHERE id = ? FOR UPDATE");
+assertIncludes(service, "SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE");
+assertIncludes(service, "SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE");
 assertIncludes(service, "body.membersConfirmed !== true");
 assertIncludes(service, "USER_NOTIFICATION_TYPES.SESSION_RESCHEDULED");
+assertIncludes(service, 'session.status === "cancelled"');
+assertIncludes(service, "createSessionRescheduleDedupeKey(id)");
+const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
+const sessionLockIndex = service.indexOf(
+  "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
+  rescheduleServiceIndex
+);
+const seatLockIndex = service.indexOf(
+  "SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE",
+  sessionLockIndex
+);
+const npcRoleLockIndex = service.indexOf(
+  "SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE",
+  seatLockIndex
+);
+const recipientReadIndex = service.indexOf("SELECT DISTINCT member.user_id", npcRoleLockIndex);
+assert(
+  sessionLockIndex < seatLockIndex &&
+    seatLockIndex < npcRoleLockIndex &&
+    npcRoleLockIndex < recipientReadIndex,
+  "expected session, seat, and NPC role locks before recipient selection"
+);
 
 const rescheduleRoute = 'idMatch(url.pathname, /^\\/api\\/sessions\\/(\\d+)\\/reschedule$/)';
 const updateRoute = 'idMatch(url.pathname, /^\\/api\\/sessions\\/(\\d+)$/)';
 assertIncludes(server, rescheduleRoute);
+assertIncludes(server, "data: result.session");
+assert(!server.includes("data: result.recipients"), "route must not expose notification recipients");
 assert(
   server.indexOf(rescheduleRoute) < server.indexOf(updateRoute),
   "expected reschedule route before generic session update route"
