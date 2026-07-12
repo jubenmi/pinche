@@ -2178,6 +2178,32 @@ export async function serveUploadedSessionAlbumVideoFile(media, response, option
   const range = options.range;
   const cosEnabled = options.cosEnabled ?? isCosUploadStorageEnabled();
   if (cosEnabled) {
+    if (method === "HEAD") {
+      const headObject = options.headObject || headCosObject;
+      const object = await headObject({
+        key: albumVideoObjectKey(videoPath),
+        config: options.cosConfig || config.cos
+      });
+      const metadata = validateCosAlbumVideoHeaders({
+        contentLength: object.headers?.["content-length"],
+        contentType: object.headers?.["content-type"]
+      });
+      if (!Number.isSafeInteger(metadata.byteSize) || !metadata.contentType) {
+        throw new AppError(
+          502,
+          "COS_VIDEO_METADATA_MISSING",
+          "COS album video HEAD response is missing playback metadata"
+        );
+      }
+      response.writeHead(200, {
+        "content-type": metadata.contentType,
+        "content-length": metadata.byteSize,
+        "accept-ranges": "bytes",
+        "cache-control": cacheControl
+      });
+      response.end();
+      return;
+    }
     response.writeHead(302, {
       "cache-control": cacheControl,
       location: signedCosAlbumVideoUrl(media, method)
