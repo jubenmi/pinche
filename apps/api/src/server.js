@@ -164,7 +164,10 @@ import {
 import { createAlbumImageUploadService } from "./modules/album-image/upload-service.js";
 import { emitAlbumImageEvent } from "./modules/album-image/telemetry.js";
 import { validateStoredAlbumImage } from "./modules/album-image/validator.js";
-import { buildAlbumImageUrls } from "./modules/album-image/signed-urls.js";
+import {
+  buildAlbumImageUrls,
+  buildWechatImageModerationUrl
+} from "./modules/album-image/signed-urls.js";
 import {
   authenticateTencentCallback,
   parseTencentCallbackPayload
@@ -273,6 +276,9 @@ const moderationClient = {
   ...tencentVideoModerationClient,
   ...wechatContentSecurityClient
 };
+const wechatImageModerationEnabled = Boolean(
+  config.contentModeration.enabled && config.contentModeration.wechatImageEnabled
+);
 
 function textProposalStale(message) {
   return new AppError(409, "CONTENT_MODERATION_PROPOSAL_STALE", message);
@@ -1075,6 +1081,28 @@ const contentModeration = createContentModerationService({
     transitionMediaModeration,
     transitionModerationJob
   },
+  getVerifiedImageUploaderOpenid: async ({ uploaderUserId }) =>
+    withDatabaseConnection(async (connection) => {
+      const [users] = await connection.query(
+        "SELECT open_id FROM users WHERE id = ? LIMIT 1",
+        [Number(uploaderUserId)]
+      );
+      return users[0]?.open_id || "";
+    }),
+  buildWechatImageUrl: ({ objectKey }) => {
+    if (!cosStorageEnabled(config.cos)) {
+      throw new AppError(
+        503,
+        "CONTENT_MODERATION_CONFIGURATION_ERROR",
+        "private COS storage is required for WeChat image moderation"
+      );
+    }
+    return buildWechatImageModerationUrl({
+      objectKey,
+      nowSeconds: Math.floor(Date.now() / 1000),
+      config: config.cos
+    });
+  },
   applyTextProposal: (connection, input) => textProposalApplicator.apply(connection, input),
   emit: (event, fields) => console.log(JSON.stringify({
     type: "content_moderation",
@@ -1119,6 +1147,12 @@ const albumImageUploads = createAlbumImageUploadService({
   insertFinalizedImage: insertFinalizedSessionAlbumImage,
   getFinalizedImage: getFinalizedSessionAlbumImage,
   serializeImage: serializeSessionAlbumImage,
+  createWechatImageModerationJob: wechatImageModerationEnabled
+    ? (connection, input) => contentModeration.createWechatImageModerationJob(connection, input)
+    : undefined,
+  submitWechatImageModeration: wechatImageModerationEnabled
+    ? (job) => contentModeration.submitWechatImageModeration(job)
+    : undefined,
   emit: emitAlbumImageEvent
 });
 

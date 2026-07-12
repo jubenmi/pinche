@@ -381,8 +381,8 @@ async function finalize(deps, { user, uploadId }) {
       throw serviceError(409, "UPLOAD_INTENT_NOT_FINALIZABLE", "Upload intent cannot be finalized");
     }
     const photoRow = await deps.insertFinalizedImage(connection, { intent, metadata: validation });
-    if (typeof deps.createImageModerationJob === "function") {
-      moderationJob = await deps.createImageModerationJob(connection, {
+    if (typeof deps.createWechatImageModerationJob === "function") {
+      moderationJob = await deps.createWechatImageModerationJob(connection, {
         media: photoRow,
         objectKey: validation.objectKey,
         subjectVersion: validation.etag
@@ -418,9 +418,9 @@ async function finalize(deps, { user, uploadId }) {
     mediaId: Number(result.photo.id),
     outcome: "finalized"
   });
-  if (newlyFinalized && moderationJob && typeof deps.submitImageModeration === "function") {
+  if (newlyFinalized && moderationJob && typeof deps.submitWechatImageModeration === "function") {
     try {
-      await deps.submitImageModeration(moderationJob);
+      await deps.submitWechatImageModeration(moderationJob);
     } catch (error) {
       deps.emit?.("moderation_submission_failure", {
         sessionId: Number(inspected.intent.session_id),

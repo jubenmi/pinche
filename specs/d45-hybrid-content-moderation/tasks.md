@@ -57,11 +57,13 @@
   - [x] 可判定的权限/领域约束失效统一标记为 stale，系统错误保持错误。
 
 - [ ] D45.6 接入微信异步图片审核。
-  - [ ] 图片 finalize 在事务内创建 pending 媒体和微信任务。
-  - [ ] 复用 JPEG/PNG 与 4 MB 校验，拒绝不支持格式和超限文件。
-  - [ ] 只生成供微信抓取的短时 COS URL，不返回用户。
-  - [ ] 提交 `mediaCheckAsync` 并把 trace_id 保存为当前 provider attempt。
-  - [ ] 提交失败保持隐藏并进入重试。
+  - 进行中：按 v1.1 在图片 finalize 事务内创建微信任务，提交在提交事务后执行；短时 URL 仅供微信抓取，绝不持久化或返回给用户。相册图片按动态/社交内容固定使用微信 `scene=4`。
+  - [x] 图片 finalize 在事务内创建 pending 媒体和微信任务。
+  - [x] 复用 JPEG/PNG 与 4 MB 校验，拒绝不支持格式和超限文件。
+  - [x] 只生成供微信抓取的短时 COS URL，不返回用户。
+  - [x] 提交 `mediaCheckAsync` 并把 trace_id 保存为当前 provider attempt。
+  - [x] 提交失败保持隐藏并进入 `error`。
+    - 限制：当前 retry Worker 仅认领腾讯云相册视频；微信图片失败保持隐藏 `error`，自动微信重试分发留待 D45.10。
   - [ ] Pass 批准；Review 入后台；Block 隐藏并幂等清理。
 
 - [ ] D45.7 实现微信图片审核事件接收。

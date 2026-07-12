@@ -397,6 +397,18 @@ export async function enqueueRejectedMediaCleanup(connection, media) {
 }
 
 export async function claimModerationRetryJobs(connection, input) {
+  const providers = Array.isArray(input.providers)
+    ? [...new Set(input.providers.map((value) => String(value || "").trim()).filter(Boolean))]
+    : [];
+  const subjectTypes = Array.isArray(input.subjectTypes)
+    ? [...new Set(input.subjectTypes.map((value) => String(value || "").trim()).filter(Boolean))]
+    : [];
+  const providerFilter = providers.length > 0
+    ? ` AND job.provider IN (${providers.map(() => "?").join(", ")})`
+    : "";
+  const subjectTypeFilter = subjectTypes.length > 0
+    ? ` AND job.subject_type IN (${subjectTypes.map(() => "?").join(", ")})`
+    : "";
   const [rows] = await connection.query(
     `SELECT job.*,
             media.object_key AS media_object_key,
@@ -413,9 +425,15 @@ export async function claimModerationRetryJobs(connection, input) {
        AND job.decided_by_admin_user_id IS NULL
        AND (job.next_retry_at IS NULL OR job.next_retry_at <= ?)
        AND (job.lease_expires_at IS NULL OR job.lease_expires_at <= ?)
+       ${providerFilter}
+       ${subjectTypeFilter}
      ORDER BY job.created_at
      LIMIT ? FOR UPDATE SKIP LOCKED`,
-    [Number(input.retryLimit), input.now, input.now, Number(input.limit)]
+    [
+      Number(input.retryLimit), input.now, input.now,
+      ...providers, ...subjectTypes,
+      Number(input.limit)
+    ]
   );
   for (const row of rows) {
     await connection.query(

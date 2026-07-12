@@ -29,6 +29,7 @@ function harness() {
     },
     insertedMedia: [],
     events: [],
+    timeline: [],
     getObjectCalls: 0,
     beforeTransaction: null,
     mediaMissing: false
@@ -39,16 +40,19 @@ function harness() {
   const transaction = (run) => {
     const next = transactionTail.then(async () => {
       state.beforeTransaction?.(intent);
-      return run({
-      async query(sql, values) {
-        assert.match(String(sql), /UPDATE session_album_upload_intents/);
-        if (!["pending", "processing"].includes(intent.status)) return [{ affectedRows: 0 }];
-        intent.status = "finalized";
-        intent.media_id = Number(values[0]);
-        intent.object_etag = String(values[5]);
-        return [{ affectedRows: 1 }];
-      }
+      state.timeline.push("transaction_begin");
+      const result = await run({
+        async query(sql, values) {
+          assert.match(String(sql), /UPDATE session_album_upload_intents/);
+          if (!["pending", "processing"].includes(intent.status)) return [{ affectedRows: 0 }];
+          intent.status = "finalized";
+          intent.media_id = Number(values[0]);
+          intent.object_etag = String(values[5]);
+          return [{ affectedRows: 1 }];
+        }
       });
+      state.timeline.push("transaction_commit");
+      return result;
     });
     transactionTail = next.catch(() => {});
     return next;
@@ -91,14 +95,16 @@ function harness() {
       return photoRow;
     },
     serializeImage: (photo) => ({ ...photo }),
-    createImageModerationJob: async (_connection, input) => {
+    createWechatImageModerationJob: async (_connection, input) => {
       state.moderationCreated += 1;
+      state.timeline.push("create_moderation_job");
       assert.equal(input.media.id, 91);
       assert.equal(input.subjectVersion, "etag-43");
       return { id: 51, status: "pending" };
     },
-    submitImageModeration: async (job) => {
+    submitWechatImageModeration: async (job) => {
       state.moderationSubmitted += 1;
+      state.timeline.push("submit_moderation");
       assert.equal(job.id, 51);
       if (state.moderationSubmitError) throw state.moderationSubmitError;
     },
@@ -137,7 +143,19 @@ test("finalize is idempotent under two callers and creates one media row", async
   assert.equal(state.moderationSubmitted, 1);
 });
 
-test("moderation submission failure keeps the finalized image hidden and retryable", async () => {
+test("finalize creates the WeChat task inside its transaction and submits after commit", async () => {
+  const { service, state } = harness();
+  await service.finalize({ user, uploadId: "00000000-0000-4000-8000-000000000043" });
+
+  assert.deepEqual(state.timeline, [
+    "transaction_begin",
+    "create_moderation_job",
+    "transaction_commit",
+    "submit_moderation"
+  ]);
+});
+
+test("moderation submission failure keeps the finalized image hidden", async () => {
   const { service, state } = harness();
   state.moderationSubmitError = new Error("network");
   const result = await service.finalize({ user, uploadId: "00000000-0000-4000-8000-000000000043" });

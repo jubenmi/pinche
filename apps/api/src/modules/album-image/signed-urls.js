@@ -7,13 +7,15 @@ import {
 } from "../../storage/cos.js";
 import {
   ALBUM_IMAGE_THUMBNAIL_PROCESS,
-  ALBUM_IMAGE_URL_SECONDS
+  ALBUM_IMAGE_URL_SECONDS,
+  WECHAT_IMAGE_MODERATION_URL_SECONDS
 } from "./constants.js";
 
 export function buildSignedCosImageUrl({
   objectKey,
   queryEntries = [],
   nowSeconds,
+  expiresInSeconds = ALBUM_IMAGE_URL_SECONDS,
   config
 }) {
   const entries = cosQueryEntries(queryEntries);
@@ -23,7 +25,7 @@ export function buildSignedCosImageUrl({
     headers: { host: cosHost(config) },
     urlParams: entries,
     nowSeconds,
-    expiresInSeconds: ALBUM_IMAGE_URL_SECONDS,
+    expiresInSeconds,
     config
   });
   const dataQuery = renderCosRequestQuery(entries);
@@ -31,6 +33,15 @@ export function buildSignedCosImageUrl({
   return `https://${cosHost(config)}/${encodeCosObjectPath(objectKey)}?${
     dataQuery ? `${dataQuery}&` : ""
   }${authorizationQuery}`;
+}
+
+export function buildWechatImageModerationUrl({ objectKey, nowSeconds, config }) {
+  return buildSignedCosImageUrl({
+    objectKey,
+    nowSeconds,
+    expiresInSeconds: WECHAT_IMAGE_MODERATION_URL_SECONDS,
+    config
+  });
 }
 
 export function buildAlbumImageUrls({ objectKey, mediaId, nowSeconds, config }) {

@@ -18,6 +18,7 @@ export async function runContentModerationRetryBatch({
   repository,
   withTransaction,
   processJob,
+  claimFilter = {},
   now = () => Date.now(),
   randomUUID = () => crypto.randomUUID(),
   random = Math.random,
@@ -30,6 +31,7 @@ export async function runContentModerationRetryBatch({
   const jobs = await withTransaction((connection) => repository.claimModerationRetryJobs(
     connection,
     {
+      ...(claimFilter && typeof claimFilter === "object" ? claimFilter : {}),
       leaseToken,
       now: new Date(claimedAt),
       leaseExpiresAt: new Date(claimedAt + 60_000),

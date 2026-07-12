@@ -49,6 +49,30 @@ test("claim SQL leases due jobs with skip locked and respects retry limit", asyn
   assert.equal(rows[0].lease_expires_at.getTime(), 61_000);
 });
 
+test("claim SQL can restrict a worker to its supported provider and subject type", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql: String(sql), params });
+      if (/^\s*SELECT/.test(sql)) return [[]];
+      return [{ affectedRows: 1 }];
+    }
+  };
+  await claimModerationRetryJobs(connection, {
+    leaseToken: "lease",
+    now: new Date(1_000),
+    leaseExpiresAt: new Date(61_000),
+    retryLimit: 8,
+    limit: 10,
+    providers: ["tencent_ci_video"],
+    subjectTypes: ["album_video"]
+  });
+
+  assert.match(calls[0].sql, /job\.provider IN \(\?\)/);
+  assert.match(calls[0].sql, /job\.subject_type IN \(\?\)/);
+  assert.deepEqual(calls[0].params.slice(-3), ["tencent_ci_video", "album_video", 10]);
+});
+
 test("retry batch processes each lease and persists failures without auto-approval", async () => {
   const state = { failures: [], processed: [] };
   const repository = {
@@ -76,6 +100,43 @@ test("retry batch processes each lease and persists failures without auto-approv
   assert.deepEqual(result, { claimed: 2, failed: 2 });
 });
 
+test("current retry worker claims only Tencent album videos and leaves pending or error WeChat images untouched", async () => {
+  const candidates = [
+    { id: 11, provider: "wechat_sec_check", subject_type: "album_image", status: "pending" },
+    { id: 12, provider: "wechat_sec_check", subject_type: "album_image", status: "error" },
+    { id: 13, provider: "tencent_ci_video", subject_type: "album_video", status: "error" }
+  ];
+  const state = { claim: null, processed: [], failed: [] };
+  const repository = {
+    claimModerationRetryJobs: async (_connection, input) => {
+      state.claim = input;
+      return candidates.filter((job) => (
+        input.providers.includes(job.provider) && input.subjectTypes.includes(job.subject_type)
+      ));
+    },
+    failModerationJob: async (_connection, input) => state.failed.push(input)
+  };
+
+  const result = await runContentModerationRetryBatch({
+    repository,
+    withTransaction: async (run) => run({}),
+    processJob: async (job) => { state.processed.push(job.id); },
+    claimFilter: {
+      providers: ["tencent_ci_video"],
+      subjectTypes: ["album_video"]
+    },
+    now: () => 1_000,
+    randomUUID: () => "lease",
+    emit: () => {}
+  });
+
+  assert.deepEqual(state.claim.providers, ["tencent_ci_video"]);
+  assert.deepEqual(state.claim.subjectTypes, ["album_video"]);
+  assert.deepEqual(state.processed, [13]);
+  assert.deepEqual(state.failed, []);
+  assert.deepEqual(result, { claimed: 1, failed: 0 });
+});
+
 test("retry submission rolls over provider attempts inside one transaction", async () => {
   const source = await readFile(
     new URL("../src/jobs/content-moderation-retry.js", import.meta.url),
@@ -85,4 +146,6 @@ test("retry submission rolls over provider attempts inside one transaction", asy
   assert.match(source, /withTransaction\(\(connection\) => repository\.recordModerationSubmission/);
   assert.match(source, /provider: "tencent_ci_video"/);
   assert.match(source, /leaseToken: job\.lease_token/);
+  assert.match(source, /claimFilter:\s*\{[\s\S]*providers:\s*\["tencent_ci_video"\]/);
+  assert.match(source, /subjectTypes:\s*\["album_video"\]/);
 });

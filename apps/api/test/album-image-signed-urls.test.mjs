@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildAlbumImageUrls } from "../src/modules/album-image/signed-urls.js";
+import {
+  buildAlbumImageUrls,
+  buildWechatImageModerationUrl
+} from "../src/modules/album-image/signed-urls.js";
 import {
   cosQueryEntries,
   renderCosCanonicalQuery,
@@ -53,4 +56,18 @@ test("all album image variants share an exact five-minute expiry", () => {
     assert.equal(url.includes("secret"), false);
   }
   assert.match(urls.download_url, /response-content-disposition=/);
+});
+
+test("WeChat image moderation receives an isolated one-minute GET URL", () => {
+  const url = buildWechatImageModerationUrl({
+    objectKey: "uploads/session-album/display/private.jpg",
+    nowSeconds: 1_000,
+    config
+  });
+
+  assert.match(url, /^https:\/\/pinche-app-1251022382\.cos\.ap-nanjing\.myqcloud\.com\//);
+  assert.match(url, /q-sign-time=1000;1060/);
+  assert.equal(url.includes("imageMogr2"), false);
+  assert.equal(url.includes("response-content-disposition"), false);
+  assert.equal(url.includes("secret"), false);
 });

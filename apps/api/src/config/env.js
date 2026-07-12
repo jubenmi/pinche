@@ -223,6 +223,7 @@ export function buildContentModerationConfig(env = process.env) {
     tencentVideoCallbackUrl: stringValue(env, "TENCENT_CI_VIDEO_CALLBACK_URL"),
     tencentVideoCallbackToken: stringValue(env, "TENCENT_CI_VIDEO_CALLBACK_TOKEN"),
     retryLimit: Math.max(1, Math.min(20, integerValue(env.CONTENT_MODERATION_RETRY_LIMIT, 8))),
+    cosEnabled: booleanValue(env.COS_ENABLED, false),
     secretId: stringValue(env, "COS_SECRET_ID"),
     secretKey: stringValue(env, "COS_SECRET_KEY"),
     bucket: stringValue(env, "COS_BUCKET"),
@@ -253,6 +254,13 @@ export function assertContentModerationConfig(
     if (!moderationConfig.wechatAppSecret) missing.push("WECHAT_APP_SECRET");
     if (!moderationConfig.wechatEventToken) missing.push("WECHAT_CONTENT_SECURITY_EVENT_TOKEN");
     if (!moderationConfig.wechatEventAesKey) missing.push("WECHAT_CONTENT_SECURITY_EVENT_AES_KEY");
+    if (moderationConfig.wechatImageEnabled) {
+      if (!moderationConfig.cosEnabled) missing.push("COS_ENABLED");
+      if (!moderationConfig.secretId) missing.push("COS_SECRET_ID");
+      if (!moderationConfig.secretKey) missing.push("COS_SECRET_KEY");
+      if (!moderationConfig.bucket) missing.push("COS_BUCKET");
+      if (!moderationConfig.cosRegion) missing.push("COS_REGION");
+    }
   }
   if (!moderationConfig.enabled) {
     if (missing.length > 0) {

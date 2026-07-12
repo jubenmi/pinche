@@ -48,6 +48,11 @@ function boundedString(value, maxLength = 128) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
 
+function exactBoundedString(value, maxLength = 128) {
+  const text = String(value ?? "").trim();
+  return text && text.length <= maxLength ? text : "";
+}
+
 function textModerationError(statusCode, code, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -197,6 +202,123 @@ export function createContentModerationService(dependencies) {
         subjectType: "album_video",
         outcome: "hidden_retryable",
         errorCode: error?.code || "CONTENT_MODERATION_UNAVAILABLE"
+      });
+      throw error;
+    }
+  }
+
+  async function createWechatImageModerationJob(connection, input) {
+    const mediaId = Number(input?.media?.id);
+    const uploaderUserId = Number(
+      input?.media?.uploader_user_id ?? input?.media?.uploaderUserId
+    );
+    const objectKey = exactBoundedString(input?.objectKey, 1024);
+    const subjectVersion = exactBoundedString(input?.subjectVersion, 512);
+    if (!Number.isInteger(mediaId) || mediaId <= 0 || !Number.isInteger(uploaderUserId) ||
+      uploaderUserId <= 0 || !objectKey || !subjectVersion) {
+      throw textModerationError(
+        500,
+        MODERATION_ERROR_CODES.configuration,
+        "image moderation job facts are incomplete"
+      );
+    }
+    const job = await deps.repository.createModerationJob(connection, {
+      subjectType: "album_image",
+      subjectId: String(mediaId),
+      subjectVersion,
+      provider: "wechat_sec_check",
+      dataId: deps.randomUUID(),
+      policyId: null
+    });
+    return {
+      ...job,
+      kind: "wechat_image",
+      objectKey,
+      uploaderUserId,
+      status: job.status || "pending"
+    };
+  }
+
+  async function submitWechatImageModeration(job) {
+    const fromStatus = job?.status || "pending";
+    try {
+      if (typeof deps.getVerifiedImageUploaderOpenid !== "function") {
+        throw textModerationError(
+          500,
+          MODERATION_ERROR_CODES.configuration,
+          "verified image uploader lookup is missing"
+        );
+      }
+      if (typeof deps.buildWechatImageUrl !== "function") {
+        throw textModerationError(
+          500,
+          MODERATION_ERROR_CODES.configuration,
+          "WeChat image URL builder is missing"
+        );
+      }
+      if (typeof deps.client?.checkImage !== "function") {
+        throw textModerationError(
+          500,
+          MODERATION_ERROR_CODES.configuration,
+          "WeChat image moderation client is missing"
+        );
+      }
+
+      const openid = boundedString(await deps.getVerifiedImageUploaderOpenid({
+        uploaderUserId: job?.uploaderUserId
+      }), 128);
+      if (!openid) {
+        throw textModerationError(
+          422,
+          MODERATION_ERROR_CODES.openidRequired,
+          "a verified image uploader openid is required"
+        );
+      }
+      const mediaUrl = await deps.buildWechatImageUrl({ objectKey: job?.objectKey });
+      const response = await deps.client.checkImage({ mediaUrl, openid, scene: 4 });
+      const traceId = boundedString(response?.traceId, 128);
+      if (!traceId) {
+        throw textModerationError(
+          502,
+          MODERATION_ERROR_CODES.unavailable,
+          "WeChat image moderation did not return a trace id"
+        );
+      }
+      const submitted = await deps.transaction((connection) =>
+        deps.repository.recordModerationSubmission(connection, {
+          jobId: job.id,
+          provider: "wechat_sec_check",
+          providerJobId: traceId,
+          fromStatus,
+          responseSummary: { traceId }
+        })
+      );
+      if (!submitted) {
+        throw textModerationError(
+          409,
+          MODERATION_ERROR_CODES.callbackStale,
+          "WeChat image moderation job changed before submission"
+        );
+      }
+      deps.emit("moderation_submission_success", {
+        subjectType: "album_image",
+        outcome: "processing"
+      });
+      return { traceId };
+    } catch (error) {
+      await deps.withDatabaseConnection((connection) =>
+        deps.repository.transitionModerationJob(connection, {
+          jobId: job?.id,
+          fromStatus,
+          toStatus: "error",
+          source: "provider",
+          errorCode: error?.code || MODERATION_ERROR_CODES.unavailable
+        })
+      );
+      deps.emit("moderation_submission_failure", {
+        subjectType: "album_image",
+        outcome: "hidden_retryable",
+        errorCode: error?.code || MODERATION_ERROR_CODES.unavailable
       });
       throw error;
     }
@@ -722,6 +844,8 @@ export function createContentModerationService(dependencies) {
   return {
     createVideoJob,
     submitVideoJob,
+    createWechatImageModerationJob,
+    submitWechatImageModeration,
     applyMediaResult,
     decideAsAdmin,
     moderateTextMutation,

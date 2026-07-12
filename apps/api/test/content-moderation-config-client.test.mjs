@@ -16,6 +16,7 @@ function validEnv(overrides = {}) {
     CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "false",
     CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "false",
     CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "true",
+    COS_ENABLED: "true",
     REDIS_ENABLED: "true",
     REDIS_URL: "redis://redis.example.test:6379",
     WECHAT_APP_ID: "wx-d45-test",
@@ -95,6 +96,25 @@ test("enabled WeChat moderation requires an explicit Redis URL or host in produc
     () => assertContentModerationConfig(config, { nodeEnv: "production" }),
     /REDIS_URL or REDIS_HOST/
   );
+});
+
+test("enabled WeChat image moderation requires private COS storage in production", () => {
+  for (const [name, value] of [
+    ["COS_ENABLED", "false"],
+    ["COS_SECRET_ID", ""],
+    ["COS_SECRET_KEY", ""],
+    ["COS_BUCKET", ""],
+    ["COS_REGION", ""]
+  ]) {
+    const config = buildContentModerationConfig(validEnv({
+      CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+      CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "true",
+      [name]: value
+    }));
+    assert.throws(() => assertContentModerationConfig(config, { nodeEnv: "production" }), {
+      code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+    });
+  }
 });
 
 test("enabled WeChat moderation rejects malformed Redis URLs and invalid host ports", () => {

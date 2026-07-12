@@ -37,6 +37,10 @@ export async function run() {
     repository,
     withTransaction,
     processJob,
+    claimFilter: {
+      providers: ["tencent_ci_video"],
+      subjectTypes: ["album_video"]
+    },
     retryLimit: config.contentModeration.retryLimit,
     emit: (event, fields) => console.log(JSON.stringify({
       type: "content_moderation",
