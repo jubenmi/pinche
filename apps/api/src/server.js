@@ -114,6 +114,7 @@ import {
   rejectSignup,
   rejectCatalogReviewItem,
   relinkMySessionMembership,
+  rescheduleSession,
   replaceStoreScripts,
   reviewCatalogRequest,
   transferSessionOrganizer,
@@ -3110,6 +3111,14 @@ async function route(request, response) {
   if (request.method === "POST" && url.pathname === "/api/sessions") {
     const user = await getAuthUser(request);
     jsonResponse(response, 201, { ok: true, data: await createSession(user, body) });
+    return;
+  }
+
+  const sessionRescheduleId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/reschedule$/);
+  if (request.method === "POST" && sessionRescheduleId) {
+    const user = await getAuthUser(request);
+    const result = await rescheduleSession(user, sessionRescheduleId, body);
+    jsonResponse(response, 200, { ok: true, data: result.session });
     return;
   }
 

@@ -19,6 +19,10 @@ import {
   albumMediaCountSql,
   visibleSignupAlbumMediaCount
 } from "./session-album-media-count.js";
+import {
+  USER_NOTIFICATION_TYPES,
+  insertUserNotification
+} from "./user-notifications.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -4261,6 +4265,96 @@ export async function updateSession(user, id, body) {
       ["note", "note"],
       ["status", "status"]
     ]);
+  });
+}
+
+export async function rescheduleSession(user, sessionId, body = {}) {
+  const id = positiveId(sessionId, "sessionId");
+
+  return withTransaction(async (connection) => {
+    const [sessionRows] = await connection.query(
+      "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
+      [id]
+    );
+    const session = sessionRows[0];
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the session organizer can reschedule this session");
+    }
+
+    const now = Date.now();
+    const oldStartTime = new Date(session.start_at).getTime();
+    if (!Number.isFinite(oldStartTime) || oldStartTime <= now) {
+      throw conflict("Past or started sessions cannot be rescheduled");
+    }
+
+    const newStart = new Date(body.startAt);
+    const newStartTime = newStart.getTime();
+    if (!body.startAt || !Number.isFinite(newStartTime)) {
+      throw badRequest("startAt must be a valid date");
+    }
+    if (newStartTime <= now) {
+      throw badRequest("startAt must be in the future");
+    }
+    if (newStartTime === oldStartTime) {
+      throw badRequest("startAt must be different from the current start time");
+    }
+
+    const [recipientRows] = await connection.query(
+      `
+        SELECT DISTINCT member.user_id, user.open_id
+        FROM (
+          SELECT confirmed_user_id AS user_id
+          FROM session_seats
+          WHERE session_id = ?
+            AND status IN ('confirmed', 'locked')
+            AND confirmed_user_id IS NOT NULL
+          UNION
+          SELECT bound_user_id AS user_id
+          FROM session_npc_roles
+          WHERE session_id = ?
+            AND status = 'active'
+            AND bound_user_id IS NOT NULL
+        ) member
+        JOIN users user ON user.id = member.user_id
+        WHERE member.user_id <> ?
+      `,
+      [id, id, session.organizer_user_id]
+    );
+    const recipients = recipientRows.map((recipient) => ({
+      userId: Number(recipient.user_id),
+      openid: recipient.open_id || null
+    }));
+    if (recipients.length > 0 && body.membersConfirmed !== true) {
+      throw conflict("Member confirmation is required before rescheduling");
+    }
+
+    const normalizedStartAt = newStart.toISOString();
+    await connection.query("UPDATE sessions SET start_at = ? WHERE id = ?", [newStart, id]);
+
+    const payload = {
+      script_name: session.script_name_snapshot,
+      old_start_at: new Date(session.start_at).toISOString(),
+      new_start_at: normalizedStartAt
+    };
+    const dedupeKey = `session-rescheduled:${id}:${normalizedStartAt}`;
+    for (const recipient of recipients) {
+      await insertUserNotification(connection, {
+        userId: recipient.userId,
+        type: USER_NOTIFICATION_TYPES.SESSION_RESCHEDULED,
+        sessionId: id,
+        title: "活动时间已调整",
+        payload,
+        dedupeKey
+      });
+    }
+
+    return {
+      session: await findById(connection, "sessions", id),
+      recipients
+    };
   });
 }
 
