@@ -3134,7 +3134,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "pending.logicalIndex !== this.currentIndex",
     "finishedLogicalIndex !== pending.logicalIndex",
     "this.windowStartForIndex(this.currentIndex)",
-    "this.rebuildWindowAt(this.currentIndex)"
+    "this.rebuildWindowAt(this.currentIndex, { internalRebase: true })"
   ]) {
     if (!albumViewerAnimationFinishSource.includes(requiredAnimationFinishText)) {
       fail(`AlbumImageViewer animationfinish validation is missing: ${requiredAnimationFinishText}`);
