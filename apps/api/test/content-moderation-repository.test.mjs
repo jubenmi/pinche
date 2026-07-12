@@ -11,6 +11,7 @@ import {
   createModerationAttempt,
   createAuditLog,
   createModerationJob,
+  claimInitialModerationLease,
   createTextProposal,
   enqueueRejectedMediaCleanup,
   findCurrentModerationAttempt,
@@ -21,6 +22,9 @@ import {
   markTextProposalStatus,
   markTextProposalStale,
   recordModerationSubmission,
+  rehydrateModerationRetryJob,
+  renewModerationLease,
+  requeueModerationJob,
   retireCurrentModerationAttempt,
   transitionModerationJob
 } from "../src/modules/content-moderation/repository.js";
@@ -96,6 +100,41 @@ test("job creation is idempotent on immutable subject version", async () => {
   assert.equal(connection.calls[0].params[3], "tencent_ci_video");
 });
 
+test("initial submission lease is atomically limited to a new unleased pending job", async () => {
+  const connection = recordingConnection();
+  const leaseExpiresAt = new Date(91_000);
+  const claimed = await claimInitialModerationLease(connection, {
+    jobId: 41,
+    leaseToken: "initial-lease-41",
+    leaseExpiresAt
+  });
+
+  assert.equal(claimed, true);
+  assert.match(connection.calls[0].sql, /status = 'pending'/);
+  assert.match(connection.calls[0].sql, /attempt_count = 0/);
+  assert.match(connection.calls[0].sql, /lease_token IS NULL AND lease_expires_at IS NULL/);
+  assert.match(connection.calls[0].sql, /decided_by_admin_user_id IS NULL/);
+  assert.deepEqual(connection.calls[0].params, ["initial-lease-41", leaseExpiresAt, 41]);
+});
+
+test("provider submission atomically renews only its current live, undecided pending or error lease for 90 seconds", async () => {
+  const connection = recordingConnection();
+  const renewed = await renewModerationLease(connection, {
+    jobId: 41,
+    leaseToken: "renew-lease-41",
+    fromStatus: "pending",
+    leaseDurationMs: 90_000
+  });
+
+  assert.equal(renewed, true);
+  assert.match(connection.calls[0].sql, /SET lease_expires_at = DATE_ADD\(CURRENT_TIMESTAMP, INTERVAL \? MICROSECOND\)/);
+  assert.match(connection.calls[0].sql, /lease_token = \? AND lease_expires_at > CURRENT_TIMESTAMP/);
+  assert.match(connection.calls[0].sql, /status = \? AND status IN \('pending', 'error'\)/);
+  assert.match(connection.calls[0].sql, /retry_exhausted_at IS NULL/);
+  assert.match(connection.calls[0].sql, /decided_by_admin_user_id IS NULL/);
+  assert.deepEqual(connection.calls[0].params, [90_000_000, 41, "renew-lease-41", "pending"]);
+});
+
 test("job lookup methods can lock exact identifiers", async () => {
   const connection = recordingConnection([
     { id: 1 }, { id: 2 }, { id: 3 }
@@ -162,7 +201,7 @@ test("provider-scoped attempts preserve WeChat trace IDs and Tencent video JobId
   ]);
 });
 
-test("submission rolls over a current provider attempt before moving the job to processing", async () => {
+test("submission moves a live lease to processing before rolling over its provider attempt", async () => {
   const connection = recordingConnection([{
     id: 41,
     provider: "tencent_ci_video",
@@ -183,11 +222,274 @@ test("submission rolls over a current provider attempt before moving the job to 
 
   assert.equal(changed, true);
   assert.match(connection.calls[0].sql, /FROM content_moderation_jobs/);
-  assert.match(connection.calls[1].sql, /SET is_current = 0/);
-  assert.match(connection.calls[2].sql, /INSERT INTO content_moderation_provider_attempts/);
-  assert.match(connection.calls[3].sql, /SET status = 'processing'/);
-  assert.match(connection.calls[3].sql, /lease_token = \?/);
-  assert.deepEqual(connection.calls[3].params.slice(-4), [41, "error", "lease-1", "lease-1"]);
+  assert.match(connection.calls[1].sql, /SET status = 'processing'/);
+  assert.match(connection.calls[1].sql, /lease_expires_at > CURRENT_TIMESTAMP/);
+  assert.match(connection.calls[1].sql, /retry_exhausted_at = NULL/);
+  assert.deepEqual(connection.calls[1].params.slice(-4), [41, "error", "lease-1", "lease-1"]);
+  assert.match(connection.calls[2].sql, /SET is_current = 0/);
+  assert.match(connection.calls[3].sql, /MAX\(attempt_no\)/);
+  assert.match(connection.calls[4].sql, /INSERT INTO content_moderation_provider_attempts/);
+});
+
+test("submission recording refuses a provider result that has no live lease token", async () => {
+  const connection = recordingConnection();
+  const recorded = await recordModerationSubmission(connection, {
+    jobId: 41,
+    provider: "tencent_ci_video",
+    providerJobId: "video-job-without-lease",
+    fromStatus: "pending"
+  });
+
+  assert.equal(recorded, false);
+  assert.deepEqual(connection.calls, []);
+});
+
+test("an expired or replaced lease cannot retire the current provider attempt", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (/^\s*SELECT/i.test(sql)) {
+        return [[{
+          id: 41,
+          provider: "tencent_ci_video",
+          status: "error",
+          attempt_count: 1,
+          decided_by_admin_user_id: null,
+          lease_token: "lease-1"
+        }]];
+      }
+      if (/UPDATE content_moderation_jobs/.test(sql)) return [{ affectedRows: 0 }];
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  const changed = await recordModerationSubmission(connection, {
+    jobId: 41,
+    provider: "tencent_ci_video",
+    providerJobId: "video-job-2",
+    fromStatus: "error",
+    leaseToken: "lease-1"
+  });
+
+  assert.equal(changed, false);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].sql, /lease_expires_at > CURRENT_TIMESTAMP/);
+});
+
+test("media retry revalidates locked immutable facts before it rolls over a provider attempt", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (/FROM content_moderation_jobs/.test(sql)) {
+        return [[{
+          id: 41,
+          provider: "wechat_sec_check",
+          subject_type: "album_image",
+          subject_id: "71",
+          subject_version: "etag-original",
+          status: "error",
+          attempt_count: 1,
+          decided_by_admin_user_id: null,
+          lease_token: "lease-1"
+        }]];
+      }
+      if (/FROM session_album_photos/.test(sql)) {
+        return [[{
+          id: 71,
+          status: "active",
+          media_type: "image",
+          moderation_status: "pending",
+          moderation_object_version: "etag-changed",
+          object_key: "uploads/session-album/display/a.jpg",
+          object_etag: "etag-changed",
+          uploader_user_id: 7
+        }]];
+      }
+      throw new Error(`provider attempt must not be touched after invalid facts: ${sql}`);
+    }
+  };
+
+  const changed = await recordModerationSubmission(connection, {
+    jobId: 41,
+    provider: "wechat_sec_check",
+    providerJobId: "trace-41",
+    fromStatus: "error",
+    leaseToken: "lease-1",
+    retryFacts: {
+      kind: "album_image",
+      mediaId: 71,
+      subjectVersion: "etag-original",
+      objectKey: "uploads/session-album/display/a.jpg",
+      uploaderUserId: 7
+    }
+  });
+
+  assert.equal(changed, false);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].sql, /FOR UPDATE/);
+});
+
+test("an admin requeue restores one claim slot without reusing a provider-attempt number", async () => {
+  const requeueConnection = recordingConnection();
+  const requeued = await requeueModerationJob(requeueConnection, { jobId: 41 });
+  assert.equal(requeued, true);
+  assert.match(requeueConnection.calls[0].sql, /retry_exhausted_at = NULL/);
+  assert.match(requeueConnection.calls[0].sql, /attempt_count = GREATEST\(attempt_count - 1, 0\)/);
+
+  const submissionConnection = recordingConnection([
+    {
+      id: 41,
+      provider: "tencent_ci_video",
+      status: "error",
+      attempt_count: 7,
+      decided_by_admin_user_id: null,
+      lease_token: "lease-2"
+    },
+    { attempt_no: 9 }
+  ]);
+  const recorded = await recordModerationSubmission(submissionConnection, {
+    jobId: 41,
+    provider: "tencent_ci_video",
+    providerJobId: "video-job-9",
+    fromStatus: "error",
+    leaseToken: "lease-2"
+  });
+
+  assert.equal(recorded, true);
+  assert.match(submissionConnection.calls[3].sql, /MAX\(attempt_no\)/);
+  assert.deepEqual(submissionConnection.calls[4].params.slice(0, 4), [
+    41, "tencent_ci_video", "video-job-9", 9
+  ]);
+});
+
+test("retry rehydration locks a live media lease and returns only current immutable image facts", async () => {
+  const calls = [];
+  const job = {
+    id: 61,
+    provider: "wechat_sec_check",
+    subject_type: "album_image",
+    subject_id: "71",
+    subject_version: "etag-image",
+    status: "error",
+    lease_token: "lease-image",
+    decided_by_admin_user_id: null
+  };
+  const media = {
+    id: 71,
+    status: "active",
+    media_type: "image",
+    moderation_status: "pending",
+    moderation_object_version: "etag-image",
+    object_key: "uploads/session-album/display/a.jpg",
+    object_etag: "etag-image",
+    uploader_user_id: 9
+  };
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (/FROM content_moderation_jobs/.test(sql)) return [[job]];
+      if (/FROM session_album_photos/.test(sql)) return [[media]];
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  const retry = await rehydrateModerationRetryJob(connection, {
+    jobId: 61,
+    leaseToken: "lease-image"
+  });
+
+  assert.equal(retry.kind, "wechat_image");
+  assert.equal(retry.objectKey, "uploads/session-album/display/a.jpg");
+  assert.equal(retry.uploaderUserId, 9);
+  assert.deepEqual(retry.retryFacts, {
+    kind: "album_image",
+    mediaId: 71,
+    subjectVersion: "etag-image",
+    objectKey: "uploads/session-album/display/a.jpg",
+    uploaderUserId: 9
+  });
+  assert.match(calls[0].sql, /lease_expires_at > CURRENT_TIMESTAMP/);
+  assert.match(calls[0].sql, /FOR UPDATE/);
+  assert.match(calls[1].sql, /FOR UPDATE/);
+});
+
+test("retry rehydration makes current invalid media facts terminal while a lost lease remains stale", async () => {
+  const job = {
+    id: 62,
+    provider: "tencent_ci_video",
+    subject_type: "album_video",
+    subject_id: "72",
+    subject_version: "etag-video",
+    status: "error",
+    lease_token: "lease-video",
+    decided_by_admin_user_id: null
+  };
+  const connection = {
+    async query(sql) {
+      if (/FROM content_moderation_jobs/.test(sql)) return [[job]];
+      if (/FROM session_album_photos/.test(sql)) return [[{
+        id: 72,
+        status: "active",
+        media_type: "video",
+        moderation_status: "pending",
+        moderation_object_version: "changed-etag",
+        source_url: "/uploads/session-album/videos/source/a.mp4",
+        uploader_user_id: 9
+      }]];
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  await assert.rejects(rehydrateModerationRetryJob(connection, {
+    jobId: 62,
+    leaseToken: "lease-video"
+  }), { code: "CONTENT_MODERATION_RETRY_FACTS_INVALID" });
+
+  const lostLeaseConnection = {
+    async query(sql) {
+      if (/FROM content_moderation_jobs/.test(sql)) return [[]];
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+  assert.equal(await rehydrateModerationRetryJob(lostLeaseConnection, {
+    jobId: 62,
+    leaseToken: "replaced-lease"
+  }), null);
+});
+
+test("image retry rehydration rejects a key that escapes the owned display object namespace", async () => {
+  const connection = {
+    async query(sql) {
+      if (/FROM content_moderation_jobs/.test(sql)) return [[{
+        id: 63,
+        provider: "wechat_sec_check",
+        subject_type: "album_image",
+        subject_id: "73",
+        subject_version: "etag-image",
+        status: "error",
+        lease_token: "lease-image",
+        decided_by_admin_user_id: null
+      }]];
+      if (/FROM session_album_photos/.test(sql)) return [[{
+        id: 73,
+        status: "active",
+        media_type: "image",
+        moderation_status: "pending",
+        moderation_object_version: "etag-image",
+        object_etag: "etag-image",
+        object_key: "uploads/session-album/display/../videos/source/unowned.mp4",
+        uploader_user_id: 9
+      }]];
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  await assert.rejects(rehydrateModerationRetryJob(connection, {
+    jobId: 63,
+    leaseToken: "lease-image"
+  }), { code: "CONTENT_MODERATION_RETRY_FACTS_INVALID" });
 });
 
 test("provider transitions are conditional and do not overwrite admin decisions", async () => {
@@ -202,6 +504,47 @@ test("provider transitions are conditional and do not overwrite admin decisions"
   assert.equal(changed, true);
   assert.match(connection.calls[0].sql, /decided_by_admin_user_id IS NULL/i);
   assert.match(connection.calls[0].sql, /WHERE id = \? AND status = \?/i);
+});
+
+test("provider error transition stores a delayed retry or terminal exhaustion marker", async () => {
+  const scheduledConnection = recordingConnection();
+  const nextRetryAt = new Date(31_000);
+  await transitionModerationJob(scheduledConnection, {
+    jobId: 4,
+    fromStatus: "processing",
+    toStatus: "error",
+    source: "provider",
+    errorCode: "CONTENT_MODERATION_INVALID_RESPONSE",
+    retry: { nextRetryAt, exhausted: false }
+  });
+
+  assert.match(scheduledConnection.calls[0].sql, /next_retry_at = \?/);
+  assert.match(scheduledConnection.calls[0].sql, /retry_exhausted_at = CASE WHEN \? THEN CURRENT_TIMESTAMP ELSE NULL END/);
+  assert.equal(scheduledConnection.calls[0].params.includes(nextRetryAt), true);
+  assert.equal(scheduledConnection.calls[0].params.includes(0), true);
+
+  const initialSubmissionConnection = recordingConnection();
+  await transitionModerationJob(initialSubmissionConnection, {
+    jobId: 5,
+    fromStatus: "pending",
+    toStatus: "error",
+    source: "provider",
+    errorCode: "WECHAT_CONTENT_SECURITY_TIMEOUT",
+    retry: { attempts: 1, nextRetryAt, exhausted: false }
+  });
+  assert.match(initialSubmissionConnection.calls[0].sql, /attempt_count = \?/);
+  assert.equal(initialSubmissionConnection.calls[0].params.includes(1), true);
+
+  const exhaustedConnection = recordingConnection();
+  await transitionModerationJob(exhaustedConnection, {
+    jobId: 4,
+    fromStatus: "processing",
+    toStatus: "error",
+    source: "provider",
+    errorCode: "CONTENT_MODERATION_INVALID_RESPONSE",
+    retry: { nextRetryAt: null, exhausted: true }
+  });
+  assert.equal(exhaustedConnection.calls[0].params.includes(1), true);
 });
 
 test("text proposal and audit inserts preserve base version and decision trail", async () => {

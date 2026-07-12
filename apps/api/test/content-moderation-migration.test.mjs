@@ -13,6 +13,10 @@ const providerAttemptsMigrationUrl = new URL(
   "../migrations/0025_content_moderation_provider_attempts.sql",
   import.meta.url
 );
+const retryExhaustionMigrationUrl = new URL(
+  "../migrations/0027_content_moderation_retry_exhaustion.sql",
+  import.meta.url
+);
 
 test("D45 migration creates moderation jobs, text proposals, audit logs, and media gate", async () => {
   const sql = await readFile(migrationUrl, "utf8");
@@ -30,6 +34,13 @@ test("D45 migration creates moderation jobs, text proposals, audit logs, and med
   assert.match(sql, /ALTER TABLE session_album_object_cleanup_jobs/i);
   assert.match(sql, /object_urls_json JSON NULL/i);
   assert.doesNotMatch(sql, /UPDATE session_album_photos SET moderation_status = 'pending'/i);
+});
+
+test("D45 retry exhaustion migration adds a nullable terminal marker without rewriting attempt history", async () => {
+  const sql = await readFile(retryExhaustionMigrationUrl, "utf8");
+  assert.match(sql, /ALTER TABLE content_moderation_jobs/i);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS retry_exhausted_at DATETIME NULL/i);
+  assert.doesNotMatch(sql, /attempt_count\s*=/i);
 });
 
 test("every new album image and video path explicitly starts moderation pending", async () => {

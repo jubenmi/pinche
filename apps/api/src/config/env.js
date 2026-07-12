@@ -3,6 +3,8 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { MODERATION_RETRY_LEASE_MIN_MS } from "../modules/content-moderation/constants.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../../..");
@@ -170,6 +172,19 @@ function moderationConfigurationError(message) {
   return error;
 }
 
+function boundedModerationInteger(env, name, { fallback, minimum, maximum }) {
+  const raw = stringValue(env, name);
+  if (!raw) return fallback;
+  if (!/^\d+$/.test(raw)) {
+    throw moderationConfigurationError(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw moderationConfigurationError(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+
 function validRedisPort(raw) {
   if (!raw) return true;
   if (!/^\d+$/.test(raw)) return false;
@@ -233,7 +248,26 @@ export function buildContentModerationConfig(env = process.env) {
       env,
       "TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN"
     ),
-    retryLimit: Math.max(1, Math.min(20, integerValue(env.CONTENT_MODERATION_RETRY_LIMIT, 8))),
+    retryLimit: boundedModerationInteger(env, "CONTENT_MODERATION_RETRY_LIMIT", {
+      fallback: 8,
+      minimum: 1,
+      maximum: 20
+    }),
+    retryPollMs: boundedModerationInteger(env, "CONTENT_MODERATION_RETRY_POLL_MS", {
+      fallback: 30_000,
+      minimum: 1_000,
+      maximum: 300_000
+    }),
+    retryBatchSize: boundedModerationInteger(env, "CONTENT_MODERATION_RETRY_BATCH_SIZE", {
+      fallback: 25,
+      minimum: 1,
+      maximum: 100
+    }),
+    retryLeaseMs: boundedModerationInteger(env, "CONTENT_MODERATION_RETRY_LEASE_MS", {
+      fallback: MODERATION_RETRY_LEASE_MIN_MS,
+      minimum: MODERATION_RETRY_LEASE_MIN_MS,
+      maximum: 300_000
+    }),
     cosEnabled: booleanValue(env.COS_ENABLED, false),
     secretId: stringValue(env, "COS_SECRET_ID"),
     secretKey: stringValue(env, "COS_SECRET_KEY"),

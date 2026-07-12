@@ -3,9 +3,14 @@ import fs from "node:fs";
 import test from "node:test";
 
 import {
+  WECHAT_ACCESS_TOKEN_OPERATION_TIMEOUT_MS,
+  WECHAT_REDIS_CONNECT_DEADLINE_MS,
+  createDefaultRedisClientResolver,
   createWechatAccessTokenProvider,
   requestWithWechatAccessTokenRetry
 } from "../src/modules/wechat/access-token.js";
+import { WECHAT_CONTENT_SECURITY_REQUEST_TIMEOUT_LIMIT_MS } from "../src/modules/content-moderation/wechat-client.js";
+import { MODERATION_RETRY_LEASE_MIN_MS } from "../src/modules/content-moderation/constants.js";
 import { sendSubscribeMessage } from "../src/modules/wechat/subscribe-message.js";
 
 function createFakeRedis() {
@@ -68,6 +73,182 @@ function providerOptions(overrides = {}) {
     ...overrides
   };
 }
+
+function createManualTimers() {
+  const timers = new Map();
+  let nextId = 0;
+  return {
+    setTimeoutFn(callback, milliseconds) {
+      const id = ++nextId;
+      timers.set(id, { callback, milliseconds });
+      return id;
+    },
+    clearTimeoutFn(id) {
+      timers.delete(id);
+    },
+    fireNext(milliseconds) {
+      const entry = [...timers.entries()].find(([, timer]) => timer.milliseconds === milliseconds);
+      assert.ok(entry, `expected timer with ${milliseconds}ms deadline`);
+      const [id, timer] = entry;
+      timers.delete(id);
+      timer.callback();
+    }
+  };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+test("default Redis cache connection has a bounded deadline, disconnects, and cannot poison a later retry", async () => {
+  const timers = createManualTimers();
+  const firstConnect = deferred();
+  const created = [];
+  const createClientOptions = [];
+  const resolver = createDefaultRedisClientResolver({
+    enabled: () => true,
+    url: () => "redis://cache.example.test:6379",
+    connectDeadlineMs: 7,
+    setTimeoutFn: timers.setTimeoutFn,
+    clearTimeoutFn: timers.clearTimeoutFn,
+    createRedisClient: (options) => {
+      createClientOptions.push(options);
+      const state = { connectCalls: 0, disconnects: 0 };
+      const client = {
+        on() {},
+        connect: () => {
+          state.connectCalls += 1;
+          return created.length === 0 ? firstConnect.promise : Promise.resolve();
+        },
+        disconnect: () => { state.disconnects += 1; }
+      };
+      created.push({ client, state });
+      return client;
+    }
+  });
+
+  const first = resolver();
+  await Promise.resolve();
+  assert.equal(created[0].state.connectCalls, 1);
+  timers.fireNext(7);
+  await assert.rejects(first, {
+    code: "WECHAT_ACCESS_TOKEN_CACHE_UNAVAILABLE"
+  });
+  assert.equal(created[0].state.disconnects, 1);
+  assert.deepEqual(createClientOptions[0], {
+    url: "redis://cache.example.test:6379",
+    disableOfflineQueue: true,
+    socket: {
+      connectTimeout: 7,
+      reconnectStrategy: false
+    }
+  });
+
+  const recovered = await resolver();
+  assert.equal(created.length, 2);
+  firstConnect.resolve();
+  await Promise.resolve();
+  assert.equal(await resolver(), recovered);
+  assert.equal(created.length, 2, "a late first connect must not replace the recovered client");
+});
+
+test("a token operation deadline covers a hanging Redis command, resets it, and permits a later retry", async () => {
+  const timers = createManualTimers();
+  const hangingRead = deferred();
+  const fallbackRedis = createFakeRedis();
+  const resetClients = [];
+  let redisAttempts = 0;
+  const hangingRedis = {
+    ...createFakeRedis(),
+    get: async () => hangingRead.promise,
+    disconnect() {}
+  };
+  const provider = createWechatAccessTokenProvider(providerOptions({
+    redis: null,
+    getRedis: async () => {
+      redisAttempts += 1;
+      return redisAttempts === 1 ? hangingRedis : fallbackRedis;
+    },
+    resetRedis: (client) => { resetClients.push(client); },
+    operationTimeoutMs: 9,
+    fetchTimeoutMs: 5,
+    setTimeoutFn: timers.setTimeoutFn,
+    clearTimeoutFn: timers.clearTimeoutFn
+  }));
+
+  const first = provider.getAccessToken();
+  await Promise.resolve();
+  timers.fireNext(9);
+  await assert.rejects(first, {
+    code: "WECHAT_ACCESS_TOKEN_CACHE_UNAVAILABLE"
+  });
+  assert.deepEqual(resetClients, [hangingRedis]);
+
+  assert.equal(await provider.getAccessToken(), "fresh-token");
+  assert.equal(redisAttempts, 2);
+  hangingRead.resolve(null);
+});
+
+test("token invalidation also bounds a queued Redis delete and releases the cache client for retry", async () => {
+  const timers = createManualTimers();
+  const hangingDelete = deferred();
+  const fallbackRedis = createFakeRedis();
+  const resetClients = [];
+  let redisAttempts = 0;
+  let deleteStarted = false;
+  const hangingRedis = {
+    ...createFakeRedis(),
+    del: async () => {
+      deleteStarted = true;
+      return hangingDelete.promise;
+    },
+    disconnect() {}
+  };
+  const provider = createWechatAccessTokenProvider(providerOptions({
+    redis: null,
+    getRedis: async () => {
+      redisAttempts += 1;
+      return redisAttempts === 1 ? hangingRedis : fallbackRedis;
+    },
+    resetRedis: (client) => { resetClients.push(client); },
+    operationTimeoutMs: 9,
+    fetchTimeoutMs: 5,
+    setTimeoutFn: timers.setTimeoutFn,
+    clearTimeoutFn: timers.clearTimeoutFn
+  }));
+
+  const first = provider.invalidate();
+  for (let attempt = 0; attempt < 10 && !deleteStarted; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(deleteStarted, true);
+  timers.fireNext(9);
+  await assert.rejects(first, {
+    code: "WECHAT_ACCESS_TOKEN_CACHE_UNAVAILABLE"
+  });
+  assert.deepEqual(resetClients, [hangingRedis]);
+
+  await provider.invalidate();
+  assert.equal(redisAttempts, 2);
+  hangingDelete.resolve(1);
+});
+
+test("default WeChat token and content-security budgets stay strictly below the 90-second moderation lease", () => {
+  assert.ok(WECHAT_REDIS_CONNECT_DEADLINE_MS < WECHAT_ACCESS_TOKEN_OPERATION_TIMEOUT_MS);
+  assert.ok(WECHAT_ACCESS_TOKEN_OPERATION_TIMEOUT_MS < MODERATION_RETRY_LEASE_MIN_MS);
+  assert.ok(
+    3 * WECHAT_ACCESS_TOKEN_OPERATION_TIMEOUT_MS +
+      2 * WECHAT_CONTENT_SECURITY_REQUEST_TIMEOUT_LIMIT_MS <
+      MODERATION_RETRY_LEASE_MIN_MS,
+    "get + request + invalidate + forced get + request must finish before one initial lease"
+  );
+});
 
 test("access token uses Redis cache until the refresh margin", async () => {
   const now = () => 1_000_000;

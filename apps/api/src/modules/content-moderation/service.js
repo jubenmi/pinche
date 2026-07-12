@@ -2,17 +2,18 @@ import crypto from "node:crypto";
 
 import {
   createResponseSummary,
-  digestNormalizedText,
   normalizeTextFields
 } from "./normalize.js";
 import { buildTextProposalPayload } from "./text-boundaries.js";
 import { projectSafeTextAppliedResult } from "./text-applied-result.js";
 import { proposalStaleForRevalidationError } from "./text-proposal-applicator.js";
+import { textProposalPayloadDigest } from "./text-proposal-digest.js";
+import { classifyModerationError, moderationRetryAt } from "./retry.js";
 import {
   textMutationSubjectVersion,
   textOperationSubjectId
 } from "./text-request-identity.js";
-import { MODERATION_ERROR_CODES } from "./constants.js";
+import { MODERATION_ERROR_CODES, MODERATION_RETRY_LEASE_MIN_MS } from "./constants.js";
 import { moderationStatusForDecision } from "./state-machine.js";
 
 const TEXT_SCENE_BY_SUBJECT = Object.freeze({
@@ -33,16 +34,6 @@ const TEXT_DECISION_BY_SUGGESTION = Object.freeze({
   review: "review",
   risky: "block"
 });
-
-function stableJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => (
-      `${JSON.stringify(key)}:${stableJson(value[key])}`
-    )).join(",")}}`;
-  }
-  return JSON.stringify(value ?? null);
-}
 
 function boundedString(value, maxLength = 128) {
   return String(value ?? "").trim().slice(0, maxLength);
@@ -70,6 +61,113 @@ function normalizeWechatTextResult(result) {
       ? Math.max(0, Math.min(100, Math.round(Number(result.score))))
       : null
   };
+}
+
+function boundedRetryLimit(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 20 ? parsed : 8;
+}
+
+function nowMilliseconds(now) {
+  const value = typeof now === "function" ? now() : Date.now();
+  const milliseconds = value instanceof Date ? value.getTime() : Number(value);
+  return Number.isFinite(milliseconds) ? milliseconds : Date.now();
+}
+
+function providerErrorRetryState(job, config, now, random) {
+  const recordedAttempts = Number(job?.attempt_count);
+  const attempts = Number.isInteger(recordedAttempts) && recordedAttempts > 0
+    ? recordedAttempts
+    : 1;
+  const exhausted = attempts >= boundedRetryLimit(config?.retryLimit);
+  return {
+    nextRetryAt: exhausted
+      ? null
+      : moderationRetryAt(nowMilliseconds(now), attempts, typeof random === "function" ? random : Math.random),
+    exhausted
+  };
+}
+
+function initialSubmissionFailurePlan(job, config, now, random, error) {
+  const recordedAttempts = Number(job?.attempt_count);
+  const attempts = (Number.isInteger(recordedAttempts) && recordedAttempts >= 0 ? recordedAttempts : 0) + 1;
+  const classification = classifyModerationError(error);
+  const exhausted = attempts >= boundedRetryLimit(config?.retryLimit) || !classification.retryable;
+  return {
+    attempts,
+    errorCode: classification.code,
+    alert: classification.alert,
+    retry: {
+      attempts,
+      nextRetryAt: exhausted
+        ? null
+        : moderationRetryAt(nowMilliseconds(now), attempts, typeof random === "function" ? random : Math.random),
+      exhausted
+    }
+  };
+}
+
+function submissionStaleError() {
+  const error = new Error("content moderation submission lease is no longer live");
+  error.code = "CONTENT_MODERATION_SUBMISSION_STALE";
+  return error;
+}
+
+function isSubmissionStale(error) {
+  return String(error?.code || "") === "CONTENT_MODERATION_SUBMISSION_STALE";
+}
+
+function retryTextIdentityMatches(job, proposal, expected) {
+  if (!expected) return true;
+  return (
+    Number(job?.id) === Number(expected.jobId) &&
+    String(job?.provider || "") === "wechat_sec_check" &&
+    String(job?.subject_type || "") === String(expected.subjectType || "") &&
+    String(job?.subject_id || "") === String(expected.subjectId || "") &&
+    String(job?.subject_version || "") === String(expected.subjectVersion || "") &&
+    Number(proposal?.id) === Number(expected.proposalId) &&
+    String(proposal?.status || "") === "pending" &&
+    String(proposal?.subject_type || "") === String(job?.subject_type || "") &&
+    String(proposal?.subject_id || "") === String(job?.subject_id || "") &&
+    String(proposal?.action || "") === String(expected.action || "") &&
+    Number(proposal?.created_by_user_id) === Number(expected.actorUserId) &&
+    String(proposal?.base_version || "") === String(expected.baseVersion || "") &&
+    String(proposal?.idempotency_key || "") === String(expected.idempotencyKey || "") &&
+    String(proposal?.payload_digest || "") === String(expected.payloadDigest || "")
+  );
+}
+
+function retryTextPayloadDigestMatches(proposal, normalizedText) {
+  try {
+    const parsed = typeof proposal?.normalized_payload_json === "string"
+      ? JSON.parse(proposal.normalized_payload_json)
+      : proposal?.normalized_payload_json;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const actorUserId = Number(proposal?.created_by_user_id);
+    if (!Number.isInteger(actorUserId) || actorUserId <= 0) return false;
+    const allowedKeys = new Set(["body", "context", "actor_user_id"]);
+    if (
+      Object.keys(parsed).some((key) => !allowedKeys.has(key)) ||
+      Number(parsed.actor_user_id) !== actorUserId
+    ) return false;
+    const normalizedPayload = {
+      body: parsed.body && typeof parsed.body === "object" && !Array.isArray(parsed.body)
+        ? parsed.body
+        : {},
+      context: parsed.context && typeof parsed.context === "object" && !Array.isArray(parsed.context)
+        ? parsed.context
+        : {},
+      actor_user_id: actorUserId
+    };
+    return textProposalPayloadDigest({
+      action: proposal.action,
+      baseVersion: proposal.base_version,
+      normalizedText,
+      normalizedPayload
+    }) === String(proposal.payload_digest || "");
+  } catch {
+    return false;
+  }
 }
 
 function replayErrorForStatus(status) {
@@ -144,9 +242,79 @@ function returnPreparedTerminalTextOutcome(outcome) {
 export function createContentModerationService(dependencies) {
   const deps = {
     randomUUID: () => crypto.randomUUID(),
+    now: () => Date.now(),
+    random: Math.random,
     emit: () => {},
     ...dependencies
   };
+
+  async function claimInitialSubmissionLease(connection, job) {
+    const leaseToken = deps.randomUUID();
+    const acquired = await deps.repository.claimInitialModerationLease(connection, {
+      jobId: job.id,
+      leaseToken,
+      leaseExpiresAt: new Date(nowMilliseconds(deps.now) + MODERATION_RETRY_LEASE_MIN_MS)
+    });
+    return {
+      initialLeaseAcquired: acquired,
+      initialLeaseToken: acquired ? leaseToken : null
+    };
+  }
+
+  async function requireLiveSubmissionLease({ jobId, leaseToken, fromStatus }) {
+    const token = String(leaseToken || "").trim();
+    if (!token) throw submissionStaleError();
+    const current = await deps.withDatabaseConnection((connection) =>
+      deps.repository.findModerationJobById(connection, jobId, {
+        forUpdate: true,
+        leaseToken: token
+      })
+    );
+    if (!current || String(current.status) !== String(fromStatus)) throw submissionStaleError();
+    return current;
+  }
+
+  async function renewSubmissionLease({ jobId, leaseToken, fromStatus }) {
+    const token = String(leaseToken || "").trim();
+    if (!token) throw submissionStaleError();
+    const renewed = await deps.withDatabaseConnection((connection) =>
+      deps.repository.renewModerationLease(connection, {
+        jobId,
+        leaseToken: token,
+        fromStatus,
+        leaseDurationMs: MODERATION_RETRY_LEASE_MIN_MS
+      })
+    );
+    if (!renewed) throw submissionStaleError();
+  }
+
+  async function recordLeasedSubmissionFailure({ job, leaseToken, subjectType, error }) {
+    const plan = initialSubmissionFailurePlan(job, deps.config, deps.now, deps.random, error);
+    const changed = await deps.withDatabaseConnection((connection) =>
+      deps.repository.failModerationJob(connection, {
+        jobId: job?.id,
+        leaseToken,
+        attempts: plan.attempts,
+        nextRetryAt: plan.retry.nextRetryAt,
+        errorCode: plan.errorCode,
+        exhausted: plan.retry.exhausted
+      })
+    );
+    if (changed) {
+      const event = plan.alert
+        ? "moderation_operational_alert"
+        : plan.retry.exhausted
+          ? "moderation_retry_exhausted"
+          : "moderation_submission_failure";
+      deps.emit(event, {
+        subjectType,
+        outcome: plan.retry.exhausted ? "operator_required" : "retry_scheduled",
+        errorCode: plan.errorCode,
+        ...(plan.alert || plan.retry.exhausted ? { priority: "high" } : {})
+      });
+    }
+    return { changed, plan };
+  }
 
   async function createVideoJob(connection, input) {
     const job = await deps.repository.createModerationJob(connection, {
@@ -157,8 +325,11 @@ export function createContentModerationService(dependencies) {
       dataId: deps.randomUUID(),
       policyId: deps.config.tencentVideoPolicyId
     });
+    const initialLease = await claimInitialSubmissionLease(connection, job);
+    if (!initialLease.initialLeaseAcquired) return null;
     return {
       ...job,
+      ...initialLease,
       kind: "video",
       objectKey: String(input.objectKey),
       dataId: job.data_id || job.dataId,
@@ -167,7 +338,16 @@ export function createContentModerationService(dependencies) {
   }
 
   async function submitVideoJob(job) {
+    const fromStatus = job?.status || "pending";
+    const retrySubmission = Boolean(job?.retryFacts);
+    const leaseToken = retrySubmission
+      ? job?.leaseToken ?? job?.lease_token ?? null
+      : job?.initialLeaseAcquired === true
+        ? job?.initialLeaseToken
+        : null;
+    if (!leaseToken) throw submissionStaleError();
     try {
+      await renewSubmissionLease({ jobId: job.id, leaseToken, fromStatus });
       const response = await deps.client.submitVideo({
         objectKey: job.objectKey,
         dataId: job.data_id || job.dataId
@@ -177,7 +357,9 @@ export function createContentModerationService(dependencies) {
           jobId: job.id,
           provider: "tencent_ci_video",
           providerJobId: response.JobId,
-          fromStatus: job.status || "pending",
+          fromStatus,
+          leaseToken,
+          ...(job?.retryFacts ? { retryFacts: job.retryFacts } : {}),
           responseSummary: {
             providerJobId: response.JobId || ""
           }
@@ -194,19 +376,15 @@ export function createContentModerationService(dependencies) {
       });
       return response;
     } catch (error) {
-      await deps.withDatabaseConnection((connection) =>
-        deps.repository.transitionModerationJob(connection, {
-          jobId: job.id,
-          fromStatus: job.status || "pending",
-          toStatus: "error",
-          source: "provider",
-          errorCode: error?.code || "CONTENT_MODERATION_UNAVAILABLE"
-        })
-      );
-      deps.emit("moderation_submission_failure", {
+      // A retry worker still owns this live lease.  It must be the component
+      // that records backoff/exhaustion atomically with that lease; changing
+      // the job here would clear the token before failModerationJob can do so.
+      if (retrySubmission || isSubmissionStale(error)) throw error;
+      await recordLeasedSubmissionFailure({
+        job,
+        leaseToken,
         subjectType: "album_video",
-        outcome: "hidden_retryable",
-        errorCode: error?.code || "CONTENT_MODERATION_UNAVAILABLE"
+        error
       });
       throw error;
     }
@@ -235,8 +413,11 @@ export function createContentModerationService(dependencies) {
       dataId: deps.randomUUID(),
       policyId: null
     });
+    const initialLease = await claimInitialSubmissionLease(connection, job);
+    if (!initialLease.initialLeaseAcquired) return null;
     return {
       ...job,
+      ...initialLease,
       kind: "wechat_image",
       objectKey,
       uploaderUserId,
@@ -246,7 +427,15 @@ export function createContentModerationService(dependencies) {
 
   async function submitWechatImageModeration(job) {
     const fromStatus = job?.status || "pending";
+    const retrySubmission = Boolean(job?.retryFacts);
+    const leaseToken = retrySubmission
+      ? job?.leaseToken ?? job?.lease_token ?? null
+      : job?.initialLeaseAcquired === true
+        ? job?.initialLeaseToken
+        : null;
+    if (!leaseToken) throw submissionStaleError();
     try {
+      await requireLiveSubmissionLease({ jobId: job.id, leaseToken, fromStatus });
       if (typeof deps.getVerifiedImageUploaderOpenid !== "function") {
         throw textModerationError(
           500,
@@ -279,6 +468,11 @@ export function createContentModerationService(dependencies) {
           "a verified image uploader openid is required"
         );
       }
+      // Database identity lookup and COS signing can block independently of
+      // the provider request. Renew before issuing the short-lived URL so an
+      // expired initial/worker lease cannot sign or submit a duplicate WeChat
+      // moderation request, and the URL fetch window starts at submission.
+      await renewSubmissionLease({ jobId: job.id, leaseToken, fromStatus });
       const mediaUrl = await deps.buildWechatImageUrl({ objectKey: job?.objectKey });
       const response = await deps.client.checkImage({ mediaUrl, openid, scene: 4 });
       const traceId = boundedString(response?.traceId, 128);
@@ -295,6 +489,8 @@ export function createContentModerationService(dependencies) {
           provider: "wechat_sec_check",
           providerJobId: traceId,
           fromStatus,
+          leaseToken,
+          ...(job?.retryFacts ? { retryFacts: job.retryFacts } : {}),
           responseSummary: { traceId }
         })
       );
@@ -311,19 +507,14 @@ export function createContentModerationService(dependencies) {
       });
       return { traceId };
     } catch (error) {
-      await deps.withDatabaseConnection((connection) =>
-        deps.repository.transitionModerationJob(connection, {
-          jobId: job?.id,
-          fromStatus,
-          toStatus: "error",
-          source: "provider",
-          errorCode: error?.code || MODERATION_ERROR_CODES.unavailable
-        })
-      );
-      deps.emit("moderation_submission_failure", {
+      // See submitVideoJob: a claimed retry leaves its lease intact for the
+      // worker's single failure transition and alert decision.
+      if (retrySubmission || isSubmissionStale(error)) throw error;
+      await recordLeasedSubmissionFailure({
+        job,
+        leaseToken,
         subjectType: "album_image",
-        outcome: "hidden_retryable",
-        errorCode: error?.code || MODERATION_ERROR_CODES.unavailable
+        error
       });
       throw error;
     }
@@ -378,6 +569,9 @@ export function createContentModerationService(dependencies) {
         return staleResult(job);
       }
       const nextStatus = moderationStatusForDecision(input.result?.decision || "error");
+      const retry = nextStatus === "error"
+        ? providerErrorRetryState(job, deps.config, deps.now, deps.random)
+        : null;
       if (job.decided_by_admin_user_id !== null && job.decided_by_admin_user_id !== undefined) {
         return staleResult(job, { adminDecided: true });
       }
@@ -425,7 +619,8 @@ export function createContentModerationService(dependencies) {
         decidedByAdminUserId: job.decided_by_admin_user_id,
         result: input.result,
         responseSummary: createResponseSummary(input.result),
-        errorCode: nextStatus === "error" ? "CONTENT_MODERATION_INVALID_RESPONSE" : null
+        errorCode: nextStatus === "error" ? "CONTENT_MODERATION_INVALID_RESPONSE" : null,
+        ...(retry ? { retry } : {})
       });
       if (!changed) return staleResult(job);
       const mediaChanged = await deps.repository.transitionMediaModeration(connection, {
@@ -441,6 +636,14 @@ export function createContentModerationService(dependencies) {
         subjectType: job.subject_type,
         outcome: nextStatus
       });
+      if (retry) {
+        deps.emit(retry.exhausted ? "moderation_retry_exhausted" : "moderation_submission_failure", {
+          subjectType: job.subject_type,
+          outcome: retry.exhausted ? "operator_required" : "retry_scheduled",
+          errorCode: "CONTENT_MODERATION_INVALID_RESPONSE",
+          ...(retry.exhausted ? { priority: "high" } : {})
+        });
+      }
       return { status: nextStatus, duplicate: false };
     });
   }
@@ -495,12 +698,12 @@ export function createContentModerationService(dependencies) {
       ...buildTextProposalPayload(action, payload),
       actor_user_id: actorUserId
     };
-    const payloadDigest = digestNormalizedText(stableJson({
+    const payloadDigest = textProposalPayloadDigest({
       action,
       baseVersion,
       normalizedText,
-      payload: normalizedPayload
-    }));
+      normalizedPayload
+    });
 
     const prepared = await deps.transaction(async (connection) => {
       const job = await deps.repository.createModerationJob(connection, {
@@ -535,7 +738,8 @@ export function createContentModerationService(dependencies) {
           "text moderation proposal was not persisted"
         );
       }
-      return { job, proposal };
+      const initialLease = await claimInitialSubmissionLease(connection, job);
+      return { job: { ...job, ...initialLease }, proposal };
     });
 
     return {
@@ -549,13 +753,18 @@ export function createContentModerationService(dependencies) {
     };
   }
 
-  async function resolveTextResult(prepared, providerResult) {
+  async function resolveTextResult(prepared, providerResult, options = {}) {
     const result = normalizeWechatTextResult(providerResult);
     const final = await deps.transaction(async (connection) => {
       const job = await deps.repository.findModerationJobById(
         connection,
         prepared.job.id,
-        { forUpdate: true }
+        {
+          forUpdate: true,
+          ...(options.leaseToken !== null && options.leaseToken !== undefined
+            ? { leaseToken: options.leaseToken }
+            : {})
+        }
       );
       const proposal = await deps.repository.findTextProposalByJobId(
         connection,
@@ -563,11 +772,18 @@ export function createContentModerationService(dependencies) {
         { forUpdate: true }
       );
       if (!job || !proposal) {
+        if (options.returnOutcome) return { kind: "stale" };
         throw textModerationError(
           409,
           MODERATION_ERROR_CODES.proposalStale,
           "text moderation proposal is stale"
         );
+      }
+      if (!retryTextIdentityMatches(job, proposal, options.expectedText)) {
+        return { kind: "stale" };
+      }
+      if (options.expectedText && !retryTextPayloadDigestMatches(proposal, prepared.normalizedText)) {
+        return { kind: "stale" };
       }
       if (proposal.status === "stale") return { kind: "stale" };
       if (job.status === "approved" && proposal.status === "approved") {
@@ -624,6 +840,7 @@ export function createContentModerationService(dependencies) {
             fromStatus: job.status,
             toStatus: "rejected",
             source: "provider",
+            leaseToken: options.leaseToken,
             result,
             responseSummary: createResponseSummary(result),
             errorCode: MODERATION_ERROR_CODES.proposalStale
@@ -655,6 +872,7 @@ export function createContentModerationService(dependencies) {
           fromStatus: job.status,
           toStatus: "approved",
           source: "provider",
+          leaseToken: options.leaseToken,
           result,
           responseSummary: createResponseSummary(result)
         });
@@ -683,6 +901,7 @@ export function createContentModerationService(dependencies) {
         fromStatus: job.status,
         toStatus: nextStatus,
         source: "provider",
+        leaseToken: options.leaseToken,
         result,
         responseSummary: createResponseSummary(result),
         errorCode: nextStatus === "error" ? MODERATION_ERROR_CODES.unavailable : null
@@ -692,6 +911,7 @@ export function createContentModerationService(dependencies) {
       }
       return { kind: "error", status: nextStatus };
     });
+    if (options.returnOutcome) return final;
     if (final.kind === "approved" || final.kind === "replay") return final.result;
     if (final.kind === "stale") {
       throw textModerationError(
@@ -709,8 +929,17 @@ export function createContentModerationService(dependencies) {
       preparedTerminalTextOutcome(prepared.job, prepared.proposal)
     );
     if (terminalResult) return terminalResult;
+    const leaseToken = prepared.job.initialLeaseAcquired === true
+      ? prepared.job.initialLeaseToken
+      : null;
+    if (!leaseToken) throw replayErrorForStatus("error");
     let providerResult;
     try {
+      await renewSubmissionLease({
+        jobId: prepared.job.id,
+        leaseToken,
+        fromStatus: prepared.job.status || "pending"
+      });
       if (typeof deps.client?.checkText !== "function") {
         throw textModerationError(
           500,
@@ -723,16 +952,105 @@ export function createContentModerationService(dependencies) {
         openid: prepared.openid,
         scene: prepared.scene
       });
-    } catch {
-      providerResult = { suggestion: "error" };
+    } catch (error) {
+      if (isSubmissionStale(error)) throw replayErrorForStatus("error");
+      await recordLeasedSubmissionFailure({
+        job: prepared.job,
+        leaseToken,
+        subjectType: prepared.subjectType,
+        error
+      });
+      throw replayErrorForStatus("error");
     }
     const outcome = normalizeWechatTextResult(providerResult);
-    const resolved = await resolveTextResult(prepared, providerResult);
+    if (outcome.decision === "error") {
+      const error = textModerationError(
+        502,
+        "WECHAT_CONTENT_SECURITY_RESPONSE_INVALID",
+        "WeChat content security response is invalid"
+      );
+      await recordLeasedSubmissionFailure({
+        job: prepared.job,
+        leaseToken,
+        subjectType: prepared.subjectType,
+        error
+      });
+      throw replayErrorForStatus("error");
+    }
+    const resolved = await resolveTextResult(prepared, providerResult, { leaseToken });
     deps.emit(`moderation_decision_${outcome.decision}`, {
       subjectType: prepared.subjectType,
       outcome: moderationStatusForDecision(outcome.decision)
     });
     return resolved;
+  }
+
+  async function retryTextModeration(input = {}) {
+    const job = input.job;
+    const proposal = input.proposal;
+    const leaseToken = String(input.leaseToken || "");
+    const normalizedText = String(input.normalizedText || "");
+    if (
+      !job ||
+      !proposal ||
+      !leaseToken ||
+      String(job.provider || "") !== "wechat_sec_check" ||
+      !retryTextIdentityMatches(job, proposal, input.expectedText) ||
+      !retryTextPayloadDigestMatches(proposal, normalizedText) ||
+      textMutationSubjectVersion({ normalizedText }) !== String(job.subject_version || "")
+    ) {
+      return { kind: "stale" };
+    }
+    const scene = textSceneForSubject(job.subject_type);
+    if (input.scene !== undefined && Number(input.scene) !== scene) return { kind: "stale" };
+    const openid = boundedString(input.openid, 128);
+    if (!openid) {
+      throw textModerationError(
+        422,
+        MODERATION_ERROR_CODES.openidRequired,
+        "a verified content producer openid is required"
+      );
+    }
+    if (typeof deps.client?.checkText !== "function") {
+      throw textModerationError(
+        500,
+        MODERATION_ERROR_CODES.configuration,
+        "WeChat text moderation client is missing"
+      );
+    }
+    await renewSubmissionLease({
+      jobId: job.id,
+      leaseToken,
+      fromStatus: job.status || "error"
+    });
+    const providerResult = await deps.client.checkText({ content: normalizedText, openid, scene });
+    const outcome = normalizeWechatTextResult(providerResult);
+    if (outcome.decision === "error") {
+      throw textModerationError(
+        502,
+        "WECHAT_CONTENT_SECURITY_RESPONSE_INVALID",
+        "WeChat content security response is invalid"
+      );
+    }
+    const final = await resolveTextResult({
+      job,
+      proposal,
+      subjectType: job.subject_type,
+      normalizedText,
+      openid,
+      scene
+    }, providerResult, {
+      leaseToken,
+      expectedText: input.expectedText,
+      returnOutcome: true
+    });
+    if (final.kind !== "stale") {
+      deps.emit(`moderation_decision_${outcome.decision}`, {
+        subjectType: job.subject_type,
+        outcome: moderationStatusForDecision(outcome.decision)
+      });
+    }
+    return final;
   }
 
   async function decideAsAdmin(input) {
@@ -866,6 +1184,7 @@ export function createContentModerationService(dependencies) {
     applyMediaResult,
     decideAsAdmin,
     moderateTextMutation,
+    retryTextModeration,
     textSceneForSubject
   };
 }

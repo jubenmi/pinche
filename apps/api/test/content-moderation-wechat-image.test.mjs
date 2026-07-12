@@ -6,20 +6,66 @@ import { createContentModerationService } from "../src/modules/content-moderatio
 const objectKey = "uploads/session-album/display/album-8-3-1.jpg";
 const signedUrl = "https://bucket.cos.ap-nanjing.myqcloud.com/private.jpg?q-signature=must-not-persist";
 
-function harness({ openid = "verified-uploader-openid", clientError = null } = {}) {
+function harness({
+  openid = "verified-uploader-openid",
+  clientError = null,
+  retryLimit = 8,
+  now = () => 1_000,
+  random = () => 0
+} = {}) {
   const state = {
     created: [],
+    initialClaims: [],
+    renewals: [],
     providerCalls: [],
     openidLookups: [],
     signedFor: [],
     submissions: [],
     transitions: [],
+    failures: [],
+    job: {
+      id: 71,
+      status: "pending",
+      attempt_count: 0,
+      provider: "wechat_sec_check",
+      subject_type: "album_image",
+      subject_id: "91",
+      subject_version: "etag-image-91",
+      lease_token: null,
+      decided_by_admin_user_id: null
+    },
     events: []
   };
   const repository = {
     createModerationJob: async (_connection, input) => {
       state.created.push(input);
-      return { id: 71, status: "pending", ...input };
+      Object.assign(state.job, {
+        status: "pending",
+        attempt_count: 0,
+        provider: input.provider,
+        subject_type: input.subjectType,
+        subject_id: input.subjectId,
+        subject_version: input.subjectVersion,
+        lease_token: null
+      });
+      return { id: 71, status: "pending", attempt_count: 0, ...input };
+    },
+    claimInitialModerationLease: async (_connection, input) => {
+      state.initialClaims.push(input);
+      state.job.lease_token = input.leaseToken;
+      return true;
+    },
+    renewModerationLease: async (_connection, input) => {
+      state.renewals.push(input);
+      return (
+        String(input.leaseToken) === String(state.job.lease_token || "") &&
+        String(input.fromStatus) === String(state.job.status) &&
+        state.job.decided_by_admin_user_id === null
+      );
+    },
+    findModerationJobById: async (_connection, _jobId, options = {}) => {
+      if (options.leaseToken && String(options.leaseToken) !== String(state.job.lease_token || "")) return null;
+      return { ...state.job };
     },
     recordModerationSubmission: async (_connection, input) => {
       state.submissions.push(input);
@@ -28,10 +74,16 @@ function harness({ openid = "verified-uploader-openid", clientError = null } = {
     transitionModerationJob: async (_connection, input) => {
       state.transitions.push(input);
       return true;
+    },
+    failModerationJob: async (_connection, input) => {
+      state.failures.push(input);
+      state.job.status = "error";
+      state.job.lease_token = null;
+      return true;
     }
   };
   const service = createContentModerationService({
-    config: { enabled: true, wechatImageEnabled: true },
+    config: { enabled: true, wechatImageEnabled: true, retryLimit },
     client: {
       checkImage: async (input) => {
         state.providerCalls.push(input);
@@ -43,6 +95,8 @@ function harness({ openid = "verified-uploader-openid", clientError = null } = {
     transaction: async (run) => run({}),
     withDatabaseConnection: async (run) => run({}),
     randomUUID: () => "00000000-0000-4000-8000-000000000071",
+    now,
+    random,
     getVerifiedImageUploaderOpenid: async ({ uploaderUserId }) => {
       state.openidLookups.push(uploaderUserId);
       return openid;
@@ -79,6 +133,7 @@ test("WeChat image job records immutable image facts and persists only its retur
   assert.deepEqual(job, {
     id: 71,
     status: "pending",
+    attempt_count: 0,
     subjectType: "album_image",
     subjectId: "91",
     subjectVersion: "etag-image-91",
@@ -86,6 +141,8 @@ test("WeChat image job records immutable image facts and persists only its retur
     dataId: "00000000-0000-4000-8000-000000000071",
     policyId: null,
     kind: "wechat_image",
+    initialLeaseAcquired: true,
+    initialLeaseToken: "00000000-0000-4000-8000-000000000071",
     objectKey,
     uploaderUserId: 3
   });
@@ -104,9 +161,81 @@ test("WeChat image job records immutable image facts and persists only its retur
     provider: "wechat_sec_check",
     providerJobId: "wechat-image-trace-71",
     fromStatus: "pending",
+    leaseToken: job.initialLeaseToken,
     responseSummary: { traceId: "wechat-image-trace-71" }
   }]);
+  assert.deepEqual(state.renewals, [{
+    jobId: 71,
+    leaseToken: job.initialLeaseToken,
+    fromStatus: "pending",
+    leaseDurationMs: 90_000
+  }]);
   assert.equal(JSON.stringify({ submissions: state.submissions, events: state.events }).includes("q-signature"), false);
+});
+
+test("a retried image submission carries its locked lease and immutable facts into the final attempt rollover", async () => {
+  const { service, state } = harness();
+  const job = await createImageJob(service);
+  const retryFacts = {
+    kind: "album_image",
+    mediaId: 91,
+    subjectVersion: "etag-image-91",
+    objectKey,
+    uploaderUserId: 3
+  };
+  state.job.status = "error";
+  state.job.lease_token = "lease-image";
+
+  await service.submitWechatImageModeration({
+    ...job,
+    status: "error",
+    leaseToken: "lease-image",
+    retryFacts
+  });
+
+  assert.deepEqual(state.submissions.at(-1), {
+    jobId: 71,
+    provider: "wechat_sec_check",
+    providerJobId: "wechat-image-trace-71",
+    fromStatus: "error",
+    leaseToken: "lease-image",
+    retryFacts,
+    responseSummary: { traceId: "wechat-image-trace-71" }
+  });
+  assert.deepEqual(state.renewals.at(-1), {
+    jobId: 71,
+    leaseToken: "lease-image",
+    fromStatus: "error",
+    leaseDurationMs: 90_000
+  });
+  assert.equal(JSON.stringify(state.submissions).includes("q-signature"), false);
+});
+
+test("a retry submission failure preserves its lease for the Worker to schedule or exhaust", async () => {
+  const upstream = Object.assign(new Error("provider timeout"), {
+    code: "WECHAT_CONTENT_SECURITY_TIMEOUT"
+  });
+  const { service, state } = harness({ clientError: upstream });
+  const job = await createImageJob(service);
+  state.job.status = "error";
+  state.job.lease_token = "lease-image";
+
+  await assert.rejects(service.submitWechatImageModeration({
+    ...job,
+    status: "error",
+    leaseToken: "lease-image",
+    retryFacts: {
+      kind: "album_image",
+      mediaId: 91,
+      subjectVersion: "etag-image-91",
+      objectKey,
+      uploaderUserId: 3
+    }
+  }), { code: "WECHAT_CONTENT_SECURITY_TIMEOUT" });
+
+  assert.deepEqual(state.transitions, []);
+  assert.deepEqual(state.failures, []);
+  assert.deepEqual(state.events, []);
 });
 
 test("image job rejects oversized immutable object facts instead of truncating them", async () => {
@@ -133,28 +262,53 @@ test("missing verified uploader openid fails closed before issuing a provider UR
   );
   assert.deepEqual(state.signedFor, []);
   assert.deepEqual(state.providerCalls, []);
-  assert.equal(state.transitions.length, 1);
-  assert.deepEqual(state.transitions[0], {
+  assert.equal(state.failures.length, 1);
+  assert.deepEqual(state.failures[0], {
     jobId: 71,
-    fromStatus: "pending",
-    toStatus: "error",
-    source: "provider",
-    errorCode: "CONTENT_MODERATION_OPENID_REQUIRED"
+    leaseToken: job.initialLeaseToken,
+    attempts: 1,
+    nextRetryAt: null,
+    errorCode: "CONTENT_MODERATION_OPENID_REQUIRED",
+    exhausted: true
+  });
+  assert.deepEqual(state.events.at(-1), {
+    event: "moderation_operational_alert",
+    fields: {
+      subjectType: "album_image",
+      outcome: "operator_required",
+      errorCode: "CONTENT_MODERATION_OPENID_REQUIRED",
+      priority: "high"
+    }
   });
 });
 
 test("provider failures keep the image hidden in error and never put its signed URL in state or telemetry", async () => {
   const upstream = Object.assign(new Error("upstream timeout"), {
-    code: "WECHAT_CONTENT_SECURITY_REQUEST_FAILED"
+    code: "WECHAT_CONTENT_SECURITY_TIMEOUT"
   });
   const { service, state } = harness({ clientError: upstream });
   const job = await createImageJob(service);
 
   await assert.rejects(service.submitWechatImageModeration(job), {
-    code: "WECHAT_CONTENT_SECURITY_REQUEST_FAILED"
+    code: "WECHAT_CONTENT_SECURITY_TIMEOUT"
   });
-  assert.equal(state.transitions.length, 1);
-  assert.equal(state.transitions[0].toStatus, "error");
+  assert.equal(state.failures.length, 1);
+  assert.deepEqual(state.failures[0], {
+    jobId: 71,
+    leaseToken: job.initialLeaseToken,
+    attempts: 1,
+    nextRetryAt: new Date(31_000),
+    errorCode: "WECHAT_CONTENT_SECURITY_TIMEOUT",
+    exhausted: false
+  });
+  assert.deepEqual(state.events.at(-1), {
+    event: "moderation_submission_failure",
+    fields: {
+      subjectType: "album_image",
+      outcome: "retry_scheduled",
+      errorCode: "WECHAT_CONTENT_SECURITY_TIMEOUT"
+    }
+  });
   assert.equal(state.submissions.length, 0);
   assert.equal(JSON.stringify({ transitions: state.transitions, events: state.events }).includes("q-signature"), false);
 });

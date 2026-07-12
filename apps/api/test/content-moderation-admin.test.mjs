@@ -54,6 +54,10 @@ function harness({ subjectType = "album_image", status = "review", applyTextProp
       status: state.jobStatus,
       decided_by_admin_user_id: state.decidedByAdminUserId
     }),
+    claimInitialModerationLease: async () => {
+      return state.jobStatus === "pending";
+    },
+    renewModerationLease: async () => state.jobStatus === "pending",
     createTextProposal: async () => proposal.id,
     transitionModerationJob: async (_connection, input) => {
       state.transitions.push(input);
@@ -262,6 +266,9 @@ test("server injects provider attempts and stale proposal transition into the mo
   const serviceDefinition = source.slice(serviceStart, serviceEnd);
 
   for (const name of [
+    "claimInitialModerationLease",
+    "failModerationJob",
+    "renewModerationLease",
     "findModerationAttemptByProviderJobId",
     "findCurrentModerationAttempt",
     "markTextProposalStale"

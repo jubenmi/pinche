@@ -11,6 +11,34 @@ export const MODERATION_JOB_STATUSES = Object.freeze([
 
 export const MODERATION_PROVIDERS = Object.freeze(["wechat_sec_check", "tencent_ci_video"]);
 
+// A WeChat retry can include two bounded token refreshes and two bounded
+// content-security requests after a token-invalid response. Keep every worker
+// lease above that chain so an older worker cannot submit concurrently after a
+// newer worker reclaims its job.
+export const MODERATION_RETRY_LEASE_MIN_MS = 90_000;
+
+// The retry worker must dispatch only these exact provider / subject-type
+// pairs. Keeping the pairs explicit prevents a provider-wide SQL filter from
+// accidentally claiming an unsupported combination (for example WeChat video
+// or Tencent text) while a handler is added or changed.
+export const MODERATION_RETRY_ROUTES = Object.freeze([
+  "user_nickname",
+  "private_store",
+  "private_script",
+  "session_create",
+  "session_update",
+  "session_npc_role",
+  "session_review",
+  "session_message",
+  "session_pinned_message"
+].map((subjectType) => Object.freeze({
+  provider: "wechat_sec_check",
+  subjectType
+})).concat(Object.freeze([
+  Object.freeze({ provider: "wechat_sec_check", subjectType: "album_image" }),
+  Object.freeze({ provider: "tencent_ci_video", subjectType: "album_video" })
+])));
+
 export const MODERATION_MEDIA_VISIBLE_STATUSES = Object.freeze([
   "approved",
   "approved_legacy"

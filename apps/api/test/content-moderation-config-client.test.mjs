@@ -49,6 +49,28 @@ test("hybrid moderation config parses independent provider gates", () => {
   assert.equal(config.retryLimit, 6);
 });
 
+test("moderation retry worker configuration is bounded and keeps network timeouts below its lease", () => {
+  const config = buildContentModerationConfig(validEnv({
+    CONTENT_MODERATION_RETRY_POLL_MS: "12000",
+    CONTENT_MODERATION_RETRY_BATCH_SIZE: "12",
+    CONTENT_MODERATION_RETRY_LEASE_MS: "90000"
+  }));
+  assert.equal(config.retryPollMs, 12_000);
+  assert.equal(config.retryBatchSize, 12);
+  assert.equal(config.retryLeaseMs, 90_000);
+
+  for (const [name, value] of [
+    ["CONTENT_MODERATION_RETRY_POLL_MS", "999"],
+    ["CONTENT_MODERATION_RETRY_BATCH_SIZE", "0"],
+    ["CONTENT_MODERATION_RETRY_LEASE_MS", "89999"],
+    ["CONTENT_MODERATION_RETRY_LEASE_MS", "not-a-number"]
+  ]) {
+    assert.throws(() => buildContentModerationConfig(validEnv({ [name]: value })), {
+      code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+    });
+  }
+});
+
 test("enabled Tencent video moderation fails closed on missing production configuration", () => {
   for (const missing of [
     "TENCENT_CI_VIDEO_REGION",
@@ -320,6 +342,41 @@ test("Tencent video transport signs CI video request and parses async job", asyn
   assert.equal(JSON.stringify(calls).includes("secret-key"), false);
 });
 
+test("Tencent video response body reading shares the request deadline", async () => {
+  const config = buildContentModerationConfig(validEnv());
+  const transport = createTencentVideoModerationTransport({
+    config,
+    timeoutMs: 5,
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      text: () => new Promise(() => {})
+    })
+  });
+  const request = {
+    kind: "video",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    dataId: "d2",
+    policyId: "video-policy",
+    bucket: "bucket-123",
+    callbackUrl: config.tencentVideoCallbackUrl,
+    region: "ap-nanjing"
+  };
+
+  await assert.rejects(
+    Promise.race([
+      transport(request),
+      new Promise((_, reject) => setTimeout(
+        () => reject(Object.assign(new Error("Tencent video response body did not respect its deadline"), {
+          code: "TEST_TENCENT_VIDEO_BODY_DEADLINE"
+        })),
+        30
+      ))
+    ]),
+    { code: "TENCENT_CI_VIDEO_TIMEOUT" }
+  );
+});
+
 test("Tencent video transport fails closed on empty, mismatched, failed, or unknown submissions", async () => {
   const config = buildContentModerationConfig(validEnv());
   const request = {
@@ -371,6 +428,88 @@ test("Tencent video client rejects legacy TaskId or lower-case jobId aliases", a
       objectKey: "uploads/session-album/videos/source/a.mp4",
       dataId: "d2"
     }), { code: "CONTENT_MODERATION_UPSTREAM_RESPONSE_INVALID" });
+  }
+});
+
+test("Tencent video transport exposes safe retry taxonomy without response-body leakage", async () => {
+  const config = buildContentModerationConfig(validEnv());
+  const request = {
+    kind: "video",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    dataId: "d2",
+    policyId: "video-policy",
+    bucket: "bucket-123",
+    callbackUrl: config.tencentVideoCallbackUrl,
+    region: "ap-nanjing"
+  };
+  const cases = [
+    {
+      name: "network",
+      fetchImpl: async () => { throw new Error("socket reset on signed request"); },
+      code: "TENCENT_CI_VIDEO_NETWORK_ERROR"
+    },
+    {
+      name: "raw network errno is redacted into the retry taxonomy",
+      fetchImpl: async () => { throw Object.assign(new Error("private endpoint reset"), { code: "ECONNRESET" }); },
+      code: "TENCENT_CI_VIDEO_NETWORK_ERROR"
+    },
+    {
+      name: "timeout",
+      fetchImpl: async () => { throw Object.assign(new Error("timed out"), { name: "AbortError" }); },
+      code: "TENCENT_CI_VIDEO_TIMEOUT"
+    },
+    {
+      name: "raw timeout errno is redacted into the retry taxonomy",
+      fetchImpl: async () => { throw Object.assign(new Error("private timeout"), { code: "ETIMEDOUT" }); },
+      code: "TENCENT_CI_VIDEO_TIMEOUT"
+    },
+    {
+      name: "rate limit",
+      fetchImpl: async () => new Response("<Error><Code>RequestLimitExceeded</Code></Error>", { status: 429 }),
+      code: "TENCENT_CI_VIDEO_RATE_LIMITED"
+    },
+    {
+      name: "upstream 5xx",
+      fetchImpl: async () => new Response("<Error><Code>InternalError</Code></Error>", { status: 503 }),
+      code: "TENCENT_CI_VIDEO_UPSTREAM_5XX"
+    },
+    {
+      name: "CAM auth",
+      fetchImpl: async () => new Response("<Error><Code>AuthFailure.SecretIdNotFound</Code></Error>", { status: 403 }),
+      code: "AuthFailure"
+    },
+    {
+      name: "permission",
+      fetchImpl: async () => new Response("<Error><Code>UnauthorizedOperation.CamVerify</Code></Error>", { status: 403 }),
+      code: "UnauthorizedOperation"
+    },
+    {
+      name: "policy",
+      fetchImpl: async () => new Response("<Error><Code>InvalidParameter.BizType</Code></Error>", { status: 400 }),
+      code: "InvalidParameter.BizType"
+    },
+    {
+      name: "quota",
+      fetchImpl: async () => new Response("<Error><Code>LimitExceeded</Code></Error>", { status: 400 }),
+      code: "LimitExceeded"
+    },
+    {
+      name: "resource exhausted",
+      fetchImpl: async () => new Response("<Error><Code>ResourceUnavailable.FrequencyLimit</Code></Error>", { status: 400 }),
+      code: "ResourceUnavailable"
+    }
+  ];
+
+  for (const entry of cases) {
+    const transport = createTencentVideoModerationTransport({
+      config,
+      fetchImpl: entry.fetchImpl
+    });
+    await assert.rejects(transport(request), (error) => {
+      assert.equal(error.code, entry.code, entry.name);
+      assert.equal(`${error.message}\n${JSON.stringify(error)}`.includes("signed request"), false);
+      return true;
+    });
   }
 });
 

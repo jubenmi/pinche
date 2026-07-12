@@ -3,11 +3,14 @@ import test from "node:test";
 
 import { forbidden } from "../src/http/errors.js";
 import { createTextBaseline } from "../src/modules/content-moderation/text-baseline.js";
+import { normalizeTextFields } from "../src/modules/content-moderation/normalize.js";
 import {
   profilePatchFromProposalBody,
   profileTextSnapshot
 } from "../src/modules/content-moderation/text-profile-patch.js";
 import { createContentModerationService } from "../src/modules/content-moderation/service.js";
+import { textProposalPayloadDigest } from "../src/modules/content-moderation/text-proposal-digest.js";
+import { textMutationSubjectVersion } from "../src/modules/content-moderation/text-request-identity.js";
 
 function textHarness({
   suggestion = "pass",
@@ -16,7 +19,13 @@ function textHarness({
   applyTextProposal = null,
   jobStatus = "pending",
   proposalStatus = "pending",
-  appliedResultJson = null
+  appliedResultJson = null,
+  jobOverrides = {},
+  proposalOverrides = {},
+  afterCheck = null,
+  retryLimit = 8,
+  now = () => 1_000,
+  random = () => 0
 } = {}) {
   const state = {
     checked: [],
@@ -24,7 +33,13 @@ function textHarness({
     proposals: [],
     transitions: [],
     proposalTransitions: [],
-    applied: []
+    applied: [],
+    jobLookups: [],
+    leaseValid: true,
+    initialClaims: [],
+    renewals: [],
+    failures: [],
+    events: []
   };
   const job = {
     id: 41,
@@ -33,16 +48,27 @@ function textHarness({
     subject_version: "",
     provider: "wechat_sec_check",
     status: jobStatus,
-    decided_by_admin_user_id: null
+    decided_by_admin_user_id: null,
+    lease_token: "lease-text",
+    ...jobOverrides
   };
   const proposal = {
     id: 51,
     moderation_job_id: 41,
     status: proposalStatus,
     action: "update_session",
+    subject_type: "session_update",
+    subject_id: "12",
+    base_version: "session-v1",
+    idempotency_key: "session-update-12-request-1",
+    payload_digest: "payload-51",
+    created_by_user_id: 7,
     normalized_payload_json: JSON.stringify({ body: { note: "周末拼车" } }),
-    applied_result_json: appliedResultJson
+    applied_result_json: appliedResultJson,
+    ...proposalOverrides
   };
+  state.job = job;
+  state.proposal = proposal;
   const repository = {
     createModerationJob: async (_connection, input) => {
       state.jobs.push(input);
@@ -52,6 +78,10 @@ function textHarness({
         subject_version: input.subjectVersion,
         provider: input.provider
       });
+      if (job.status === "pending") {
+        job.attempt_count = 0;
+        job.lease_token = null;
+      }
       return { ...job };
     },
     createTextProposal: async (_connection, input) => {
@@ -61,7 +91,36 @@ function textHarness({
       proposal.base_version = input.baseVersion;
       return proposal.id;
     },
-    findModerationJobById: async () => ({ ...job }),
+    findModerationJobById: async (_connection, _id, options = {}) => {
+      state.jobLookups.push(options);
+      if (
+        options.leaseToken &&
+        (!state.leaseValid || String(options.leaseToken) !== String(job.lease_token || ""))
+      ) return null;
+      return { ...job };
+    },
+    claimInitialModerationLease: async (_connection, input) => {
+      state.initialClaims.push(input);
+      if (job.status !== "pending" || job.lease_token !== null) return false;
+      job.lease_token = input.leaseToken;
+      return true;
+    },
+    renewModerationLease: async (_connection, input) => {
+      state.renewals.push(input);
+      return (
+        state.leaseValid &&
+        String(input.leaseToken) === String(job.lease_token || "") &&
+        String(input.fromStatus) === String(job.status) &&
+        job.decided_by_admin_user_id === null
+      );
+    },
+    failModerationJob: async (_connection, input) => {
+      state.failures.push(input);
+      if (!state.leaseValid || String(input.leaseToken) !== String(job.lease_token || "")) return false;
+      job.status = "error";
+      job.lease_token = null;
+      return true;
+    },
     findTextProposalByJobId: async () => ({ ...proposal }),
     transitionModerationJob: async (_connection, input) => {
       state.transitions.push(input);
@@ -81,10 +140,11 @@ function textHarness({
     }
   };
   const service = createContentModerationService({
-    config: { enabled: true, wechatTextEnabled: true },
+    config: { enabled: true, wechatTextEnabled: true, retryLimit },
     client: {
       checkText: async (input) => {
         state.checked.push(input);
+        if (typeof afterCheck === "function") afterCheck(state);
         if (clientError) throw clientError;
         return { suggestion, label: "100", score: 1 };
       }
@@ -93,13 +153,15 @@ function textHarness({
     transaction: async (run) => run({}),
     withDatabaseConnection: async (run) => run({}),
     randomUUID: () => "00000000-0000-4000-8000-000000000045",
+    now,
+    random,
     applyTextProposal: async (_connection, input) => {
       if (typeof applyTextProposal === "function") return applyTextProposal(input, state);
       if (applyError) throw applyError;
       state.applied.push(input);
       return { id: 99, note: "周末拼车" };
     },
-    emit: () => {}
+    emit: (event, fields) => state.events.push({ event, fields })
   });
   return { service, state };
 }
@@ -197,11 +259,46 @@ function statefulTextReplayHarness() {
       state.proposals.set(Number(input.jobId), proposal);
       return proposal.id;
     },
-    findModerationJobById: async (_connection, id) => {
+    findModerationJobById: async (_connection, id, options = {}) => {
       for (const job of state.jobs.values()) {
-        if (Number(job.id) === Number(id)) return { ...job };
+        if (Number(job.id) === Number(id)) {
+          if (options.leaseToken && String(options.leaseToken) !== String(job.lease_token || "")) return null;
+          return { ...job };
+        }
       }
       return null;
+    },
+    claimInitialModerationLease: async (_connection, input) => {
+      const job = await repository.findModerationJobById(null, input.jobId);
+      if (!job || job.status !== "pending" || job.lease_token) return false;
+      for (const current of state.jobs.values()) {
+        if (Number(current.id) === Number(input.jobId)) current.lease_token = input.leaseToken;
+      }
+      return true;
+    },
+    renewModerationLease: async (_connection, input) => {
+      const job = await repository.findModerationJobById(null, input.jobId, {
+        leaseToken: input.leaseToken
+      });
+      return Boolean(
+        job &&
+        ["pending", "error"].includes(String(input.fromStatus)) &&
+        String(job.status) === String(input.fromStatus) &&
+        job.decided_by_admin_user_id === null
+      );
+    },
+    failModerationJob: async (_connection, input) => {
+      const job = await repository.findModerationJobById(null, input.jobId, {
+        leaseToken: input.leaseToken
+      });
+      if (!job) return false;
+      for (const current of state.jobs.values()) {
+        if (Number(current.id) === Number(input.jobId)) {
+          current.status = "error";
+          current.lease_token = null;
+        }
+      }
+      return true;
     },
     findTextProposalByJobId: async (_connection, id) => {
       const proposal = state.proposals.get(Number(id));
@@ -224,7 +321,10 @@ function statefulTextReplayHarness() {
       const job = await repository.findModerationJobById(null, input.jobId);
       if (!job || job.status !== input.fromStatus) return false;
       for (const current of state.jobs.values()) {
-        if (Number(current.id) === Number(input.jobId)) current.status = input.toStatus;
+        if (Number(current.id) === Number(input.jobId)) {
+          current.status = input.toStatus;
+          current.lease_token = null;
+        }
       }
       state.transitions.push(input);
       return true;
@@ -274,6 +374,13 @@ test("text pass uses the fixed scene, persists a proposal, and applies it atomic
   assert.equal(state.applied.length, 1);
   assert.equal(state.proposalTransitions[0].toStatus, "approved");
   assert.equal(state.transitions.at(-1).toStatus, "approved");
+  assert.equal(state.transitions.at(-1).leaseToken, state.initialClaims[0].leaseToken);
+  assert.deepEqual(state.renewals, [{
+    jobId: 41,
+    leaseToken: state.initialClaims[0].leaseToken,
+    fromStatus: "pending",
+    leaseDurationMs: 90_000
+  }]);
 });
 
 test("a mixed profile patch applies only after nickname text passes moderation", async () => {
@@ -405,8 +512,38 @@ test("an unavailable or unknown WeChat result remains hidden for retry", async (
   });
 
   assert.equal(state.applied.length, 0);
-  assert.equal(state.transitions.at(-1).toStatus, "error");
+  assert.equal(state.failures.at(-1).exhausted, true);
   assert.equal(state.proposalTransitions.length, 0);
+});
+
+test("initial text provider failure preserves its safe code for delayed retry without exposing it to callers", async () => {
+  const providerFailure = Object.assign(new Error("private upstream diagnostic"), {
+    code: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE"
+  });
+  const { service, state } = textHarness({ clientError: providerFailure });
+
+  await assert.rejects(service.moderateTextMutation(mutationInput()), {
+    code: "CONTENT_MODERATION_UNAVAILABLE"
+  });
+
+  assert.deepEqual(state.failures.at(-1), {
+    jobId: 41,
+    leaseToken: state.initialClaims[0].leaseToken,
+    attempts: 1,
+    nextRetryAt: new Date(31_000),
+    errorCode: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE",
+    exhausted: false
+  });
+  assert.deepEqual(state.events.at(-1), {
+    event: "moderation_operational_alert",
+    fields: {
+      subjectType: "session_update",
+      outcome: "retry_scheduled",
+      errorCode: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE",
+      priority: "high"
+    }
+  });
+  assert.equal(JSON.stringify(state.events).includes("private upstream diagnostic"), false);
 });
 
 test("text moderation rejects a missing producer openid before it can bypass WeChat", async () => {
@@ -574,15 +711,239 @@ test("a revalidation permission failure becomes stale and closes the proposal tr
   assert.equal(state.transitions.at(-1).errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
 });
 
-test("a retry that later passes uses the same hidden proposal applicator", async () => {
+test("an existing error text job is left for the leased Worker instead of resubmitting directly", async () => {
   const { service, state } = textHarness({ jobStatus: "error" });
 
-  const result = await service.moderateTextMutation(mutationInput());
+  await assert.rejects(service.moderateTextMutation(mutationInput()), {
+    code: "CONTENT_MODERATION_UNAVAILABLE"
+  });
+  assert.equal(state.checked.length, 0);
+  assert.equal(state.applied.length, 0);
+});
 
-  assert.deepEqual(result, { id: 99, note: "周末拼车" });
+test("leased text retry applies the current proposal through the same applicator after immutable revalidation", async () => {
+  const normalizedText = normalizeTextFields({ note: "周末拼车" });
+  const subjectVersion = textMutationSubjectVersion({ normalizedText });
+  const normalizedPayload = {
+    body: { note: "周末拼车" },
+    context: {},
+    actor_user_id: 7
+  };
+  const payloadDigest = textProposalPayloadDigest({
+    action: "update_session",
+    baseVersion: "session-v1",
+    normalizedText,
+    normalizedPayload
+  });
+  const { service, state } = textHarness({
+    jobStatus: "error",
+    jobOverrides: {
+      subject_id: "text-op-41",
+      subject_version: subjectVersion
+    },
+    proposalOverrides: {
+      subject_id: "text-op-41",
+      payload_digest: payloadDigest,
+      normalized_payload_json: JSON.stringify(normalizedPayload)
+    }
+  });
+
+  const result = await service.retryTextModeration({
+      job: {
+        id: 41,
+        provider: "wechat_sec_check",
+        subject_type: "session_update",
+        subject_id: "text-op-41",
+        subject_version: subjectVersion,
+        status: "error",
+        lease_token: "lease-text"
+      },
+      proposal: {
+        id: 51,
+        status: "pending",
+        subject_type: "session_update",
+        subject_id: "text-op-41",
+        action: "update_session",
+        base_version: "session-v1",
+        idempotency_key: "session-update-12-request-1",
+        payload_digest: payloadDigest,
+        created_by_user_id: 7,
+        normalized_payload_json: JSON.stringify(normalizedPayload)
+      },
+      normalizedText,
+      openid: "openid-7",
+      leaseToken: "lease-text",
+      expectedText: {
+        jobId: 41,
+        proposalId: 51,
+        subjectType: "session_update",
+        subjectId: "text-op-41",
+        subjectVersion,
+        action: "update_session",
+        actorUserId: 7,
+        baseVersion: "session-v1",
+        idempotencyKey: "session-update-12-request-1",
+        payloadDigest
+      }
+    });
+
+  assert.deepEqual(result, { kind: "approved", result: { id: 99, note: "周末拼车" } });
+  assert.equal(state.checked.length, 1);
   assert.equal(state.applied.length, 1);
-  assert.equal(state.transitions.at(-1).fromStatus, "error");
-  assert.equal(state.transitions.at(-1).toStatus, "approved");
+  assert.equal(state.jobLookups.some((options) => options.leaseToken === "lease-text"), true);
+  assert.equal(state.transitions.at(-1).leaseToken, "lease-text");
+  assert.deepEqual(state.renewals.at(-1), {
+    jobId: 41,
+    leaseToken: "lease-text",
+    fromStatus: "error",
+    leaseDurationMs: 90_000
+  });
+});
+
+test("a leased text retry with an expired lease or changed immutable version cannot apply the proposal", async () => {
+  const normalizedText = normalizeTextFields({ note: "周末拼车" });
+  const subjectVersion = textMutationSubjectVersion({ normalizedText });
+  const normalizedPayload = {
+    body: { note: "周末拼车" },
+    context: {},
+    actor_user_id: 7
+  };
+  const payloadDigest = textProposalPayloadDigest({
+    action: "update_session",
+    baseVersion: "session-v1",
+    normalizedText,
+    normalizedPayload
+  });
+  const { service, state } = textHarness({
+    jobStatus: "error",
+    jobOverrides: { subject_id: "text-op-42", subject_version: subjectVersion },
+    proposalOverrides: {
+      subject_id: "text-op-42",
+      payload_digest: payloadDigest,
+      normalized_payload_json: JSON.stringify(normalizedPayload)
+    }
+  });
+  state.leaseValid = false;
+  const baseInput = {
+    job: {
+      id: 41,
+      provider: "wechat_sec_check",
+      subject_type: "session_update",
+      subject_id: "text-op-42",
+      subject_version: subjectVersion,
+      status: "error",
+      lease_token: "lease-text"
+    },
+    proposal: {
+      id: 51,
+      status: "pending",
+      subject_type: "session_update",
+      subject_id: "text-op-42",
+      action: "update_session",
+      base_version: "session-v1",
+      idempotency_key: "session-update-12-request-1",
+      payload_digest: payloadDigest,
+      created_by_user_id: 7,
+      normalized_payload_json: JSON.stringify(normalizedPayload)
+    },
+    normalizedText,
+    openid: "openid-7",
+    leaseToken: "lease-text",
+    expectedText: {
+      jobId: 41,
+      proposalId: 51,
+      subjectType: "session_update",
+      subjectId: "text-op-42",
+      subjectVersion,
+      action: "update_session",
+      actorUserId: 7,
+      baseVersion: "session-v1",
+      idempotencyKey: "session-update-12-request-1",
+      payloadDigest
+    }
+  };
+
+  await assert.rejects(service.retryTextModeration(baseInput), {
+    code: "CONTENT_MODERATION_SUBMISSION_STALE"
+  });
+  assert.equal(state.checked.length, 0);
+  assert.equal(state.applied.length, 0);
+
+  state.leaseValid = true;
+  assert.deepEqual(await service.retryTextModeration({
+    ...baseInput,
+    normalizedText: normalizeTextFields({ note: "changed" })
+  }), { kind: "stale" });
+  assert.equal(state.applied.length, 0);
+});
+
+test("a post-network text association change cannot reach the applicator or write a result", async () => {
+  const normalizedText = normalizeTextFields({ note: "周末拼车" });
+  const subjectVersion = textMutationSubjectVersion({ normalizedText });
+  const normalizedPayload = {
+    body: { note: "周末拼车" },
+    context: {},
+    actor_user_id: 7
+  };
+  const payloadDigest = textProposalPayloadDigest({
+    action: "update_session",
+    baseVersion: "session-v1",
+    normalizedText,
+    normalizedPayload
+  });
+  const { service, state } = textHarness({
+    jobStatus: "error",
+    jobOverrides: { subject_id: "text-op-43", subject_version: subjectVersion },
+    proposalOverrides: {
+      subject_id: "text-op-43",
+      payload_digest: payloadDigest,
+      normalized_payload_json: JSON.stringify(normalizedPayload)
+    },
+    afterCheck: (current) => { current.job.subject_id = "changed-after-network"; }
+  });
+  const input = {
+    job: {
+      id: 41,
+      provider: "wechat_sec_check",
+      subject_type: "session_update",
+      subject_id: "text-op-43",
+      subject_version: subjectVersion,
+      status: "error",
+      lease_token: "lease-text"
+    },
+    proposal: {
+      id: 51,
+      status: "pending",
+      subject_type: "session_update",
+      subject_id: "text-op-43",
+      action: "update_session",
+      base_version: "session-v1",
+      idempotency_key: "session-update-12-request-1",
+      payload_digest: payloadDigest,
+      created_by_user_id: 7,
+      normalized_payload_json: JSON.stringify(normalizedPayload)
+    },
+    normalizedText,
+    openid: "openid-7",
+    leaseToken: "lease-text",
+    expectedText: {
+      jobId: 41,
+      proposalId: 51,
+      subjectType: "session_update",
+      subjectId: "text-op-43",
+      subjectVersion,
+      action: "update_session",
+      actorUserId: 7,
+      baseVersion: "session-v1",
+      idempotencyKey: "session-update-12-request-1",
+      payloadDigest
+    }
+  };
+
+  assert.deepEqual(await service.retryTextModeration(input), { kind: "stale" });
+  assert.equal(state.checked.length, 1);
+  assert.equal(state.applied.length, 0);
+  assert.equal(state.transitions.length, 0);
 });
 
 test("an approved creation request replays its safe result without creating another entity", async () => {

@@ -2,6 +2,7 @@ import {
   assertModerationTransition,
   assertTextProposalTransition
 } from "./state-machine.js";
+import { MODERATION_RETRY_LEASE_MIN_MS, MODERATION_RETRY_ROUTES } from "./constants.js";
 import { projectSafeTextAppliedResult } from "./text-applied-result.js";
 
 function lockClause(forUpdate) {
@@ -24,10 +25,67 @@ function safeAppliedResultJson(result) {
   return safe ? JSON.stringify(safe) : null;
 }
 
-export async function findModerationJobById(connection, id, { forUpdate = false } = {}) {
+const RETRY_IMAGE_OBJECT_KEY = /^uploads\/session-album\/display\/[A-Za-z0-9._-]+$/;
+const RETRY_VIDEO_OBJECT_KEY = /^uploads\/session-album\/videos\/source\/[A-Za-z0-9._-]+\.mp4$/;
+const RETRY_ROUTE_KEYS = new Set(MODERATION_RETRY_ROUTES.map((route) => (
+  `${route.provider}:${route.subjectType}`
+)));
+
+function supportedRetryRoute(job) {
+  return RETRY_ROUTE_KEYS.has(`${job?.provider}:${job?.subject_type}`);
+}
+
+function invalidRetryFacts() {
+  const error = new Error("content moderation retry facts are no longer valid");
+  error.code = "CONTENT_MODERATION_RETRY_FACTS_INVALID";
+  return error;
+}
+
+function currentRetryMediaFacts(job, media) {
+  const kind = String(job?.subject_type || "");
+  const subjectVersion = String(job?.subject_version || "");
+  const expectedMediaType = kind === "album_image" ? "image" : kind === "album_video" ? "video" : "";
+  const objectKey = String(kind === "album_image" ? media?.object_key : media?.source_url || "")
+    .replace(/^\//, "");
+  const validObjectKey = kind === "album_image"
+    ? RETRY_IMAGE_OBJECT_KEY.test(objectKey)
+    : RETRY_VIDEO_OBJECT_KEY.test(objectKey);
+  const uploaderUserId = Number(media?.uploader_user_id);
+  if (
+    !expectedMediaType ||
+    !media ||
+    Number(media.id) !== Number(job?.subject_id) ||
+    String(media.status) !== "active" ||
+    String(media.media_type) !== expectedMediaType ||
+    !["pending", "error"].includes(String(media.moderation_status)) ||
+    String(media.moderation_object_version || "") !== subjectVersion ||
+    (kind === "album_image" && String(media.object_etag || "") !== subjectVersion) ||
+    !validObjectKey ||
+    !Number.isInteger(uploaderUserId) || uploaderUserId <= 0
+  ) {
+    return null;
+  }
+  return {
+    kind,
+    mediaId: Number(media.id),
+    subjectVersion,
+    objectKey,
+    uploaderUserId
+  };
+}
+
+export async function findModerationJobById(
+  connection,
+  id,
+  { forUpdate = false, leaseToken = null } = {}
+) {
+  const hasLeaseToken = leaseToken !== null && leaseToken !== undefined;
+  const leaseClause = hasLeaseToken
+    ? " AND lease_token = ? AND lease_expires_at > CURRENT_TIMESTAMP"
+    : "";
   const [rows] = await connection.query(
-    `SELECT * FROM content_moderation_jobs WHERE id = ? LIMIT 1${lockClause(forUpdate)}`,
-    [Number(id)]
+    `SELECT * FROM content_moderation_jobs WHERE id = ?${leaseClause} LIMIT 1${lockClause(forUpdate)}`,
+    [Number(id), ...(hasLeaseToken ? [String(leaseToken)] : [])]
   );
   return rows[0] || null;
 }
@@ -118,6 +176,22 @@ export async function createModerationAttempt(connection, input) {
   };
 }
 
+async function nextModerationAttemptNo(connection, jobId) {
+  // recordModerationSubmission holds the moderation job row FOR UPDATE before
+  // reaching this query. Every attempt writer takes that same job lock, so the
+  // aggregate cannot race another attempt insert for this job. This deliberately
+  // decouples immutable provider-attempt numbering from retry attempt_count,
+  // which an administrator may decrement to allow one more claim.
+  const [rows] = await connection.query(
+    `SELECT COALESCE(MAX(attempt_no), 0) + 1 AS attempt_no
+     FROM content_moderation_provider_attempts
+     WHERE moderation_job_id = ?`,
+    [Number(jobId)]
+  );
+  const attemptNo = Number(rows[0]?.attempt_no);
+  return Number.isInteger(attemptNo) && attemptNo > 0 ? attemptNo : 1;
+}
+
 export async function createModerationJob(connection, input) {
   const [result] = await connection.query(
     `INSERT INTO content_moderation_jobs
@@ -136,6 +210,72 @@ export async function createModerationJob(connection, input) {
   return findModerationJobById(connection, result.insertId);
 }
 
+export async function claimInitialModerationLease(
+  connection,
+  { jobId, leaseToken, leaseExpiresAt } = {}
+) {
+  const token = String(leaseToken || "").trim();
+  if (!Number.isInteger(Number(jobId)) || Number(jobId) <= 0 || !token || !(leaseExpiresAt instanceof Date)) {
+    return false;
+  }
+  const [result] = await connection.query(
+    `UPDATE content_moderation_jobs
+     SET lease_token = ?, lease_expires_at = ?
+     WHERE id = ? AND status = 'pending' AND attempt_count = 0
+       AND lease_token IS NULL AND lease_expires_at IS NULL
+       AND decided_by_admin_user_id IS NULL`,
+    [token, leaseExpiresAt, Number(jobId)]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function renewModerationLease(
+  connection,
+  { jobId, leaseToken, fromStatus, leaseDurationMs = MODERATION_RETRY_LEASE_MIN_MS } = {}
+) {
+  const token = String(leaseToken || "").trim();
+  const status = String(fromStatus || "").trim();
+  const durationMs = Number(leaseDurationMs);
+  if (
+    !Number.isInteger(Number(jobId)) || Number(jobId) <= 0 ||
+    !token || !["pending", "error"].includes(status) ||
+    !Number.isFinite(durationMs) || durationMs < MODERATION_RETRY_LEASE_MIN_MS
+  ) {
+    return false;
+  }
+  const durationMicroseconds = Math.round(durationMs * 1_000);
+  const [result] = await connection.query(
+    `UPDATE content_moderation_jobs
+     SET lease_expires_at = DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? MICROSECOND)
+     WHERE id = ? AND lease_token = ? AND lease_expires_at > CURRENT_TIMESTAMP
+       AND status = ? AND status IN ('pending', 'error')
+       AND retry_exhausted_at IS NULL AND decided_by_admin_user_id IS NULL`,
+    [durationMicroseconds, Number(jobId), token, status]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+async function retrySubmissionFactsMatch(connection, job, retryFacts) {
+  if (!retryFacts) return true;
+  if (
+    String(retryFacts.kind || "") !== String(job?.subject_type || "") ||
+    Number(retryFacts.mediaId) !== Number(job?.subject_id) ||
+    String(retryFacts.subjectVersion || "") !== String(job?.subject_version || "")
+  ) {
+    return false;
+  }
+  const media = await findModerationMedia(connection, job, { forUpdate: true });
+  const current = currentRetryMediaFacts(job, media);
+  return Boolean(
+    current &&
+    current.kind === String(retryFacts.kind) &&
+    current.mediaId === Number(retryFacts.mediaId) &&
+    current.subjectVersion === String(retryFacts.subjectVersion) &&
+    current.objectKey === String(retryFacts.objectKey || "") &&
+    current.uploaderUserId === Number(retryFacts.uploaderUserId)
+  );
+}
+
 export async function recordModerationSubmission(
   connection,
   {
@@ -144,9 +284,12 @@ export async function recordModerationSubmission(
     providerJobId,
     fromStatus = "pending",
     leaseToken = null,
-    responseSummary = null
+    responseSummary = null,
+    retryFacts = null
   }
 ) {
+  const normalizedLeaseToken = String(leaseToken || "").trim();
+  if (!normalizedLeaseToken) return false;
   const job = await findModerationJobById(connection, jobId, { forUpdate: true });
   const provider = String(requestedProvider || job?.provider || "");
   const normalizedProviderJobId = String(providerJobId || "").trim();
@@ -160,32 +303,30 @@ export async function recordModerationSubmission(
   ) {
     return false;
   }
-  if (leaseToken !== null && String(job.lease_token || "") !== String(leaseToken)) {
+  if (String(job.lease_token || "") !== normalizedLeaseToken) {
     return false;
   }
+  if (!(await retrySubmissionFactsMatch(connection, job, retryFacts))) return false;
 
+  const [result] = await connection.query(
+    `UPDATE content_moderation_jobs
+     SET status = 'processing', provider_job_id = ?, submitted_at = CURRENT_TIMESTAMP,
+         attempt_count = attempt_count + 1, last_error_code = NULL,
+         next_retry_at = NULL, retry_exhausted_at = NULL,
+         lease_token = NULL, lease_expires_at = NULL
+     WHERE id = ? AND status = ? AND decided_by_admin_user_id IS NULL
+       AND (? IS NULL OR (lease_token = ? AND lease_expires_at > CURRENT_TIMESTAMP))`,
+    [normalizedProviderJobId, Number(jobId), fromStatus, normalizedLeaseToken, normalizedLeaseToken]
+  );
+  if (Number(result.affectedRows || 0) !== 1) return false;
   await retireCurrentModerationAttempt(connection, { jobId: job.id });
   await createModerationAttempt(connection, {
     jobId: job.id,
     provider,
     providerJobId: normalizedProviderJobId,
-    attemptNo: Number(job.attempt_count || 0) + 1,
+    attemptNo: await nextModerationAttemptNo(connection, job.id),
     responseSummary
   });
-  const [result] = await connection.query(
-    `UPDATE content_moderation_jobs
-     SET status = 'processing', provider_job_id = ?, submitted_at = CURRENT_TIMESTAMP,
-         attempt_count = attempt_count + 1, last_error_code = NULL,
-         next_retry_at = NULL, lease_token = NULL, lease_expires_at = NULL
-     WHERE id = ? AND status = ? AND decided_by_admin_user_id IS NULL
-       AND (? IS NULL OR lease_token = ?)`,
-    [normalizedProviderJobId, Number(jobId), fromStatus, leaseToken, leaseToken]
-  );
-  if (Number(result.affectedRows || 0) !== 1) {
-    const error = new Error("moderation submission changed concurrently");
-    error.code = "CONTENT_MODERATION_SUBMISSION_STALE";
-    throw error;
-  }
   return true;
 }
 
@@ -196,17 +337,36 @@ export async function transitionModerationJob(connection, input) {
   });
   if (input.fromStatus === input.toStatus) return false;
   const providerGuard = input.source === "admin" ? "" : " AND decided_by_admin_user_id IS NULL";
+  const leaseGuard = input.leaseToken === undefined || input.leaseToken === null
+    ? ""
+    : " AND lease_token = ? AND lease_expires_at > CURRENT_TIMESTAMP";
+  const retry = input.toStatus === "error" && input.retry && typeof input.retry === "object"
+    ? {
+      exhausted: input.retry.exhausted === true,
+      nextRetryAt: input.retry.exhausted === true ? null : input.retry.nextRetryAt,
+      attempts: input.retry.attempts === undefined ? null : Number(input.retry.attempts)
+    }
+    : null;
+  if (retry && !retry.exhausted && !(retry.nextRetryAt instanceof Date)) {
+    throw new TypeError("retry.nextRetryAt must be a Date when a moderation error is retryable");
+  }
+  if (retry && retry.attempts !== null && (!Number.isInteger(retry.attempts) || retry.attempts < 1)) {
+    throw new TypeError("retry.attempts must be a positive integer when supplied");
+  }
+  const retrySet = retry
+    ? `${retry.attempts === null ? "" : ", attempt_count = ?"}, next_retry_at = ?, retry_exhausted_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END`
+    : "";
   const adminUserId = input.source === "admin" ? Number(input.adminUserId) : null;
   const completed = ["approved", "rejected"].includes(input.toStatus);
   const [result] = await connection.query(
     `UPDATE content_moderation_jobs
      SET status = ?, suggestion = ?, label = ?, sub_label = ?, score = ?,
-         response_summary_json = ?, last_error_code = ?,
+         response_summary_json = ?, last_error_code = ?${retrySet},
          decided_by_admin_user_id = COALESCE(?, decided_by_admin_user_id),
          decision_reason = COALESCE(?, decision_reason),
          completed_at = ${completed ? "CURRENT_TIMESTAMP" : "completed_at"},
          lease_token = NULL, lease_expires_at = NULL
-     WHERE id = ? AND status = ?${providerGuard}`,
+     WHERE id = ? AND status = ?${providerGuard}${leaseGuard}`,
     [
       input.toStatus,
       input.result?.suggestion || null,
@@ -215,10 +375,16 @@ export async function transitionModerationJob(connection, input) {
       Number.isFinite(Number(input.result?.score)) ? Number(input.result.score) : null,
       input.responseSummary ? JSON.stringify(input.responseSummary) : null,
       input.errorCode || null,
+      ...(retry ? [
+        ...(retry.attempts === null ? [] : [retry.attempts]),
+        retry.nextRetryAt,
+        retry.exhausted ? 1 : 0
+      ] : []),
       adminUserId,
       input.reason || null,
       Number(input.jobId),
-      input.fromStatus
+      input.fromStatus,
+      ...(leaseGuard ? [String(input.leaseToken)] : [])
     ]
   );
   return Number(result.affectedRows || 0) === 1;
@@ -341,6 +507,62 @@ export async function findModerationMedia(connection, job, { forUpdate = false }
     [Number(job.subject_id)]
   );
   return rows[0] || null;
+}
+
+export async function rehydrateModerationRetryJob(connection, { jobId, leaseToken } = {}) {
+  const token = String(leaseToken || "");
+  if (!Number.isInteger(Number(jobId)) || Number(jobId) <= 0 || !token) return null;
+  const [jobs] = await connection.query(
+    `SELECT * FROM content_moderation_jobs
+     WHERE id = ?
+       AND status IN ('pending', 'error')
+       AND lease_token = ?
+       AND lease_expires_at > CURRENT_TIMESTAMP
+       AND retry_exhausted_at IS NULL
+       AND decided_by_admin_user_id IS NULL
+     LIMIT 1 FOR UPDATE`,
+    [Number(jobId), token]
+  );
+  const job = jobs[0] || null;
+  if (!job) return null;
+  if (!supportedRetryRoute(job)) throw invalidRetryFacts();
+
+  if (String(job.subject_type).startsWith("album_")) {
+    const media = await findModerationMedia(connection, job, { forUpdate: true });
+    const retryFacts = currentRetryMediaFacts(job, media);
+    if (!retryFacts) throw invalidRetryFacts();
+    return {
+      kind: retryFacts.kind === "album_image" ? "wechat_image" : "tencent_video",
+      job,
+      objectKey: retryFacts.objectKey,
+      uploaderUserId: retryFacts.uploaderUserId,
+      retryFacts
+    };
+  }
+
+  const proposal = await findTextProposalByJobId(connection, job.id, { forUpdate: true });
+  if (
+    !proposal ||
+    String(proposal.status) !== "pending" ||
+    Number(proposal.moderation_job_id) !== Number(job.id) ||
+    String(proposal.subject_type || "") !== String(job.subject_type) ||
+    String(proposal.subject_id || "") !== String(job.subject_id) ||
+    !String(proposal.action || "").trim() ||
+    !String(proposal.base_version || "").trim() ||
+    !String(proposal.idempotency_key || "").trim() ||
+    !String(proposal.payload_digest || "").trim() ||
+    !Number.isInteger(Number(proposal.created_by_user_id)) ||
+    Number(proposal.created_by_user_id) <= 0
+  ) {
+    throw invalidRetryFacts();
+  }
+  const [users] = await connection.query(
+    "SELECT id, open_id FROM users WHERE id = ? LIMIT 1 FOR UPDATE",
+    [Number(proposal.created_by_user_id)]
+  );
+  const actorOpenid = String(users[0]?.open_id || "").trim();
+  if (!actorOpenid) throw invalidRetryFacts();
+  return { kind: "text", job, proposal, actorOpenid };
 }
 
 export async function transitionMediaModeration(
@@ -514,18 +736,28 @@ export async function enqueueRejectedMediaCleanup(
 }
 
 export async function claimModerationRetryJobs(connection, input) {
-  const providers = Array.isArray(input.providers)
-    ? [...new Set(input.providers.map((value) => String(value || "").trim()).filter(Boolean))]
+  const allowedRoutes = new Set(MODERATION_RETRY_ROUTES.map((route) => (
+    `${route.provider}:${route.subjectType}`
+  )));
+  const routes = Array.isArray(input.routes)
+    ? input.routes.map((route) => ({
+      provider: String(route?.provider || "").trim(),
+      subjectType: String(route?.subjectType || "").trim()
+    }))
     : [];
-  const subjectTypes = Array.isArray(input.subjectTypes)
-    ? [...new Set(input.subjectTypes.map((value) => String(value || "").trim()).filter(Boolean))]
-    : [];
-  const providerFilter = providers.length > 0
-    ? ` AND job.provider IN (${providers.map(() => "?").join(", ")})`
-    : "";
-  const subjectTypeFilter = subjectTypes.length > 0
-    ? ` AND job.subject_type IN (${subjectTypes.map(() => "?").join(", ")})`
-    : "";
+  if (
+    routes.length === 0 ||
+    routes.some((route) => !allowedRoutes.has(`${route.provider}:${route.subjectType}`))
+  ) {
+    throw new TypeError("moderation retry routes must be explicit supported provider and subject-type pairs");
+  }
+  const uniqueRoutes = [...new Map(routes.map((route) => [
+    `${route.provider}:${route.subjectType}`,
+    route
+  ])).values()];
+  const routeFilter = ` AND (${uniqueRoutes.map(() => (
+    "(job.provider = ? AND job.subject_type = ?)"
+  )).join(" OR ")})`;
   const [rows] = await connection.query(
     `SELECT job.*,
             media.object_key AS media_object_key,
@@ -539,16 +771,16 @@ export async function claimModerationRetryJobs(connection, input) {
        ON proposal.moderation_job_id = job.id
      WHERE job.status IN ('pending', 'error')
        AND job.attempt_count < ?
+       AND job.retry_exhausted_at IS NULL
        AND job.decided_by_admin_user_id IS NULL
        AND (job.next_retry_at IS NULL OR job.next_retry_at <= ?)
        AND (job.lease_expires_at IS NULL OR job.lease_expires_at <= ?)
-       ${providerFilter}
-       ${subjectTypeFilter}
+       ${routeFilter}
      ORDER BY job.created_at
      LIMIT ? FOR UPDATE SKIP LOCKED`,
     [
       Number(input.retryLimit), input.now, input.now,
-      ...providers, ...subjectTypes,
+      ...uniqueRoutes.flatMap((route) => [route.provider, route.subjectType]),
       Number(input.limit)
     ]
   );
@@ -569,11 +801,14 @@ export async function failModerationJob(connection, input) {
   const [result] = await connection.query(
     `UPDATE content_moderation_jobs
      SET status = 'error', attempt_count = ?, next_retry_at = ?,
+         retry_exhausted_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
          last_error_code = ?, lease_token = NULL, lease_expires_at = NULL
-     WHERE id = ? AND lease_token = ? AND decided_by_admin_user_id IS NULL`,
+     WHERE id = ? AND lease_token = ? AND lease_expires_at > CURRENT_TIMESTAMP
+       AND retry_exhausted_at IS NULL AND decided_by_admin_user_id IS NULL`,
     [
       Number(input.attempts),
       input.exhausted ? null : input.nextRetryAt,
+      input.exhausted === true ? 1 : 0,
       String(input.errorCode || "CONTENT_MODERATION_UNAVAILABLE").slice(0, 128),
       Number(input.jobId),
       input.leaseToken
@@ -599,7 +834,9 @@ export async function requeueModerationJob(connection, { jobId, fromStatus = "er
   const [result] = await connection.query(
     `UPDATE content_moderation_jobs
      SET status = 'pending', next_retry_at = CURRENT_TIMESTAMP,
-         lease_token = NULL, lease_expires_at = NULL, last_error_code = NULL
+         retry_exhausted_at = NULL, attempt_count = GREATEST(attempt_count - 1, 0),
+         lease_token = NULL, lease_expires_at = NULL,
+         last_error_code = NULL
      WHERE id = ? AND status = ? AND decided_by_admin_user_id IS NULL`,
     [Number(jobId), fromStatus]
   );

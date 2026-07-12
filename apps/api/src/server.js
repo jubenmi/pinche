@@ -180,9 +180,11 @@ import {
   parseWechatSecureImageEvent
 } from "./modules/content-moderation/wechat-callback.js";
 import {
+  claimInitialModerationLease,
   createModerationJob,
   createTextProposal,
   enqueueRejectedMediaCleanup,
+  failModerationJob,
   findTextProposalByJobId,
   findCurrentModerationAttempt,
   findModerationAttemptByProviderJobId,
@@ -190,6 +192,7 @@ import {
   findModerationJobByDataId,
   findModerationMedia,
   recordModerationSubmission,
+  renewModerationLease,
   markTextProposalStatus,
   markTextProposalStale,
   createAuditLog,
@@ -1066,21 +1069,27 @@ const textProposalApplicator = createTextProposalApplicator({
     update_session_pinned_message: applySessionPinnedMessageProposal
   }
 });
-const contentModeration = createContentModerationService({
+// The retry worker imports this controlled runtime. server.js only calls
+// listen() behind its direct-main guard, so that import reuses the identical
+// client/COS/openid/applicator wiring without opening an HTTP listener.
+export const contentModeration = createContentModerationService({
   config: config.contentModeration,
   client: moderationClient,
   transaction: withTransaction,
   withDatabaseConnection,
   repository: {
+    claimInitialModerationLease,
     createModerationJob,
     createTextProposal,
     enqueueRejectedMediaCleanup,
+    failModerationJob,
     findTextProposalByJobId,
     findCurrentModerationAttempt,
     findModerationAttemptByProviderJobId,
     findModerationJobById,
     findModerationMedia,
     recordModerationSubmission,
+    renewModerationLease,
     markTextProposalStatus,
     markTextProposalStale,
     createAuditLog,

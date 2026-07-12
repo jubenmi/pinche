@@ -8,10 +8,15 @@ function harness({
   recordSubmissionResult = true,
   jobOverrides = {},
   mediaOverrides = {},
-  attemptOverrides = {}
+  attemptOverrides = {},
+  retryLimit = 8,
+  now = () => 1_000,
+  random = () => 0
 } = {}) {
   const state = {
-    created: [], submitted: [], transitions: [], mediaUpdates: [], cleanup: [],
+    created: [], initialClaims: [], renewals: [], submitted: [], failures: [], providerCalls: [], transitions: [], mediaUpdates: [], cleanup: [],
+    events: [],
+    transactionCalls: 0, databaseConnectionCalls: 0,
     currentAttempt: { id: 19, moderation_job_id: 7, is_current: 1, ...attemptOverrides },
     job: {
       id: 7, subject_type: "album_video", subject_id: "91", subject_version: "etag-1",
@@ -22,7 +27,29 @@ function harness({
   const repository = {
     createModerationJob: async (_connection, input) => {
       state.created.push(input);
+      Object.assign(state.job, {
+        subject_type: input.subjectType,
+        subject_id: input.subjectId,
+        subject_version: input.subjectVersion,
+        provider: input.provider,
+        status: "pending",
+        attempt_count: 0,
+        decided_by_admin_user_id: null
+      });
       return { id: 7, status: "pending", ...input };
+    },
+    claimInitialModerationLease: async (_connection, input) => {
+      state.initialClaims.push(input);
+      state.job.lease_token = input.leaseToken;
+      return true;
+    },
+    renewModerationLease: async (_connection, input) => {
+      state.renewals.push(input);
+      return (
+        String(state.job.lease_token || "") === String(input.leaseToken) &&
+        String(state.job.status) === String(input.fromStatus) &&
+        state.job.decided_by_admin_user_id === null
+      );
     },
     recordModerationSubmission: async (_connection, input) => {
       state.submitted.push(input);
@@ -34,7 +61,16 @@ function harness({
       if (input.source === "admin") state.job.decided_by_admin_user_id = input.adminUserId;
       return true;
     },
-    findModerationJobById: async () => ({ ...state.job }),
+    findModerationJobById: async (_connection, _jobId, options = {}) => {
+      if (options.leaseToken && String(state.job.lease_token || "") !== String(options.leaseToken)) return null;
+      return { ...state.job };
+    },
+    failModerationJob: async (_connection, input) => {
+      state.failures.push(input);
+      state.job.status = "error";
+      state.job.lease_token = null;
+      return true;
+    },
     findModerationMedia: async () => ({
       id: 91, session_id: 8, media_type: "video",
       source_url: "/uploads/session-album/videos/source/a.mp4",
@@ -51,16 +87,30 @@ function harness({
   });
   repository.findCurrentModerationAttempt = async () => ({ ...state.currentAttempt });
   const service = createContentModerationService({
-    config: { enabled: true, tencentVideoEnabled: true, tencentVideoPolicyId: "video-policy" },
-    client: { submitVideo: async () => {
+    config: {
+      enabled: true,
+      tencentVideoEnabled: true,
+      tencentVideoPolicyId: "video-policy",
+      retryLimit
+    },
+    client: { submitVideo: async (input) => {
+      state.providerCalls.push(input);
       if (clientError) throw clientError;
       return { JobId: "provider-job-1" };
     } },
     repository,
-    withDatabaseConnection: async (run) => run({}),
-    transaction: async (run) => run({}),
+    withDatabaseConnection: async (run) => {
+      state.databaseConnectionCalls += 1;
+      return run({});
+    },
+    transaction: async (run) => {
+      state.transactionCalls += 1;
+      return run({});
+    },
     randomUUID: () => "00000000-0000-4000-8000-000000000045",
-    emit: () => {}
+    now,
+    random,
+    emit: (event, fields) => state.events.push({ event, fields })
   });
   return { service, state };
 }
@@ -87,6 +137,27 @@ test("video job uses immutable media facts and Tencent video provider", async ()
   });
   assert.equal(state.submitted[0].providerJobId, "provider-job-1");
   assert.equal(state.submitted[0].provider, "tencent_ci_video");
+  assert.equal(state.submitted[0].leaseToken, job.initialLeaseToken);
+  assert.deepEqual(state.renewals, [{
+    jobId: 7,
+    leaseToken: job.initialLeaseToken,
+    fromStatus: "pending",
+    leaseDurationMs: 90_000
+  }]);
+});
+
+test("provider attempt rollover runs inside the repository transaction", async () => {
+  const { service, state } = harness();
+  const job = await service.createVideoJob({}, {
+    media: { id: 92 }, objectKey: "uploads/session-album/videos/source/a.mp4", subjectVersion: "etag-v"
+  });
+  const baselineTransactions = state.transactionCalls;
+  const baselineConnections = state.databaseConnectionCalls;
+
+  await service.submitVideoJob(job);
+
+  assert.equal(state.transactionCalls, baselineTransactions + 1);
+  assert.equal(state.databaseConnectionCalls, baselineConnections + 1);
 });
 
 test("video submission failure moves task to error and remains hidden", async () => {
@@ -94,7 +165,54 @@ test("video submission failure moves task to error and remains hidden", async ()
   const { service, state } = harness({ clientError: upstream });
   const job = await service.createVideoJob({}, { media: { id: 91 }, objectKey: "key", subjectVersion: "etag" });
   await assert.rejects(service.submitVideoJob(job), { code: "COS_REQUEST_TIMEOUT" });
-  assert.equal(state.transitions[0].toStatus, "error");
+  assert.deepEqual(state.failures[0], {
+    jobId: 7,
+    leaseToken: job.initialLeaseToken,
+    attempts: 1,
+    nextRetryAt: new Date(31_000),
+    errorCode: "COS_REQUEST_TIMEOUT",
+    exhausted: false
+  });
+  assert.deepEqual(state.events.at(-1), {
+    event: "moderation_submission_failure",
+    fields: {
+      subjectType: "album_video",
+      outcome: "retry_scheduled",
+      errorCode: "COS_REQUEST_TIMEOUT"
+    }
+  });
+});
+
+test("a retried video submission failure leaves its lease for Worker retry bookkeeping", async () => {
+  const upstream = Object.assign(new Error("timeout"), { code: "TENCENT_CI_VIDEO_TIMEOUT" });
+  const { service, state } = harness({ clientError: upstream });
+  const job = await service.createVideoJob({}, {
+    media: { id: 91 }, objectKey: "uploads/session-album/videos/source/a.mp4", subjectVersion: "etag"
+  });
+  state.job.status = "error";
+  state.job.lease_token = "lease-video";
+
+  await assert.rejects(service.submitVideoJob({
+    ...job,
+    status: "error",
+    leaseToken: "lease-video",
+    retryFacts: {
+      kind: "album_video",
+      mediaId: 91,
+      subjectVersion: "etag",
+      objectKey: "uploads/session-album/videos/source/a.mp4",
+      uploaderUserId: 7
+    }
+  }), { code: "TENCENT_CI_VIDEO_TIMEOUT" });
+
+  assert.deepEqual(state.transitions, []);
+  assert.deepEqual(state.failures, []);
+  assert.deepEqual(state.renewals.at(-1), {
+    jobId: 7,
+    leaseToken: "lease-video",
+    fromStatus: "error",
+    leaseDurationMs: 90_000
+  });
 });
 
 test("video submission treats an unrecorded provider attempt as a hidden failure", async () => {
@@ -109,8 +227,7 @@ test("video submission treats an unrecorded provider attempt as a hidden failure
     code: "CONTENT_MODERATION_SUBMISSION_STALE"
   });
   assert.equal(state.submitted.length, 1);
-  assert.equal(state.transitions.length, 1);
-  assert.equal(state.transitions[0].toStatus, "error");
+  assert.equal(state.failures.length, 0);
 });
 
 for (const [decision, expectedStatus] of [["pass", "approved"], ["review", "review"], ["block", "rejected"]]) {
@@ -144,6 +261,71 @@ test("an unknown Tencent decision transitions the current video to the unified h
   assert.equal(state.transitions[0].toStatus, "error");
   assert.equal(state.transitions[0].errorCode, "CONTENT_MODERATION_INVALID_RESPONSE");
   assert.equal(state.mediaUpdates[0].toStatus, "error");
+});
+
+test("a provider callback error persists delayed retry state while media remains hidden", async () => {
+  const { service, state } = harness({
+    jobOverrides: { attempt_count: 1 },
+    retryLimit: 3
+  });
+
+  const result = await service.applyMediaResult({
+    jobId: 7,
+    provider: "tencent_ci_video",
+    providerJobId: "current-video-job",
+    subjectVersion: "etag-1",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    result: { decision: "error", suggestion: "provider-failed" }
+  });
+
+  assert.equal(result.status, "error");
+  assert.deepEqual(state.transitions[0].retry, {
+    nextRetryAt: new Date(31_000),
+    exhausted: false
+  });
+  assert.deepEqual(state.mediaUpdates[0], {
+    mediaId: 91,
+    fromStatuses: ["pending", "error"],
+    toStatus: "error"
+  });
+  assert.deepEqual(state.events.at(-1), {
+    event: "moderation_submission_failure",
+    fields: {
+      subjectType: "album_video",
+      outcome: "retry_scheduled",
+      errorCode: "CONTENT_MODERATION_INVALID_RESPONSE"
+    }
+  });
+});
+
+test("a provider callback error at the retry limit persists exhaustion and raises a high alert", async () => {
+  const { service, state } = harness({
+    jobOverrides: { attempt_count: 3 },
+    retryLimit: 3
+  });
+
+  await service.applyMediaResult({
+    jobId: 7,
+    provider: "tencent_ci_video",
+    providerJobId: "current-video-job",
+    subjectVersion: "etag-1",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    result: { decision: "error", suggestion: "provider-failed" }
+  });
+
+  assert.deepEqual(state.transitions[0].retry, {
+    nextRetryAt: null,
+    exhausted: true
+  });
+  assert.deepEqual(state.events.at(-1), {
+    event: "moderation_retry_exhausted",
+    fields: {
+      subjectType: "album_video",
+      outcome: "operator_required",
+      errorCode: "CONTENT_MODERATION_INVALID_RESPONSE",
+      priority: "high"
+    }
+  });
 });
 
 function wechatImageResult(decision = "pass") {

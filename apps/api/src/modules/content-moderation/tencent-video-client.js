@@ -12,6 +12,18 @@ const ACCEPTED_SUBMISSION_STATES = new Set([
   "Success"
 ]);
 const VIDEO_SOURCE_OBJECT_KEY = /^uploads\/session-album\/videos\/source\/[A-Za-z0-9._-]+\.mp4$/;
+const TENCENT_OPERATIONAL_ERROR_PREFIXES = Object.freeze([
+  ["AuthFailure", "AuthFailure"],
+  ["UnauthorizedOperation", "UnauthorizedOperation"],
+  ["InvalidParameter.BizType", "InvalidParameter.BizType"],
+  ["LimitExceeded", "LimitExceeded"],
+  ["ResourceUnavailable", "ResourceUnavailable"],
+  ["FailedOperation.BalanceNotEnough", "FailedOperation.BalanceNotEnough"]
+]);
+const SAFE_TRANSPORT_ERROR_CODES = new Set([
+  "CONTENT_MODERATION_RESPONSE_TOO_LARGE",
+  "CONTENT_MODERATION_UPSTREAM_RESPONSE_INVALID"
+]);
 
 function configurationError(message) {
   const error = new Error(message);
@@ -60,8 +72,65 @@ function transportError(statusCode, code = "CONTENT_MODERATION_UPSTREAM_ERROR") 
   return error;
 }
 
+function createRequestDeadline(timeoutMs) {
+  const controller = new AbortController();
+  const timeoutError = transportError(undefined, "TENCENT_CI_VIDEO_TIMEOUT");
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+  return {
+    signal: controller.signal,
+    isTimeout(error) {
+      return error === timeoutError;
+    },
+    run(operation) {
+      if (controller.signal.aborted) {
+        const aborted = Promise.reject(timeoutError);
+        aborted.catch(() => {});
+        return aborted;
+      }
+      const operationPromise = Promise.resolve().then(() => {
+        if (controller.signal.aborted) throw timeoutError;
+        return operation();
+      });
+      operationPromise.catch(() => {});
+      const raced = Promise.race([operationPromise, timeout]);
+      raced.catch(() => {});
+      return raced;
+    },
+    close() {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    }
+  };
+}
+
 function invalidSubmissionResponse() {
   return transportError(502, "CONTENT_MODERATION_UPSTREAM_RESPONSE_INVALID");
+}
+
+function safeTencentOperationalErrorCode(value) {
+  const providerCode = String(value || "").trim();
+  if (!/^[A-Za-z][A-Za-z0-9.]{0,127}$/.test(providerCode)) return "";
+  for (const [prefix, normalized] of TENCENT_OPERATIONAL_ERROR_PREFIXES) {
+    if (providerCode === prefix || providerCode.startsWith(`${prefix}.`)) return normalized;
+  }
+  return "";
+}
+
+function responseTransportError(response, responseBody) {
+  const providerCode = safeTencentOperationalErrorCode(xmlTag(responseBody, "Code"));
+  if (providerCode) return transportError(response.status, providerCode);
+  if (Number(response.status) === 429) {
+    return transportError(response.status, "TENCENT_CI_VIDEO_RATE_LIMITED");
+  }
+  if (Number(response.status) >= 500 && Number(response.status) <= 599) {
+    return transportError(response.status, "TENCENT_CI_VIDEO_UPSTREAM_5XX");
+  }
+  return transportError(response.status, "CONTENT_MODERATION_UPSTREAM_RESPONSE_INVALID");
 }
 
 function boundedResponseIdentifier(value) {
@@ -117,6 +186,9 @@ export function createTencentVideoModerationTransport({
   timeoutMs = 15_000
 }) {
   if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required");
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs >= 30_000) {
+    throw new TypeError("timeoutMs must be a positive duration shorter than the retry lease");
+  }
   return async function transport(request) {
     if (request.kind !== "video") throw new TypeError("only Tencent video moderation is supported");
     requiredVideoSourceObjectKey(request.objectKey);
@@ -139,14 +211,29 @@ export function createTencentVideoModerationTransport({
       headers,
       config: { secretId: config.secretId, secretKey: config.secretKey }
     });
-    const response = await fetchImpl(`https://${host}/${endpoint}`, {
-      method: "POST",
-      headers: { ...headers, authorization },
-      body,
-      signal: AbortSignal.timeout(timeoutMs)
-    });
-    const responseBody = await readBounded(response);
-    if (!response.ok) throw transportError(response.status);
+    const deadline = createRequestDeadline(timeoutMs);
+    let response;
+    let responseBody;
+    try {
+      response = await deadline.run(() => fetchImpl(`https://${host}/${endpoint}`, {
+        method: "POST",
+        headers: { ...headers, authorization },
+        body,
+        signal: deadline.signal
+      }));
+      responseBody = await deadline.run(() => readBounded(response));
+    } catch (error) {
+      if (SAFE_TRANSPORT_ERROR_CODES.has(error?.code)) throw error;
+      const code = deadline.isTimeout(error) || deadline.signal.aborted ||
+        ["AbortError", "TimeoutError"].includes(error?.name) ||
+        ["ETIMEDOUT", "ABORT_ERR"].includes(error?.code)
+        ? "TENCENT_CI_VIDEO_TIMEOUT"
+        : "TENCENT_CI_VIDEO_NETWORK_ERROR";
+      throw transportError(undefined, code);
+    } finally {
+      deadline.close();
+    }
+    if (!response.ok) throw responseTransportError(response, responseBody);
     return validateTencentVideoSubmission({
       JobId: xmlTag(responseBody, "JobId"),
       State: xmlTag(responseBody, "State"),
