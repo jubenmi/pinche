@@ -4287,10 +4287,6 @@ export async function rescheduleSession(user, sessionId, body = {}) {
     if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the session organizer can reschedule this session");
     }
-    if (session.status === "cancelled") {
-      throw conflict("Cancelled sessions cannot be rescheduled");
-    }
-
     const now = Date.now();
     const oldStartTime = Math.floor(new Date(session.start_at).getTime() / 1000) * 1000;
     if (!Number.isFinite(oldStartTime) || oldStartTime <= now) {

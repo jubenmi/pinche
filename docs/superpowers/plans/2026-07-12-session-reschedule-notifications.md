@@ -139,7 +139,7 @@ Update `sessions.start_at`, then insert one `session_rescheduled` row per dedupl
 }
 ```
 
-Use dedupe key `session-rescheduled:<sessionId>:<normalizedStartAt>` and return the updated session plus recipient `userId`/`openid` records to the outer scope.
+Use one operation-scoped dedupe key `session-rescheduled:<sessionId>:<operationId>` shared by all recipient inserts, and return the updated session plus recipient `userId`/`openid` records to the outer scope. Generate `operationId` once per successful transaction so retries that roll back remain harmless while a later legitimate reschedule back to an earlier time (for example B→A) still creates new notifications.
 
 - [ ] **Step 5: Add the dedicated route**
 

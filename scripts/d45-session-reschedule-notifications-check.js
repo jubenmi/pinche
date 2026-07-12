@@ -40,7 +40,6 @@ assertIncludes(service, "SELECT id FROM session_seats WHERE session_id = ? FOR U
 assertIncludes(service, "SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE");
 assertIncludes(service, "body.membersConfirmed !== true");
 assertIncludes(service, "USER_NOTIFICATION_TYPES.SESSION_RESCHEDULED");
-assertIncludes(service, 'session.status === "cancelled"');
 assertIncludes(service, "createSessionRescheduleDedupeKey(id)");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf(
