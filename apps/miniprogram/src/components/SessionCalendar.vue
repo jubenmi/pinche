@@ -392,7 +392,7 @@ const cityLocationActionText = computed(() =>
 );
 const calendarEmptyTitle = computed(() => {
   if (activeCalendarFilter.value === "guest") {
-    return "今天还没有公开车局";
+    return "暂无公开车局";
   }
   if (activeCalendarFilter.value !== "city") {
     return "今天还没有你的车局";
@@ -404,7 +404,7 @@ const calendarEmptyTitle = computed(() => {
 });
 const calendarEmptyBody = computed(() => {
   if (activeCalendarFilter.value === "guest") {
-    return "下一场公开车局发布后，会出现在日期轴上";
+    return "新的公开车局发布后，会显示在这里";
   }
   if (activeCalendarFilter.value === "mine") {
     return "创建或加入车局后，会按日期出现在这里";
@@ -1572,7 +1572,7 @@ function signupStatusLabel(status) {
 
 .calendar-empty-day-band {
   position: relative;
-  min-height: 650rpx;
+  min-height: 680rpx;
   margin-top: 14rpx;
 }
 
@@ -1583,16 +1583,19 @@ function signupStatusLabel(status) {
 .calendar-empty-day-card {
   position: relative;
   overflow: hidden;
-  min-height: 610rpx;
+  min-height: 640rpx;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .calendar-empty-day-art {
   position: absolute;
-  right: -70rpx;
-  bottom: -34rpx;
-  width: 560rpx;
-  height: 290rpx;
-  opacity: 0.11;
+  right: -48rpx;
+  bottom: -20rpx;
+  width: 660rpx;
+  height: 330rpx;
+  opacity: 0.1;
 }
 
 .calendar-empty-day-content {
@@ -1602,8 +1605,8 @@ function signupStatusLabel(status) {
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  min-height: 610rpx;
-  padding: 56rpx 32rpx 82rpx;
+  min-height: 640rpx;
+  padding: 72rpx 12rpx 150rpx 30rpx;
   box-sizing: border-box;
   text-align: center;
 }
@@ -1611,24 +1614,25 @@ function signupStatusLabel(status) {
 .calendar-empty-day-title {
   color: #175f4d;
   font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
-  font-size: 36rpx;
+  font-size: 40rpx;
   font-weight: 700;
   line-height: 1.36;
   letter-spacing: 1rpx;
 }
 
 .calendar-empty-day-text {
-  max-width: 430rpx;
-  margin-top: 18rpx;
+  width: 100%;
+  margin-top: 20rpx;
   color: #746f67;
-  font-size: 24rpx;
+  font-size: 22rpx;
   line-height: 1.65;
+  white-space: nowrap;
 }
 
 .calendar-empty-day-refresh {
   width: 268rpx;
   height: 72rpx;
-  margin: 46rpx 0 0;
+  margin: 48rpx 0 0;
   padding: 0 20rpx;
   border: 1rpx solid rgba(36, 116, 95, 0.52);
   border-radius: 12rpx;

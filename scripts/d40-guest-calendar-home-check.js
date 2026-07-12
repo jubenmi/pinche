@@ -102,8 +102,8 @@ for (const token of [
   'class="timeline-rail"',
   'class="day-marker">今</view>',
   'class="day-card calendar-empty-day-card"',
-  "今天还没有公开车局",
-  "下一场公开车局发布后，会出现在日期轴上",
+  "暂无公开车局",
+  "新的公开车局发布后，会显示在这里",
   "刷新车局",
   '@tap="refreshCalendar"',
   '/static/icons/return-green.svg',
@@ -112,12 +112,27 @@ for (const token of [
 ]) {
   assert(calendar.includes(token), `D40 empty state must reuse the real day-band timeline: ${token}`);
 }
+for (const token of [
+  ".calendar-empty-day-card {",
+  "border: 0;",
+  "border-radius: 0;",
+  "background: transparent;",
+  "white-space: nowrap;"
+]) {
+  assert(calendar.includes(token), `D40 selected empty-state polish must include: ${token}`);
+}
 assert(
   calendar.includes('v-if="filteredCalendarItems.length > 0"') &&
     !calendar.includes(':description="calendarEmptyText"'),
   "D40 empty calendar must replace the generic empty node and hide the redundant load-more footer"
 );
-for (const token of ["calendar-empty-route-axis", "emptyDateTicks", "选择其他日期"]) {
+for (const token of [
+  "calendar-empty-route-axis",
+  "emptyDateTicks",
+  "选择其他日期",
+  "今天还没有公开车局",
+  "下一场公开车局发布后，会出现在日期轴上"
+]) {
   assert(!calendar.includes(token), `D40 empty state must remove the parallel timeline feature: ${token}`);
 }
 assert(
