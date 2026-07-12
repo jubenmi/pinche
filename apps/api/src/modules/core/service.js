@@ -4294,12 +4294,47 @@ export async function rescheduleSession(user, sessionId, body = {}) {
     settledResults
   );
   if (notificationDelivery.failed > 0) {
-    console.warn("notifySessionRescheduled failed", {
-      failed: notificationDelivery.failed,
-      recipients: notificationDelivery.recipients
-    });
+    for (const diagnostic of sessionRescheduleDeliveryDiagnostics(settledResults)) {
+      console.warn("notifySessionRescheduled failed", diagnostic);
+    }
   }
   return { ...result, notificationDelivery };
+}
+
+function safeDeliveryErrorCode(value) {
+  const text = String(value ?? "");
+  return /^[A-Za-z0-9_-]{1,40}$/.test(text) ? value : undefined;
+}
+
+export function sessionRescheduleDeliveryDiagnostics(settledResults) {
+  const diagnostics = [];
+  settledResults.forEach((settled, index) => {
+    if (settled.status === "rejected") {
+      diagnostics.push({
+        index,
+        scene: "session_rescheduled",
+        ...(safeDeliveryErrorCode(settled.reason?.code) === undefined
+          ? {}
+          : { errorCode: safeDeliveryErrorCode(settled.reason.code) }),
+        message:
+          settled.reason?.name === "AbortError"
+            ? "notification request timed out"
+            : "notification request failed",
+        reason: "rejected"
+      });
+    } else if (!settled.value?.ok) {
+      diagnostics.push({
+        index,
+        scene: settled.value?.scene || "session_rescheduled",
+        ...(safeDeliveryErrorCode(settled.value?.errorCode) === undefined
+          ? {}
+          : { errorCode: safeDeliveryErrorCode(settled.value.errorCode) }),
+        message: "WeChat API request failed",
+        reason: "api_error"
+      });
+    }
+  });
+  return diagnostics;
 }
 
 export function summarizeSessionRescheduleDeliveries(recipients, settledResults) {

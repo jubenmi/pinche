@@ -9,11 +9,20 @@ const productionEnvExample = readFileSync(
   new URL("../.env.production.example", import.meta.url),
   "utf8"
 );
+const developmentEnvExample = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
 
 assert.equal(
   config.subscribeMessage.sessionRescheduledTemplateId,
   process.env.WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID || "",
   "rescheduled subscription template id should map from the environment"
+);
+assert(
+  developmentEnvExample.includes("WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID="),
+  "development env example should document the reschedule template id"
+);
+assert(
+  productionEnvExample.includes("WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID="),
+  "production env example should document the reschedule template id"
 );
 
 assert.equal(

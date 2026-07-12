@@ -26,6 +26,11 @@ const subscribeMessage = readFileSync(
   new URL("../apps/api/src/modules/wechat/subscribe-message.js", import.meta.url),
   "utf8"
 );
+const envExample = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
+const productionEnvExample = readFileSync(
+  new URL("../.env.production.example", import.meta.url),
+  "utf8"
+);
 
 assertIncludes(migration, "CREATE TABLE IF NOT EXISTS user_notifications");
 assertIncludes(
@@ -50,12 +55,16 @@ assertIncludes(service, "USER_NOTIFICATION_TYPES.SESSION_RESCHEDULED");
 assertIncludes(service, "createSessionRescheduleDedupeKey(id)");
 assertIncludes(env, "WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID");
 assertIncludes(env, "sessionRescheduledTemplateId");
+assertIncludes(envExample, "WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID=");
+assertIncludes(productionEnvExample, "WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID=");
 assertIncludes(subscribeMessage, "export async function notifySessionRescheduled");
 assertIncludes(subscribeMessage, 'scene: "session_rescheduled"');
 assertIncludes(subscribeMessage, "rescheduleMessageData");
 assertIncludes(subscribeMessage, 'valueOrFallback(payload.scriptName, "拼车车局")');
-assertIncludes(subscribeMessage, 'rescheduleDate(payload.oldStartAt, "原时间待定")');
-assertIncludes(subscribeMessage, 'rescheduleDate(payload.newStartAt, "新时间待定")');
+assertIncludes(subscribeMessage, 'formatSessionRescheduleTime(payload.oldStartAt, "原时间待定")');
+assertIncludes(subscribeMessage, 'formatSessionRescheduleTime(payload.newStartAt, "新时间待定")');
+assertIncludes(subscribeMessage, 'timeZone: "Asia/Shanghai"');
+assertIncludes(subscribeMessage, "AbortSignal.timeout");
 assertIncludes(subscribeMessage, 'value: "车局已改期"');
 assertIncludes(subscribeMessage, "`/pages/session/detail?id=${payload.sessionId}`");
 assertIncludes(service, "notifySessionRescheduled");

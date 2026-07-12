@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   rescheduleSessionInTransaction,
+  sessionRescheduleDeliveryDiagnostics,
   summarizeSessionRescheduleDeliveries
 } from "../src/modules/core/service.js";
 import { sessionRescheduleResponse } from "../src/modules/core/session-reschedule.js";
@@ -56,6 +57,32 @@ test("unauthorized reschedule rejects before locks or mutation", async () => {
     { code: "FORBIDDEN" }
   );
   assert.equal(connection.calls.length, 1);
+});
+
+test("delivery diagnostics are per-result and redact sensitive error content", () => {
+  const settled = [
+    {
+      status: "fulfilled",
+      value: { ok: false, scene: "session_rescheduled", errorCode: 43101, error: "user refuse" }
+    },
+    {
+      status: "rejected",
+      reason: new Error("fetch https://api.weixin.qq.com/send?access_token=secret-token failed")
+    }
+  ];
+  const diagnostics = sessionRescheduleDeliveryDiagnostics(settled);
+  assert.deepEqual(diagnostics[0], {
+    index: 0,
+    scene: "session_rescheduled",
+    errorCode: 43101,
+    message: "WeChat API request failed",
+    reason: "api_error"
+  });
+  assert.equal(diagnostics[1].index, 1);
+  assert.equal(diagnostics[1].scene, "session_rescheduled");
+  assert.equal(diagnostics[1].reason, "rejected");
+  assert.equal(diagnostics[1].message.includes("secret-token"), false);
+  assert.equal(diagnostics[1].message.includes("api.weixin.qq.com"), false);
 });
 
 test("uses the database lifecycle flag before child locks or mutation", async () => {

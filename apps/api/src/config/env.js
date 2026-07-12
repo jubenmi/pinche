@@ -199,7 +199,8 @@ export const config = {
     signupCreatedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_CREATED || "",
     signupReviewedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED || "",
     sessionRescheduledTemplateId:
-      process.env.WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID || ""
+      process.env.WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID || "",
+    timeoutMs: integerEnv("WECHAT_SUBSCRIBE_MESSAGE_TIMEOUT_MS", 8000)
   },
   map: {
     tencentKey:
