@@ -1,3 +1,4 @@
+import COS from "cos-wx-sdk-v5/index.js";
 import { showActionSheet, showModal, showToast } from "./tdesignFeedback.js";
 
 const TOKEN_KEY = "pinche_token";
@@ -486,8 +487,7 @@ function readFileAsArrayBuffer(filePath) {
 }
 
 async function loadCosSdk() {
-  const module = require("cos-wx-sdk-v5/index.js");
-  return module.default || module;
+  return COS;
 }
 
 async function getCosClient() {

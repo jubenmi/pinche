@@ -12,12 +12,14 @@
 
 ### Task 1: 建立最终构建包失败门禁
 
+进度：已完成；门禁已通过红—绿验证，可捕获最终包中的裸模块 `require`。
+
 **Files:**
 - Create: `apps/miniprogram/test/cosSdkBundle.test.mjs`
 - Inspect: `apps/miniprogram/dist/build/mp-weixin/utils/api.js`
 - Inspect: `apps/miniprogram/dist/build/mp-weixin/common/vendor.js`
 
-- [ ] **Step 1: 写最终构建包检查**
+- [x] **Step 1: 写最终构建包检查**
 
 ```js
 import assert from "node:assert/strict";
@@ -38,13 +40,13 @@ test("production bundle resolves the COS SDK at build time", async () => {
 });
 ```
 
-- [ ] **Step 2: 用当前生产构建验证测试确实失败**
+- [x] **Step 2: 用当前生产构建验证测试确实失败**
 
 Run: `node --test test/cosSdkBundle.test.mjs`
 
 Expected: FAIL，指出 `dist/build/mp-weixin/utils/api.js` 仍包含 `require("cos-wx-sdk-v5/index.js")`。
 
-- [ ] **Step 3: 把该测试加入相册媒体测试脚本**
+- [x] **Step 3: 把该测试加入相册媒体测试脚本**
 
 将 `apps/miniprogram/package.json` 中脚本改为：
 
@@ -54,12 +56,16 @@ Expected: FAIL，指出 `dist/build/mp-weixin/utils/api.js` 仍包含 `require("
 
 ### Task 2: 改为构建期静态解析
 
+进度：已完成；源码已改为静态 ESM import，源码级测试通过。
+
+执行备注：静态 import 会让 Node 单测加载 COS SDK；SDK 顶层读取 `wx.getFileSystemManager()`，因此测试在动态导入被测模块前提供最小 `wx` 桩。该调整仅修复测试环境，不改变生产逻辑。
+
 **Files:**
 - Modify: `apps/miniprogram/src/utils/api.js`
 - Modify: `apps/miniprogram/test/albumPhotoUpload.test.mjs`
 - Modify: `scripts/d17-cos-storage-check.js`
 
-- [ ] **Step 1: 更新源码级测试表达期望导入方式**
+- [x] **Step 1: 更新源码级测试表达期望导入方式**
 
 把现有 COS SDK 测试改为匹配顶层静态导入，并同时禁止动态 import 和运行时 require：
 
@@ -71,13 +77,13 @@ assert.doesNotMatch(source, /require\("cos-wx-sdk-v5\/index\.js"\)/);
 
 同步修改 `scripts/d17-cos-storage-check.js` 的三项断言。
 
-- [ ] **Step 2: 运行源码级测试并确认失败**
+- [x] **Step 2: 运行源码级测试并确认失败**
 
 Run: `node --test test/albumPhotoUpload.test.mjs`
 
 Expected: FAIL，当前源码没有静态 ESM import。
 
-- [ ] **Step 3: 实施最小静态导入**
+- [x] **Step 3: 实施最小静态导入**
 
 在 `apps/miniprogram/src/utils/api.js` 顶层加入：
 
@@ -93,7 +99,7 @@ async function loadCosSdk() {
 }
 ```
 
-- [ ] **Step 4: 运行源码级测试并确认通过**
+- [x] **Step 4: 运行源码级测试并确认通过**
 
 Run: `node --test test/albumPhotoUpload.test.mjs`
 
@@ -101,22 +107,24 @@ Expected: PASS。
 
 ### Task 3: 重建并验证交付包
 
+进度：已完成；生产构建、最终包检查和相关回归检查均通过。
+
 **Files:**
 - Generate: `apps/miniprogram/dist/build/mp-weixin/**`（忽略的构建产物）
 
-- [ ] **Step 1: 执行生产构建**
+- [x] **Step 1: 执行生产构建**
 
 Run: `npm run build:mp-weixin`
 
 Expected: exit 0，输出 `DONE Build complete.`。
 
-- [ ] **Step 2: 运行最终构建包回归测试**
+- [x] **Step 2: 运行最终构建包回归测试**
 
 Run: `node --test test/cosSdkBundle.test.mjs`
 
 Expected: PASS，`utils/api.js` 不再包含 COS 包名，vendor chunk 包含 SDK 标识。
 
-- [ ] **Step 3: 运行相关回归检查**
+- [x] **Step 3: 运行相关回归检查**
 
 Run: `npm run test:album-media`
 
@@ -126,7 +134,7 @@ Run: `node scripts/d17-cos-storage-check.js`
 
 Expected: 输出 `D17 COS storage check passed`。
 
-- [ ] **Step 4: 检查变更范围并提交**
+- [x] **Step 4: 检查变更范围并提交**
 
 Run: `git diff --check && git status --short`
 
