@@ -98,26 +98,28 @@ assert(
 );
 assert(calendar.includes("近期车局"), "D40 guest calendar filter must be labelled 近期车局");
 for (const token of [
-  'class="calendar-empty-route"',
+  'class="day-band today calendar-empty-day-band"',
+  'class="timeline-rail"',
+  'class="day-marker">今</view>',
+  'class="day-card calendar-empty-day-card"',
   "今天还没有公开车局",
   "下一场公开车局发布后，会出现在日期轴上",
   "刷新车局",
-  "选择其他日期",
   '@tap="refreshCalendar"',
-  '@tap="openCalendarDatePicker"',
   '/static/icons/return-green.svg',
-  '/static/icons/calendar-green.svg',
   '/static/art/ink-home-landscape.jpg',
-  "emptyDateTicks",
-  "addDays"
+  "calendar-empty-day-content"
 ]) {
-  assert(calendar.includes(token), `D40 route-timeline empty state must reuse: ${token}`);
+  assert(calendar.includes(token), `D40 empty state must reuse the real day-band timeline: ${token}`);
 }
 assert(
   calendar.includes('v-if="filteredCalendarItems.length > 0"') &&
     !calendar.includes(':description="calendarEmptyText"'),
   "D40 empty calendar must replace the generic empty node and hide the redundant load-more footer"
 );
+for (const token of ["calendar-empty-route-axis", "emptyDateTicks", "选择其他日期"]) {
+  assert(!calendar.includes(token), `D40 empty state must remove the parallel timeline feature: ${token}`);
+}
 assert(
   calendar.includes("/pages/session/detail?id=${id}&entry=guest"),
   "D40 guest cards must mark the detail entry as guest"
