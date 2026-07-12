@@ -6,6 +6,8 @@ import {
   canRescheduleSession,
   formatSessionStartAt,
   parseSessionStartAt,
+  rescheduleErrorRequiresRefresh,
+  rescheduleErrorText,
   validateRescheduleSelection
 } from "../src/utils/sessionReschedule.js";
 
@@ -81,4 +83,34 @@ test("buildRescheduleConfirmation uses ordinary copy without recipients", () => 
   });
   assert.doesNotMatch(confirmation, /通知将发送/);
   assert.match(confirmation, /确认将车局时间从/);
+});
+
+test("normalized 409 started errors trigger refresh and direct guidance", () => {
+  const error = Object.assign(new Error("Past or started sessions cannot be rescheduled"), {
+    statusCode: 409,
+    code: "CONFLICT"
+  });
+  assert.equal(rescheduleErrorRequiresRefresh(error), true);
+  assert.equal(rescheduleErrorText(error), "车局已经开始，不能再改期；页面已刷新。");
+});
+
+test("normalized confirmation and time errors map to direct guidance", () => {
+  const confirmation = Object.assign(
+    new Error("Member confirmation is required before rescheduling"),
+    { statusCode: 409, code: "CONFLICT" }
+  );
+  const past = Object.assign(new Error("startAt must be in the future"), {
+    statusCode: 400,
+    code: "BAD_REQUEST"
+  });
+  const unchanged = Object.assign(new Error("startAt must change by at least one second"), {
+    statusCode: 400,
+    code: "BAD_REQUEST"
+  });
+  assert.equal(
+    rescheduleErrorText(confirmation),
+    "已上车成员发生变化，请重新确认改期和通知人数。"
+  );
+  assert.equal(rescheduleErrorText(past), "新时间必须晚于当前时间，请重新选择。");
+  assert.equal(rescheduleErrorText(unchanged), "新时间与当前时间相同，请重新选择。");
 });

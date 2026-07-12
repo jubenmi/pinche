@@ -76,3 +76,28 @@ export function buildRescheduleConfirmation({ memberCount = 0, oldStartAt, newSt
   }
   return `确认将车局时间从 ${oldTime} 改为 ${newTime} 吗？`;
 }
+
+export function rescheduleErrorRequiresRefresh(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return error?.statusCode === 409 && /past|started/.test(message);
+}
+
+export function rescheduleErrorText(error) {
+  const message = String(error?.message || "").toLowerCase();
+  if (error?.statusCode === 409 && /confirmation/.test(message)) {
+    return "已上车成员发生变化，请重新确认改期和通知人数。";
+  }
+  if (error?.statusCode === 409 && /past|started/.test(message)) {
+    return "车局已经开始，不能再改期；页面已刷新。";
+  }
+  if (/future|past/.test(message)) {
+    return "新时间必须晚于当前时间，请重新选择。";
+  }
+  if (/change|unchanged/.test(message)) {
+    return "新时间与当前时间相同，请重新选择。";
+  }
+  if (/startat|timezone|timestamp|valid/.test(message)) {
+    return "所选时间无效，请重新选择。";
+  }
+  return "改期失败，请保留当前选择后重试。";
+}

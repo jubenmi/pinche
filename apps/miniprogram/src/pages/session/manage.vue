@@ -227,6 +227,8 @@ import {
   buildRescheduleConfirmation,
   canRescheduleSession,
   formatSessionStartAt,
+  rescheduleErrorRequiresRefresh as shouldRefreshAfterRescheduleError,
+  rescheduleErrorText as formatRescheduleErrorText,
   validateRescheduleSelection
 } from "../../utils/sessionReschedule";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
@@ -607,27 +609,10 @@ export default {
       return `改期成功。通知对象 ${recipients} 人：已发送 ${sent}，已跳过 ${skipped}，失败 ${failed}。`;
     },
     rescheduleErrorRequiresRefresh(error) {
-      const message = String(error?.data?.error?.message || "").toLowerCase();
-      return error?.statusCode === 409 && /past|started/.test(message);
+      return shouldRefreshAfterRescheduleError(error);
     },
     rescheduleErrorText(error) {
-      const message = String(error?.data?.error?.message || "").toLowerCase();
-      if (error?.statusCode === 409 && /confirmation/.test(message)) {
-        return "已上车成员发生变化，请重新确认改期和通知人数。";
-      }
-      if (error?.statusCode === 409 && /past|started/.test(message)) {
-        return "车局已经开始，不能再改期；页面已刷新。";
-      }
-      if (/future|past/.test(message)) {
-        return "新时间必须晚于当前时间，请重新选择。";
-      }
-      if (/change|unchanged/.test(message)) {
-        return "新时间与当前时间相同，请重新选择。";
-      }
-      if (/startat|timezone|timestamp|valid/.test(message)) {
-        return "所选时间无效，请重新选择。";
-      }
-      return "改期失败，请保留当前选择后重试。";
+      return formatRescheduleErrorText(error);
     },
     async loadSession() {
       try {
