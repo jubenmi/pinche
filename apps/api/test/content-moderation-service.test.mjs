@@ -146,6 +146,46 @@ test("video job uses immutable media facts and Tencent video provider", async ()
   }]);
 });
 
+test("moderation lifecycle events retain provider dimensions and only numeric latency", async () => {
+  const { service: createService, state: createState } = harness();
+  await createService.createVideoJob({}, {
+    media: { id: 92 },
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    subjectVersion: "etag-v"
+  });
+  assert.deepEqual(createState.events, [{
+    event: "moderation_job_created",
+    fields: {
+      provider: "tencent_ci_video",
+      subjectType: "album_video",
+      outcome: "pending"
+    }
+  }]);
+
+  const { service, state } = harness({
+    now: () => Date.parse("2026-07-12T08:00:01.000Z"),
+    jobOverrides: { created_at: "2026-07-12T08:00:00.000Z" }
+  });
+  await service.applyMediaResult({
+    jobId: 7,
+    provider: "tencent_ci_video",
+    providerJobId: "current-video-job",
+    subjectVersion: "etag-1",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    result: { decision: "pass", suggestion: "pass" }
+  });
+  const fields = {
+    provider: "tencent_ci_video",
+    subjectType: "album_video",
+    outcome: "approved",
+    latencyMs: 1_000
+  };
+  assert.deepEqual(state.events, [
+    { event: "moderation_decision_pass", fields },
+    { event: "moderation_latency", fields }
+  ]);
+});
+
 test("provider attempt rollover runs inside the repository transaction", async () => {
   const { service, state } = harness();
   const job = await service.createVideoJob({}, {
@@ -173,14 +213,28 @@ test("video submission failure moves task to error and remains hidden", async ()
     errorCode: "COS_REQUEST_TIMEOUT",
     exhausted: false
   });
-  assert.deepEqual(state.events.at(-1), {
-    event: "moderation_submission_failure",
-    fields: {
-      subjectType: "album_video",
-      outcome: "retry_scheduled",
-      errorCode: "COS_REQUEST_TIMEOUT"
+  assert.deepEqual(state.events.slice(-2), [
+    {
+      event: "moderation_submission_failure",
+      fields: {
+        provider: "tencent_ci_video",
+        subjectType: "album_video",
+        outcome: "retry_scheduled",
+        errorCode: "COS_REQUEST_TIMEOUT",
+        attempt: 1
+      }
+    },
+    {
+      event: "moderation_retry_scheduled",
+      fields: {
+        provider: "tencent_ci_video",
+        subjectType: "album_video",
+        outcome: "retry_scheduled",
+        errorCode: "COS_REQUEST_TIMEOUT",
+        attempt: 1
+      }
     }
-  });
+  ]);
 });
 
 test("a retried video submission failure leaves its lease for Worker retry bookkeeping", async () => {
@@ -280,6 +334,7 @@ test("a provider callback error persists delayed retry state while media remains
 
   assert.equal(result.status, "error");
   assert.deepEqual(state.transitions[0].retry, {
+    attempts: 1,
     nextRetryAt: new Date(31_000),
     exhausted: false
   });
@@ -289,11 +344,13 @@ test("a provider callback error persists delayed retry state while media remains
     toStatus: "error"
   });
   assert.deepEqual(state.events.at(-1), {
-    event: "moderation_submission_failure",
+    event: "moderation_retry_scheduled",
     fields: {
+      provider: "tencent_ci_video",
       subjectType: "album_video",
       outcome: "retry_scheduled",
-      errorCode: "CONTENT_MODERATION_INVALID_RESPONSE"
+      errorCode: "CONTENT_MODERATION_INVALID_RESPONSE",
+      attempt: 1
     }
   });
 });
@@ -314,15 +371,18 @@ test("a provider callback error at the retry limit persists exhaustion and raise
   });
 
   assert.deepEqual(state.transitions[0].retry, {
+    attempts: 3,
     nextRetryAt: null,
     exhausted: true
   });
   assert.deepEqual(state.events.at(-1), {
     event: "moderation_retry_exhausted",
     fields: {
+      provider: "tencent_ci_video",
       subjectType: "album_video",
       outcome: "operator_required",
       errorCode: "CONTENT_MODERATION_INVALID_RESPONSE",
+      attempt: 3,
       priority: "high"
     }
   });

@@ -365,7 +365,8 @@ test("text pass uses the fixed scene, persists a proposal, and applies it atomic
   assert.deepEqual(state.checked, [{
     content: "[dm_name]阿青\n[note]周末拼车",
     openid: "openid-7",
-    scene: 4
+    scene: 4,
+    subjectType: "session_update"
   }]);
   assert.equal(state.jobs[0].provider, "wechat_sec_check");
   assert.equal(state.jobs[0].subjectType, "session_update");
@@ -537,9 +538,11 @@ test("initial text provider failure preserves its safe code for delayed retry wi
   assert.deepEqual(state.events.at(-1), {
     event: "moderation_operational_alert",
     fields: {
+      provider: "wechat_sec_check",
       subjectType: "session_update",
       outcome: "retry_scheduled",
       errorCode: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE",
+      attempt: 1,
       priority: "high"
     }
   });

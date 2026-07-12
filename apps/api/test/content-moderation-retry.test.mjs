@@ -19,6 +19,11 @@ test("retry classifier separates transient failures from operational alerts", ()
   ]) {
     assert.equal(classifyModerationError({ code }).retryable, true, code);
   }
+  assert.deepEqual(classifyModerationError({ code: "TENCENT_CI_VIDEO_RATE_LIMITED" }), {
+    retryable: true,
+    alert: true,
+    code: "TENCENT_CI_VIDEO_RATE_LIMITED"
+  });
   for (const code of [
     "WECHAT_CONTENT_SECURITY_TOKEN_INVALID",
     "WECHAT_CONTENT_SECURITY_PERMISSION_DENIED",
@@ -350,15 +355,18 @@ test("operational failures persist once, raise a high-priority alert, and do not
 
   assert.equal(failures.length, 1);
   assert.equal(failures[0].exhausted, true);
-  assert.deepEqual(events, [{
-    event: "moderation_operational_alert",
-    fields: {
-      subjectType: "album_image",
-      outcome: "operator_required",
-      errorCode: "WECHAT_CONTENT_SECURITY_QUOTA_EXHAUSTED",
-      priority: "high"
-    }
-  }]);
+  const fields = {
+    provider: "wechat_sec_check",
+    subjectType: "album_image",
+    outcome: "operator_required",
+    errorCode: "WECHAT_CONTENT_SECURITY_QUOTA_EXHAUSTED",
+    attempt: 2,
+    priority: "high"
+  };
+  assert.deepEqual(events, [
+    { event: "moderation_submission_failure", fields },
+    { event: "moderation_operational_alert", fields }
+  ]);
   assert.deepEqual(result, { claimed: 1, failed: 1 });
 });
 
@@ -398,15 +406,19 @@ test("token infrastructure unavailability keeps backoff while raising a high-pri
 
   assert.equal(failures[0].exhausted, false);
   assert.equal(failures[0].nextRetryAt.getTime(), 61_000);
-  assert.deepEqual(events, [{
-    event: "moderation_operational_alert",
-    fields: {
-      subjectType: "session_update",
-      outcome: "retry_scheduled",
-      errorCode: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE",
-      priority: "high"
-    }
-  }]);
+  const fields = {
+    provider: "wechat_sec_check",
+    subjectType: "session_update",
+    outcome: "retry_scheduled",
+    errorCode: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE",
+    attempt: 2,
+    priority: "high"
+  };
+  assert.deepEqual(events, [
+    { event: "moderation_submission_failure", fields },
+    { event: "moderation_retry_scheduled", fields },
+    { event: "moderation_operational_alert", fields }
+  ]);
 });
 
 test("retry-limit exhaustion raises a high-priority alert even for a transient upstream failure", async () => {
@@ -434,15 +446,18 @@ test("retry-limit exhaustion raises a high-priority alert even for a transient u
     emit: (event, fields) => events.push({ event, fields })
   });
 
-  assert.deepEqual(events, [{
-    event: "moderation_retry_exhausted",
-    fields: {
-      subjectType: "album_video",
-      outcome: "operator_required",
-      errorCode: "TENCENT_CI_VIDEO_UPSTREAM_5XX",
-      priority: "high"
-    }
-  }]);
+  const fields = {
+    provider: "tencent_ci_video",
+    subjectType: "album_video",
+    outcome: "operator_required",
+    errorCode: "TENCENT_CI_VIDEO_UPSTREAM_5XX",
+    attempt: 8,
+    priority: "high"
+  };
+  assert.deepEqual(events, [
+    { event: "moderation_submission_failure", fields },
+    { event: "moderation_retry_exhausted", fields }
+  ]);
 });
 
 test("a stale or expired lease never emits a duplicate failure or alert", async () => {

@@ -17,6 +17,7 @@ const TENCENT_OPERATIONAL_ERROR_PREFIXES = Object.freeze([
   ["UnauthorizedOperation", "UnauthorizedOperation"],
   ["InvalidParameter.BizType", "InvalidParameter.BizType"],
   ["LimitExceeded", "LimitExceeded"],
+  ["RequestLimitExceeded", "TENCENT_CI_VIDEO_RATE_LIMITED"],
   ["ResourceUnavailable", "ResourceUnavailable"],
   ["FailedOperation.BalanceNotEnough", "FailedOperation.BalanceNotEnough"]
 ]);

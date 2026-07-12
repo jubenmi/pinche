@@ -15,6 +15,7 @@ import {
 } from "./text-request-identity.js";
 import { MODERATION_ERROR_CODES, MODERATION_RETRY_LEASE_MIN_MS } from "./constants.js";
 import { moderationStatusForDecision } from "./state-machine.js";
+import { emitModerationSubmissionFailure } from "./telemetry.js";
 
 const TEXT_SCENE_BY_SUBJECT = Object.freeze({
   user_nickname: 1,
@@ -74,6 +75,20 @@ function nowMilliseconds(now) {
   return Number.isFinite(milliseconds) ? milliseconds : Date.now();
 }
 
+function moderationLatencyMs(job, now) {
+  const startedAt = Date.parse(String(job?.created_at || ""));
+  const finishedAt = nowMilliseconds(now);
+  if (!Number.isFinite(startedAt) || startedAt > finishedAt) return undefined;
+  return Math.min(finishedAt - startedAt, 30 * 24 * 60 * 60 * 1000);
+}
+
+function emitModerationDecision(emit, { decision, ...fields }) {
+  emit(`moderation_decision_${decision}`, fields);
+  if (Number.isSafeInteger(fields.latencyMs) && fields.latencyMs >= 0) {
+    emit("moderation_latency", fields);
+  }
+}
+
 function providerErrorRetryState(job, config, now, random) {
   const recordedAttempts = Number(job?.attempt_count);
   const attempts = Number.isInteger(recordedAttempts) && recordedAttempts > 0
@@ -81,6 +96,7 @@ function providerErrorRetryState(job, config, now, random) {
     : 1;
   const exhausted = attempts >= boundedRetryLimit(config?.retryLimit);
   return {
+    attempts,
     nextRetryAt: exhausted
       ? null
       : moderationRetryAt(nowMilliseconds(now), attempts, typeof random === "function" ? random : Math.random),
@@ -97,6 +113,7 @@ function initialSubmissionFailurePlan(job, config, now, random, error) {
     attempts,
     errorCode: classification.code,
     alert: classification.alert,
+    retryable: classification.retryable,
     retry: {
       attempts,
       nextRetryAt: exhausted
@@ -301,16 +318,15 @@ export function createContentModerationService(dependencies) {
       })
     );
     if (changed) {
-      const event = plan.alert
-        ? "moderation_operational_alert"
-        : plan.retry.exhausted
-          ? "moderation_retry_exhausted"
-          : "moderation_submission_failure";
-      deps.emit(event, {
+      emitModerationSubmissionFailure({
+        emit: deps.emit,
+        provider: job?.provider,
         subjectType,
-        outcome: plan.retry.exhausted ? "operator_required" : "retry_scheduled",
         errorCode: plan.errorCode,
-        ...(plan.alert || plan.retry.exhausted ? { priority: "high" } : {})
+        attempt: plan.attempts,
+        retryScheduled: !plan.retry.exhausted,
+        retryExhausted: plan.retry.exhausted && plan.retryable,
+        alert: plan.alert
       });
     }
     return { changed, plan };
@@ -327,7 +343,7 @@ export function createContentModerationService(dependencies) {
     });
     const initialLease = await claimInitialSubmissionLease(connection, job);
     if (!initialLease.initialLeaseAcquired) return null;
-    return {
+    const created = {
       ...job,
       ...initialLease,
       kind: "video",
@@ -335,6 +351,12 @@ export function createContentModerationService(dependencies) {
       dataId: job.data_id || job.dataId,
       status: job.status || "pending"
     };
+    deps.emit("moderation_job_created", {
+      provider: "tencent_ci_video",
+      subjectType: "album_video",
+      outcome: "pending"
+    });
+    return created;
   }
 
   async function submitVideoJob(job) {
@@ -371,8 +393,10 @@ export function createContentModerationService(dependencies) {
         throw error;
       }
       deps.emit("moderation_submission_success", {
+        provider: "tencent_ci_video",
         subjectType: "album_video",
-        outcome: "processing"
+        outcome: "processing",
+        attempt: Number(job?.attempt_count || 0) + 1
       });
       return response;
     } catch (error) {
@@ -415,7 +439,7 @@ export function createContentModerationService(dependencies) {
     });
     const initialLease = await claimInitialSubmissionLease(connection, job);
     if (!initialLease.initialLeaseAcquired) return null;
-    return {
+    const created = {
       ...job,
       ...initialLease,
       kind: "wechat_image",
@@ -423,6 +447,12 @@ export function createContentModerationService(dependencies) {
       uploaderUserId,
       status: job.status || "pending"
     };
+    deps.emit("moderation_job_created", {
+      provider: "wechat_sec_check",
+      subjectType: "album_image",
+      outcome: "pending"
+    });
+    return created;
   }
 
   async function submitWechatImageModeration(job) {
@@ -474,7 +504,12 @@ export function createContentModerationService(dependencies) {
       // moderation request, and the URL fetch window starts at submission.
       await renewSubmissionLease({ jobId: job.id, leaseToken, fromStatus });
       const mediaUrl = await deps.buildWechatImageUrl({ objectKey: job?.objectKey });
-      const response = await deps.client.checkImage({ mediaUrl, openid, scene: 4 });
+      const response = await deps.client.checkImage({
+        mediaUrl,
+        openid,
+        scene: 4,
+        subjectType: "album_image"
+      });
       const traceId = boundedString(response?.traceId, 128);
       if (!traceId) {
         throw textModerationError(
@@ -502,8 +537,10 @@ export function createContentModerationService(dependencies) {
         );
       }
       deps.emit("moderation_submission_success", {
+        provider: "wechat_sec_check",
         subjectType: "album_image",
-        outcome: "processing"
+        outcome: "processing",
+        attempt: Number(job?.attempt_count || 0) + 1
       });
       return { traceId };
     } catch (error) {
@@ -632,15 +669,20 @@ export function createContentModerationService(dependencies) {
       if (nextStatus === "rejected") {
         await deps.repository.enqueueRejectedMediaCleanup(connection, media);
       }
-      deps.emit(`moderation_decision_${input.result.decision}`, {
+      emitModerationDecision(deps.emit, {
+        decision: input.result.decision,
+        provider: job.provider,
         subjectType: job.subject_type,
-        outcome: nextStatus
+        outcome: nextStatus,
+        latencyMs: moderationLatencyMs(job, deps.now)
       });
       if (retry) {
-        deps.emit(retry.exhausted ? "moderation_retry_exhausted" : "moderation_submission_failure", {
+        deps.emit(retry.exhausted ? "moderation_retry_exhausted" : "moderation_retry_scheduled", {
+          provider: job.provider,
           subjectType: job.subject_type,
           outcome: retry.exhausted ? "operator_required" : "retry_scheduled",
           errorCode: "CONTENT_MODERATION_INVALID_RESPONSE",
+          attempt: retry.attempts,
           ...(retry.exhausted ? { priority: "high" } : {})
         });
       }
@@ -742,7 +784,7 @@ export function createContentModerationService(dependencies) {
       return { job: { ...job, ...initialLease }, proposal };
     });
 
-    return {
+    const result = {
       ...prepared,
       subjectType,
       subjectId: operationSubjectId,
@@ -751,6 +793,14 @@ export function createContentModerationService(dependencies) {
       openid,
       normalizedText
     };
+    if (prepared.job.initialLeaseAcquired) {
+      deps.emit("moderation_job_created", {
+        provider: "wechat_sec_check",
+        subjectType,
+        outcome: "pending"
+      });
+    }
+    return result;
   }
 
   async function resolveTextResult(prepared, providerResult, options = {}) {
@@ -950,7 +1000,8 @@ export function createContentModerationService(dependencies) {
       providerResult = await deps.client.checkText({
         content: prepared.normalizedText,
         openid: prepared.openid,
-        scene: prepared.scene
+        scene: prepared.scene,
+        subjectType: prepared.subjectType
       });
     } catch (error) {
       if (isSubmissionStale(error)) throw replayErrorForStatus("error");
@@ -978,9 +1029,12 @@ export function createContentModerationService(dependencies) {
       throw replayErrorForStatus("error");
     }
     const resolved = await resolveTextResult(prepared, providerResult, { leaseToken });
-    deps.emit(`moderation_decision_${outcome.decision}`, {
+    emitModerationDecision(deps.emit, {
+      decision: outcome.decision,
+      provider: prepared.job.provider,
       subjectType: prepared.subjectType,
-      outcome: moderationStatusForDecision(outcome.decision)
+      outcome: moderationStatusForDecision(outcome.decision),
+      latencyMs: moderationLatencyMs(prepared.job, deps.now)
     });
     return resolved;
   }
@@ -1023,7 +1077,12 @@ export function createContentModerationService(dependencies) {
       leaseToken,
       fromStatus: job.status || "error"
     });
-    const providerResult = await deps.client.checkText({ content: normalizedText, openid, scene });
+    const providerResult = await deps.client.checkText({
+      content: normalizedText,
+      openid,
+      scene,
+      subjectType: job.subject_type
+    });
     const outcome = normalizeWechatTextResult(providerResult);
     if (outcome.decision === "error") {
       throw textModerationError(
@@ -1045,9 +1104,12 @@ export function createContentModerationService(dependencies) {
       returnOutcome: true
     });
     if (final.kind !== "stale") {
-      deps.emit(`moderation_decision_${outcome.decision}`, {
+      emitModerationDecision(deps.emit, {
+        decision: outcome.decision,
+        provider: job.provider,
         subjectType: job.subject_type,
-        outcome: moderationStatusForDecision(outcome.decision)
+        outcome: moderationStatusForDecision(outcome.decision),
+        latencyMs: moderationLatencyMs(job, deps.now)
       });
     }
     return final;
@@ -1065,7 +1127,8 @@ export function createContentModerationService(dependencies) {
     if (action === "reject" && !reason) {
       throw publicModerationError(400, "BAD_REQUEST", "rejection reason is required");
     }
-    return deps.transaction(async (connection) => {
+    let decisionMetric = null;
+    const result = await deps.transaction(async (connection) => {
       const job = await deps.repository.findModerationJobById(
         connection,
         input.jobId,
@@ -1171,6 +1234,13 @@ export function createContentModerationService(dependencies) {
               nextStatus: "rejected",
               reason: reason || null
             });
+            decisionMetric = {
+              decision: "block",
+              provider: job.provider,
+              subjectType: job.subject_type,
+              outcome: "rejected",
+              latencyMs: moderationLatencyMs(job, deps.now)
+            };
             return { id: Number(job.id), status: "rejected", stale: true };
           }
         }
@@ -1200,8 +1270,19 @@ export function createContentModerationService(dependencies) {
         nextStatus,
         reason: reason || null
       });
+      decisionMetric = {
+        decision: action === "approve" ? "pass" : "block",
+        provider: job.provider,
+        subjectType: job.subject_type,
+        outcome: nextStatus,
+        latencyMs: moderationLatencyMs(job, deps.now)
+      };
       return { id: Number(job.id), status: nextStatus };
     });
+    if (decisionMetric) {
+      emitModerationDecision(deps.emit, decisionMetric);
+    }
+    return result;
   }
 
   return {

@@ -217,6 +217,8 @@ test("server places the WeChat image callback before generic parsing and never u
   assert.match(routeBody, /readRawBody\(request, 256 \* 1024\)/);
   assert.match(routeBody, /parseWechatSecureImageEvent/);
   assert.match(routeBody, /dispatchWechatImageModerationEvent/);
+  assert.match(routeBody, /emitContentModerationEvent\("moderation_callback_failure"/);
+  assert.match(routeBody, /outcome: unauthorized \? "unauthorized" : "invalid"/);
   assert.doesNotMatch(routeBody, /objectKey|object_key|media_url|signedUrl|console\.log/);
   assert.match(server, /CONTENT_MODERATION_CALLBACK_UNAUTHORIZED: \[401,/);
   assert.match(server, /CONTENT_MODERATION_INVALID_CALLBACK: \[400,/);

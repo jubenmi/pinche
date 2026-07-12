@@ -207,6 +207,7 @@ import {
   transitionModerationJob
 } from "./modules/content-moderation/repository.js";
 import { createContentModerationService } from "./modules/content-moderation/service.js";
+import { emitContentModerationEvent } from "./modules/content-moderation/telemetry.js";
 import { createAdminModerationApi } from "./modules/content-moderation/admin-api.js";
 import { createAdminModerationPreviewBuilder } from "./modules/content-moderation/admin-preview.js";
 import {
@@ -286,7 +287,7 @@ const tencentVideoModerationClient = createTencentVideoModerationClient({
 const wechatContentSecurityClient = (
   config.contentModeration.wechatTextEnabled || config.contentModeration.wechatImageEnabled
 )
-  ? createWechatContentSecurityClient()
+  ? createWechatContentSecurityClient({ emit: emitContentModerationEvent })
   : {};
 const moderationClient = {
   ...tencentVideoModerationClient,
@@ -1127,12 +1128,7 @@ export const contentModeration = createContentModerationService({
     });
   },
   applyTextProposal: (connection, input) => textProposalApplicator.apply(connection, input),
-  emit: (event, fields) => console.log(JSON.stringify({
-    type: "content_moderation",
-    event,
-    at: new Date().toISOString(),
-    ...fields
-  }))
+  emit: emitContentModerationEvent
 });
 
 async function applyApprovedTextProposal(connection, { job, proposal }) {
@@ -3652,6 +3648,12 @@ async function route(request, response) {
         config.contentModeration.tencentVideoCallbackPreviousToken
       ]
     )) {
+      emitContentModerationEvent("moderation_callback_failure", {
+        provider: "tencent_ci_video",
+        subjectType: "album_video",
+        outcome: "unauthorized",
+        errorCode: "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED"
+      });
       throw new AppError(
         401,
         "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED",
@@ -3708,15 +3710,29 @@ async function route(request, response) {
     url.pathname === "/api/internal/content-moderation/wechat-image/callback"
   ) {
     const rawCallback = await readRawBody(request, 256 * 1024);
-    const callback = parseWechatSecureImageEvent({
-      rawBody: rawCallback,
-      token: config.contentModeration.wechatEventToken,
-      aesKey: config.contentModeration.wechatEventAesKey,
-      appId: config.contentModeration.wechatAppId,
-      msgSignature: url.searchParams.get("msg_signature") || "",
-      timestamp: url.searchParams.get("timestamp") || "",
-      nonce: url.searchParams.get("nonce") || ""
-    });
+    let callback;
+    try {
+      callback = parseWechatSecureImageEvent({
+        rawBody: rawCallback,
+        token: config.contentModeration.wechatEventToken,
+        aesKey: config.contentModeration.wechatEventAesKey,
+        appId: config.contentModeration.wechatAppId,
+        msgSignature: url.searchParams.get("msg_signature") || "",
+        timestamp: url.searchParams.get("timestamp") || "",
+        nonce: url.searchParams.get("nonce") || ""
+      });
+    } catch (error) {
+      const unauthorized = error?.code === "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED";
+      emitContentModerationEvent("moderation_callback_failure", {
+        provider: "wechat_sec_check",
+        subjectType: "album_image",
+        outcome: unauthorized ? "unauthorized" : "invalid",
+        errorCode: unauthorized
+          ? "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED"
+          : "CONTENT_MODERATION_INVALID_CALLBACK"
+      });
+      throw error;
+    }
     const callbackResult = await dispatchWechatImageModerationEvent({
       event: callback,
       withDatabaseConnection,
@@ -5035,6 +5051,17 @@ async function route(request, response) {
 export function createApp() {
   return http.createServer((request, response) => {
     route(request, response).catch((error) => {
+      if (error?.contentModerationDenied === true) {
+        try {
+          emitContentModerationEvent("moderation_access_denied", {
+            provider: error.contentModerationProvider,
+            subjectType: error.contentModerationSubjectType,
+            outcome: "unpublished"
+          });
+        } catch {
+          // Telemetry must not change the external 404 gate response.
+        }
+      }
       const normalized = normalizeError(error);
       errorResponse(
         response,

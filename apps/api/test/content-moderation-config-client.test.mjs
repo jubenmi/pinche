@@ -71,6 +71,34 @@ test("moderation retry worker configuration is bounded and keeps network timeout
   }
 });
 
+test("orphan scanner configuration stays report-only by default and bounds its safety window", () => {
+  const config = buildContentModerationConfig(validEnv({
+    CONTENT_MODERATION_ORPHAN_SCAN_ENABLED: "true",
+    CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED: "false",
+    CONTENT_MODERATION_ORPHAN_SCAN_POLL_MS: "300000",
+    CONTENT_MODERATION_ORPHAN_SCAN_BATCH_SIZE: "50",
+    CONTENT_MODERATION_ORPHAN_RETENTION_HOURS: "48",
+    CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS: "900"
+  }));
+  assert.equal(config.orphanScanEnabled, true);
+  assert.equal(config.orphanCleanupEnabled, false);
+  assert.equal(config.orphanScanPollMs, 300_000);
+  assert.equal(config.orphanScanBatchSize, 50);
+  assert.equal(config.orphanRetentionHours, 48);
+  assert.equal(config.queueAlertAgeSeconds, 900);
+
+  for (const [name, value] of [
+    ["CONTENT_MODERATION_ORPHAN_SCAN_POLL_MS", "59999"],
+    ["CONTENT_MODERATION_ORPHAN_SCAN_BATCH_SIZE", "1001"],
+    ["CONTENT_MODERATION_ORPHAN_RETENTION_HOURS", "23"],
+    ["CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS", "59"]
+  ]) {
+    assert.throws(() => buildContentModerationConfig(validEnv({ [name]: value })), {
+      code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+    });
+  }
+});
+
 test("enabled Tencent video moderation fails closed on missing production configuration", () => {
   for (const missing of [
     "TENCENT_CI_VIDEO_REGION",
@@ -511,6 +539,23 @@ test("Tencent video transport exposes safe retry taxonomy without response-body 
       return true;
     });
   }
+});
+
+test("Tencent video concurrency quota errors normalize into the retryable high-priority quota taxonomy", async () => {
+  const config = buildContentModerationConfig(validEnv());
+  const transport = createTencentVideoModerationTransport({
+    config,
+    fetchImpl: async () => new Response("<Error><Code>RequestLimitExceeded</Code></Error>", { status: 400 })
+  });
+  await assert.rejects(transport({
+    kind: "video",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    dataId: "d2",
+    policyId: "video-policy",
+    bucket: "bucket-123",
+    callbackUrl: config.tencentVideoCallbackUrl,
+    region: "ap-nanjing"
+  }), { code: "TENCENT_CI_VIDEO_RATE_LIMITED" });
 });
 
 test("Tencent transport rejects non-video request kinds", async () => {

@@ -154,7 +154,8 @@ test("WeChat image job records immutable image facts and persists only its retur
   assert.deepEqual(state.providerCalls, [{
     mediaUrl: signedUrl,
     openid: "verified-uploader-openid",
-    scene: 4
+    scene: 4,
+    subjectType: "album_image"
   }]);
   assert.deepEqual(state.submissions, [{
     jobId: 71,
@@ -235,7 +236,14 @@ test("a retry submission failure preserves its lease for the Worker to schedule 
 
   assert.deepEqual(state.transitions, []);
   assert.deepEqual(state.failures, []);
-  assert.deepEqual(state.events, []);
+  assert.deepEqual(state.events, [{
+    event: "moderation_job_created",
+    fields: {
+      provider: "wechat_sec_check",
+      subjectType: "album_image",
+      outcome: "pending"
+    }
+  }]);
 });
 
 test("image job rejects oversized immutable object facts instead of truncating them", async () => {
@@ -274,9 +282,11 @@ test("missing verified uploader openid fails closed before issuing a provider UR
   assert.deepEqual(state.events.at(-1), {
     event: "moderation_operational_alert",
     fields: {
+      provider: "wechat_sec_check",
       subjectType: "album_image",
       outcome: "operator_required",
       errorCode: "CONTENT_MODERATION_OPENID_REQUIRED",
+      attempt: 1,
       priority: "high"
     }
   });
@@ -301,14 +311,17 @@ test("provider failures keep the image hidden in error and never put its signed 
     errorCode: "WECHAT_CONTENT_SECURITY_TIMEOUT",
     exhausted: false
   });
-  assert.deepEqual(state.events.at(-1), {
-    event: "moderation_submission_failure",
-    fields: {
-      subjectType: "album_image",
-      outcome: "retry_scheduled",
-      errorCode: "WECHAT_CONTENT_SECURITY_TIMEOUT"
-    }
-  });
+  const fields = {
+    provider: "wechat_sec_check",
+    subjectType: "album_image",
+    outcome: "retry_scheduled",
+    errorCode: "WECHAT_CONTENT_SECURITY_TIMEOUT",
+    attempt: 1
+  };
+  assert.deepEqual(state.events.slice(-2), [
+    { event: "moderation_submission_failure", fields },
+    { event: "moderation_retry_scheduled", fields }
+  ]);
   assert.equal(state.submissions.length, 0);
   assert.equal(JSON.stringify({ transitions: state.transitions, events: state.events }).includes("q-signature"), false);
 });

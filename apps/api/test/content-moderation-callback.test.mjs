@@ -247,4 +247,7 @@ test("server wires the authenticated callback before the generic JSON body parse
   assert.match(routeBody, /tencentVideoCallbackPreviousToken/);
   assert.match(routeBody, /readRawBody\(request, TENCENT_VIDEO_CALLBACK_MAX_BYTES\)/);
   assert.match(routeBody, /contentModeration\.applyMediaResult/);
+  assert.match(routeBody, /emitContentModerationEvent\("moderation_callback_failure"/);
+  assert.match(routeBody, /outcome: "unauthorized"/);
+  assert.doesNotMatch(routeBody, /providedToken[\s\S]{0,200}console\.(?:log|info|warn)/);
 });

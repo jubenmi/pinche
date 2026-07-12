@@ -167,7 +167,7 @@ function responseError({ response, payload }) {
   return sanitizedError("WECHAT_CONTENT_SECURITY_RESPONSE_INVALID", "WeChat content security response is invalid", status);
 }
 
-async function requestSuccess({ tokenProvider, fetchImpl, path, body, timeoutMs }) {
+async function requestSuccess({ tokenProvider, fetchImpl, path, body, timeoutMs, emit, subjectType }) {
   let result;
   try {
     result = await requestWithWechatAccessTokenRetry({
@@ -176,6 +176,17 @@ async function requestSuccess({ tokenProvider, fetchImpl, path, body, timeoutMs 
     });
   } catch (error) {
     if (WECHAT_ACCESS_TOKEN_INFRASTRUCTURE_ERRORS.has(String(error?.code || ""))) {
+      try {
+        emit("moderation_token_refresh_failure", {
+          provider: "wechat_sec_check",
+          ...(subjectType ? { subjectType } : {}),
+          outcome: "error",
+          errorCode: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE",
+          priority: "high"
+        });
+      } catch {
+        // A telemetry sink must not turn an operational retry into a new failure mode.
+      }
       throw sanitizedError("WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE", "WeChat content security request failed");
     }
     throw error;
@@ -189,22 +200,26 @@ async function requestSuccess({ tokenProvider, fetchImpl, path, body, timeoutMs 
 export function createWechatContentSecurityClient({
   tokenProvider = getWechatAccessTokenProvider(),
   fetchImpl = globalThis.fetch,
-  timeoutMs = 10_000
+  timeoutMs = 10_000,
+  emit = () => {}
 } = {}) {
   if (!tokenProvider || typeof tokenProvider.getAccessToken !== "function") {
     throw new TypeError("tokenProvider.getAccessToken is required");
   }
   if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required");
+  if (typeof emit !== "function") throw new TypeError("emit must be a function");
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 ||
     timeoutMs >= WECHAT_CONTENT_SECURITY_REQUEST_TIMEOUT_LIMIT_MS) {
     throw new TypeError("timeoutMs must be a positive duration shorter than the retry lease");
   }
 
   return {
-    async checkText({ content, openid, scene } = {}) {
+    async checkText({ content, openid, scene, subjectType } = {}) {
       const payload = await requestSuccess({
         tokenProvider,
         fetchImpl,
+        emit,
+        subjectType,
         path: "/wxa/msg_sec_check",
         timeoutMs,
         body: {
@@ -228,10 +243,12 @@ export function createWechatContentSecurityClient({
         score: cleanScore(result.score)
       };
     },
-    async checkImage({ mediaUrl, openid, scene } = {}) {
+    async checkImage({ mediaUrl, openid, scene, subjectType } = {}) {
       const payload = await requestSuccess({
         tokenProvider,
         fetchImpl,
+        emit,
+        subjectType,
         path: "/wxa/media_check_async",
         timeoutMs,
         body: {

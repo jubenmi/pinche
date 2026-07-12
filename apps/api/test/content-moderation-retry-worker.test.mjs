@@ -114,6 +114,68 @@ test("retry worker never creates an injected lease shorter than the safe WeChat 
   assert.equal(claim.leaseExpiresAt.getTime(), 91_000);
 });
 
+test("retry worker publishes queue depth and overdue-age snapshots after each batch", async () => {
+  const events = [];
+  const worker = createContentModerationRetryWorker({
+    repositoryModule: {
+      claimModerationRetryJobs: async () => [],
+      rehydrateModerationRetryJob: async () => assert.fail("empty queue must not rehydrate"),
+      getModerationQueueStats: async () => [{
+        provider: "wechat_sec_check",
+        subject_type: "album_image",
+        status: "pending",
+        queue_depth: 2,
+        oldest_age_seconds: 901
+      }]
+    },
+    withTransactionFn: async (run) => run({}),
+    contentModerationRuntime: {},
+    moderationConfig: {
+      retryLimit: 6,
+      retryBatchSize: 3,
+      retryLeaseMs: 90_000,
+      queueAlertAgeSeconds: 900
+    },
+    now: () => 1_000,
+    randomUUID: () => "lease-queue",
+    emit: (event, fields) => events.push({ event, fields })
+  });
+
+  assert.deepEqual(await worker.runOnce(), { claimed: 0, failed: 0 });
+  assert.deepEqual(events, [
+    {
+      event: "moderation_queue_snapshot",
+      fields: {
+        provider: "wechat_sec_check",
+        subjectType: "album_image",
+        outcome: "pending",
+        queueDepth: 2,
+        oldestAgeSeconds: 901
+      }
+    },
+    {
+      event: "moderation_queue_oldest_age",
+      fields: {
+        provider: "wechat_sec_check",
+        subjectType: "album_image",
+        outcome: "pending",
+        queueDepth: 2,
+        oldestAgeSeconds: 901
+      }
+    },
+    {
+      event: "moderation_operational_alert",
+      fields: {
+        provider: "wechat_sec_check",
+        subjectType: "album_image",
+        outcome: "pending",
+        errorCode: "CONTENT_MODERATION_QUEUE_AGE_EXCEEDED",
+        priority: "high"
+      }
+    }
+  ]);
+});
+
 test("current invalid rehydrated facts become a terminal hidden error and are not claimed again", async () => {
   const failures = [];
   const events = [];
@@ -157,15 +219,18 @@ test("current invalid rehydrated facts become a terminal hidden error and are no
   assert.deepEqual(await worker.runOnce(), { claimed: 1, failed: 1 });
   assert.equal(failures[0].exhausted, true);
   assert.equal(failures[0].errorCode, "CONTENT_MODERATION_RETRY_FACTS_INVALID");
-  assert.deepEqual(events, [{
-    event: "moderation_operational_alert",
-    fields: {
-      subjectType: "album_image",
-      outcome: "operator_required",
-      errorCode: "CONTENT_MODERATION_RETRY_FACTS_INVALID",
-      priority: "high"
-    }
-  }]);
+  const fields = {
+    provider: "wechat_sec_check",
+    subjectType: "album_image",
+    outcome: "operator_required",
+    errorCode: "CONTENT_MODERATION_RETRY_FACTS_INVALID",
+    attempt: 1,
+    priority: "high"
+  };
+  assert.deepEqual(events, [
+    { event: "moderation_submission_failure", fields },
+    { event: "moderation_operational_alert", fields }
+  ]);
   assert.deepEqual(await worker.runOnce(), { claimed: 0, failed: 0 });
 });
 

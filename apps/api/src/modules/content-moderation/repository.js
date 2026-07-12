@@ -27,6 +27,12 @@ function safeAppliedResultJson(result) {
 
 const RETRY_IMAGE_OBJECT_KEY = /^uploads\/session-album\/display\/[A-Za-z0-9._-]+$/;
 const RETRY_VIDEO_OBJECT_KEY = /^uploads\/session-album\/videos\/source\/[A-Za-z0-9._-]+\.mp4$/;
+const ORPHAN_SCAN_OBJECT_KEY = /^uploads\/session-album\/(?:display\/[A-Za-z0-9._-]+|videos\/(?:source|display|cover)\/[A-Za-z0-9._-]+)$/;
+const ORPHAN_SCAN_NAMES = new Set([
+  "cos_session_album",
+  "media_session_album",
+  "job_session_album"
+]);
 const RETRY_ROUTE_KEYS = new Set(MODERATION_RETRY_ROUTES.map((route) => (
   `${route.provider}:${route.subjectType}`
 )));
@@ -39,6 +45,53 @@ function invalidRetryFacts() {
   const error = new Error("content moderation retry facts are no longer valid");
   error.code = "CONTENT_MODERATION_RETRY_FACTS_INVALID";
   return error;
+}
+
+function boundedPositiveInteger(value, maximum, name) {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new TypeError(`${name} must be an integer from 1 to ${maximum}`);
+  }
+  return parsed;
+}
+
+function validDate(value, name) {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new TypeError(`${name} must be a valid Date`);
+  }
+  return value;
+}
+
+function validOrphanScanName(value) {
+  const name = String(value || "");
+  if (!ORPHAN_SCAN_NAMES.has(name)) throw new TypeError("unsupported orphan scan name");
+  return name;
+}
+
+function validOrphanScanLeaseToken(value) {
+  const token = String(value || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(token)) {
+    throw new TypeError("invalid orphan scan lease token");
+  }
+  return token;
+}
+
+function normalizeOrphanScanCursor(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const cursor = String(value);
+  if (
+    !/^(?:\d+|uploads\/session-album\/[A-Za-z0-9._/-]{1,1000})$/.test(cursor) ||
+    cursor.includes("..") ||
+    cursor.includes("\\")
+  ) {
+    throw new TypeError("invalid orphan scan cursor");
+  }
+  return cursor;
+}
+
+function normalizeOrphanScanObjectKey(value) {
+  const key = String(value || "").replace(/^\//, "");
+  return ORPHAN_SCAN_OBJECT_KEY.test(key) ? key : null;
 }
 
 function currentRetryMediaFacts(job, media) {
@@ -841,6 +894,226 @@ export async function requeueModerationJob(connection, { jobId, fromStatus = "er
     [Number(jobId), fromStatus]
   );
   return Number(result.affectedRows || 0) === 1;
+}
+
+export async function getModerationQueueStats(connection, { now = new Date() } = {}) {
+  const snapshotAt = validDate(now, "queue snapshot time");
+  const [rows] = await connection.query(
+    `SELECT provider, subject_type, status,
+            COUNT(*) AS queue_depth,
+            GREATEST(TIMESTAMPDIFF(SECOND, MIN(created_at), ?), 0) AS oldest_age_seconds
+     FROM content_moderation_jobs
+     WHERE status IN ('pending', 'processing', 'review', 'error')
+     GROUP BY provider, subject_type, status`,
+    [snapshotAt]
+  );
+  return rows;
+}
+
+export async function claimOrphanScanState(
+  connection,
+  { scanName, leaseToken, now, leaseExpiresAt } = {}
+) {
+  const normalizedName = validOrphanScanName(scanName);
+  const normalizedToken = validOrphanScanLeaseToken(leaseToken);
+  const claimTime = validDate(now, "orphan scan claim time");
+  const expiry = validDate(leaseExpiresAt, "orphan scan lease expiry");
+  if (expiry.getTime() <= claimTime.getTime()) {
+    throw new TypeError("orphan scan lease expiry must be after its claim time");
+  }
+  await connection.query(
+    `INSERT INTO content_moderation_orphan_scan_state (scan_name, cursor_value)
+     VALUES (?, NULL)
+     ON DUPLICATE KEY UPDATE scan_name = VALUES(scan_name)`,
+    [normalizedName]
+  );
+  const [rows] = await connection.query(
+    `SELECT scan_name, cursor_value, lease_expires_at
+     FROM content_moderation_orphan_scan_state
+     WHERE scan_name = ? LIMIT 1 FOR UPDATE`,
+    [normalizedName]
+  );
+  const state = rows[0];
+  if (!state) return null;
+  const existingLeaseExpiry = state.lease_expires_at ? new Date(state.lease_expires_at) : null;
+  if (existingLeaseExpiry && !Number.isNaN(existingLeaseExpiry.getTime()) && existingLeaseExpiry > claimTime) {
+    return null;
+  }
+  const [result] = await connection.query(
+    `UPDATE content_moderation_orphan_scan_state
+     SET lease_token = ?, lease_expires_at = ?
+     WHERE scan_name = ?`,
+    [normalizedToken, expiry, normalizedName]
+  );
+  if (Number(result.affectedRows || 0) !== 1) return null;
+  return { cursor_value: normalizeOrphanScanCursor(state.cursor_value) };
+}
+
+export async function completeOrphanScanState(
+  connection,
+  { scanName, leaseToken, cursorValue, now } = {}
+) {
+  const completedAt = validDate(now, "orphan scan completion time");
+  const [result] = await connection.query(
+    `UPDATE content_moderation_orphan_scan_state
+     SET cursor_value = ?, lease_token = NULL, lease_expires_at = NULL
+     WHERE scan_name = ? AND lease_token = ? AND lease_expires_at > ?`,
+    [
+      normalizeOrphanScanCursor(cursorValue),
+      validOrphanScanName(scanName),
+      validOrphanScanLeaseToken(leaseToken),
+      completedAt
+    ]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function renewOrphanScanState(
+  connection,
+  { scanName, leaseToken, now, leaseExpiresAt } = {}
+) {
+  const renewedAt = validDate(now, "orphan scan renewal time");
+  const expiry = validDate(leaseExpiresAt, "orphan scan renewal expiry");
+  if (expiry.getTime() <= renewedAt.getTime()) {
+    throw new TypeError("orphan scan renewal expiry must be after its renewal time");
+  }
+  const [result] = await connection.query(
+    `UPDATE content_moderation_orphan_scan_state
+     SET lease_expires_at = ?
+     WHERE scan_name = ? AND lease_token = ? AND lease_expires_at > ?`,
+    [
+      expiry,
+      validOrphanScanName(scanName),
+      validOrphanScanLeaseToken(leaseToken),
+      renewedAt
+    ]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function releaseOrphanScanState(connection, { scanName, leaseToken } = {}) {
+  const [result] = await connection.query(
+    `UPDATE content_moderation_orphan_scan_state
+     SET lease_token = NULL, lease_expires_at = NULL
+     WHERE scan_name = ? AND lease_token = ?`,
+    [validOrphanScanName(scanName), validOrphanScanLeaseToken(leaseToken)]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function findContentModerationObjectReferences(connection, { objectKeys = [] } = {}) {
+  const keys = [...new Set((Array.isArray(objectKeys) ? objectKeys : [])
+    .map(normalizeOrphanScanObjectKey)
+    .filter(Boolean))];
+  if (keys.length === 0) return [];
+  const placeholders = keys.map(() => "?").join(", ");
+  const [rows] = await connection.query(
+    `SELECT object_key
+     FROM session_album_photos
+     WHERE status IN ('active', 'deleting') AND object_key IN (${placeholders})
+     UNION ALL
+     SELECT TRIM(LEADING '/' FROM photo_url) AS object_key
+     FROM session_album_photos
+     WHERE status IN ('active', 'deleting')
+       AND TRIM(LEADING '/' FROM photo_url) IN (${placeholders})
+     UNION ALL
+     SELECT TRIM(LEADING '/' FROM source_url) AS object_key
+     FROM session_album_photos
+     WHERE status IN ('active', 'deleting')
+       AND TRIM(LEADING '/' FROM source_url) IN (${placeholders})
+     UNION ALL
+     SELECT TRIM(LEADING '/' FROM display_url) AS object_key
+     FROM session_album_photos
+     WHERE status IN ('active', 'deleting')
+       AND TRIM(LEADING '/' FROM display_url) IN (${placeholders})
+     UNION ALL
+     SELECT TRIM(LEADING '/' FROM cover_url) AS object_key
+     FROM session_album_photos
+     WHERE status IN ('active', 'deleting')
+       AND TRIM(LEADING '/' FROM cover_url) IN (${placeholders})
+     UNION ALL
+     SELECT object_key
+     FROM session_album_upload_intents
+     WHERE status <> 'cleaned' AND object_key IN (${placeholders})
+     UNION ALL
+     SELECT object_key
+     FROM session_album_object_cleanup_jobs
+     WHERE status IN ('pending', 'retry', 'leased') AND object_key IN (${placeholders})
+     UNION ALL
+     SELECT cleanup_object.object_key
+     FROM session_album_object_cleanup_jobs cleanup
+     JOIN JSON_TABLE(
+       COALESCE(cleanup.object_urls_json, JSON_ARRAY()),
+       '$[*]' COLUMNS(object_key VARCHAR(512) PATH '$.objectKey' NULL ON EMPTY)
+     ) AS cleanup_object ON TRUE
+     WHERE cleanup.status IN ('pending', 'retry', 'leased')
+       AND cleanup_object.object_key IN (${placeholders})`,
+    [...keys, ...keys, ...keys, ...keys, ...keys, ...keys, ...keys, ...keys]
+  );
+  return [...new Set(rows.map((row) => normalizeOrphanScanObjectKey(row.object_key)).filter(Boolean))];
+}
+
+export async function listModerationMediaForReconciliation(
+  connection,
+  { afterId = 0, limit = 100 } = {}
+) {
+  const cursor = Number(afterId);
+  if (!Number.isSafeInteger(cursor) || cursor < 0) throw new TypeError("media reconciliation cursor must be non-negative");
+  const batchLimit = boundedPositiveInteger(limit, 1000, "media reconciliation limit");
+  const [mediaRows] = await connection.query(
+    `SELECT id, media_type, status, moderation_status, moderation_object_version,
+            object_key, source_url, display_url, cover_url
+     FROM session_album_photos
+     WHERE id > ? AND media_type IN ('image', 'video') AND status IN ('active', 'deleting')
+     ORDER BY id LIMIT ?`,
+    [cursor, batchLimit]
+  );
+  if (mediaRows.length === 0) return [];
+  const mediaIds = mediaRows.map((row) => Number(row.id));
+  const [jobRows] = await connection.query(
+    `SELECT id, provider, subject_type, subject_id, subject_version, status
+     FROM content_moderation_jobs
+     WHERE subject_type IN ('album_image', 'album_video')
+       AND CAST(subject_id AS UNSIGNED) IN (${mediaIds.map(() => "?").join(", ")})`,
+    mediaIds
+  );
+  const jobsByMediaId = new Map();
+  for (const job of jobRows) {
+    const mediaId = Number(job.subject_id);
+    if (!jobsByMediaId.has(mediaId)) jobsByMediaId.set(mediaId, []);
+    jobsByMediaId.get(mediaId).push(job);
+  }
+  return mediaRows.map((media) => ({
+    ...media,
+    moderation_jobs: jobsByMediaId.get(Number(media.id)) || []
+  }));
+}
+
+export async function listMediaModerationJobsForReconciliation(
+  connection,
+  { afterId = 0, limit = 100 } = {}
+) {
+  const cursor = Number(afterId);
+  if (!Number.isSafeInteger(cursor) || cursor < 0) throw new TypeError("job reconciliation cursor must be non-negative");
+  const batchLimit = boundedPositiveInteger(limit, 1000, "job reconciliation limit");
+  const [rows] = await connection.query(
+    `SELECT job.id, job.provider, job.subject_type, job.subject_id, job.subject_version, job.status,
+            media.id AS media_id, media.media_type, media.status AS media_status,
+            media.moderation_object_version AS media_moderation_object_version,
+            attempt.id AS current_attempt_id
+     FROM content_moderation_jobs job
+     LEFT JOIN session_album_photos media
+       ON job.subject_type IN ('album_image', 'album_video')
+      AND media.id = CAST(job.subject_id AS UNSIGNED)
+     LEFT JOIN content_moderation_provider_attempts attempt
+       ON attempt.moderation_job_id = job.id AND attempt.is_current = 1
+     WHERE job.id > ?
+       AND job.subject_type IN ('album_image', 'album_video')
+       AND job.status IN ('pending', 'processing', 'review', 'error')
+     ORDER BY job.id LIMIT ?`,
+    [cursor, batchLimit]
+  );
+  return rows;
 }
 
 export async function listAdminModerationJobs(

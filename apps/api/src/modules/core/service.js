@@ -517,6 +517,32 @@ function sessionAlbumVideoSourceUrl(sessionId, userId, value) {
 
 export { isModerationPublished };
 
+function moderationUnpublishedNotFound(subjectType) {
+  const type = subjectType === "album_video" ? "album_video" : "album_image";
+  const error = notFound(type === "album_video" ? "Album video not found" : "Album photo not found");
+  Object.defineProperties(error, {
+    contentModerationDenied: {
+      configurable: false,
+      enumerable: false,
+      value: true,
+      writable: false
+    },
+    contentModerationProvider: {
+      configurable: false,
+      enumerable: false,
+      value: type === "album_video" ? "tencent_ci_video" : "wechat_sec_check",
+      writable: false
+    },
+    contentModerationSubjectType: {
+      configurable: false,
+      enumerable: false,
+      value: type,
+      writable: false
+    }
+  });
+  return error;
+}
+
 function albumMediaType(row = {}) {
   return row.media_type === "video" ? "video" : "image";
 }
@@ -6268,8 +6294,11 @@ export async function updateSessionAlbumPhotoTags(user, photoId, body = {}) {
   const tagKeys = normalizeAlbumTagKeys(body);
   return withTransaction(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
-    if (!photo || photo.status !== "active" || !isModerationPublished(photo.moderation_status)) {
+    if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
+    }
+    if (!isModerationPublished(photo.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_image");
     }
     if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the photo uploader can tag this photo");
@@ -6454,8 +6483,11 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
   const currentUserId = positiveId(userId, "userId");
   return withDatabaseConnection(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
-    if (!photo || photo.status !== "active" || !isModerationPublished(photo.moderation_status)) {
+    if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
+    }
+    if (!isModerationPublished(photo.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_image");
     }
     if (albumMediaType(photo) !== "image") {
       throw notFound("Album photo not found");
@@ -6487,8 +6519,11 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
   const normalizedClaims = normalizeAlbumShareClaims(claims);
   return withDatabaseConnection(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
-    if (!photo || photo.status !== "active" || !isModerationPublished(photo.moderation_status)) {
+    if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
+    }
+    if (!isModerationPublished(photo.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_image");
     }
     if (albumMediaType(photo) !== "image") {
       throw notFound("Album photo not found");
@@ -6519,11 +6554,11 @@ export async function getVisibleSessionAlbumVideoForPlayback(user, mediaId) {
   const id = positiveId(mediaId, "mediaId");
   return withDatabaseConnection(async (connection) => {
     const media = await findById(connection, "session_album_photos", id);
-    if (
-      !media || media.status !== "active" || albumMediaType(media) !== "video" ||
-      !isModerationPublished(media.moderation_status)
-    ) {
+    if (!media || media.status !== "active" || albumMediaType(media) !== "video") {
       throw notFound("Album video not found");
+    }
+    if (!isModerationPublished(media.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_video");
     }
     if (albumMediaProcessingStatus(media) !== "ready" || !media.display_url) {
       throw forbidden("Album video is not ready");
@@ -6555,11 +6590,11 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
   const normalizedClaims = normalizeAlbumShareClaims(claims);
   return withDatabaseConnection(async (connection) => {
     const media = await findById(connection, "session_album_photos", id);
-    if (
-      !media || media.status !== "active" || albumMediaType(media) !== "video" ||
-      !isModerationPublished(media.moderation_status)
-    ) {
+    if (!media || media.status !== "active" || albumMediaType(media) !== "video") {
       throw notFound("Album video not found");
+    }
+    if (!isModerationPublished(media.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_video");
     }
     if (albumMediaProcessingStatus(media) !== "ready" || !media.cover_url) {
       throw notFound("Album video cover not found");

@@ -17,6 +17,10 @@ const retryExhaustionMigrationUrl = new URL(
   "../migrations/0027_content_moderation_retry_exhaustion.sql",
   import.meta.url
 );
+const orphanScanMigrationUrl = new URL(
+  "../migrations/0028_content_moderation_orphan_scan_state.sql",
+  import.meta.url
+);
 
 test("D45 migration creates moderation jobs, text proposals, audit logs, and media gate", async () => {
   const sql = await readFile(migrationUrl, "utf8");
@@ -41,6 +45,17 @@ test("D45 retry exhaustion migration adds a nullable terminal marker without rew
   assert.match(sql, /ALTER TABLE content_moderation_jobs/i);
   assert.match(sql, /ADD COLUMN IF NOT EXISTS retry_exhausted_at DATETIME NULL/i);
   assert.doesNotMatch(sql, /attempt_count\s*=/i);
+});
+
+test("D45 orphan scanner persists only bounded cursors and opaque leases", async () => {
+  const sql = await readFile(orphanScanMigrationUrl, "utf8");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS content_moderation_orphan_scan_state/i);
+  assert.match(sql, /scan_name VARCHAR\(64\) NOT NULL PRIMARY KEY/i);
+  assert.match(sql, /cursor_value VARCHAR\(1024\) NULL/i);
+  assert.match(sql, /lease_token VARCHAR\(128\) NULL/i);
+  assert.match(sql, /lease_expires_at DATETIME NULL/i);
+  assert.equal(requiredSchemaTables.includes("content_moderation_orphan_scan_state"), true);
+  assert.doesNotMatch(sql, /object_key|signed_url|access_token|normalized_payload_json/i);
 });
 
 test("every new album image and video path explicitly starts moderation pending", async () => {

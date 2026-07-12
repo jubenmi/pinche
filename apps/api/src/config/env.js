@@ -268,6 +268,28 @@ export function buildContentModerationConfig(env = process.env) {
       minimum: MODERATION_RETRY_LEASE_MIN_MS,
       maximum: 300_000
     }),
+    queueAlertAgeSeconds: boundedModerationInteger(env, "CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS", {
+      fallback: 900,
+      minimum: 60,
+      maximum: 7 * 24 * 60 * 60
+    }),
+    orphanScanEnabled: booleanValue(env.CONTENT_MODERATION_ORPHAN_SCAN_ENABLED, false),
+    orphanCleanupEnabled: booleanValue(env.CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED, false),
+    orphanScanPollMs: boundedModerationInteger(env, "CONTENT_MODERATION_ORPHAN_SCAN_POLL_MS", {
+      fallback: 300_000,
+      minimum: 60_000,
+      maximum: 24 * 60 * 60 * 1000
+    }),
+    orphanScanBatchSize: boundedModerationInteger(env, "CONTENT_MODERATION_ORPHAN_SCAN_BATCH_SIZE", {
+      fallback: 100,
+      minimum: 1,
+      maximum: 1000
+    }),
+    orphanRetentionHours: boundedModerationInteger(env, "CONTENT_MODERATION_ORPHAN_RETENTION_HOURS", {
+      fallback: 48,
+      minimum: 24,
+      maximum: 30 * 24
+    }),
     cosEnabled: booleanValue(env.COS_ENABLED, false),
     secretId: stringValue(env, "COS_SECRET_ID"),
     secretKey: stringValue(env, "COS_SECRET_KEY"),
@@ -285,6 +307,16 @@ export function assertContentModerationConfig(
   const wechatModerationEnabled = Boolean(
     moderationConfig.wechatTextEnabled || moderationConfig.wechatImageEnabled
   );
+  if (moderationConfig.orphanCleanupEnabled && !moderationConfig.orphanScanEnabled) {
+    missing.push("CONTENT_MODERATION_ORPHAN_SCAN_ENABLED");
+  }
+  if (moderationConfig.orphanScanEnabled) {
+    if (!moderationConfig.cosEnabled) missing.push("COS_ENABLED");
+    if (!moderationConfig.secretId) missing.push("COS_SECRET_ID");
+    if (!moderationConfig.secretKey) missing.push("COS_SECRET_KEY");
+    if (!moderationConfig.bucket) missing.push("COS_BUCKET");
+    if (!moderationConfig.cosRegion) missing.push("COS_REGION");
+  }
   if (nodeEnv === "production" && wechatModerationEnabled) {
     if (!moderationConfig.redisEnabled) missing.push("REDIS_ENABLED");
     if (moderationConfig.redisUrl) {

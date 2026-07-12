@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { MODERATION_RETRY_LEASE_MIN_MS, MODERATION_RETRY_ROUTES } from "./constants.js";
+import { emitModerationSubmissionFailure } from "./telemetry.js";
 
 export { MODERATION_RETRY_ROUTES } from "./constants.js";
 
@@ -33,7 +34,9 @@ const TRANSIENT_CODES = new Set([
   "InternalError"
 ]);
 const ALERTING_TRANSIENT_CODES = new Set([
-  "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE"
+  "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE",
+  "TENCENT_CI_VIDEO_RATE_LIMITED",
+  "RequestLimitExceeded"
 ]);
 
 function safeErrorCode(error) {
@@ -125,16 +128,15 @@ export async function runContentModerationRetryBatch({
         exhausted
       }));
       if (!persisted) continue;
-      const event = classification.alert
-        ? "moderation_operational_alert"
-        : exhausted
-          ? "moderation_retry_exhausted"
-          : "moderation_submission_failure";
-      emit(event, {
+      emitModerationSubmissionFailure({
+        emit,
+        provider: job.provider,
         subjectType: job.subject_type,
-        outcome: exhausted ? "operator_required" : "retry_scheduled",
         errorCode: classification.code,
-        ...(classification.alert || exhausted ? { priority: "high" } : {})
+        attempt: attempts,
+        retryScheduled: !exhausted,
+        retryExhausted: exhausted && classification.retryable,
+        alert: classification.alert
       });
     }
     if (shouldStop()) break;

@@ -5,6 +5,10 @@ import * as repository from "../modules/content-moderation/repository.js";
 import { MODERATION_RETRY_LEASE_MIN_MS } from "../modules/content-moderation/constants.js";
 import { MODERATION_RETRY_ROUTES, runContentModerationRetryBatch } from "../modules/content-moderation/retry.js";
 import { createContentModerationRetryProcessor } from "../modules/content-moderation/retry-dispatch.js";
+import {
+  emitContentModerationEvent,
+  emitModerationQueueSnapshots
+} from "../modules/content-moderation/telemetry.js";
 
 function boundedPositiveInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -52,12 +56,7 @@ export function createContentModerationRetryWorker({
   now,
   randomUUID,
   random,
-  emit = (event, fields) => console.log(JSON.stringify({
-    type: "content_moderation",
-    event,
-    at: new Date().toISOString(),
-    ...fields
-  }))
+  emit = emitContentModerationEvent
 } = {}) {
   const retryLimit = boundedPositiveInteger(moderationConfig?.retryLimit, 8, 1, 20);
   const retryBatchSize = boundedPositiveInteger(moderationConfig?.retryBatchSize, 25, 1, 100);
@@ -67,6 +66,12 @@ export function createContentModerationRetryWorker({
     MODERATION_RETRY_LEASE_MIN_MS,
     300_000
   );
+  const queueAlertAgeSeconds = boundedPositiveInteger(
+    moderationConfig?.queueAlertAgeSeconds,
+    900,
+    60,
+    7 * 24 * 60 * 60
+  );
   const processor = createContentModerationRetryProcessor({
     repository: repositoryModule,
     withTransaction: withTransactionFn,
@@ -75,8 +80,8 @@ export function createContentModerationRetryWorker({
 
   return {
     processJob: (job) => processor.processJob(job),
-    runOnce({ signal, isStopping } = {}) {
-      return runContentModerationRetryBatch({
+    async runOnce({ signal, isStopping } = {}) {
+      const result = await runContentModerationRetryBatch({
         repository: repositoryModule,
         withTransaction: withTransactionFn,
         processJob: (job) => processor.processJob(job),
@@ -91,6 +96,27 @@ export function createContentModerationRetryWorker({
         ...(typeof isStopping === "function" ? { isStopping } : {}),
         emit
       });
+      if (typeof repositoryModule.getModerationQueueStats === "function") {
+        try {
+          const snapshotAt = new Date(typeof now === "function" ? now() : Date.now());
+          const rows = await withTransactionFn((connection) => repositoryModule.getModerationQueueStats(
+            connection,
+            { now: snapshotAt }
+          ));
+          emitModerationQueueSnapshots({
+            telemetry: { emit },
+            rows,
+            alertAgeSeconds: queueAlertAgeSeconds
+          });
+        } catch {
+          emit("moderation_operational_alert", {
+            outcome: "error",
+            errorCode: "CONTENT_MODERATION_QUEUE_SNAPSHOT_FAILED",
+            priority: "high"
+          });
+        }
+      }
+      return result;
     }
   };
 }

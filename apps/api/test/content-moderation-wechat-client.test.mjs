@@ -267,6 +267,43 @@ test("access-token infrastructure failures map into retryable high-alert content
   }
 });
 
+test("token refresh failures emit only safe moderation telemetry dimensions", async () => {
+  const events = [];
+  const client = createWechatContentSecurityClient({
+    tokenProvider: {
+      async getAccessToken() {
+        throw Object.assign(new Error("private token infrastructure diagnostic"), {
+          code: "WECHAT_ACCESS_TOKEN_CACHE_UNAVAILABLE"
+        });
+      }
+    },
+    fetchImpl: async () => assert.fail("token failure must stop before the provider request"),
+    emit: (event, fields) => events.push({ event, fields })
+  });
+
+  await assert.rejects(
+    client.checkText({
+      content: "private text that must not reach telemetry",
+      openid: "private-openid",
+      scene: 2,
+      subjectType: "session_review"
+    }),
+    { code: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE" }
+  );
+  assert.deepEqual(events, [{
+    event: "moderation_token_refresh_failure",
+    fields: {
+      provider: "wechat_sec_check",
+      subjectType: "session_review",
+      outcome: "error",
+      errorCode: "WECHAT_CONTENT_SECURITY_TOKEN_UNAVAILABLE",
+      priority: "high"
+    }
+  }]);
+  assert.equal(JSON.stringify(events).includes("private text"), false);
+  assert.equal(JSON.stringify(events).includes("private-openid"), false);
+});
+
 test("content security rejects unknown text suggestions instead of treating them as pass", async () => {
   const client = createWechatContentSecurityClient({
     tokenProvider: createTokenProvider(),
