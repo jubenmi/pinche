@@ -24,6 +24,14 @@ assert(
   productionEnvExample.includes("WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID="),
   "production env example should document the reschedule template id"
 );
+assert(
+  developmentEnvExample.includes("VITE_SUBSCRIBE_TEMPLATE_SESSION_RESCHEDULED="),
+  "development env example should document the Mini Program reschedule template id"
+);
+assert(
+  productionEnvExample.includes("VITE_SUBSCRIBE_TEMPLATE_SESSION_RESCHEDULED="),
+  "production env example should document the Mini Program reschedule template id"
+);
 
 assert.equal(
   buildRedisUrl({

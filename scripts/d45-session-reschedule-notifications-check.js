@@ -83,6 +83,8 @@ assertIncludes(env, "WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID");
 assertIncludes(env, "sessionRescheduledTemplateId");
 assertIncludes(envExample, "WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID=");
 assertIncludes(productionEnvExample, "WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID=");
+assertIncludes(envExample, "VITE_SUBSCRIBE_TEMPLATE_SESSION_RESCHEDULED=");
+assertIncludes(productionEnvExample, "VITE_SUBSCRIBE_TEMPLATE_SESSION_RESCHEDULED=");
 assertIncludes(subscribeMessage, "export async function notifySessionRescheduled");
 assertIncludes(subscribeMessage, 'scene: "session_rescheduled"');
 assertIncludes(subscribeMessage, "rescheduleMessageData");
