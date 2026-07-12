@@ -183,7 +183,7 @@ import {
   request
 } from "../../utils/api";
 import { showToast } from "../../utils/tdesignFeedback";
-import { isConfirmedSessionMember } from "../../utils/sessionMembership";
+import { canRequestRescheduleReminder } from "../../utils/sessionMembership";
 import { requestSessionRescheduledSubscription } from "../../utils/subscribeMessages";
 
 function coordinateNumber(value, min, max) {
@@ -231,7 +231,7 @@ export default {
     canRequestRescheduleReminder() {
       return (
         !this.isCityPreview &&
-        isConfirmedSessionMember(this.session, this.currentUserId)
+        canRequestRescheduleReminder(this.session, this.currentUserId)
       );
     },
     summaryText() {

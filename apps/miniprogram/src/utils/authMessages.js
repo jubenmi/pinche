@@ -141,6 +141,18 @@ export function mergeAuthMessages(pendingMessages = [], persistentMessages = [])
   return [...(pendingMessages || []), ...persistent];
 }
 
+export function mergePersistentMessagePages(existingMessages = [], incomingMessages = []) {
+  const seen = new Set();
+  return [...(existingMessages || []), ...(incomingMessages || [])].filter((message) => {
+    const key = message?.notificationId || message?.key;
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 export function totalMessageBadgeCount(pendingMessages = [], persistentUnreadCount = 0) {
   return (
     totalOrganizerSignupMessageCount(pendingMessages) +

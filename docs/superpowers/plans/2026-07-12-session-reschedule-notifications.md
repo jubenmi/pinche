@@ -465,3 +465,12 @@ Confirm all seven acceptance criteria in `docs/superpowers/specs/2026-07-12-sess
 git add scripts/d45-session-reschedule-notifications-smoke.js scripts/d45-session-reschedule-notifications-check.js package.json
 git commit -m "test: cover session reschedule notifications"
 ```
+
+### Final review blockers (2026-07-12)
+
+- [x] Reject legacy `PATCH /api/sessions/:id` bodies containing `startAt` or `start_at`, with regression coverage for future/member/started sessions and manage-settings compatibility.
+- [x] Add bounded, owner-scoped, tamper-safe cursor pagination to `GET /api/users/me/notifications`, preserving one unread-count snapshot per page.
+- [x] Add Mini Program message-center load-more behavior with race-safe reset/append merging, deduplication, and partial-error handling.
+- [x] Hide member reschedule reminder eligibility from the session organizer, including organizer seat/NPC identities.
+- [x] Update D45/D25 assertions and design wording, run the requested focused/aggregate verification, self-review, and commit the blocker fixes.
+- [x] Keep manage overview summary and 时间 row on `formatSessionStartAt` (`Asia/Shanghai`, `YYYY-MM-DD HH:mm`) with no raw ISO output.

@@ -4,11 +4,42 @@ import {
   buildOrganizerSignupMessages,
   buildPersistentMessages,
   authMessageIdentityKey,
+  mergePersistentMessagePages,
   mergeAuthMessages,
   restorePersistentUnread,
   shouldApplyMessageRefresh,
   totalMessageBadgeCount
 } from "../src/utils/authMessages.js";
+
+test("appends notification pages without duplicates and keeps live item state", () => {
+  const existing = buildPersistentMessages([
+    { id: 52, type: "signup_reviewed", read_at: "read" },
+    { id: 51, type: "signup_reviewed", read_at: null }
+  ]);
+  existing[1] = { ...existing[1], unread: false };
+  const incoming = buildPersistentMessages([
+    { id: 51, type: "signup_reviewed", read_at: null },
+    { id: 50, type: "session_rescheduled", read_at: null }
+  ]);
+
+  const merged = mergePersistentMessagePages(existing, incoming);
+  assert.deepEqual(merged.map(({ notificationId }) => notificationId), [52, 51, 50]);
+  assert.equal(merged[1].unread, false);
+});
+
+test("all notifications beyond the first fifty remain appendable", () => {
+  const first = buildPersistentMessages(
+    Array.from({ length: 50 }, (_, index) => ({
+      id: 100 - index,
+      type: "signup_reviewed"
+    }))
+  );
+  const second = buildPersistentMessages([
+    { id: 50, type: "signup_reviewed" },
+    { id: 49, type: "signup_reviewed" }
+  ]);
+  assert.equal(mergePersistentMessagePages(first, second).length, 52);
+});
 
 test("normalizes pending signup messages", () => {
   const [message] = buildOrganizerSignupMessages([

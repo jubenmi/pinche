@@ -213,6 +213,9 @@ assertIncludes(miniAuthIdentityBar, "messageRefreshGeneration");
 assertIncludes(miniAuthIdentityBar, "shouldApplyMessageRefresh(requestContext, currentContext)");
 assertIncludes(miniAuthIdentityBar, "restorePersistentUnread(");
 assertIncludes(miniAuthIdentityBar, "error?.statusCode === 401");
+assertIncludes(miniAuthIdentityBar, "loadMoreNotifications");
+assertIncludes(miniAuthIdentityBar, "notificationsNextCursor");
+assertIncludes(miniAuthIdentityBar, "mergePersistentMessagePages(");
 for (const token of [
   "verifyD45SmokePreflight",
   "returned non-JSON",
@@ -322,16 +325,19 @@ assert.deepEqual(listResult, {
       created_at: "2026-07-12 10:00:00"
     }
   ],
-  unread_count: 3
+  unread_count: 3,
+  next_cursor: null,
+  has_more: false
 });
 assert.equal(listQueries.length, 1, "inbox items and unread count must use one DB snapshot");
 assert(listQueries.every(({ values }) => values.includes(7)), "inbox SQL must be owner scoped");
 assert(
   listQueries.some(({ sql }) =>
-    sql.includes("ORDER BY (read_at IS NULL) DESC, created_at DESC") && sql.includes("LIMIT 50")
+    sql.includes("ORDER BY (read_at IS NULL) DESC, created_at DESC") && sql.includes("LIMIT ?")
   ),
   "inbox must cap at 50 and order unread first, then newest"
 );
+assert.equal(listQueries[0].values.at(-1), 51, "inbox query must fetch one lookahead row");
 
 const emptyListQueries = [];
 const emptyListResult = await listMyNotifications(
@@ -344,7 +350,12 @@ const emptyListResult = await listMyNotifications(
   7,
   50
 );
-assert.deepEqual(emptyListResult, { items: [], unread_count: 0 });
+assert.deepEqual(emptyListResult, {
+  items: [],
+  unread_count: 0,
+  next_cursor: null,
+  has_more: false
+});
 assert.equal(emptyListQueries.length, 1, "empty inbox must also use one query");
 
 const readQueries = [];

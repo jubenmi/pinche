@@ -116,6 +116,19 @@
             <text class="message-action">{{ message.actionText }}</text>
           </view>
         </t-button>
+        <view v-if="notificationsHasMore || notificationsLoadMoreError" class="message-load-more">
+          <t-button
+            class="message-panel-tool"
+            :class="{ disabled: notificationsLoadingMore }"
+            :disabled="notificationsLoadingMore"
+            @tap.stop="loadMoreNotifications"
+          >
+            {{ notificationsLoadingMore ? "加载中..." : "加载更多" }}
+          </t-button>
+          <text v-if="notificationsLoadMoreError" class="message-load-more-error">
+            {{ notificationsLoadMoreError }}
+          </text>
+        </view>
       </block>
     </view>
 
@@ -290,6 +303,7 @@ import {
   authMessageIdentityKey,
   buildOrganizerSignupMessages,
   buildPersistentMessages,
+  mergePersistentMessagePages,
   mergeAuthMessages,
   restorePersistentUnread,
   shouldApplyMessageRefresh,
@@ -367,6 +381,10 @@ export default {
       organizerMessages: [],
       persistentMessages: [],
       persistentUnreadCount: 0,
+      notificationsNextCursor: null,
+      notificationsHasMore: false,
+      notificationsLoadingMore: false,
+      notificationsLoadMoreError: "",
       notificationReadInFlight: [],
       messagesLoading: false,
       sessionsMessagesError: "",
@@ -564,6 +582,10 @@ export default {
       this.organizerMessages = [];
       this.persistentMessages = [];
       this.persistentUnreadCount = 0;
+      this.notificationsNextCursor = null;
+      this.notificationsHasMore = false;
+      this.notificationsLoadingMore = false;
+      this.notificationsLoadMoreError = "";
       this.notificationReadInFlight = [];
       this.sessionsMessagesError = "";
       this.notificationsMessagesError = "";
@@ -586,6 +608,10 @@ export default {
         this.organizerMessages = [];
         this.persistentMessages = [];
         this.persistentUnreadCount = 0;
+        this.notificationsNextCursor = null;
+        this.notificationsHasMore = false;
+        this.notificationsLoadingMore = false;
+        this.notificationsLoadMoreError = "";
         this.notificationReadInFlight = [];
         this.sessionsMessagesError = "";
         this.notificationsMessagesError = "";
@@ -624,10 +650,15 @@ export default {
           const inbox = dataOf(notificationsResult.value) || {};
           this.persistentMessages = buildPersistentMessages(inbox.items || []);
           this.persistentUnreadCount = Math.max(0, Number(inbox.unread_count) || 0);
+          this.notificationsNextCursor = inbox.next_cursor || null;
+          this.notificationsHasMore = Boolean(inbox.has_more && this.notificationsNextCursor);
+          this.notificationsLoadMoreError = "";
           this.notificationsMessagesError = "";
         } else {
           this.persistentMessages = [];
           this.persistentUnreadCount = 0;
+          this.notificationsNextCursor = null;
+          this.notificationsHasMore = false;
           this.notificationsMessagesError = "通知消息同步失败。";
         }
       } catch (error) {
@@ -646,6 +677,8 @@ export default {
         this.organizerMessages = [];
         this.persistentMessages = [];
         this.persistentUnreadCount = 0;
+        this.notificationsNextCursor = null;
+        this.notificationsHasMore = false;
         this.sessionsMessagesError = "待审核申请同步失败。";
         this.notificationsMessagesError = "通知消息同步失败。";
       } finally {
@@ -655,6 +688,60 @@ export default {
         };
         if (shouldApplyMessageRefresh(requestContext, currentContext)) {
           this.messagesLoading = false;
+        }
+      }
+    },
+    async loadMoreNotifications() {
+      const cursor = this.notificationsNextCursor;
+      const requestContext = {
+        generation: this.messageRefreshGeneration,
+        identityKey: authMessageIdentityKey(this.user?.id, getToken())
+      };
+      if (!cursor || !this.notificationsHasMore || this.notificationsLoadingMore) {
+        return;
+      }
+      this.notificationsLoadingMore = true;
+      this.notificationsLoadMoreError = "";
+      try {
+        const response = await request({
+          url: `/api/users/me/notifications?cursor=${encodeURIComponent(cursor)}`
+        });
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (!shouldApplyMessageRefresh(requestContext, currentContext)) {
+          return;
+        }
+        const inbox = dataOf(response) || {};
+        this.persistentMessages = mergePersistentMessagePages(
+          this.persistentMessages,
+          buildPersistentMessages(inbox.items || [])
+        );
+        this.persistentUnreadCount = Math.max(0, Number(inbox.unread_count) || 0);
+        this.notificationsNextCursor = inbox.next_cursor || null;
+        this.notificationsHasMore = Boolean(inbox.has_more && this.notificationsNextCursor);
+      } catch (error) {
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (!shouldApplyMessageRefresh(requestContext, currentContext)) {
+          return;
+        }
+        if (error?.statusCode === 401) {
+          clearAuth();
+          this.refreshIdentity();
+          return;
+        }
+        this.notificationsLoadMoreError = "更多通知加载失败，请重试。";
+      } finally {
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (shouldApplyMessageRefresh(requestContext, currentContext)) {
+          this.notificationsLoadingMore = false;
         }
       }
     },
@@ -1324,6 +1411,18 @@ export default {
 
 .message-empty.error {
   color: #a4473d;
+}
+
+.message-load-more {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding-top: 16rpx;
+}
+
+.message-load-more-error {
+  color: #b42318;
+  font-size: 22rpx;
 }
 
 .message-item {

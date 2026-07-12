@@ -55,3 +55,10 @@ export function isConfirmedSessionMember(session = {}, userId) {
     (role) => role.status === "active" && sameUser(role.bound_user_id, userId)
   );
 }
+
+export function canRequestRescheduleReminder(session = {}, userId) {
+  return (
+    !sameUser(session.organizer_user_id, userId) &&
+    isConfirmedSessionMember(session, userId)
+  );
+}

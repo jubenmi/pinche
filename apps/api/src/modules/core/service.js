@@ -4230,7 +4230,19 @@ export async function relinkMySessionMembership(user, sessionId) {
   });
 }
 
+export function assertSessionPatchDoesNotReschedule(body = {}) {
+  if (
+    Object.prototype.hasOwnProperty.call(body, "startAt") ||
+    Object.prototype.hasOwnProperty.call(body, "start_at")
+  ) {
+    throw badRequest(
+      "Session time changes must use POST /api/sessions/:id/reschedule"
+    );
+  }
+}
+
 export async function updateSession(user, id, body) {
+  assertSessionPatchDoesNotReschedule(body);
   return withDatabaseConnection(async (connection) => {
     await requireSessionOwner(connection, id, user);
     assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
@@ -4259,7 +4271,6 @@ export async function updateSession(user, id, body) {
             : 0
     };
     return updateAllowed(connection, "sessions", id, normalized, [
-      ["startAt", "start_at"],
       ["dmUserId", "dm_user_id"],
       ["dmNameSnapshot", "dm_name_snapshot"],
       ["npcUserId", "npc_user_id"],
@@ -4748,7 +4759,7 @@ async function insertSignupReviewedNotification(connection, signup, notification
 
 export async function listMyNotifications(user, filters = {}) {
   return withDatabaseConnection((connection) =>
-    listMyNotificationsFromConnection(connection, user.user.id, filters.limit)
+    listMyNotificationsFromConnection(connection, user.user.id, filters)
   );
 }
 

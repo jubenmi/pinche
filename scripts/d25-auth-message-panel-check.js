@@ -5,6 +5,7 @@ import {
   authMessageIdentityKey,
   buildOrganizerSignupMessages,
   buildPersistentMessages,
+  mergePersistentMessagePages,
   mergeAuthMessages,
   restorePersistentUnread,
   shouldApplyMessageRefresh,
@@ -75,6 +76,11 @@ assert.match(persistentMessages[1].subtitle, /2026-07-12 10:00 → 2026-07-12 19
 assert.equal(persistentMessages[1].typeTag, "车局改期");
 assert.equal(persistentMessages[1].actionText, "查看车局");
 assert.equal(totalMessageBadgeCount(messages, 3), 110);
+assert.equal(
+  mergePersistentMessagePages(persistentMessages, persistentMessages).length,
+  persistentMessages.length,
+  "pagination merge must deduplicate notification identities"
+);
 assert.deepEqual(
   mergeAuthMessages(messages, persistentMessages).map((message) => message.kind),
   ["pending_signup", "pending_signup", "persistent", "persistent"]
@@ -116,7 +122,11 @@ for (const requiredText of [
   "部分消息同步失败，请刷新重试",
   "shouldApplyMessageRefresh",
   "restorePersistentUnread",
-  "activeMessageIdentityKey"
+  "activeMessageIdentityKey",
+  "loadMoreNotifications",
+  "notificationsNextCursor",
+  "mergePersistentMessagePages",
+  "encodeURIComponent(cursor)"
 ]) {
   assert(
     identityBarSource.includes(requiredText),
