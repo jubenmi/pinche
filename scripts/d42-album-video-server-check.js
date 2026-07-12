@@ -465,6 +465,31 @@ check("COS video redirect does not bind playback authorization to the first byte
   assert.equal(redirects[0].pathname, redirects[1].pathname);
 });
 
+check("COS video HEAD stays on the authenticated API URL before GET playback", async () => {
+  const response = new MemoryResponse();
+  const headCalls = [];
+  await serveUploadedSessionAlbumVideoFile({ source_url: SOURCE_URL }, response, {
+    cosEnabled: true,
+    method: "HEAD",
+    headObject: async (options) => {
+      headCalls.push(options);
+      return {
+        headers: {
+          "content-length": String(VIDEO_BYTES.length),
+          "content-type": "video/mp4"
+        }
+      };
+    }
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers.location, undefined);
+  assert.equal(response.headers["content-length"], VIDEO_BYTES.length);
+  assert.equal(response.headers["content-type"], "video/mp4");
+  assert.equal(response.headers["accept-ranges"], "bytes");
+  assert.equal(response.body.length, 0);
+  assert.equal(headCalls.length, 1);
+});
+
 check("production video fallback is streamed and immutable", async () => {
   const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
   assert.match(server, /headers:\s*\{\s*"x-cos-forbid-overwrite":\s*"true"\s*\}/);
