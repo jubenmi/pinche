@@ -6,6 +6,7 @@ import {
   canRescheduleSession,
   formatSessionStartAt,
   parseSessionStartAt,
+  rescheduleConfirmationRequired,
   rescheduleErrorRequiresRefresh,
   rescheduleErrorText,
   validateRescheduleSelection
@@ -20,6 +21,9 @@ test("parseSessionStartAt rejects invalid or empty values", () => {
   assert.equal(parseSessionStartAt("not-a-date"), null);
   assert.equal(parseSessionStartAt(""), null);
   assert.equal(parseSessionStartAt(null), null);
+  assert.equal(parseSessionStartAt("2026-02-30 10:00:00"), null);
+  assert.equal(parseSessionStartAt("2025-02-29 10:00:00"), null);
+  assert.equal(parseSessionStartAt("2024-02-29 10:00:00")?.toISOString(), "2024-02-29T02:00:00.000Z");
 });
 
 test("formatSessionStartAt displays Asia/Shanghai local minute precision", () => {
@@ -111,6 +115,22 @@ test("normalized confirmation and time errors map to direct guidance", () => {
     rescheduleErrorText(confirmation),
     "已上车成员发生变化，请重新确认改期和通知人数。"
   );
+  assert.equal(rescheduleConfirmationRequired(confirmation), true);
   assert.equal(rescheduleErrorText(past), "新时间必须晚于当前时间，请重新选择。");
   assert.equal(rescheduleErrorText(unchanged), "新时间与当前时间相同，请重新选择。");
+});
+
+test("auth and missing-session errors map to non-generic guidance", () => {
+  assert.equal(
+    rescheduleErrorText(Object.assign(new Error("Unauthorized"), { statusCode: 401 })),
+    "登录已过期，请重新登录后再改期。"
+  );
+  assert.equal(
+    rescheduleErrorText(Object.assign(new Error("Forbidden"), { statusCode: 403 })),
+    "你已不是本车车头，无法继续改期。"
+  );
+  assert.equal(
+    rescheduleErrorText(Object.assign(new Error("Session not found"), { statusCode: 404 })),
+    "车局不存在或已被删除，请返回上一页。"
+  );
 });

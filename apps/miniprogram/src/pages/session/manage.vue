@@ -227,6 +227,7 @@ import {
   buildRescheduleConfirmation,
   canRescheduleSession,
   formatSessionStartAt,
+  rescheduleConfirmationRequired,
   rescheduleErrorRequiresRefresh as shouldRefreshAfterRescheduleError,
   rescheduleErrorText as formatRescheduleErrorText,
   validateRescheduleSelection
@@ -556,19 +557,22 @@ export default {
         this.statusText = validation.message;
         return;
       }
+      this.showRescheduleConfirmation(validation.startAt);
+    },
+    showRescheduleConfirmation(startAt) {
       const memberCount = this.otherOnboardMemberCount;
       showModal({
         title: "确认改期",
         content: buildRescheduleConfirmation({
           memberCount,
           oldStartAt: this.session.start_at,
-          newStartAt: validation.startAt
+          newStartAt: startAt
         }),
         confirmText: "确认改期",
         cancelText: "再想想",
         success: (result) => {
           if (result.confirm) {
-            this.rescheduleSession(validation.startAt, memberCount > 0);
+            this.rescheduleSession(startAt, memberCount > 0);
           }
         }
       });
@@ -577,8 +581,13 @@ export default {
       if (this.busyAction) {
         return;
       }
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
       this.busyAction = true;
       this.busyText = "正在改期，请稍候...";
+      let needsFreshConfirmation = false;
       try {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/reschedule`,
@@ -592,13 +601,20 @@ export default {
         showToast({ title: "改期成功", icon: "none" });
       } catch (error) {
         this.statusText = this.rescheduleErrorText(error);
-        if (this.rescheduleErrorRequiresRefresh(error)) {
+        if (rescheduleConfirmationRequired(error)) {
+          needsFreshConfirmation = true;
+          await this.reload();
+          this.statusText = "已刷新上车成员，请按最新人数重新确认改期。";
+        } else if (this.rescheduleErrorRequiresRefresh(error)) {
           await this.reload();
           this.statusText = this.rescheduleErrorText(error);
         }
       } finally {
         this.busyAction = false;
         this.busyText = "";
+      }
+      if (needsFreshConfirmation) {
+        this.showRescheduleConfirmation(startAt);
       }
     },
     rescheduleDeliveryText(delivery) {

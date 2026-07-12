@@ -14,6 +14,22 @@ export function parseSessionStartAt(value) {
   }
   const text = value.trim();
   const databaseMatch = text.match(DATABASE_DATE_TIME);
+  if (databaseMatch) {
+    const [year, month, day] = databaseMatch[1].split("-").map(Number);
+    const [hour, minute] = databaseMatch[2].split(":").map(Number);
+    const second = Number(databaseMatch[3] || 0);
+    const calendar = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    if (
+      calendar.getUTCFullYear() !== year ||
+      calendar.getUTCMonth() !== month - 1 ||
+      calendar.getUTCDate() !== day ||
+      calendar.getUTCHours() !== hour ||
+      calendar.getUTCMinutes() !== minute ||
+      calendar.getUTCSeconds() !== second
+    ) {
+      return null;
+    }
+  }
   const normalized = databaseMatch
     ? `${databaseMatch[1]}T${databaseMatch[2]}:${databaseMatch[3] || "00"}${
         databaseMatch[4] ? `.${databaseMatch[4].padEnd(3, "0")}` : ""
@@ -82,9 +98,25 @@ export function rescheduleErrorRequiresRefresh(error) {
   return error?.statusCode === 409 && /past|started/.test(message);
 }
 
+export function rescheduleConfirmationRequired(error) {
+  return (
+    error?.statusCode === 409 &&
+    /confirmation/.test(String(error?.message || "").toLowerCase())
+  );
+}
+
 export function rescheduleErrorText(error) {
   const message = String(error?.message || "").toLowerCase();
-  if (error?.statusCode === 409 && /confirmation/.test(message)) {
+  if (error?.statusCode === 401) {
+    return "登录已过期，请重新登录后再改期。";
+  }
+  if (error?.statusCode === 403) {
+    return "你已不是本车车头，无法继续改期。";
+  }
+  if (error?.statusCode === 404) {
+    return "车局不存在或已被删除，请返回上一页。";
+  }
+  if (rescheduleConfirmationRequired(error)) {
     return "已上车成员发生变化，请重新确认改期和通知人数。";
   }
   if (error?.statusCode === 409 && /past|started/.test(message)) {
