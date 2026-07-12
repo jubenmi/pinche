@@ -1,7 +1,42 @@
+export function normalizeUserId(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? String(value) : "";
+  }
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    return "";
+  }
+  const normalized = value.replace(/^0+/, "");
+  return normalized || "";
+}
+
 function sameUser(left, right) {
-  const leftId = Number(left);
-  const rightId = Number(right);
-  return Boolean(left) && Boolean(right) && Number.isFinite(leftId) && leftId === rightId;
+  const leftId = normalizeUserId(left);
+  const rightId = normalizeUserId(right);
+  return Boolean(leftId) && leftId === rightId;
+}
+
+export function shouldRequestRescheduleSubscription(
+  wasConfirmedMember,
+  joinResult,
+  confirmedResult = "joined"
+) {
+  return !wasConfirmedMember && joinResult === confirmedResult;
+}
+
+export async function requestSubscriptionAfterConfirmedJoin(
+  wasConfirmedMember,
+  joinResult,
+  confirmedResult,
+  requestSubscription
+) {
+  if (!shouldRequestRescheduleSubscription(wasConfirmedMember, joinResult, confirmedResult)) {
+    return null;
+  }
+  try {
+    return await requestSubscription();
+  } catch (error) {
+    return null;
+  }
 }
 
 export function isConfirmedSessionMember(session = {}, userId) {

@@ -55,6 +55,10 @@ const miniDetailPage = readFileSync(
   new URL("../apps/miniprogram/src/pages/session/detail.vue", import.meta.url),
   "utf8"
 );
+const miniMembershipHelper = readFileSync(
+  new URL("../apps/miniprogram/src/utils/sessionMembership.js", import.meta.url),
+  "utf8"
+);
 
 assertIncludes(migration, "CREATE TABLE IF NOT EXISTS user_notifications");
 assertIncludes(
@@ -149,11 +153,21 @@ assertIncludes(
 assertIncludes(miniSharePage, "requestSessionRescheduledSubscription");
 assertIncludes(miniSharePage, 'joinResult === "joined"');
 assertIncludes(miniSharePage, 'result.join_result === "npc_joined"');
+assert(!miniSharePage.includes('join_result || "joined"'), "missing join_result must not imply success");
+assertIncludes(miniSharePage, "wasConfirmedMember");
+assertIncludes(miniSharePage, "requestSubscriptionAfterConfirmedJoin");
+assertIncludes(miniSharePage, "上车结果异常");
 assert.equal(
-  miniSharePage.match(/await requestSessionRescheduledSubscription\(\)\.catch\(\(\) => null\)/g)?.length,
+  miniSharePage.match(/await requestSubscriptionAfterConfirmedJoin\(/g)?.length,
   2,
-  "only successful direct seat/NPC joins request reschedule subscription, and refusal cannot replace join success"
+  "seat and NPC direct results must use guarded transition subscription flow"
 );
+assertIncludes(miniMembershipHelper, "export function normalizeUserId");
+assertIncludes(miniMembershipHelper, "Number.isSafeInteger");
+assertIncludes(miniMembershipHelper, "export function shouldRequestRescheduleSubscription");
+assertIncludes(miniMembershipHelper, "!wasConfirmedMember && joinResult === confirmedResult");
+assertIncludes(miniMembershipHelper, "export async function requestSubscriptionAfterConfirmedJoin");
+assertIncludes(miniMembershipHelper, "catch (error)");
 assertIncludes(miniDetailPage, "canRequestRescheduleReminder");
 assertIncludes(miniDetailPage, "改期提醒");
 assertIncludes(miniDetailPage, "requestRescheduleReminder");

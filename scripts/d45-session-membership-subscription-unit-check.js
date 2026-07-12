@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { isConfirmedSessionMember } from "../apps/miniprogram/src/utils/sessionMembership.js";
+import {
+  isConfirmedSessionMember,
+  normalizeUserId,
+  requestSubscriptionAfterConfirmedJoin,
+  shouldRequestRescheduleSubscription
+} from "../apps/miniprogram/src/utils/sessionMembership.js";
 
 const session = {
   organizer_user_id: 99,
@@ -25,5 +30,34 @@ assert.equal(isConfirmedSessionMember(session, 12), false, "pending NPC identity
 assert.equal(isConfirmedSessionMember(session, 99), false, "organizer-only identity is not eligible");
 assert.equal(isConfirmedSessionMember(session, "0007"), true, "numeric duplicate identity matches once");
 assert.equal(isConfirmedSessionMember(session, ""), false, "missing identity is not eligible");
+assert.equal(normalizeUserId("0007"), "7", "digit ids normalize without numeric conversion");
+assert.equal(normalizeUserId("9007199254740993"), "9007199254740993");
+assert.equal(normalizeUserId("9007199254740992"), "9007199254740992");
+assert.notEqual(normalizeUserId("9007199254740993"), normalizeUserId("9007199254740992"));
+for (const invalidId of ["", " 7", "7 ", "7.0", "1e3", "-7", 7.5, null, undefined]) {
+  assert.equal(normalizeUserId(invalidId), "", `invalid user id ${String(invalidId)} is rejected`);
+}
+
+assert.equal(
+  shouldRequestRescheduleSubscription(false, "joined"),
+  true,
+  "explicit first join requests authorization"
+);
+assert.equal(shouldRequestRescheduleSubscription(true, "joined"), false, "member switch does not prompt");
+assert.equal(shouldRequestRescheduleSubscription(false, "pending_review"), false);
+assert.equal(shouldRequestRescheduleSubscription(false, undefined), false);
+assert.equal(shouldRequestRescheduleSubscription(false, ""), false);
+assert.equal(
+  await requestSubscriptionAfterConfirmedJoin(false, "joined", "joined", async () => {
+    throw new Error("subscription rejected");
+  }),
+  null,
+  "subscription rejection never replaces join success"
+);
+let existingMemberRequests = 0;
+await requestSubscriptionAfterConfirmedJoin(true, "joined", "joined", async () => {
+  existingMemberRequests += 1;
+});
+assert.equal(existingMemberRequests, 0, "existing-member switches never request again");
 
 console.log("D45 session membership subscription unit checks passed");
