@@ -2100,6 +2100,18 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`Manage page must integrate top actions, status, and pinned message into one overview block: ${requiredManageOverviewText}`);
     }
   }
+  for (const requiredManageDateTimeText of [
+    "formatSessionDateTime",
+    "formattedStartAt",
+    "时间：{{ formattedStartAt }}"
+  ]) {
+    if (!manageSource.includes(requiredManageDateTimeText)) {
+      fail(`Manage page must present a localized session time: ${requiredManageDateTimeText}`);
+    }
+  }
+  if (manageSource.includes("时间：{{ session.start_at }}")) {
+    fail("Manage page must not expose the raw ISO session time");
+  }
   if (/section-title">\s*车况/.test(manageSource)) {
     fail("Manage page must not keep a separate 车况 section after overview consolidation");
   }

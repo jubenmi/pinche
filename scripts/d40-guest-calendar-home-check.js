@@ -118,6 +118,7 @@ for (const token of [
   "border-radius: 0 !important;",
   "background: transparent !important;",
   "box-shadow: none !important;",
+  "opacity: 0.18;",
   "white-space: nowrap;"
 ]) {
   assert(calendar.includes(token), `D40 selected empty-state polish must include: ${token}`);
