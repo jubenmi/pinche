@@ -25,6 +25,7 @@ const d35AdminCatalogCheckPath = path.join(root, "scripts/d35-miniprogram-admin-
 const albumImageViewerPath = path.join(srcRoot, "components", "AlbumImageViewer.vue");
 const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
 const productionWechatAppId = "wx2675a606d3bd242c";
+const requireBuiltWxml = process.argv.includes("--require-built-wxml");
 const mainPackageLimitBytes = Math.floor(1.5 * 1024 * 1024);
 const localMediaLimitBytes = 200 * 1024;
 const localFontLimitBytes = 200 * 1024;
@@ -2193,6 +2194,36 @@ if (!fs.existsSync(pagesJsonPath)) {
   const albumImageViewerSource = fs.existsSync(albumImageViewerPath)
     ? fs.readFileSync(albumImageViewerPath, "utf8")
     : "";
+  const builtAlbumImageViewerWxmlPath = path.join(
+    miniprogramBuildRoot,
+    "components",
+    "AlbumImageViewer.wxml"
+  );
+  if (!fs.existsSync(builtAlbumImageViewerWxmlPath)) {
+    if (requireBuiltWxml) {
+      fail(
+        "Built AlbumImageViewer WXML is required; run npm run build:mp-weixin before this check"
+      );
+    }
+  } else {
+    const builtAlbumImageViewerWxml = fs.readFileSync(builtAlbumImageViewerWxmlPath, "utf8");
+    const builtAlbumViewerSwiperTag =
+      builtAlbumImageViewerWxml.match(/<swiper(?=[\s>])[^>]*>/)?.[0] || "";
+    if (!builtAlbumViewerSwiperTag) {
+      fail("Built AlbumImageViewer WXML must contain a structural swiper tag");
+    }
+    for (const requiredBuiltSwiperAttribute of ["wx:for=", "wx:key=", "data-generation="]) {
+      if (!builtAlbumViewerSwiperTag.includes(requiredBuiltSwiperAttribute)) {
+        fail(`Built AlbumImageViewer swiper must remount structurally: ${requiredBuiltSwiperAttribute}`);
+      }
+    }
+  }
+  if (!albumImageViewerSource.includes('v-for="(photo, windowIndex) in windowPhotos"')) {
+    fail("AlbumImageViewer swiper template must render windowPhotos instead of the full photos list");
+  }
+  if (albumImageViewerSource.includes('v-for="(photo, index) in photos"')) {
+    fail("AlbumImageViewer swiper template must not mount the full photos list");
+  }
   const apiServerSource = fs.existsSync(apiServerPath)
     ? fs.readFileSync(apiServerPath, "utf8")
     : "";
@@ -2292,9 +2323,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   for (const requiredAlbumImageViewerVideoText of [
     "isVideo(photo)",
-    "isActiveVideo(index)",
+    "isActiveVideo(logicalIndexForWindowIndex(windowIndex))",
     "<video",
-    "v-if=\"isActiveVideo(index) && videoUrl(photo)\"",
+    "v-if=\"isActiveVideo(logicalIndexForWindowIndex(windowIndex)) && videoUrl(photo)\"",
+    "videoDomId(photo, logicalIndexForWindowIndex(windowIndex))",
     "album-image-viewer__video",
     "video_display_url",
     "video_load_failed",
@@ -2970,6 +3002,40 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!albumImageViewerSource) {
     fail("AlbumImageViewer component must exist for D31 preview");
   }
+  for (const requiredAlbumViewerWindowText of [
+    "const ALBUM_VIEWER_WINDOW_SIZE = 5;",
+    'v-for="generation in swiperGenerations"',
+    ':key="generation"',
+    ':data-generation="generation"',
+    '@animationfinish="handleSwiperAnimationFinish"',
+    'v-for="(photo, windowIndex) in windowPhotos"',
+    ':key="photoKey(photo, logicalIndexForWindowIndex(windowIndex))"',
+    "isActiveVideo(logicalIndexForWindowIndex(windowIndex))",
+    "videoDomId(photo, logicalIndexForWindowIndex(windowIndex))"
+  ]) {
+    if (!albumImageViewerSource.includes(requiredAlbumViewerWindowText)) {
+      fail(`AlbumImageViewer must implement five-slide windowing: ${requiredAlbumViewerWindowText}`);
+    }
+  }
+  if (albumImageViewerSource.includes(':data-generation="swiperGeneration"')) {
+    fail("AlbumImageViewer swiper must not use a non-structural swiperGeneration data binding");
+  }
+  const albumViewerSwiperGenerationsSource = methodBody(
+    albumImageViewerSource,
+    "swiperGenerations"
+  );
+  if (!albumViewerSwiperGenerationsSource.includes("return [this.swiperGeneration]")) {
+    fail("AlbumImageViewer swiperGenerations must expose exactly the current generation token");
+  }
+  const albumViewerWindowPhotosSource = methodBody(albumImageViewerSource, "windowPhotos");
+  for (const requiredWindowPhotosText of [
+    "this.photos.slice(",
+    "this.windowStart + ALBUM_VIEWER_WINDOW_SIZE"
+  ]) {
+    if (!albumViewerWindowPhotosSource.includes(requiredWindowPhotosText)) {
+      fail(`AlbumImageViewer windowPhotos must slice the five-slide logical window: ${requiredWindowPhotosText}`);
+    }
+  }
   for (const requiredAlbumImageViewerText of [
     "thumbnail_display_url",
     "previewLoadedById",
@@ -3006,21 +3072,83 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const albumViewerSwiperChangeSource = methodBody(albumImageViewerSource, "handleSwiperChange");
   for (const requiredSwiperChangeText of [
+    "this.isCurrentSwiperEvent(event)",
+    "this.windowPhotos.length",
     "event?.detail?.current",
+    "this.windowStart + windowIndex",
+    "this.activeWindowIndex = windowIndex",
+    "this.updatePendingWindowRebase(windowIndex, nextIndex)",
     "this.currentIndex = nextIndex",
-    "this.swiperIndex = nextIndex",
     'this.$emit("change"'
   ]) {
     if (!albumViewerSwiperChangeSource.includes(requiredSwiperChangeText)) {
-      fail(`AlbumImageViewer must keep 1-20 swipe state in sync: ${requiredSwiperChangeText}`);
+      fail(`AlbumImageViewer must map window swipes to logical state: ${requiredSwiperChangeText}`);
+    }
+  }
+  for (const forbiddenSwiperChangeText of [
+    "this.swiperIndex",
+    "this.windowStart =",
+    "this.swiperGeneration",
+    "this.rebuildWindowAt("
+  ]) {
+    if (albumViewerSwiperChangeSource.includes(forbiddenSwiperChangeText)) {
+      fail(`AlbumImageViewer native change handler must not mutate window structure: ${forbiddenSwiperChangeText}`);
+    }
+  }
+  const albumViewerSyncInitialIndexSource = methodBody(albumImageViewerSource, "syncInitialIndex");
+  if (!albumViewerSyncInitialIndexSource.includes("this.rebuildWindowAt(nextIndex)")) {
+    fail("AlbumImageViewer initial index sync must rebuild the logical window at nextIndex");
+  }
+  const albumViewerGenerationGuardSource = methodBody(albumImageViewerSource, "isCurrentSwiperEvent");
+  for (const requiredGenerationGuardText of [
+    "Number(event?.currentTarget?.dataset?.generation)",
+    "Number.isFinite(generation)",
+    "generation === this.swiperGeneration"
+  ]) {
+    if (!albumViewerGenerationGuardSource.includes(requiredGenerationGuardText)) {
+      fail(`AlbumImageViewer native event generation guard is missing: ${requiredGenerationGuardText}`);
+    }
+  }
+  const albumViewerAnimationFinishSource = methodBody(
+    albumImageViewerSource,
+    "handleSwiperAnimationFinish"
+  );
+  for (const requiredAnimationFinishText of [
+    "this.isCurrentSwiperEvent(event)",
+    "this.pendingWindowRebase",
+    "event?.detail?.current",
+    "this.logicalIndexForWindowIndex(finishedWindowIndex)",
+    "pending.generation !== this.swiperGeneration",
+    "pending.logicalIndex !== this.currentIndex",
+    "finishedLogicalIndex !== pending.logicalIndex",
+    "this.windowStartForIndex(this.currentIndex)",
+    "this.rebuildWindowAt(this.currentIndex)"
+  ]) {
+    if (!albumViewerAnimationFinishSource.includes(requiredAnimationFinishText)) {
+      fail(`AlbumImageViewer animationfinish validation is missing: ${requiredAnimationFinishText}`);
     }
   }
   const albumViewerPhotosWatcherSource = methodBody(albumImageViewerSource, "photos");
-  if (albumViewerPhotosWatcherSource.includes("syncInitialIndex")) {
-    fail("AlbumImageViewer photos watcher must not reset swiper to initialIndex during media hydration");
+  if (
+    !albumViewerPhotosWatcherSource.includes("syncCurrentIndexAfterPhotosChange(") ||
+    !albumViewerPhotosWatcherSource.includes("nextPhotos") ||
+    !albumViewerPhotosWatcherSource.includes("previousPhotos")
+  ) {
+    fail("AlbumImageViewer photos watcher must distinguish hydration from structure changes");
   }
-  if (!albumViewerPhotosWatcherSource.includes("syncCurrentIndexAfterPhotosChange")) {
-    fail("AlbumImageViewer photos watcher must preserve the current swiper index during media hydration");
+  const albumViewerPhotosSyncSource = methodBody(
+    albumImageViewerSource,
+    "syncCurrentIndexAfterPhotosChange"
+  );
+  for (const requiredPhotosSyncText of [
+    "this.samePhotoStructure",
+    "previousPhotos[previousIndex]",
+    "this.pauseVideoPhoto",
+    "this.rebuildWindowAt(nextIndex, { force: true })"
+  ]) {
+    if (!albumViewerPhotosSyncSource.includes(requiredPhotosSyncText)) {
+      fail(`AlbumImageViewer structure sync is missing ${requiredPhotosSyncText}`);
+    }
   }
   const albumViewerThumbnailUrlSource = methodBody(albumImageViewerSource, "thumbnailUrl");
   if (!albumViewerThumbnailUrlSource.includes("photo?.thumbnail_display_url")) {
@@ -3055,10 +3183,55 @@ if (!fs.existsSync(pagesJsonPath)) {
     "onProgressUpdate",
     "progress: progress.progress",
     "uni.downloadFile",
-    ':media-progress="mediaProgressById"'
+    ':media-progress="previewMediaProgress"'
   ]) {
     if (!albumSource.includes(requiredAlbumMediaProgressText)) {
       fail(`Album D31 preview must expose local media download progress to the viewer: ${requiredAlbumMediaProgressText}`);
+    }
+  }
+  if (!albumSource.includes(':media-progress="previewMediaProgress"')) {
+    fail("Album preview must pass previewMediaProgress to AlbumImageViewer");
+  }
+  if (albumSource.includes(':media-progress="mediaProgressById"')) {
+    fail("Album preview must not pass the full media progress map");
+  }
+
+  const previewMediaProgressSource = methodBody(albumSource, "previewMediaProgress");
+  for (const requiredText of [
+    "this.previewCurrentIndex",
+    "this.previewPhotos",
+    '["thumbnail", "preview"]',
+    "this.mediaProgressById[key]"
+  ]) {
+    if (!previewMediaProgressSource.includes(requiredText)) {
+      fail("Album preview progress window is missing " + requiredText);
+    }
+  }
+
+  const setAlbumMediaProgressSource = methodBody(albumSource, "setAlbumMediaProgress");
+  if (
+    !setAlbumMediaProgressSource.includes("this.mediaProgressById[key] =") ||
+    setAlbumMediaProgressSource.includes("this.mediaProgressById =")
+  ) {
+    fail("Album progress must update one key without replacing the root map");
+  }
+
+  const updatePreviewMediaSource = methodBody(
+    albumSource,
+    "updatePreviewPhotoDisplayMedia"
+  );
+  if (
+    !updatePreviewMediaSource.includes("this.previewPhotos.findIndex") ||
+    !updatePreviewMediaSource.includes("this.previewPhotos.splice") ||
+    updatePreviewMediaSource.includes(".map(")
+  ) {
+    fail("Album preview hydration must replace only one matching photo");
+  }
+
+  const ensurePreviewMediaAroundSource = methodBody(albumSource, "ensurePreviewMediaAround");
+  for (const requiredText of ["center - 2", "center + 3"]) {
+    if (!ensurePreviewMediaAroundSource.includes(requiredText)) {
+      fail("Album preview media range is missing " + requiredText);
     }
   }
   const albumDownloadOnceSource = methodBody(albumSource, "downloadAlbumImageOnce");
