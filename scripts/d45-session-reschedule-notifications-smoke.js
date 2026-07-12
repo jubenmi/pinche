@@ -252,19 +252,56 @@ async function main() {
 
   const playerInbox = await request("GET", "/api/users/me/notifications", undefined, player.token);
   const npcInbox = await request("GET", "/api/users/me/notifications", undefined, npc.token);
+  const organizerInbox = await request(
+    "GET",
+    "/api/users/me/notifications",
+    undefined,
+    organizer.token
+  );
   const rejectedInbox = await request(
     "GET",
     "/api/users/me/notifications",
     undefined,
     rejectedPlayer.token
   );
+  const playerRescheduleNotifications = notificationsOfType(
+    playerInbox,
+    "session_rescheduled",
+    future.id
+  );
+  const npcRescheduleNotifications = notificationsOfType(
+    npcInbox,
+    "session_rescheduled",
+    future.id
+  );
   assert(
-    notificationsOfType(playerInbox, "session_rescheduled", future.id).length === 1,
+    playerRescheduleNotifications.length === 1,
     "deduped player must receive exactly one reschedule inbox notification"
   );
   assert(
-    notificationsOfType(npcInbox, "session_rescheduled", future.id).length === 1,
+    npcRescheduleNotifications.length === 1,
     "bound NPC user must receive one reschedule inbox notification"
+  );
+  const playerRescheduleId = Number(playerRescheduleNotifications[0].id);
+  const npcRescheduleId = Number(npcRescheduleNotifications[0].id);
+  assert(
+    playerRescheduleId !== npcRescheduleId,
+    "player and NPC fixtures must have distinguishable notification identities"
+  );
+  assert(
+    !playerInbox.data.items.some((item) => Number(item.id) === npcRescheduleId),
+    "player inbox must exclude the NPC-only reschedule notification"
+  );
+  assert(
+    !npcInbox.data.items.some((item) => Number(item.id) === playerRescheduleId),
+    "NPC inbox must exclude the player-only reschedule notification"
+  );
+  assert(
+    notificationsOfType(organizerInbox, "session_rescheduled", future.id).length === 0 &&
+      !organizerInbox.data.items.some(
+        (item) => Number(item.id) === playerRescheduleId || Number(item.id) === npcRescheduleId
+      ),
+    "organizer inbox must exclude member-only reschedule notifications"
   );
   assert(
     notificationsOfType(playerInbox, "signup_reviewed", review.id).some(
@@ -279,7 +316,7 @@ async function main() {
     "rejected signup result must persist"
   );
 
-  const notification = notificationsOfType(playerInbox, "session_rescheduled", future.id)[0];
+  const notification = playerRescheduleNotifications[0];
   await request(
     "POST",
     `/api/users/me/notifications/${notification.id}/read`,
