@@ -33,7 +33,7 @@ export async function verifyD45SmokePreflight({ env = {}, fetchImpl = fetch } = 
     target?.marker !== D45_SMOKE_MARKER ||
     target?.isolated !== true ||
     target?.wechat_mock_login !== true ||
-    !String(target?.database || "").startsWith("pinche_d45_test")
+    target?.database !== "pinche_d45_test"
   ) {
     throw new Error(`D45 smoke preflight rejected target identity: ${body.slice(0, 500)}`);
   }

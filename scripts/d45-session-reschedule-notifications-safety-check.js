@@ -28,6 +28,7 @@ await expectRejectedWithoutFetch(
 for (const invalidTarget of [
   { marker: "wrong", isolated: true, database: "pinche_d45_test", wechat_mock_login: true },
   { marker: "d45-session-reschedule-notifications", isolated: true, database: "pinche", wechat_mock_login: true },
+  { marker: "d45-session-reschedule-notifications", isolated: true, database: "pinche_d45_test_archive", wechat_mock_login: true },
   { marker: "d45-session-reschedule-notifications", isolated: true, database: "pinche_d45_test", wechat_mock_login: false }
 ]) {
   let fetchCalls = 0;

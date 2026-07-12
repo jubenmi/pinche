@@ -2300,7 +2300,7 @@ function d45SmokeDatabaseIsIsolated() {
     config.wechat.mockLogin === true &&
     process.env.D45_SMOKE_ISOLATED === "1" &&
     localHost &&
-    config.mysql.database.startsWith("pinche_d45_test")
+    config.mysql.database === "pinche_d45_test"
   );
 }
 

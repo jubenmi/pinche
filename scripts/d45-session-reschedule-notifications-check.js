@@ -232,7 +232,7 @@ for (const token of [
   'url.pathname === "/api/testing/d45-smoke-target"',
   "d45SmokeDatabaseIsIsolated",
   'process.env.D45_SMOKE_ISOLATED === "1"',
-  'config.mysql.database.startsWith("pinche_d45_test")',
+  'config.mysql.database === "pinche_d45_test"',
   'marker: "d45-session-reschedule-notifications"',
   "wechat_mock_login: true"
 ]) {
