@@ -16,6 +16,8 @@ test("D45 migration creates moderation jobs, text proposals, audit logs, and med
   assert.match(sql, /ALTER TABLE session_album_photos/i);
   assert.match(sql, /moderation_status VARCHAR\(32\) NOT NULL DEFAULT 'approved_legacy'/i);
   assert.match(sql, /idx_album_moderation/i);
+  assert.match(sql, /ALTER TABLE session_album_object_cleanup_jobs/i);
+  assert.match(sql, /object_urls_json JSON NULL/i);
   assert.doesNotMatch(sql, /UPDATE session_album_photos SET moderation_status = 'pending'/i);
 });
 

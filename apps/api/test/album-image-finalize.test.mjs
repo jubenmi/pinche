@@ -32,6 +32,8 @@ function harness() {
     getObjectCalls: 0,
     beforeTransaction: null,
     mediaMissing: false
+    ,moderationCreated: 0
+    ,moderationSubmitted: 0
   };
   let transactionTail = Promise.resolve();
   const transaction = (run) => {
@@ -66,6 +68,7 @@ function harness() {
   };
   const photoRow = {
     id: 91, session_id: 8, uploader_user_id: 3, media_type: "image", status: "active",
+    moderation_status: "pending",
     object_key: objectKey, object_etag: "etag-43", image_width: 1600,
     image_height: 1200, image_byte_size: 1234, image_content_type: "image/jpeg"
   };
@@ -88,6 +91,17 @@ function harness() {
       return photoRow;
     },
     serializeImage: (photo) => ({ ...photo }),
+    createImageModerationJob: async (_connection, input) => {
+      state.moderationCreated += 1;
+      assert.equal(input.media.id, 91);
+      assert.equal(input.subjectVersion, "etag-43");
+      return { id: 51, status: "pending" };
+    },
+    submitImageModeration: async (job) => {
+      state.moderationSubmitted += 1;
+      assert.equal(job.id, 51);
+      if (state.moderationSubmitError) throw state.moderationSubmitError;
+    },
     emit: (event, fields) => state.events.push({ event, fields }),
     cosConfig: { enabled: true, secretId: "id", secretKey: "secret", bucket: "b", region: "r" }
   });
@@ -117,6 +131,17 @@ test("finalize is idempotent under two callers and creates one media row", async
   ]);
   assert.equal(first.photo.id, 91);
   assert.equal(second.photo.id, 91);
+  assert.equal(state.insertedMedia.length, 1);
+  assert.equal(first.photo.moderation_status, "pending");
+  assert.equal(state.moderationCreated, 1);
+  assert.equal(state.moderationSubmitted, 1);
+});
+
+test("moderation submission failure keeps the finalized image hidden and retryable", async () => {
+  const { service, state } = harness();
+  state.moderationSubmitError = new Error("network");
+  const result = await service.finalize({ user, uploadId: "00000000-0000-4000-8000-000000000043" });
+  assert.equal(result.photo.moderation_status, "pending");
   assert.equal(state.insertedMedia.length, 1);
 });
 

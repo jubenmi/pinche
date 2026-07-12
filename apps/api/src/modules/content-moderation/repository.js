@@ -153,3 +153,64 @@ export async function createAuditLog(connection, input) {
   return result.insertId;
 }
 
+export async function findModerationMedia(connection, job, { forUpdate = false } = {}) {
+  if (!String(job?.subject_type || "").startsWith("album_")) return null;
+  const [rows] = await connection.query(
+    `SELECT * FROM session_album_photos WHERE id = ? LIMIT 1${lockClause(forUpdate)}`,
+    [Number(job.subject_id)]
+  );
+  return rows[0] || null;
+}
+
+export async function transitionMediaModeration(
+  connection,
+  { mediaId, fromStatuses, toStatus }
+) {
+  const placeholders = fromStatuses.map(() => "?").join(", ");
+  const [result] = await connection.query(
+    `UPDATE session_album_photos SET moderation_status = ?
+     WHERE id = ? AND status = 'active' AND moderation_status IN (${placeholders})`,
+    [toStatus, Number(mediaId), ...fromStatuses]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function enqueueRejectedMediaCleanup(connection, media) {
+  const mediaType = media.media_type === "video" ? "video" : "image";
+  let storageKind = "cos";
+  let objectKey = null;
+  let localPath = null;
+  let objectUrls = null;
+  if (mediaType === "image") {
+    if (media.object_key) objectKey = String(media.object_key);
+    else {
+      storageKind = "local";
+      localPath = String(media.photo_url || "");
+    }
+  } else {
+    storageKind = "multi";
+    objectUrls = [...new Set([
+      media.source_url,
+      media.display_url,
+      media.cover_url
+    ].filter(Boolean))].map((value) => ({
+      storageKind: String(value).startsWith("/uploads/") ? "cos" : "cos",
+      objectKey: String(value).replace(/^\//, "")
+    }));
+  }
+  const [result] = await connection.query(
+    `INSERT INTO session_album_object_cleanup_jobs
+      (media_id, session_id, storage_kind, object_key, local_path, object_urls_json, status)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending')
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
+    [
+      Number(media.id),
+      Number(media.session_id),
+      storageKind,
+      objectKey,
+      localPath,
+      objectUrls ? JSON.stringify(objectUrls) : null
+    ]
+  );
+  return result.insertId;
+}

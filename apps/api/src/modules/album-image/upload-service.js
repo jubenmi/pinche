@@ -364,6 +364,7 @@ async function finalize(deps, { user, uploadId }) {
   }
 
   let newlyFinalized = false;
+  let moderationJob = null;
   const result = await deps.transaction(async (connection) => {
     const intent = await deps.repository.find(connection, uploadId, { forUpdate: true });
     if (!intent || Number(intent.user_id) !== Number(user.user.id)) throw uploadNotFound();
@@ -380,6 +381,13 @@ async function finalize(deps, { user, uploadId }) {
       throw serviceError(409, "UPLOAD_INTENT_NOT_FINALIZABLE", "Upload intent cannot be finalized");
     }
     const photoRow = await deps.insertFinalizedImage(connection, { intent, metadata: validation });
+    if (typeof deps.createImageModerationJob === "function") {
+      moderationJob = await deps.createImageModerationJob(connection, {
+        media: photoRow,
+        objectKey: validation.objectKey,
+        subjectVersion: validation.etag
+      });
+    }
     const [updated] = await connection.query(
       `UPDATE session_album_upload_intents
        SET status = 'finalized', media_id = ?, stored_content_type = ?,
@@ -410,6 +418,18 @@ async function finalize(deps, { user, uploadId }) {
     mediaId: Number(result.photo.id),
     outcome: "finalized"
   });
+  if (newlyFinalized && moderationJob && typeof deps.submitImageModeration === "function") {
+    try {
+      await deps.submitImageModeration(moderationJob);
+    } catch (error) {
+      deps.emit?.("moderation_submission_failure", {
+        sessionId: Number(inspected.intent.session_id),
+        mediaId: Number(result.photo.id),
+        outcome: "hidden_retryable",
+        errorCode: error?.code || "CONTENT_MODERATION_UNAVAILABLE"
+      });
+    }
+  }
   return result;
 }
 

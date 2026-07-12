@@ -146,6 +146,20 @@ import { createAlbumImageUploadService } from "./modules/album-image/upload-serv
 import { emitAlbumImageEvent } from "./modules/album-image/telemetry.js";
 import { validateStoredAlbumImage } from "./modules/album-image/validator.js";
 import { buildAlbumImageUrls } from "./modules/album-image/signed-urls.js";
+import {
+  createModerationJob,
+  enqueueRejectedMediaCleanup,
+  findModerationJobById,
+  findModerationMedia,
+  recordModerationSubmission,
+  transitionMediaModeration,
+  transitionModerationJob
+} from "./modules/content-moderation/repository.js";
+import { createContentModerationService } from "./modules/content-moderation/service.js";
+import {
+  createTencentModerationClient,
+  createTencentModerationTransport
+} from "./modules/content-moderation/tencent-client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "..");
@@ -184,6 +198,35 @@ const avatarMimeTypes = {
   "image/png": ".png"
 };
 
+const moderationTransport = createTencentModerationTransport({
+  config: config.contentModeration
+});
+const moderationClient = createTencentModerationClient({
+  config: config.contentModeration,
+  transport: moderationTransport
+});
+const contentModeration = createContentModerationService({
+  config: config.contentModeration,
+  client: moderationClient,
+  transaction: withTransaction,
+  withDatabaseConnection,
+  repository: {
+    createModerationJob,
+    enqueueRejectedMediaCleanup,
+    findModerationJobById,
+    findModerationMedia,
+    recordModerationSubmission,
+    transitionMediaModeration,
+    transitionModerationJob
+  },
+  emit: (event, fields) => console.log(JSON.stringify({
+    type: "content_moderation",
+    event,
+    at: new Date().toISOString(),
+    ...fields
+  }))
+});
+
 const albumImageUploads = createAlbumImageUploadService({
   cosConfig: config.cos,
   directUploadRequired: config.albumMedia.directUploadRequired,
@@ -213,6 +256,9 @@ const albumImageUploads = createAlbumImageUploadService({
     }
   }),
   insertFinalizedImage: insertFinalizedSessionAlbumImage,
+  createImageModerationJob: (connection, input) =>
+    contentModeration.createImageJob(connection, input),
+  submitImageModeration: (job) => contentModeration.submitImageJob(job),
   getFinalizedImage: getFinalizedSessionAlbumImage,
   serializeImage: serializeSessionAlbumImage,
   emit: emitAlbumImageEvent
@@ -1227,6 +1273,27 @@ function sessionAlbumMediaPath(photoId, variant = "preview") {
 function attachAlbumImageUrls(photo, legacyUrls, options) {
   const { storage_object_key: objectKey, storage_object_etag: ignoredEtag, ...safePhoto } = photo;
   void ignoredEtag;
+  const moderationStatus = String(photo.moderation_status || "approved_legacy");
+  if (!["approved", "approved_legacy"].includes(moderationStatus)) {
+    return {
+      ...safePhoto,
+      moderation_status: moderationStatus,
+      moderation_message: moderationStatus === "review"
+        ? "内容需要进一步审核"
+        : moderationStatus === "rejected"
+          ? "内容未通过安全审核，如有疑问请联系客服"
+          : "内容正在审核",
+      image_url: null,
+      preview_url: null,
+      thumbnail_url: null,
+      preview_load_url: null,
+      thumbnail_load_url: null,
+      preview_display_url: null,
+      thumbnail_display_url: null,
+      download_url: null,
+      media_url_expires_at: null
+    };
+  }
   const signed = options.directMediaUrls && objectKey && cosStorageEnabled(options.cosConfig)
     ? options.buildUrls({
         objectKey,
@@ -1372,7 +1439,7 @@ export function createSessionAlbumVideoStorageAdapter(options = {}) {
       inspectedKey = key;
       inspectedEtag = etag;
       inspectedByteSize = metadata.byteSize;
-      return metadata;
+      return { ...metadata, etag };
     },
     readRange: async (sourceUrl, start, end) => {
       const key = albumVideoSourceObjectKey(sourceUrl);
@@ -1480,6 +1547,11 @@ function stripAlbumVideoInternalFields(photo) {
   return safePhoto;
 }
 
+function isAlbumMediaApprovedForUrls(photo) {
+  const status = photo.moderation_status || "approved_legacy";
+  return status === "approved" || status === "approved_legacy";
+}
+
 function mediaVariant(query) {
   const variant = query.get("variant") || "preview";
   if (variant === "thumbnail") {
@@ -1571,10 +1643,13 @@ export function attachSessionAlbumMediaUrls(album, userId, options = {}) {
   const photos = album.photos.map((photo) => {
       if (photo.media_type === "video") {
         const safePhoto = stripAlbumVideoInternalFields(photo);
+        const approved = isAlbumMediaApprovedForUrls(photo);
         return {
           ...safePhoto,
-          cover_url: photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
-          video_url: photo.processing_status === "ready" ? sessionAlbumVideoUrlPath(photo.id) : ""
+          cover_url: approved && photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
+          video_url: approved && photo.processing_status === "ready"
+            ? sessionAlbumVideoUrlPath(photo.id)
+            : ""
         };
       }
       const preview = sessionAlbumMediaPath(photo.id, "preview");
@@ -1779,9 +1854,10 @@ export function attachPublicSessionAlbumMediaUrls(
   const photos = album.photos.map((photo) => {
       if (photo.media_type === "video") {
         const safePhoto = stripAlbumVideoInternalFields(photo);
+        const approved = isAlbumMediaApprovedForUrls(photo);
         return {
           ...safePhoto,
-          cover_url: photo.has_cover
+          cover_url: approved && photo.has_cover
             ? signedPublicAlbumVideoSnapshotUrl(photo, claims, albumShareToken)
             : ""
         };
@@ -3494,7 +3570,10 @@ async function route(request, response) {
       inspectSessionAlbumVideoObject({ sourceUrl, storageAdapter });
     const video = await createSessionAlbumVideo(user, adminSessionAlbumVideosId, body, {
       inspectObject,
-      readyOnCreate: true
+      readyOnCreate: true,
+      createVideoModerationJob: (connection, input) =>
+        contentModeration.createVideoJob(connection, input),
+      submitVideoModeration: (job) => contentModeration.submitVideoJob(job)
     });
     jsonResponse(response, 201, {
       ok: true,

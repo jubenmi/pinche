@@ -73,3 +73,5 @@ ALTER TABLE session_album_photos
   ADD COLUMN moderation_status VARCHAR(32) NOT NULL DEFAULT 'approved_legacy' AFTER processing_status,
   ADD INDEX idx_album_moderation (session_id, status, moderation_status, created_at);
 
+ALTER TABLE session_album_object_cleanup_jobs
+  ADD COLUMN object_urls_json JSON NULL AFTER local_path;

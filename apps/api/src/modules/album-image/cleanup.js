@@ -47,21 +47,56 @@ async function cleanupMedia({
   row, leaseToken, repository, storage, unlinkFile, withTransaction, now, emit
 }) {
   try {
-    if (row.storage_kind === "cos") {
-      try {
-        await storage.delete(row.object_key);
-      } catch (error) {
-        if (error?.code !== "COS_OBJECT_NOT_FOUND") throw error;
+    const cleanupOne = async ({ storageKind, objectKey, localPath }) => {
+      if (storageKind === "cos") {
+        try {
+          await storage.delete(objectKey);
+        } catch (error) {
+          if (error?.code !== "COS_OBJECT_NOT_FOUND") throw error;
+        }
+        return;
       }
-    } else if (row.storage_kind === "local") {
-      try {
-        await unlinkFile(row.local_path);
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
+      if (storageKind === "local") {
+        try {
+          await unlinkFile(localPath);
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
+        return;
       }
-    } else {
       throw Object.assign(new Error("invalid storage kind"), {
         code: "ALBUM_IMAGE_STORAGE_KIND_INVALID"
+      });
+    };
+    if (row.storage_kind === "multi") {
+      let entries;
+      try {
+        entries = typeof row.object_urls_json === "string"
+          ? JSON.parse(row.object_urls_json)
+          : row.object_urls_json;
+      } catch {
+        entries = null;
+      }
+      if (!Array.isArray(entries) || entries.length === 0) {
+        throw Object.assign(new Error("invalid multi-object cleanup payload"), {
+          code: "ALBUM_IMAGE_STORAGE_KIND_INVALID"
+        });
+      }
+      const unique = new Map();
+      for (const entry of entries) {
+        const normalized = {
+          storageKind: String(entry?.storageKind || ""),
+          objectKey: entry?.objectKey ? String(entry.objectKey) : null,
+          localPath: entry?.localPath ? String(entry.localPath) : null
+        };
+        unique.set(JSON.stringify(normalized), normalized);
+      }
+      for (const entry of unique.values()) await cleanupOne(entry);
+    } else {
+      await cleanupOne({
+        storageKind: row.storage_kind,
+        objectKey: row.object_key,
+        localPath: row.local_path
       });
     }
     await withTransaction((connection) => repository.completeMediaCleanup(connection, {

@@ -1444,6 +1444,8 @@ function expectedCreationResponse(row, userId = CREATION_USER_ID) {
     session_id: Number(row.session_id),
     media_type: "video",
     processing_status: row.processing_status,
+    moderation_status: row.moderation_status || "pending",
+    moderation_message: "内容正在审核",
     uploader_user_id: Number(row.uploader_user_id),
     is_mine: isMine,
     can_delete: isMine,

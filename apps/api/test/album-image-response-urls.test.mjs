@@ -49,3 +49,43 @@ test("disabled direct reads still expose all new fields through legacy URLs", ()
   assert.match(result.photos[0].download_url, /^\/api\/session-album\/photos\/4\/image/);
   assert.equal(result.photos[0].media_url_expires_at, null);
 });
+
+test("pending image is a metadata-only placeholder without legacy or signed URLs", () => {
+  const result = attachSessionAlbumMediaUrls({
+    session_id: 8,
+    photos: [{
+      id: 5,
+      media_type: "image",
+      moderation_status: "pending",
+      storage_object_key: "uploads/session-album/display/private.jpg",
+      storage_object_etag: "private-etag"
+    }]
+  }, 9, { directMediaUrls: true, nowSeconds: 1000, cosConfig, emit: () => {} });
+
+  assert.equal(result.photos[0].moderation_status, "pending");
+  for (const field of [
+    "image_url", "preview_url", "thumbnail_url", "preview_load_url",
+    "thumbnail_load_url", "preview_display_url", "thumbnail_display_url", "download_url"
+  ]) {
+    assert.equal(result.photos[0][field], null);
+  }
+  assert.equal("storage_object_key" in result.photos[0], false);
+  assert.equal("storage_object_etag" in result.photos[0], false);
+});
+
+test("pending video never receives playback or cover URLs even when processing is ready", () => {
+  const result = attachSessionAlbumMediaUrls({
+    session_id: 8,
+    photos: [{
+      id: 6,
+      media_type: "video",
+      processing_status: "ready",
+      moderation_status: "pending",
+      has_cover: true,
+      video_cover_source_url: "/uploads/session-album/videos/cover/private.jpg"
+    }]
+  }, 9, { emit: () => {} });
+  assert.equal(result.photos[0].video_url, "");
+  assert.equal(result.photos[0].cover_url, "");
+  assert.equal("video_cover_source_url" in result.photos[0], false);
+});

@@ -98,3 +98,32 @@ test("local deletion treats an already-unlinked file as idempotent", async () =>
   assert.equal(harness.state.completedMedia.length, 1);
   assert.equal(harness.state.failed.length, 0);
 });
+
+test("rejected video cleanup deletes every deduplicated owned object before completing", async () => {
+  const calls = [];
+  const harness = cleanupHarness([{
+    type: "media",
+    row: {
+      id: 9,
+      media_id: 93,
+      storage_kind: "multi",
+      object_urls_json: JSON.stringify([
+        { storageKind: "cos", objectKey: "source.mp4" },
+        { storageKind: "cos", objectKey: "display.mp4" },
+        { storageKind: "cos", objectKey: "source.mp4" }
+      ])
+    }
+  }]);
+  harness.repository.completeMediaCleanup = async (_c, input) => calls.push(["db", input.mediaId]);
+  await runAlbumImageCleanupBatch({
+    repository: harness.repository,
+    storage: { delete: async (key) => calls.push(["delete", key]) },
+    withTransaction: async (run) => run({}), now: () => 1000, randomUUID: () => "lease",
+    emit: () => {}
+  });
+  assert.deepEqual(calls, [
+    ["delete", "source.mp4"],
+    ["delete", "display.mp4"],
+    ["db", 93]
+  ]);
+});
