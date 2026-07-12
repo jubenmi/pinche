@@ -2,6 +2,8 @@
 
 更新日期：2026-07-12
 
+版本：v1.1
+
 ## 1. 决策
 
 D45 采用混合审核：微信免费接口负责文本和图片，腾讯云 CI 只负责完整视频画面与音轨，COS 只作为私有存储。业务数据库状态机与 API 门禁是发布权限的唯一来源，不启用 COS 图片自动审核或全桶自动冻结。
@@ -43,13 +45,15 @@ apps/api/src/modules/content-moderation/
   state-machine.js          # 合法迁移与管理员优先级
   repository.js             # 任务、提案、租约、审计
   service.js                # 统一业务编排
-  wechat-token.js           # access_token 缓存、单飞刷新
   wechat-client.js          # msgSecCheck/mediaCheckAsync
   wechat-callback.js        # 微信事件签名、解包和结构校验
   tencent-video-client.js   # 仅腾讯云 CI 视频
   tencent-video-callback.js # 仅视频回调
   retry.js                  # 错误分类、退避和租约
   telemetry.js              # 无敏感数据的事件/指标
+apps/api/src/modules/wechat/
+  access-token.js           # 订阅消息与内容安全共享 token、Redis 单飞刷新
+  subscribe-message.js      # 改为使用共享 access-token
 ```
 
 旧 `tencent-client.js` 中的 TMS 与图片方法应删除或拆分，不能保留无调用的密钥和策略配置。
@@ -82,6 +86,10 @@ apps/api/src/modules/content-moderation/
 
 `content_moderation_audit_logs` 记录管理员、动作、前后状态、原因和时间。
 
+### 服务商提交尝试
+
+新增 `content_moderation_provider_attempts`，保存 `moderation_job_id`、`provider`、`provider_job_id`、`attempt_no`、`is_current`、`submitted_at` 和响应摘要。`(provider, provider_job_id)` 唯一。每次重试先把旧尝试置为非当前，再写入新 trace_id/JobId；旧结果只计入 stale 指标，不能改变任务。
+
 ### 媒体字段
 
 `session_album_photos.moderation_status` 默认仅用于历史回填 `approved_legacy`，新建记录必须显式为 `pending`。`moderation_object_version` 固定审核对应的 ETag。清理队列允许保存视频多个对象 Key。
@@ -90,16 +98,17 @@ apps/api/src/modules/content-moderation/
 
 ### access token
 
-`wechat-token.js` 使用缓存记录 token 与过期时间，提前刷新；同一进程内只允许一个刷新请求。收到微信 token 失效错误时清缓存、强制刷新并仅重试一次。多实例部署可使用数据库/Redis 共享缓存；若当前没有 Redis，先使用数据库行锁与加密/受限配置存储。
+`apps/api/src/modules/wechat/access-token.js` 是唯一 token 来源。它复用现有微信 AppID/AppSecret，使用生产 Redis 保存 token、过期时间和短租约刷新锁；进程内 Promise 再做一层单飞。收到 token 失效错误时清缓存、强制刷新并仅重试一次。现有 `subscribe-message.js` 同步改为调用该模块，禁止维护第二套缓存。
 
 AppSecret 永不写日志或响应。配置：
 
 ```text
-CONTENT_MODERATION_WECHAT_ENABLED
-WECHAT_MINIPROGRAM_APP_ID
-WECHAT_MINIPROGRAM_APP_SECRET
+CONTENT_MODERATION_WECHAT_TEXT_ENABLED
+CONTENT_MODERATION_WECHAT_IMAGE_ENABLED
+WECHAT_APP_ID
+WECHAT_APP_SECRET
 WECHAT_CONTENT_SECURITY_EVENT_TOKEN
-WECHAT_CONTENT_SECURITY_EVENT_AES_KEY   # 若启用安全模式
+WECHAT_CONTENT_SECURITY_EVENT_AES_KEY
 ```
 
 ### 文本
@@ -111,13 +120,24 @@ WECHAT_CONTENT_SECURITY_EVENT_AES_KEY   # 若启用安全模式
 [note]\n周末拼车说明
 ```
 
-调用 `msgSecCheck` 时传生产者 openid、scene 和固定版本。统一映射：微信“正常”→ Pass；“疑似”→ Review；“违规”→ Block；未知/异常→ Error。同步 Pass 后才执行原业务方法，其余结果只保存提案。
+调用 `msgSecCheck` 时传生产者 openid、scene 和固定版本。微信 `result.suggest` 只按 `pass → Pass`、`review → Review`、`risky → Block` 映射，其他值一律 Error。
+
+scene 使用固定映射，业务代码不得自行选择：
+
+| 业务内容 | scene | 含义 |
+|---|---:|---|
+| 用户昵称、私有门店/剧本资料 | 1 | 资料 |
+| 评价、留言、置顶留言 | 2 | 评论 |
+| 论坛式扩展内容 | 3 | 论坛 |
+| 拼车标题、说明、DM/NPC 名称等动态内容 | 4 | 社交日志 |
+
+没有生产者 openid 时返回 `CONTENT_MODERATION_OPENID_REQUIRED`。同步 Pass 后才执行原业务方法；Review/Error 保存提案；risky 拒绝。提案统一保存 action、最小 payload、actor、base version 和幂等键。重试 Pass 或管理员批准调用同一个事务型 applicator：重新校验当前权限和领域约束，创建操作按幂等键执行，基线或权限变化则标记 stale。
 
 ### 图片
 
-图片 finalize 在同一事务创建媒体和审核任务。事务提交后生成只供微信抓取的短时 COS URL并调用 `mediaCheckAsync(media_type=2)`，保存 `trace_id`，状态进入 processing。
+图片 finalize 在同一事务创建媒体和审核任务。图片继续使用现有 JPEG/PNG、4 MB 上限。事务提交后生成只供微信抓取的短时 COS URL并调用 `mediaCheckAsync(media_type=2)`，把 `trace_id` 写入 provider attempt，状态进入 processing；短时 URL 不进入数据库摘要或日志。
 
-微信通过小程序消息/事件服务器推送结果。接收端验证签名（安全模式还需验签解密），以 `trace_id` 查任务并锁行，再校验对象 Key、媒体 ID 与 ETag。任何无法明确识别的事件都进入 error，不能通过。
+微信通过小程序消息/事件服务器推送结果。生产强制安全模式，回调路由在通用 JSON parser 前限制并读取原始 body，完成签名验证、AES 解密和结构校验。接收端以 `trace_id` 找到当前 provider attempt 和任务，再锁定媒体并比较任务保存的 subject ID/version 与当前 object key/ETag。回调不需要、也不假设携带对象 Key 或 ETag。任何无法明确识别的事件都进入 error，旧 attempt 结果记 stale。
 
 ## 6. 腾讯云视频设计
 
@@ -127,15 +147,16 @@ WECHAT_CONTENT_SECURITY_EVENT_AES_KEY   # 若启用安全模式
 
 ```text
 CONTENT_MODERATION_TENCENT_VIDEO_ENABLED
-TENCENT_CLOUD_SECRET_ID
-TENCENT_CLOUD_SECRET_KEY
-TENCENT_CLOUD_REGION
-TENCENT_CI_VIDEO_POLICY_ID
+COS_SECRET_ID
+COS_SECRET_KEY
+COS_BUCKET
+TENCENT_CI_VIDEO_REGION
+TENCENT_CI_VIDEO_BIZ_TYPE
 TENCENT_CI_VIDEO_CALLBACK_URL
 TENCENT_CI_VIDEO_CALLBACK_TOKEN
 ```
 
-删除 TMS 策略和 CI 图片策略配置。腾讯云回调与微信事件使用独立路由和鉴权器，避免协议混用。
+删除 TMS 策略和 CI 图片策略配置。腾讯云回调与微信事件使用独立路由和鉴权器，避免协议混用。若 CI 只能在回调 URL 携带令牌，反向代理和应用日志必须对该参数脱敏，令牌独立轮换。
 
 ## 7. 状态机与错误处理
 
@@ -197,7 +218,7 @@ POST /api/admin/content-moderation/:id/retry
 - UI：后台队列与操作、小程序状态文案。
 - 非生产联调：微信文本与图片、腾讯云视频分别验证 Pass/Review/Block/Error。
 
-所有本地自动化使用假服务商客户端，不依赖公网或生产凭证。
+所有本地自动化使用假服务商客户端，不依赖公网或生产凭证。真实微信额度由后台和运行指标读取；“免费”仅表示当前平台免费额度内使用，不作为永久 SLA。
 
 ## 12. 明确非目标
 
