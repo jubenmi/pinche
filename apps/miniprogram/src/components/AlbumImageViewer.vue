@@ -8,14 +8,18 @@
     @tap.stop
   >
     <swiper
+      v-for="generation in swiperGenerations"
+      :key="generation"
       class="album-image-viewer__swiper"
       :current="swiperIndex"
+      :data-generation="generation"
       :duration="220"
       @change="handleSwiperChange"
+      @animationfinish="handleSwiperAnimationFinish"
     >
       <swiper-item
-        v-for="(photo, index) in photos"
-        :key="photoKey(photo, index)"
+        v-for="(photo, windowIndex) in windowPhotos"
+        :key="photoKey(photo, logicalIndexForWindowIndex(windowIndex))"
         class="album-image-viewer__item"
       >
         <view class="album-image-viewer__slide">
@@ -44,8 +48,8 @@
               mode="aspectFit"
             />
             <video
-              v-if="isActiveVideo(index) && videoUrl(photo)"
-              :id="videoDomId(photo, index)"
+              v-if="isActiveVideo(logicalIndexForWindowIndex(windowIndex)) && videoUrl(photo)"
+              :id="videoDomId(photo, logicalIndexForWindowIndex(windowIndex))"
               class="album-image-viewer__video"
               :src="videoUrl(photo)"
               :controls="true"
@@ -112,6 +116,8 @@
 </template>
 
 <script>
+const ALBUM_VIEWER_WINDOW_SIZE = 5;
+
 export default {
   props: {
     visible: {
@@ -139,6 +145,10 @@ export default {
     return {
       currentIndex: 0,
       swiperIndex: 0,
+      windowStart: 0,
+      activeWindowIndex: 0,
+      swiperGeneration: 0,
+      pendingWindowRebase: null,
       touchStartX: 0,
       touchStartY: 0,
       previewLoadedById: {},
@@ -149,6 +159,15 @@ export default {
     };
   },
   computed: {
+    swiperGenerations() {
+      return [this.swiperGeneration];
+    },
+    windowPhotos() {
+      return this.photos.slice(
+        this.windowStart,
+        this.windowStart + ALBUM_VIEWER_WINDOW_SIZE
+      );
+    },
     currentPhoto() {
       return this.photos[this.currentIndex] || null;
     },
@@ -163,10 +182,14 @@ export default {
     visible(nextValue, previousValue) {
       if (nextValue && !previousValue) {
         this.resetImageStates();
-        this.syncInitialIndex();
+        this.syncInitialIndex(false);
         this.$nextTick(() => this.requestCurrentVideoIfNeeded());
       }
       if (!nextValue) {
+        this.pendingWindowRebase = null;
+        if (previousValue) {
+          this.swiperGeneration += 1;
+        }
         this.touchStartX = 0;
         this.touchStartY = 0;
         this.pauseAllVideos();
@@ -174,13 +197,15 @@ export default {
     },
     initialIndex() {
       if (this.visible) {
-        this.syncInitialIndex();
+        this.syncInitialIndex(true);
         this.$nextTick(() => this.requestCurrentVideoIfNeeded());
       }
     },
-    photos() {
+    photos(nextPhotos, previousPhotos) {
+      // Structural list changes replace the array; in-place item writes are media hydration
+      // and intentionally must not rebuild the native swiper generation.
       if (this.visible) {
-        this.syncCurrentIndexAfterPhotosChange();
+        this.syncCurrentIndexAfterPhotosChange(nextPhotos, previousPhotos);
         this.$nextTick(() => this.requestCurrentVideoIfNeeded());
       }
     }
@@ -188,24 +213,117 @@ export default {
   methods: {
     clampIndex(index) {
       const maxIndex = Math.max(0, this.photos.length - 1);
-      const parsed = Number(index || 0);
+      const parsed = Number(index);
       if (!Number.isFinite(parsed)) {
         return 0;
       }
-      return Math.min(Math.max(0, parsed), maxIndex);
+      return Math.min(Math.max(0, Math.trunc(parsed)), maxIndex);
     },
-    syncInitialIndex() {
-      const nextIndex = this.clampIndex(this.initialIndex);
+    windowStartForIndex(index) {
+      const logicalIndex = this.clampIndex(index);
+      const maxStart = Math.max(0, this.photos.length - ALBUM_VIEWER_WINDOW_SIZE);
+      const centeredStart = logicalIndex - Math.floor(ALBUM_VIEWER_WINDOW_SIZE / 2);
+      return Math.min(Math.max(0, centeredStart), maxStart);
+    },
+    clampWindowIndex(index) {
+      const maxIndex = Math.max(0, this.windowPhotos.length - 1);
+      const parsed = Number(index);
+      if (!Number.isFinite(parsed)) {
+        return 0;
+      }
+      return Math.min(Math.max(0, Math.trunc(parsed)), maxIndex);
+    },
+    logicalIndexForWindowIndex(windowIndex) {
+      return this.clampIndex(this.windowStart + this.clampWindowIndex(windowIndex));
+    },
+    logicalIndexForPhoto(photo) {
+      if (!photo) {
+        return -1;
+      }
+      const exactIndex = this.photos.indexOf(photo);
+      if (exactIndex >= 0) {
+        return exactIndex;
+      }
+      if (photo.id === undefined || photo.id === null) {
+        return -1;
+      }
+      const key = String(photo.id);
+      const index = this.photos.findIndex((item) => String(item?.id) === key);
+      return index;
+    },
+    rebuildWindowAt(logicalIndex, { force = false } = {}) {
+      const nextIndex = this.clampIndex(logicalIndex);
+      const nextWindowStart = this.windowStartForIndex(nextIndex);
+      const nextWindowIndex = nextIndex - nextWindowStart;
+      const stateChanged =
+        this.currentIndex !== nextIndex ||
+        this.windowStart !== nextWindowStart ||
+        this.activeWindowIndex !== nextWindowIndex ||
+        this.swiperIndex !== nextWindowIndex;
+
+      this.pendingWindowRebase = null;
       this.currentIndex = nextIndex;
-      this.swiperIndex = nextIndex;
+      this.windowStart = nextWindowStart;
+      this.activeWindowIndex = nextWindowIndex;
+      this.swiperIndex = nextWindowIndex;
+      if (force || stateChanged) {
+        this.swiperGeneration += 1;
+      }
     },
-    syncCurrentIndexAfterPhotosChange() {
-      const nextIndex = this.clampIndex(this.currentIndex);
-      if (nextIndex === this.currentIndex) {
+    syncInitialIndex(shouldPausePrevious = false) {
+      const nextIndex = this.clampIndex(this.initialIndex);
+      if (shouldPausePrevious && nextIndex !== this.currentIndex) {
+        this.pauseVideoAt(this.currentIndex);
+      }
+      this.rebuildWindowAt(nextIndex);
+    },
+    photoIdentityKey(photo, index) {
+      if (!photo) {
+        return "";
+      }
+      if (photo.id !== undefined && photo.id !== null) {
+        return "id:" + String(photo.id);
+      }
+      return "index:" + String(index);
+    },
+    samePhotoStructure(nextPhotos = [], previousPhotos = []) {
+      if (nextPhotos === previousPhotos) {
+        return true;
+      }
+      if (nextPhotos.length !== previousPhotos.length) {
+        return false;
+      }
+      return nextPhotos.every(
+        (photo, index) =>
+          this.photoIdentityKey(photo, index) ===
+          this.photoIdentityKey(previousPhotos[index], index)
+      );
+    },
+    syncCurrentIndexAfterPhotosChange(nextPhotos = [], previousPhotos = []) {
+      if (this.samePhotoStructure(nextPhotos, previousPhotos)) {
         return;
       }
-      this.currentIndex = nextIndex;
-      this.swiperIndex = nextIndex;
+
+      const previousIndex = this.currentIndex;
+      const previousPhoto = previousPhotos[previousIndex] || null;
+      const previousIdentity = this.photoIdentityKey(previousPhoto, previousIndex);
+      let nextIndex = -1;
+      if (previousIdentity) {
+        nextIndex = nextPhotos.findIndex(
+          (photo, index) =>
+            this.photoIdentityKey(photo, index) === previousIdentity
+        );
+      }
+      if (nextIndex < 0) {
+        nextIndex = this.clampIndex(previousIndex);
+      }
+
+      const nextPhoto = nextPhotos[nextIndex] || null;
+      const nextIdentity = this.photoIdentityKey(nextPhoto, nextIndex);
+      if (previousPhoto && previousIdentity !== nextIdentity) {
+        this.pauseVideoPhoto(previousPhoto, previousIndex);
+      }
+      this.rebuildWindowAt(nextIndex, { force: true });
     },
     resetImageStates() {
       this.previewLoadedById = {};
@@ -326,8 +444,12 @@ export default {
       this.setPhotoState("thumbnailFailedById", photo, true);
     },
     handleVideoError(photo) {
+      const logicalIndex = this.logicalIndexForPhoto(photo);
+      if (logicalIndex < 0) {
+        return;
+      }
       this.$emit("video-error", {
-        index: this.currentIndex,
+        index: logicalIndex,
         photo
       });
     },
@@ -338,9 +460,13 @@ export default {
       return Boolean(this.isVideo(photo) && (photo?.video_load_failed || this.videoFailedById[this.photoStateKey(photo)]));
     },
     retryVideo(photo) {
+      const logicalIndex = this.logicalIndexForPhoto(photo);
+      if (logicalIndex < 0) {
+        return;
+      }
       this.setPhotoState("videoFailedById", photo, false);
       this.$emit("need-video", {
-        index: this.currentIndex,
+        index: logicalIndex,
         photo,
         retry: true
       });
@@ -364,12 +490,11 @@ export default {
       }
       return createVideoContext(this.videoDomId(photo, index), this);
     },
-    pauseVideoAt(index) {
-      const photo = this.photos[index];
+    pauseVideoPhoto(photo, logicalIndex) {
       if (!this.isVideo(photo) || !this.videoUrl(photo)) {
         return;
       }
-      const videoContext = this.createVideoContext(photo, index);
+      const videoContext = this.createVideoContext(photo, logicalIndex);
       if (!videoContext || typeof videoContext.pause !== "function") {
         return;
       }
@@ -378,6 +503,9 @@ export default {
       } catch (error) {
         // Some mini program runtimes throw while the video node is being removed.
       }
+    },
+    pauseVideoAt(index) {
+      this.pauseVideoPhoto(this.photos[index], index);
     },
     pauseAllVideos() {
       this.photos.forEach((photo, index) => {
@@ -415,19 +543,64 @@ export default {
       const previewUnavailable = !this.previewUrl(photo) || this.previewFailed(photo);
       return thumbnailUnavailable && previewUnavailable;
     },
-    handleSwiperChange(event) {
-      const previousIndex = this.currentIndex;
-      const nextIndex = this.clampIndex(event?.detail?.current || 0);
-      if (previousIndex !== nextIndex) {
-        this.pauseVideoAt(previousIndex);
+    isCurrentSwiperEvent(event) {
+      const generation = Number(event?.currentTarget?.dataset?.generation);
+      return Number.isFinite(generation) && generation === this.swiperGeneration;
+    },
+    updatePendingWindowRebase(windowIndex, logicalIndex) {
+      const hasPhotosBeforeWindow = this.windowStart > 0;
+      const hasPhotosAfterWindow =
+        this.windowStart + this.windowPhotos.length < this.photos.length;
+      const isRebaseEdge =
+        (windowIndex === 0 && hasPhotosBeforeWindow) ||
+        (windowIndex === this.windowPhotos.length - 1 && hasPhotosAfterWindow);
+      if (!isRebaseEdge) {
+        this.pendingWindowRebase = null;
+        return;
       }
+      this.pendingWindowRebase = {
+        generation: this.swiperGeneration,
+        logicalIndex
+      };
+    },
+    handleSwiperChange(event) {
+      if (!this.isCurrentSwiperEvent(event) || !this.windowPhotos.length) {
+        return;
+      }
+      const windowIndex = this.clampWindowIndex(event?.detail?.current);
+      const nextIndex = this.windowStart + windowIndex;
+      this.activeWindowIndex = windowIndex;
+      this.updatePendingWindowRebase(windowIndex, nextIndex);
+      if (nextIndex === this.currentIndex) {
+        return;
+      }
+      const previousIndex = this.currentIndex;
+      this.pauseVideoAt(previousIndex);
       this.currentIndex = nextIndex;
-      this.swiperIndex = nextIndex;
       this.$emit("change", {
         index: nextIndex,
         photo: this.photos[nextIndex] || null
       });
       this.$nextTick(() => this.requestCurrentVideoIfNeeded());
+    },
+    handleSwiperAnimationFinish(event) {
+      if (!this.isCurrentSwiperEvent(event) || !this.windowPhotos.length) {
+        return;
+      }
+      const finishedWindowIndex = this.clampWindowIndex(event?.detail?.current);
+      const finishedLogicalIndex = this.logicalIndexForWindowIndex(finishedWindowIndex);
+      const pending = this.pendingWindowRebase;
+      if (
+        !pending ||
+        pending.generation !== this.swiperGeneration ||
+        pending.logicalIndex !== this.currentIndex ||
+        finishedLogicalIndex !== pending.logicalIndex
+      ) {
+        return;
+      }
+      if (this.windowStartForIndex(this.currentIndex) !== this.windowStart) {
+        this.rebuildWindowAt(this.currentIndex);
+      }
     },
     handleTouchStart(event) {
       const touch = event?.touches?.[0];
@@ -464,6 +637,7 @@ export default {
       });
     },
     close() {
+      this.pendingWindowRebase = null;
       this.pauseAllVideos();
       this.$emit("close");
     }
