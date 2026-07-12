@@ -236,6 +236,9 @@
                 <view v-if="photo.media_type === 'video'" class="video-placeholder-copy">
                   {{ videoStateText(photo) }}
                 </view>
+                <view v-else-if="mediaModerationStatusText(photo)" class="moderation-placeholder-copy">
+                  {{ mediaModerationStatusText(photo) }}
+                </view>
                 <view v-else class="photo-loading-dot"></view>
               </view>
               <view v-if="photo.media_type === 'video'" class="video-overlay">
@@ -261,7 +264,10 @@
             </view>
             <view v-else class="photo-meta">
               <view class="photo-caption-body">
-                <view class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
+                <view v-if="mediaModerationStatusText(photo)" class="photo-moderation-status">
+                  {{ mediaModerationStatusText(photo) }}
+                </view>
+                <view v-else class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
                   {{ tagSummary(photo) }}
                 </view>
               </view>
@@ -362,6 +368,9 @@
                 <view v-if="photo.media_type === 'video'" class="video-placeholder-copy">
                   {{ videoStateText(photo) }}
                 </view>
+                <view v-else-if="mediaModerationStatusText(photo)" class="moderation-placeholder-copy">
+                  {{ mediaModerationStatusText(photo) }}
+                </view>
                 <view v-else class="photo-loading-dot"></view>
               </view>
               <view v-if="photo.media_type === 'video'" class="video-overlay">
@@ -387,7 +396,10 @@
             </view>
             <view v-else class="photo-meta">
               <view class="photo-caption-body">
-                <view class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
+                <view v-if="mediaModerationStatusText(photo)" class="photo-moderation-status">
+                  {{ mediaModerationStatusText(photo) }}
+                </view>
+                <view v-else class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
                   {{ tagSummary(photo) }}
                 </view>
               </view>
@@ -595,6 +607,7 @@ import {
 } from "../../utils/albumVideo";
 import { classifyAlbumMediaSelection } from "../../utils/albumMediaSelection";
 import { runExclusiveAlbumMediaTask } from "../../utils/albumMediaOperation";
+import { contentModerationStatusText } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
@@ -2473,6 +2486,12 @@ export default {
       }
       return `${photo.media_type === "video" ? "视频" : "照片"}里：${photo.tags.map((tag) => tag.label).join("、")}`;
     },
+    mediaModerationStatusText(photo) {
+      if (this.timelineMode || !photo?.is_mine) {
+        return "";
+      }
+      return contentModerationStatusText(photo.moderation_status);
+    },
     isVideoMedia(photo) {
       return photo?.media_type === "video";
     },
@@ -2507,6 +2526,10 @@ export default {
     videoStateText(photo) {
       if (!this.isVideoMedia(photo)) {
         return "";
+      }
+      const moderationText = this.mediaModerationStatusText(photo);
+      if (moderationText) {
+        return moderationText;
       }
       if (this.videoProcessing(photo)) {
         return "处理中";
@@ -3081,8 +3104,7 @@ export default {
           this.statusText = "";
         }
       } catch (error) {
-        const message = error?.message || error?.userMessage || "相册照片上传失败，请稍后重试。";
-        this.statusText = error?.code ? `${message} [${error.code}]` : message;
+        this.statusText = error?.userMessage || error?.message || "相册照片上传失败，请稍后重试。";
       } finally {
         this.uploading = false;
       }
@@ -4040,9 +4062,21 @@ export default {
 }
 
 .video-placeholder-copy {
+  max-width: 82%;
   color: #ffffff;
   font-size: 25rpx;
   font-weight: 700;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.moderation-placeholder-copy {
+  max-width: 82%;
+  color: #7b5d2e;
+  font-size: 25rpx;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: center;
 }
 
 .video-overlay {
@@ -4072,13 +4106,16 @@ export default {
   position: absolute;
   right: 12rpx;
   bottom: 12rpx;
+  max-width: calc(100% - 24rpx);
   border-radius: 8rpx;
   background: rgba(15, 23, 42, 0.68);
   color: #ffffff;
   font-size: 22rpx;
   font-weight: 700;
-  line-height: 36rpx;
-  padding: 0 10rpx;
+  line-height: 1.35;
+  padding: 6rpx 10rpx;
+  text-align: center;
+  white-space: normal;
 }
 
 .selection-checkbox {
@@ -4152,6 +4189,15 @@ export default {
 
 .photo-caption-title.pending {
   color: #9c7440;
+}
+
+.photo-moderation-status {
+  color: #8a5a23;
+  font-size: 23rpx;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .photo-actions-row {

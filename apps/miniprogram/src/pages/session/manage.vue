@@ -203,6 +203,7 @@ import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinnedMessage.vue";
 import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
+import { contentModerationErrorText } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
 import { showActionSheet, showModal, showToast } from "../../utils/tdesignFeedback";
@@ -286,7 +287,7 @@ export default {
       };
     },
     authTools() {
-      return { dataOf, request };
+      return { dataOf, request, contentModerationErrorText };
     },
     hasOtherOnboardMembers() {
       const seats = this.session.seats || [];
@@ -878,6 +879,10 @@ export default {
       }
     },
     actionErrorText(error) {
+      const moderationMessage = contentModerationErrorText(error);
+      if (moderationMessage) {
+        return moderationMessage;
+      }
       if (error?.statusCode === 403) {
         return "只有车头可以执行这个操作。";
       }
