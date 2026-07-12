@@ -46,7 +46,7 @@
       </view>
       <view v-if="session.id" class="overview-lines">
         <view class="overview-line">店家：{{ session.store_name_snapshot }}</view>
-        <view class="overview-line">时间：{{ session.start_at }}</view>
+        <view class="overview-line">时间：{{ formattedStartAt }}</view>
       </view>
       <view v-if="session.id" class="overview-actions">
         <t-button class="mini-button muted" :disabled="busyAction" @tap="subscribeSignupReminder">
@@ -217,6 +217,20 @@ function booleanSetting(value, fallback = true) {
   return ["1", "true", "enabled"].includes(String(value).trim().toLowerCase());
 }
 
+function formatSessionDateTime(value) {
+  if (!value) {
+    return "时间待定";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
+}
+
 export default {
   components: { AuthIdentityBar, RoleSeatBoard, ManagePinnedMessage, FeedbackHost },
   data() {
@@ -245,7 +259,10 @@ export default {
       if (!this.session.id) {
         return "加载车况、提醒、详情和置顶信息。";
       }
-      return `${this.session.store_name_snapshot} / ${this.session.start_at}`;
+      return `${this.session.store_name_snapshot} / ${this.formattedStartAt}`;
+    },
+    formattedStartAt() {
+      return formatSessionDateTime(this.session.start_at);
     },
     seatSummary() {
       const seats = this.session.seats || [];
