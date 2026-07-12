@@ -53,12 +53,14 @@ function reviewedMessage(item, common) {
   return {
     ...common,
     result,
+    typeTag: "审核结果",
+    tagTheme: "primary",
     title: textOr(
       item?.title,
       result === "approved" ? "报名审核已通过" : "报名审核未通过"
     ),
     subtitle: `${scriptName} / ${targetLabel} / ${storeName}`,
-    actionText: "查看详情"
+    actionText: "查看结果"
   };
 }
 
@@ -69,9 +71,11 @@ function rescheduledMessage(item, common) {
   const newStartAt = formatShanghaiTime(payload.new_start_at, "新时间待定");
   return {
     ...common,
+    typeTag: "车局改期",
+    tagTheme: "warning",
     title: textOr(item?.title, "活动时间已调整"),
     subtitle: `${scriptName}：${oldStartAt} → ${newStartAt}`,
-    actionText: "查看详情"
+    actionText: "查看车局"
   };
 }
 

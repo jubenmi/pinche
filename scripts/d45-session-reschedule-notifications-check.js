@@ -183,12 +183,16 @@ assertIncludes(miniDetailPage, "requestSessionRescheduledSubscription");
 assertIncludes(miniAuthMessages, "export function buildPersistentMessages");
 assertIncludes(miniAuthMessages, "formatSessionStartAt");
 assertIncludes(miniAuthMessages, 'kind: "persistent"');
+assertIncludes(miniAuthMessages, 'typeTag: "审核结果"');
+assertIncludes(miniAuthMessages, 'typeTag: "车局改期"');
+assertIncludes(miniAuthMessages, 'actionText: "查看车局"');
 assertIncludes(miniAuthIdentityBar, 'url: "/api/users/me/notifications"');
 assertIncludes(miniAuthIdentityBar, "Promise.allSettled");
 assertIncludes(miniAuthIdentityBar, "persistentUnreadCount = Math.max(0");
 assertIncludes(miniAuthIdentityBar, "message.kind === 'pending_signup'");
 assertIncludes(miniAuthIdentityBar, "notificationReadInFlight.includes(notificationId)");
 assertIncludes(miniAuthIdentityBar, "method: \"POST\"");
+assertIncludes(miniAuthIdentityBar, "{{ message.typeTag }}");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(

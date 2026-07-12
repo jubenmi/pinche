@@ -95,14 +95,18 @@
                   {{ message.count }}待审
                 </t-tag>
                 <t-tag
-                  v-else-if="message.unread"
+                  v-else
                   class="message-count"
-                  theme="danger"
+                  :theme="message.tagTheme"
                   variant="light"
                   size="small"
                 >
-                  未读
+                  {{ message.typeTag }}
                 </t-tag>
+                <text
+                  v-if="message.kind === 'persistent' && message.unread"
+                  class="message-unread"
+                >未读</text>
               </view>
               <text class="message-subtitle">{{ message.subtitle }}</text>
             </view>
@@ -1290,6 +1294,14 @@ export default {
   flex: 0 0 auto;
   color: #c94d3f;
   font-size: 21rpx;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.message-unread {
+  flex: 0 0 auto;
+  color: #c94d3f;
+  font-size: 20rpx;
   font-weight: 700;
   line-height: 1.3;
 }

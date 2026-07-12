@@ -56,6 +56,9 @@ test("builds defensive signup-reviewed copy and target", () => {
   assert.equal(messages[0].title, "报名审核已通过");
   assert.equal(messages[0].subtitle, "雾都 / 侦探位 / 山海店");
   assert.equal(messages[0].result, "approved");
+  assert.equal(messages[0].typeTag, "审核结果");
+  assert.equal(messages[0].tagTheme, "primary");
+  assert.equal(messages[0].actionText, "查看结果");
   assert.equal(messages[0].targetUrl, "/pages/session/detail?id=12");
   assert.equal(messages[0].unread, true);
   assert.equal(messages[1].title, "报名审核未通过");
@@ -80,6 +83,9 @@ test("formats reschedule old to new copy in Asia/Shanghai", () => {
 
   assert.equal(message.title, "活动时间已调整");
   assert.equal(message.subtitle, "孤城：2026-07-12 10:00 → 2026-07-12 19:30");
+  assert.equal(message.typeTag, "车局改期");
+  assert.equal(message.tagTheme, "warning");
+  assert.equal(message.actionText, "查看车局");
   assert.equal(message.targetUrl, "/pages/session/detail?id=22");
 });
 

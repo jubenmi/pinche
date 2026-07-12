@@ -66,7 +66,11 @@ const persistentMessages = buildPersistentMessages([
 ]);
 assert.equal(persistentMessages[0].unread, true);
 assert.match(persistentMessages[0].title, /审核已通过/);
+assert.equal(persistentMessages[0].typeTag, "审核结果");
+assert.equal(persistentMessages[0].actionText, "查看结果");
 assert.match(persistentMessages[1].subtitle, /2026-07-12 10:00 → 2026-07-12 19:30/);
+assert.equal(persistentMessages[1].typeTag, "车局改期");
+assert.equal(persistentMessages[1].actionText, "查看车局");
 assert.equal(totalMessageBadgeCount(messages, 3), 110);
 assert.deepEqual(
   mergeAuthMessages(messages, persistentMessages).map((message) => message.kind),
@@ -83,7 +87,9 @@ for (const requiredText of [
   "Promise.allSettled",
   "persistentUnreadCount",
   "handleMessageTap",
-  "method: \"POST\""
+  "method: \"POST\"",
+  "{{ message.typeTag }}",
+  "message.kind === 'persistent' && message.unread"
 ]) {
   assert(
     identityBarSource.includes(requiredText),
