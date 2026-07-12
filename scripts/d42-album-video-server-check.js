@@ -442,6 +442,29 @@ check("local server playback returns real HEAD, 200, 206, 416 and 404 responses"
   }
 });
 
+check("COS video redirect does not bind playback authorization to the first byte range", async () => {
+  const media = {
+    source_url: SOURCE_URL,
+    display_url: "",
+    video_content_type: "video/mp4"
+  };
+  const redirects = [];
+  for (const range of ["bytes=0-1023", "bytes=1024-2047"]) {
+    const response = new MemoryResponse();
+    await serveUploadedSessionAlbumVideoFile(media, response, {
+      cosEnabled: true,
+      method: "GET",
+      range
+    });
+    assert.equal(response.statusCode, 302);
+    redirects.push(new URL(response.headers.location));
+  }
+  for (const redirect of redirects) {
+    assert.equal(redirect.searchParams.get("q-header-list"), "host");
+  }
+  assert.equal(redirects[0].pathname, redirects[1].pathname);
+});
+
 check("production video fallback is streamed and immutable", async () => {
   const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
   assert.match(server, /headers:\s*\{\s*"x-cos-forbid-overwrite":\s*"true"\s*\}/);

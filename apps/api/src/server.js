@@ -1408,17 +1408,13 @@ function albumVideoObjectKey(uploadPath) {
   return cosObjectKeyFromUploadPath(pathText, prefix);
 }
 
-function signedCosAlbumVideoUrl(media, method = "GET", range = "") {
+function signedCosAlbumVideoUrl(media, method = "GET") {
   const key = albumVideoObjectKey(media.display_url || media.source_url);
   const host = cosHost(config.cos);
-  const headers = {
-    host,
-    ...(range ? { range: String(range) } : {})
-  };
   const authorization = buildCosAuthorization({
     method,
     key,
-    headers,
+    headers: { host },
     config: config.cos
   });
   return `https://${host}/${encodeCosObjectKey(key)}?${authorization}`;
@@ -2184,7 +2180,7 @@ export async function serveUploadedSessionAlbumVideoFile(media, response, option
   if (cosEnabled) {
     response.writeHead(302, {
       "cache-control": cacheControl,
-      location: signedCosAlbumVideoUrl(media, method, range)
+      location: signedCosAlbumVideoUrl(media, method)
     });
     response.end();
     return;
