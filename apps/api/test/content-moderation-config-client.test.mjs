@@ -22,7 +22,7 @@ function validEnv(overrides = {}) {
     WECHAT_APP_ID: "wx-d45-test",
     WECHAT_APP_SECRET: "wechat-app-secret",
     WECHAT_CONTENT_SECURITY_EVENT_TOKEN: "wechat-content-security-event-token",
-    WECHAT_CONTENT_SECURITY_EVENT_AES_KEY: "wechat-content-security-event-aes-key",
+    WECHAT_CONTENT_SECURITY_EVENT_AES_KEY: "A".repeat(43),
     TENCENT_CI_VIDEO_REGION: "ap-nanjing",
     TENCENT_CI_VIDEO_BIZ_TYPE: "video-policy",
     TENCENT_CI_VIDEO_CALLBACK_URL: "https://api.example.com/api/internal/content-moderation/tencent-video/callback",
@@ -77,6 +77,20 @@ test("enabled WeChat moderation fails closed in production without Redis, creden
       CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
       CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "true",
       [missing]: ""
+    }));
+    assert.throws(() => assertContentModerationConfig(config, { nodeEnv: "production" }), {
+      code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+    });
+  }
+});
+
+test("enabled WeChat moderation requires a canonical 43-character event AES key", () => {
+  for (const aesKey of ["short", `${"A".repeat(42)}=`, "!".repeat(43)]) {
+    const config = buildContentModerationConfig(validEnv({
+      CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+      CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "true",
+      WECHAT_CONTENT_SECURITY_EVENT_AES_KEY: aesKey,
+      COS_REGION: "ap-nanjing"
     }));
     assert.throws(() => assertContentModerationConfig(config, { nodeEnv: "production" }), {
       code: "CONTENT_MODERATION_CONFIGURATION_ERROR"

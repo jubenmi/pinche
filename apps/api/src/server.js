@@ -173,6 +173,10 @@ import {
   parseTencentCallbackPayload
 } from "./modules/content-moderation/callback.js";
 import {
+  dispatchWechatImageModerationEvent,
+  parseWechatSecureImageEvent
+} from "./modules/content-moderation/wechat-callback.js";
+import {
   createModerationJob,
   createTextProposal,
   enqueueRejectedMediaCleanup,
@@ -1232,7 +1236,9 @@ export function normalizeError(error) {
     CONTENT_MODERATION_PROPOSAL_STALE: [409, "Content moderation proposal is stale"],
     CONTENT_MODERATION_IDEMPOTENCY_CONFLICT: [409, "Content moderation request conflicts with an existing request"],
     CONTENT_MODERATION_INVALID_TRANSITION: [409, "Content moderation state changed"],
-    CONTENT_MODERATION_CONFIGURATION_ERROR: [500, "Content moderation is not configured"]
+    CONTENT_MODERATION_CONFIGURATION_ERROR: [500, "Content moderation is not configured"],
+    CONTENT_MODERATION_CALLBACK_UNAUTHORIZED: [401, "Content moderation callback is unauthorized"],
+    CONTENT_MODERATION_INVALID_CALLBACK: [400, "Content moderation callback is invalid"]
   };
   if (moderationErrors[error?.code]) {
     const [statusCode, message] = moderationErrors[error.code];
@@ -3580,6 +3586,33 @@ async function route(request, response) {
       ok: true,
       data: callbackResult
     });
+    return;
+  }
+
+  if (
+    request.method === "POST" &&
+    url.pathname === "/api/internal/content-moderation/wechat-image/callback"
+  ) {
+    const rawCallback = await readRawBody(request, 256 * 1024);
+    const callback = parseWechatSecureImageEvent({
+      rawBody: rawCallback,
+      token: config.contentModeration.wechatEventToken,
+      aesKey: config.contentModeration.wechatEventAesKey,
+      appId: config.contentModeration.wechatAppId,
+      msgSignature: url.searchParams.get("msg_signature") || "",
+      timestamp: url.searchParams.get("timestamp") || "",
+      nonce: url.searchParams.get("nonce") || ""
+    });
+    const callbackResult = await dispatchWechatImageModerationEvent({
+      event: callback,
+      withDatabaseConnection,
+      repository: {
+        findModerationAttemptByProviderJobId,
+        findModerationJobById
+      },
+      applyMediaResult: (input) => contentModeration.applyMediaResult(input)
+    });
+    jsonResponse(response, 200, { ok: true, data: callbackResult });
     return;
   }
 

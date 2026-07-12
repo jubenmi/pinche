@@ -397,7 +397,19 @@ export function createContentModerationService(dependencies) {
       const currentObjectKey = String(
         job.subject_type === "album_image" ? media.object_key : media.source_url
       ).replace(/^\//, "");
-      if (currentObjectKey !== String(input.objectKey).replace(/^\//, "")) {
+      if (
+        provider === "wechat_sec_check" &&
+        (
+          String(job.subject_type) !== "album_image" ||
+          !/^uploads\/session-album\/display\/[A-Za-z0-9._/-]+$/.test(currentObjectKey)
+        )
+      ) {
+        return staleResult(job);
+      }
+      if (
+        provider !== "wechat_sec_check" &&
+        currentObjectKey !== String(input.objectKey).replace(/^\//, "")
+      ) {
         return staleResult(job);
       }
       const changed = await deps.repository.transitionModerationJob(connection, {

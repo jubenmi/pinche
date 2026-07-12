@@ -3,10 +3,15 @@ import test from "node:test";
 
 import { createContentModerationService } from "../src/modules/content-moderation/service.js";
 
-function harness({ clientError = null, jobOverrides = {} } = {}) {
+function harness({
+  clientError = null,
+  jobOverrides = {},
+  mediaOverrides = {},
+  attemptOverrides = {}
+} = {}) {
   const state = {
     created: [], submitted: [], transitions: [], mediaUpdates: [], cleanup: [],
-    currentAttempt: { id: 19, moderation_job_id: 7, is_current: 1 },
+    currentAttempt: { id: 19, moderation_job_id: 7, is_current: 1, ...attemptOverrides },
     job: {
       id: 7, subject_type: "album_video", subject_id: "91", subject_version: "etag-1",
       provider: "tencent_ci_video", status: "processing", decided_by_admin_user_id: null,
@@ -29,7 +34,8 @@ function harness({ clientError = null, jobOverrides = {} } = {}) {
     findModerationMedia: async () => ({
       id: 91, session_id: 8, media_type: "video",
       source_url: "/uploads/session-album/videos/source/a.mp4",
-      moderation_object_version: "etag-1", moderation_status: "pending", status: "active"
+      moderation_object_version: "etag-1", moderation_status: "pending", status: "active",
+      ...mediaOverrides
     }),
     transitionMediaModeration: async (_connection, input) => { state.mediaUpdates.push(input); return true; },
     enqueueRejectedMediaCleanup: async (_connection, media) => { state.cleanup.push(media.id); return 99; }
@@ -101,6 +107,82 @@ for (const [decision, expectedStatus] of [["pass", "approved"], ["review", "revi
     assert.equal(result.status, expectedStatus);
     assert.equal(state.mediaUpdates[0].toStatus, expectedStatus);
     assert.equal(state.cleanup.length, decision === "block" ? 1 : 0);
+  });
+}
+
+function wechatImageResult(decision = "pass") {
+  return {
+    jobId: 7,
+    provider: "wechat_sec_check",
+    providerJobId: "wechat-image-trace-7",
+    subjectVersion: "etag-1",
+    result: { decision, suggestion: decision, label: "normal", score: 100 }
+  };
+}
+
+test("a WeChat image result reads the object key only from locked media state", async () => {
+  const { service, state } = harness({
+    jobOverrides: { provider: "wechat_sec_check", subject_type: "album_image" },
+    mediaOverrides: {
+      media_type: "image",
+      object_key: "uploads/session-album/display/image-91.jpg"
+    }
+  });
+
+  const result = await service.applyMediaResult(wechatImageResult());
+
+  assert.deepEqual(result, { status: "approved", duplicate: false });
+  assert.equal(state.mediaUpdates[0].toStatus, "approved");
+});
+
+test("duplicate WeChat image events are idempotent after the first current result", async () => {
+  const { service, state } = harness({
+    jobOverrides: { provider: "wechat_sec_check", subject_type: "album_image" },
+    mediaOverrides: {
+      media_type: "image",
+      object_key: "uploads/session-album/display/image-91.jpg"
+    }
+  });
+
+  await service.applyMediaResult(wechatImageResult());
+  const duplicate = await service.applyMediaResult(wechatImageResult());
+
+  assert.deepEqual(duplicate, { status: "approved", duplicate: true, stale: false });
+  assert.equal(state.mediaUpdates.length, 1);
+});
+
+for (const [name, options, expected] of [
+  ["old attempt", { attemptOverrides: { is_current: 0 } }, { stale: true }],
+  ["changed media version", { mediaOverrides: { moderation_object_version: "etag-new" } }, { stale: true }],
+  ["missing internal object key", { mediaOverrides: { object_key: "" } }, { stale: true }],
+  ["deleted media", { mediaOverrides: { status: "deleted" } }, { stale: true }],
+  [
+    "administrator decision",
+    { jobOverrides: { status: "review", decided_by_admin_user_id: 2 } },
+    { stale: true, adminDecided: true }
+  ]
+]) {
+  test(`a WeChat image ${name} event cannot overwrite the current hidden state`, async () => {
+    const { service, state } = harness({
+      ...options,
+      jobOverrides: {
+        provider: "wechat_sec_check",
+        subject_type: "album_image",
+        ...options.jobOverrides
+      },
+      mediaOverrides: {
+        media_type: "image",
+        object_key: "uploads/session-album/display/image-91.jpg",
+        ...options.mediaOverrides
+      }
+    });
+
+    const result = await service.applyMediaResult(wechatImageResult());
+
+    assert.equal(result.stale, expected.stale);
+    if (expected.adminDecided) assert.equal(result.adminDecided, true);
+    assert.equal(state.transitions.length, 0);
+    assert.equal(state.mediaUpdates.length, 0);
   });
 }
 

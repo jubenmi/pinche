@@ -203,6 +203,13 @@ function validRedisUrl(raw) {
   }
 }
 
+function validWechatEventAesKey(raw) {
+  const encoded = String(raw || "").trim();
+  if (!/^[A-Za-z0-9+/]{43}$/.test(encoded)) return false;
+  const decoded = Buffer.from(`${encoded}=`, "base64");
+  return decoded.length === 32 && decoded.toString("base64").replace(/=$/, "") === encoded;
+}
+
 export function buildContentModerationConfig(env = process.env) {
   return {
     enabled: booleanValue(env.CONTENT_MODERATION_ENABLED, false),
@@ -253,7 +260,11 @@ export function assertContentModerationConfig(
     if (!moderationConfig.wechatAppId) missing.push("WECHAT_APP_ID");
     if (!moderationConfig.wechatAppSecret) missing.push("WECHAT_APP_SECRET");
     if (!moderationConfig.wechatEventToken) missing.push("WECHAT_CONTENT_SECURITY_EVENT_TOKEN");
-    if (!moderationConfig.wechatEventAesKey) missing.push("WECHAT_CONTENT_SECURITY_EVENT_AES_KEY");
+    if (!moderationConfig.wechatEventAesKey) {
+      missing.push("WECHAT_CONTENT_SECURITY_EVENT_AES_KEY");
+    } else if (!validWechatEventAesKey(moderationConfig.wechatEventAesKey)) {
+      missing.push("valid WECHAT_CONTENT_SECURITY_EVENT_AES_KEY");
+    }
     if (moderationConfig.wechatImageEnabled) {
       if (!moderationConfig.cosEnabled) missing.push("COS_ENABLED");
       if (!moderationConfig.secretId) missing.push("COS_SECRET_ID");
