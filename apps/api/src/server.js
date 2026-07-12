@@ -135,6 +135,7 @@ import {
   serializeSessionAlbumImage
 } from "./modules/core/service.js";
 import { isAlbumImageKind } from "./modules/album-image/constants.js";
+import { sessionRescheduleResponse } from "./modules/core/session-reschedule.js";
 import {
   bindLegacyIntentByteSize,
   findAlbumImageIntent,
@@ -3118,7 +3119,7 @@ async function route(request, response) {
   if (request.method === "POST" && sessionRescheduleId) {
     const user = await getAuthUser(request);
     const result = await rescheduleSession(user, sessionRescheduleId, body);
-    jsonResponse(response, 200, { ok: true, data: result.session });
+    jsonResponse(response, 200, { ok: true, data: sessionRescheduleResponse(result) });
     return;
   }
 

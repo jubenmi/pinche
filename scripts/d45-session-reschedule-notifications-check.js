@@ -35,17 +35,16 @@ assertIncludes(helper, "export const USER_NOTIFICATION_TYPES");
 assertIncludes(helper, "export async function insertUserNotification");
 assertIncludes(helper, "export function userNotificationResponse");
 assertIncludes(service, "export async function rescheduleSession");
-assertIncludes(service, "SELECT * FROM sessions WHERE id = ? FOR UPDATE");
+assertIncludes(service, "export async function rescheduleSessionInTransaction");
+assertIncludes(service, "(start_at <= CURRENT_TIMESTAMP) AS session_started");
+assertIncludes(service, "FROM sessions WHERE id = ? FOR UPDATE");
 assertIncludes(service, "SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE");
 assertIncludes(service, "SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE");
 assertIncludes(service, "body.membersConfirmed !== true");
 assertIncludes(service, "USER_NOTIFICATION_TYPES.SESSION_RESCHEDULED");
 assertIncludes(service, "createSessionRescheduleDedupeKey(id)");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
-const sessionLockIndex = service.indexOf(
-  "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
-  rescheduleServiceIndex
-);
+const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(
   "SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE",
   sessionLockIndex
@@ -65,7 +64,7 @@ assert(
 const rescheduleRoute = 'idMatch(url.pathname, /^\\/api\\/sessions\\/(\\d+)\\/reschedule$/)';
 const updateRoute = 'idMatch(url.pathname, /^\\/api\\/sessions\\/(\\d+)$/)';
 assertIncludes(server, rescheduleRoute);
-assertIncludes(server, "data: result.session");
+assertIncludes(server, "data: sessionRescheduleResponse(result)");
 assert(!server.includes("data: result.recipients"), "route must not expose notification recipients");
 assert(
   server.indexOf(rescheduleRoute) < server.indexOf(updateRoute),

@@ -53,6 +53,9 @@ function parseExplicitIsoTimestamp(value) {
 export function normalizeSessionRescheduleStartAt(value, currentStartAt, now = Date.now()) {
   const inputTimestamp = parseExplicitIsoTimestamp(value);
   const normalizedTimestamp = Math.floor(inputTimestamp / 1000) * 1000;
+  // mysql2 returns DATETIME values as Date objects under the connection's established
+  // local-time convention. Normalize that driver value only for second-precision equality;
+  // the database-computed session_started flag remains authoritative for lifecycle state.
   const currentTimestamp = Math.floor(new Date(currentStartAt).getTime() / 1000) * 1000;
   if (!Number.isFinite(currentTimestamp)) {
     throw rescheduleError("INVALID_CURRENT_START_AT", "Current session start time is invalid");
@@ -70,4 +73,8 @@ export function normalizeSessionRescheduleStartAt(value, currentStartAt, now = D
 
 export function createSessionRescheduleDedupeKey(sessionId) {
   return `session-rescheduled:${sessionId}:${randomUUID()}`;
+}
+
+export function sessionRescheduleResponse(result) {
+  return result.session;
 }

@@ -4274,10 +4274,15 @@ export async function updateSession(user, id, body) {
 
 export async function rescheduleSession(user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
+  return withTransaction((connection) =>
+    rescheduleSessionInTransaction(connection, user, id, body)
+  );
+}
 
-  return withTransaction(async (connection) => {
+export async function rescheduleSessionInTransaction(connection, user, id, body = {}) {
     const [sessionRows] = await connection.query(
-      "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
+      `SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started
+       FROM sessions WHERE id = ? FOR UPDATE`,
       [id]
     );
     const session = sessionRows[0];
@@ -4287,11 +4292,10 @@ export async function rescheduleSession(user, sessionId, body = {}) {
     if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the session organizer can reschedule this session");
     }
-    const now = Date.now();
-    const oldStartTime = Math.floor(new Date(session.start_at).getTime() / 1000) * 1000;
-    if (!Number.isFinite(oldStartTime) || oldStartTime <= now) {
+    if (Number(session.session_started) === 1) {
       throw conflict("Past or started sessions cannot be rescheduled");
     }
+    const now = Date.now();
 
     let normalizedStart;
     try {
@@ -4303,8 +4307,9 @@ export async function rescheduleSession(user, sessionId, body = {}) {
       throw error;
     }
 
-    // Lock order is always parent session, all seats, then all NPC roles. The indexed
-    // child ranges also serialize inserts/changes to the membership snapshot until commit.
+    // Lock order is parent session, indexed seat range, then indexed NPC-role range.
+    // Existing child updates wait on these locks; FK-validating child inserts also wait
+    // on the already-exclusive parent lock, keeping this membership snapshot stable.
     await connection.query("SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE", [id]);
     await connection.query("SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE", [id]);
 
@@ -4329,15 +4334,20 @@ export async function rescheduleSession(user, sessionId, body = {}) {
       `,
       [id, id, session.organizer_user_id]
     );
-    const recipients = recipientRows.map((recipient) => ({
-      userId: Number(recipient.user_id),
-      openid: recipient.open_id || null
-    }));
+    const recipientsByUserId = new Map();
+    for (const recipient of recipientRows) {
+      const userId = Number(recipient.user_id);
+      if (userId && !recipientsByUserId.has(userId)) {
+        recipientsByUserId.set(userId, { userId, openid: recipient.open_id || null });
+      }
+    }
+    const recipients = [...recipientsByUserId.values()];
     if (recipients.length > 0 && body.membersConfirmed !== true) {
       throw conflict("Member confirmation is required before rescheduling");
     }
 
     const normalizedStartAt = normalizedStart.canonical;
+    // Bind the normalized Date through mysql2, matching existing timestamp write paths.
     await connection.query("UPDATE sessions SET start_at = ? WHERE id = ?", [
       normalizedStart.date,
       id
@@ -4364,7 +4374,6 @@ export async function rescheduleSession(user, sessionId, body = {}) {
       session: await findById(connection, "sessions", id),
       recipients
     };
-  });
 }
 
 async function requireSessionNpcRoleOwner(connection, npcRoleId, user) {

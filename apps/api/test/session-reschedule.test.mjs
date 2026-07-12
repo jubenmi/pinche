@@ -45,7 +45,7 @@ test("rejects invalid and past timestamps", () => {
   );
 });
 
-test("rejects unchanged and sub-second-only changes after normalization", () => {
+test("compares the driver-returned current Date at MySQL second precision", () => {
   assert.throws(
     () => normalizeSessionRescheduleStartAt("2026-07-12T05:00:00Z", CURRENT, NOW),
     { code: "UNCHANGED_START_AT" }

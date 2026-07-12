@@ -15,6 +15,9 @@
 - Create `apps/api/migrations/0024_user_notifications.sql`: persistent notification schema and indexes.
 - Create `apps/api/src/modules/core/user-notifications.js`: notification constants, payload serialization, row mapping, insert/list/read helpers.
 - Modify `apps/api/src/modules/core/service.js`: transactional reschedule, recipient selection, notification list/read exports, and signup-review notification inserts.
+- Create `apps/api/src/modules/core/session-reschedule.js`: explicit-offset parsing, MySQL-second normalization, operation-key generation, and safe response shaping.
+- Create `apps/api/test/session-reschedule.test.mjs`: pure reschedule time and operation-key tests.
+- Create `apps/api/test/session-reschedule-service.test.mjs`: executable transaction behavior tests with a fake connection.
 - Modify `apps/api/src/server.js`: reschedule and notification routes.
 - Modify `apps/api/src/config/env.js`: reschedule template ID configuration.
 - Modify `apps/api/src/modules/wechat/subscribe-message.js`: reschedule message builder/sender.
@@ -102,12 +105,16 @@ git commit -m "feat: add persistent user notifications"
 
 **Files:**
 - Modify: `apps/api/src/modules/core/service.js`
+- Create: `apps/api/src/modules/core/session-reschedule.js`
+- Create: `apps/api/test/session-reschedule.test.mjs`
+- Create: `apps/api/test/session-reschedule-service.test.mjs`
 - Modify: `apps/api/src/server.js`
+- Modify: `apps/api/package.json`
 - Modify: `scripts/d45-session-reschedule-notifications-check.js`
 
 - [ ] **Step 1: Extend the failing contract check**
 
-Assert the service exports `rescheduleSession`, uses `SELECT ... FOR UPDATE`, checks `membersConfirmed`, inserts `SESSION_RESCHEDULED`, and the server matches `POST /api/sessions/:id/reschedule` before the generic session update route.
+Assert the service exports `rescheduleSession` and its testable transaction worker, uses the database-computed `start_at <= CURRENT_TIMESTAMP` lifecycle flag plus session/seat/NPC-role `SELECT ... FOR UPDATE` lock order, checks `membersConfirmed`, inserts `SESSION_RESCHEDULED`, and the server matches `POST /api/sessions/:id/reschedule` before the generic session update route without exposing internal recipients.
 
 - [ ] **Step 2: Verify RED**
 
@@ -117,7 +124,9 @@ Expected: FAIL with missing `rescheduleSession` and route assertions.
 
 - [ ] **Step 3: Implement recipient selection and validation**
 
-In `service.js`, add a transaction that locks the session row, calls the existing organizer/admin authorization rule, rejects when `start_at <= CURRENT_TIMESTAMP`, parses `body.startAt`, rejects invalid/past/unchanged values, and selects distinct non-organizer users from confirmed/locked seats plus bound active NPC roles.
+In `service.js`, add a transaction that locks the session row and reads `(start_at <= CURRENT_TIMESTAMP) AS session_started`, calls the existing organizer/admin authorization rule, and rejects when that database-authoritative flag is true. Require an explicit ISO-8601 offset or `Z`, normalize input and the driver-returned current `Date` to MySQL second precision, and reject invalid/past/unchanged (including sub-second-only) values. Lock indexed child membership in session → seats → NPC roles order before selecting distinct non-organizer users from confirmed/locked seats plus bound active NPC roles.
+
+Extract the transaction work as an exported connection-accepting function while keeping `rescheduleSession(user, id, body)` as the unchanged public service API. Add executable fake-connection tests for authorization before mutation, confirmation conflict without writes, seat/NPC recipient dedupe, lock order, notification failure rejection, internal recipients, and safe public response shaping.
 
 Use an explicit conflict response when recipients exist without confirmation:
 
@@ -147,7 +156,7 @@ Parse `/api/sessions/(\d+)/reschedule`, require authentication, read JSON, call 
 
 - [ ] **Step 6: Run checks**
 
-Run: `node scripts/d45-session-reschedule-notifications-check.js && npm --workspace apps/api run check`
+Run: `npm --workspace apps/api run test:session-reschedule && node scripts/d45-session-reschedule-notifications-check.js && npm --workspace apps/api run check`
 
 Expected: PASS.
 
