@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { executeAlbumCosUpload } from "@pinche/shared";
-import { uploadAlbumPhoto } from "../src/utils/albumPhotoUpload.js";
+
+globalThis.wx = {
+  canIUse: () => false,
+  getFileSystemManager: () => ({})
+};
+const { uploadAlbumPhoto } = await import("../src/utils/albumPhotoUpload.js");
 
 function directUpload(overrides = {}) {
   return {
@@ -157,10 +162,11 @@ test("album API requests suppress maintenance without changing generic default",
   assert.match(source, /task\?\.abort\?\.\(\)/);
 });
 
-test("COS SDK uses a synchronous mini-program module require", async () => {
+test("COS SDK uses a static ESM import resolved by the mini-program build", async () => {
   const source = await import("node:fs/promises").then(({ readFile }) =>
     readFile(new URL("../src/utils/api.js", import.meta.url), "utf8")
   );
-  assert.match(source, /require\("cos-wx-sdk-v5\/index\.js"\)/);
+  assert.match(source, /import COS from "cos-wx-sdk-v5\/index\.js"/);
   assert.doesNotMatch(source, /import\("cos-wx-sdk-v5\/index\.js"\)/);
+  assert.doesNotMatch(source, /require\("cos-wx-sdk-v5\/index\.js"\)/);
 });
