@@ -1,6 +1,14 @@
 import { cosStorageEnabled } from "../../storage/cos.js";
 
 export const ADMIN_MODERATION_PREVIEW_SECONDS = 60;
+export const ADMIN_MODERATION_PREVIEW_RESPONSE_CACHE_CONTROL = "no-store, private, max-age=0";
+
+function previewQueryEntries() {
+  return [{
+    name: "response-cache-control",
+    value: ADMIN_MODERATION_PREVIEW_RESPONSE_CACHE_CONTROL
+  }];
+}
 
 function isCurrentMedia(row, { provider, mediaType }) {
   const subjectVersion = String(row?.subject_version || "");
@@ -74,7 +82,8 @@ export function createAdminModerationPreviewBuilder({
       return previewResult(buildImageUrl({
         objectKey: String(row.object_key),
         nowSeconds,
-        expiresInSeconds: ADMIN_MODERATION_PREVIEW_SECONDS
+        expiresInSeconds: ADMIN_MODERATION_PREVIEW_SECONDS,
+        queryEntries: previewQueryEntries()
       }), previewExpiresAt);
     }
 
@@ -86,7 +95,8 @@ export function createAdminModerationPreviewBuilder({
     ) {
       return previewResult(buildVideoUrl({
         uploadPath: String(videoPath),
-        expiresInSeconds: ADMIN_MODERATION_PREVIEW_SECONDS
+        expiresInSeconds: ADMIN_MODERATION_PREVIEW_SECONDS,
+        queryEntries: previewQueryEntries()
       }), previewExpiresAt);
     }
 

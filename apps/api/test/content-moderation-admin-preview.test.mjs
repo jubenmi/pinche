@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ADMIN_MODERATION_PREVIEW_RESPONSE_CACHE_CONTROL,
   ADMIN_MODERATION_PREVIEW_SECONDS,
   createAdminModerationPreviewBuilder
 } from "../src/modules/content-moderation/admin-preview.js";
@@ -71,7 +72,11 @@ test("administrator image preview signs only its current private object for 60 s
   assert.deepEqual(calls.image, [{
     objectKey: "uploads/session-album/display/album-8-7-1.jpg",
     nowSeconds: 1783857600,
-    expiresInSeconds: ADMIN_MODERATION_PREVIEW_SECONDS
+    expiresInSeconds: ADMIN_MODERATION_PREVIEW_SECONDS,
+    queryEntries: [{
+      name: "response-cache-control",
+      value: ADMIN_MODERATION_PREVIEW_RESPONSE_CACHE_CONTROL
+    }]
   }]);
   assert.deepEqual(calls.video, []);
   assert.deepEqual(preview, {
@@ -88,7 +93,11 @@ test("administrator video preview signs only a controlled display/source path fo
   assert.deepEqual(calls.image, []);
   assert.deepEqual(calls.video, [{
     uploadPath: "/uploads/session-album/videos/display/album-8-7-2.mp4",
-    expiresInSeconds: ADMIN_MODERATION_PREVIEW_SECONDS
+    expiresInSeconds: ADMIN_MODERATION_PREVIEW_SECONDS,
+    queryEntries: [{
+      name: "response-cache-control",
+      value: ADMIN_MODERATION_PREVIEW_RESPONSE_CACHE_CONTROL
+    }]
   }]);
   assert.deepEqual(preview, {
     previewUrl: "https://cos.example/video?expires=60",

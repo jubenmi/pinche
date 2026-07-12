@@ -36,6 +36,7 @@ import { geocodeStoreLocation, reverseGeocodeCity } from "./modules/location/geo
 import {
   buildCosAuthorization,
   cosHost,
+  cosQueryEntries,
   cosObjectKeyFromUploadPath,
   cosStorageEnabled,
   deleteCosObject,
@@ -44,6 +45,7 @@ import {
   headCosObject,
   isTrustedCosStorageError,
   readCosObjectRange,
+  renderCosRequestQuery,
   putCosObject
 } from "./storage/cos.js";
 import {
@@ -1139,16 +1141,18 @@ async function applyApprovedTextProposal(connection, { job, proposal }) {
 
 const buildAdminModerationPreview = createAdminModerationPreviewBuilder({
   cosConfig: config.cos,
-  buildImageUrl: ({ objectKey, nowSeconds, expiresInSeconds }) => buildSignedCosImageUrl({
+  buildImageUrl: ({ objectKey, nowSeconds, expiresInSeconds, queryEntries }) => buildSignedCosImageUrl({
     objectKey,
     nowSeconds,
     expiresInSeconds,
+    queryEntries,
     config: config.cos
   }),
-  buildVideoUrl: ({ uploadPath, expiresInSeconds }) => signedCosAlbumVideoUrl(
+  buildVideoUrl: ({ uploadPath, expiresInSeconds, queryEntries }) => signedCosAlbumVideoUrl(
     { display_url: uploadPath },
     "GET",
-    expiresInSeconds
+    expiresInSeconds,
+    queryEntries
   )
 });
 
@@ -2461,19 +2465,24 @@ function albumVideoObjectKey(uploadPath) {
   return cosObjectKeyFromUploadPath(pathText, prefix);
 }
 
-function signedCosAlbumVideoUrl(media, method = "GET", expiresInSeconds) {
+function signedCosAlbumVideoUrl(media, method = "GET", expiresInSeconds, queryEntries = []) {
   const key = albumVideoObjectKey(media.display_url || media.source_url);
   const host = cosHost(config.cos);
+  const entries = cosQueryEntries(queryEntries);
   const authorization = buildCosAuthorization({
     method,
     key,
     headers: { host },
+    urlParams: entries,
     ...(Number.isSafeInteger(expiresInSeconds) && expiresInSeconds > 0
       ? { expiresInSeconds }
       : {}),
     config: config.cos
   });
-  return `https://${host}/${encodeCosObjectKey(key)}?${authorization}`;
+  const dataQuery = renderCosRequestQuery(entries);
+  return `https://${host}/${encodeCosObjectKey(key)}?${
+    dataQuery ? `${dataQuery}&` : ""
+  }${authorization}`;
 }
 
 function signedAlbumVideoUrl(media, userId) {
