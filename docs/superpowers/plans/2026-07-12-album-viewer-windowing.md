@@ -1972,12 +1972,21 @@ Expected: clean source state except the intentional plan progress update.
 
 ### Task 5: Real 263-Item Runtime Acceptance
 
+**Status:** Completed
+
+- **Runtime setup:** The Nightly DevTools build did not honor `miniprogramRoot` when the source project root was opened, so runtime acceptance imported the generated worktree root `apps/miniprogram/dist/dev/mp-weixin` directly. A generated-only `project.private.config.json` restored the approved `album-29-runtime` condition; no source file changed. The existing development login opened `[冯厚敦·流芳] 相册` with 263 items.
+- **Forward stability:** Starting at `1/263`, 20 consecutive forward drag gestures settled visibly at `5/263`. `/private/tmp/pinche-swiper-window-forward-{1s,10s,30s}.png` show the same visible counter and subject with no oscillation, delayed visible advance, black screen, or gesture lock. The first 1-second accessibility-tree read briefly returned stale `4/263`, while its simultaneously captured screenshot already showed `5/263`; screenshot evidence is the acceptance source of truth.
+- **Backward stability:** Starting at `5/263`, 20 consecutive backward drag gestures settled at `3/263`. `/private/tmp/pinche-swiper-window-backward-{1s,10s,30s}.png` all show `3/263` and the same subject with no oscillation, continued movement, black screen, or gesture lock.
+- **Preserved controls:** Image-to-image swiping crossed a five-slide rebase in both directions. The close button and downward close gesture both returned to the 263-item album. Download opened the existing business confirmation, continued to the native system-album permission request, and was then declined so runtime acceptance did not grant a new OS permission. This real dataset exposed no reachable video card and no naturally failing media item; the unavailable mixed-video and error/retry branches remain covered by the GREEN D31 and D42 executable checks.
+- **Runtime performance:** Setup/launch produced a separate `setTimeout` 2463 ms warning. Around viewer interaction the observed warnings were `setInterval` 81/98 ms, `setTimeout` 165 ms, and `message` 211 ms; an earlier setup/window-operation message spike reached 568 ms. The swipe-adjacent message warning was below the 282–309 ms first-stage baseline, while the 165 ms timer was above its 58–115 ms range. These mixed supporting numbers did not affect the mandatory stable visible behavior, and no runtime error accompanied either swipe sequence.
+- **Final verification:** D31 printed `AlbumImageViewer windowing checks passed`; the ordinary and `--require-built-wxml` static checks each printed `UniApp miniprogram check passed: 13 pages`; D42 printed its upload/viewer/timeline/auth success message; the production build printed `DONE  Build complete.` with Sass deprecation warnings only; `git diff --check` exited 0. The generated swiper retained structural `wx:for`, `wx:key`, and `data-generation`. `ab822876` remains an ancestor of all second-phase commits, so this windowing phase can be reverted independently of the first feedback-loop fix.
+
 **Files:**
 - Generated only: apps/miniprogram/dist/dev/mp-weixin/**
 - Update: docs/superpowers/plans/2026-07-12-album-viewer-windowing.md
 - Evidence only: /private/tmp/pinche-swiper-window-*.png
 
-- [ ] **Step 1: Build the development output from this worktree**
+- [x] **Step 1: Build the development output from this worktree**
 
 From /Users/dirui/Documents/pinche/.worktrees/codex/album-swiper-feedback-loop-fix, run:
 
@@ -1987,7 +1996,7 @@ npm run dev:mp-weixin
 
 Expected: Build complete. Watching for changes. Keep this watcher running during runtime acceptance so the worktree output remains current.
 
-- [ ] **Step 2: Open the worktree project in WeChat DevTools**
+- [x] **Step 2: Open the worktree project in WeChat DevTools**
 
 Run:
 
@@ -1997,7 +2006,7 @@ Run:
 
 Expected: DevTools opens this exact worktree path and uses its dist/dev/mp-weixin root. Do not open /Users/dirui/Documents/pinche/apps/miniprogram, which is the separate main worktree.
 
-- [ ] **Step 3: Verify the real album and forward rapid-swipe settling**
+- [x] **Step 3: Verify the real album and forward rapid-swipe settling**
 
 Using the authenticated DevTools session:
 
@@ -2011,7 +2020,7 @@ Using the authenticated DevTools session:
 
 Expected: the counter and subject photo are identical at 1, 10, and 30 seconds; there is no adjacent oscillation, delayed page advance, black screen, or gesture lock.
 
-- [ ] **Step 4: Verify backward rapid-swipe settling**
+- [x] **Step 4: Verify backward rapid-swipe settling**
 
 Perform 20 rapid backward horizontal swipes and capture:
 
@@ -2021,7 +2030,7 @@ Perform 20 rapid backward horizontal swipes and capture:
 
 Expected: the three backward counters and photos are identical and stable under the same criteria.
 
-- [ ] **Step 5: Verify preserved controls and mixed media**
+- [x] **Step 5: Verify preserved controls and mixed media**
 
 Check:
 
@@ -2034,11 +2043,11 @@ Check:
 
 Expected: logical counter/payload behavior remains correct and no control regresses.
 
-- [ ] **Step 6: Record runtime performance evidence**
+- [x] **Step 6: Record runtime performance evidence**
 
 Record DevTools long-task/message-handler warnings next to the six screenshots in this plan. Behavior stability is mandatory. Compare warning severity with the first-stage baseline of 58–115 ms timer warnings and 282–309 ms message-handler warnings; improvement is supporting performance evidence, not a substitute for stable 1/10/30-second results.
 
-- [ ] **Step 7: Stop the watcher, run final verification, and commit the record**
+- [x] **Step 7: Stop the watcher, run final verification, and commit the record**
 
 Stop the development watcher, then run:
 
@@ -2065,15 +2074,15 @@ git commit -m "docs: record album viewer windowing verification"
 
 The second phase is complete only when:
 
-- [ ] D31 proves no more than five slides and exact 1 → 263 → 1 logical traversal.
-- [ ] Native change never writes the programmatic swiper command.
-- [ ] Matching animationfinish is the only native-interaction rebase path.
-- [ ] Stale generation and same-page remount events are idempotent.
-- [ ] Hydration keeps state/generation stable; reorder/remove/empty are covered.
-- [ ] Video, download, close, downward close, retry, and failure recovery pass.
-- [ ] Parent preview photo/progress hot paths preserve root references.
-- [ ] Viewer progress/preload is limited to current ±2.
-- [ ] check-miniprogram, D42, and production build pass.
-- [ ] Real 263-item forward and backward 1/10/30-second screenshots are stable.
-- [ ] Independent spec and quality review have no Critical or Important finding.
-- [ ] Worktree is clean and the second-phase commits can be reverted without removing ab822876.
+- [x] D31 proves no more than five slides and exact 1 → 263 → 1 logical traversal.
+- [x] Native change never writes the programmatic swiper command.
+- [x] Matching animationfinish is the only native-interaction rebase path.
+- [x] Stale generation and same-page remount events are idempotent.
+- [x] Hydration keeps state/generation stable; reorder/remove/empty are covered.
+- [x] Video, download, close, downward close, retry, and failure recovery pass.
+- [x] Parent preview photo/progress hot paths preserve root references.
+- [x] Viewer progress/preload is limited to current ±2.
+- [x] check-miniprogram, D42, and production build pass.
+- [x] Real 263-item forward and backward 1/10/30-second screenshots are stable.
+- [x] Independent spec and quality review have no Critical or Important finding.
+- [x] Worktree is clean and the second-phase commits can be reverted without removing ab822876.
