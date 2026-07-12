@@ -1,237 +1,235 @@
-# Tencent Cloud Content Moderation Design
+# 腾讯云内容安全审核设计
 
-## Goal
+## 目标
 
-Prevent newly submitted user images, videos, and selected user-authored text from becoming visible before Tencent Cloud machine moderation or an administrator explicitly approves them. Existing content remains available without a historical rescan.
+确保新提交的用户图片、视频和指定用户文本，在腾讯云机审通过或管理员明确批准前，不会对其他用户公开。现有内容继续可用，本期不做历史内容扫描。
 
-## Scope
+## 范围
 
-This phase covers:
+本期覆盖：
 
-- Session album images.
-- Session album videos, including video frames and audio tracks.
-- User nicknames and nickname changes.
-- Session review text.
-- Pseudo-chat messages and pinned messages.
-- User-submitted or edited store and script names and descriptions.
-- Public explanatory text entered while creating or managing a session.
-- A minimal administrator review queue for machine results that require review.
+- 拼车相册图片。
+- 拼车相册视频，包括视频画面和音轨。
+- 用户昵称及昵称修改。
+- 车友评价正文。
+- 车内留言及置顶留言。
+- 用户提交或编辑的门店、剧本名称与介绍。
+- 创建或管理拼车时填写的公开说明类文本。
+- 处理机审疑似结果的最小化管理后台复核队列。
 
-This phase does not cover:
+本期不覆盖：
 
-- Historical rescanning of existing COS objects.
-- Automated user strikes, suspensions, or bans.
-- A productized appeal workflow.
-- System-generated text, phone numbers, or administrator review notes.
-- General document, live-stream, or private-message moderation beyond the listed entry points.
+- 对现有 COS 对象执行历史扫描。
+- 自动累计违规次数、暂停账号或封禁账号。
+- 产品化的用户申诉流程。
+- 系统生成文本、手机号和管理员审核备注。
+- 上述入口之外的文档、直播或私信内容审核。
 
-## Selected Approach
+## 选定方案
 
-Use a hybrid moderation architecture:
+采用混合审核架构：
 
-1. The API explicitly submits each eligible image or video to Tencent Cloud Data Processing/Cloud Infinite (CI) and each eligible text mutation to Tencent Cloud Text Moderation System (TMS).
-2. Application database state is the authority for visibility and access.
-3. COS automatic moderation and automatic freezing are enabled for the relevant upload prefixes as a second line of defense.
-4. Moderation service failures fail closed: new content stays hidden and is retried; it is never automatically approved.
+1. API 主动将每张图片和每个视频提交至腾讯云数据万象（CI），将每次符合范围的文本变更提交至腾讯云文本内容安全（TMS）。
+2. 数据库审核状态是内容能否公开和访问的唯一业务依据。
+3. 针对相关上传目录同时开启 COS 自动审核与自动冻结，作为第二道防线。
+4. 审核服务故障时采用关闭式失败：新内容保持隐藏并重试，绝不自动放行。
 
-COS automatic moderation alone is insufficient because an object could become visible before the asynchronous result arrives. Explicit submission alone is insufficient as the only protection because an application defect could omit submission. The hybrid design makes the application gate deterministic and retains a cloud-side safety net.
+只开启 COS 自动审核无法避免异步结果返回前的短暂暴露。只依赖业务代码主动送审，则可能因程序缺陷漏送。混合方案以业务状态机保证确定性，以云端自动审核提供兜底。
 
-## Data Model
+## 数据模型
 
-### Unified moderation jobs
+### 统一审核任务
 
-Add a `content_moderation_jobs` table with these responsibilities:
+新增 `content_moderation_jobs` 表，承担以下职责：
 
-- Identify the subject using `subject_type` and `subject_id`.
-- Identify the immutable submitted version using an object ETag for media or a SHA-256 digest for text.
-- Record the provider (`tencent_ci` or `tencent_tms`), provider job ID, opaque `data_id`, and configured policy identifier.
-- Track `status`: `pending`, `processing`, `approved`, `review`, `rejected`, or `error`.
-- Store the highest-priority suggestion, label, sublabel, score, a bounded response summary, attempt count, next retry time, and last error code.
-- Record submission, completion, and update timestamps.
-- Enforce uniqueness for a subject version so retries and duplicate callbacks cannot create conflicting decisions.
+- 使用 `subject_type` 和 `subject_id` 标识审核对象。
+- 使用媒体对象 ETag 或文本 SHA-256 摘要标识不可变的提交版本。
+- 记录服务商（`tencent_ci` 或 `tencent_tms`）、腾讯云任务 ID、不可猜测的 `data_id` 和审核策略标识。
+- 跟踪状态：`pending`、`processing`、`approved`、`review`、`rejected`、`error`。
+- 保存最高优先级处置建议、标签、子标签、分数、受长度限制的响应摘要、尝试次数、下次重试时间和最后错误码。
+- 记录提交、完成和更新时间。
+- 对“业务对象 + 不可变版本”建立唯一约束，避免重试或重复回调产生冲突结论。
 
-Raw provider payloads must not be retained without a size bound. Logs must exclude credentials, user tokens, signed URLs, and full private text.
+腾讯云原始响应只能保存受长度限制的必要摘要。日志不得包含密钥、用户令牌、可复用签名 URL 或完整私密文本。
 
-### Media moderation state
+### 媒体审核状态
 
-Add `moderation_status` to `session_album_photos` with these values:
+在 `session_album_photos` 增加 `moderation_status`：
 
-- `approved_legacy`: content that existed before the production cutover and is not rescanned.
-- `pending`: uploaded or processed and awaiting submission or a provider result.
-- `approved`: machine-approved or administrator-approved.
-- `review`: hidden pending human review.
-- `rejected`: denied and scheduled for object cleanup.
-- `error`: provider submission or processing failed and is awaiting retry or operator action.
+- `approved_legacy`：生产切换前已存在且本期不回扫的内容。
+- `pending`：已上传或处理完成，等待送审或等待结果。
+- `approved`：机审通过或管理员通过。
+- `review`：等待人工复核，保持隐藏。
+- `rejected`：已拒绝，等待清理 COS 对象。
+- `error`：提交或处理失败，等待重试或人工处置。
 
-The existing `status` continues to represent the media lifecycle, such as active versus deleting. The existing `processing_status` continues to represent image/video processing. Moderation is a separate concern and must not overload either field.
+现有 `status` 继续表示媒体生命周期，例如有效或删除中；现有 `processing_status` 继续表示图片或视频技术处理状态。内容审核是独立维度，不复用这两个字段。
 
-The migration backfills all existing media to `approved_legacy`. New rows must explicitly start at `pending`; they must not inherit the legacy default.
+迁移时将现有媒体统一回填为 `approved_legacy`。新媒体必须显式写入 `pending`，不能继承历史内容默认值。
 
-### Text proposals
+### 文本提案
 
-Text that can replace an existing visible value, such as a nickname, is stored as a versioned proposal while moderation is pending or requires review. The current approved value stays visible until the proposal is approved. Approval atomically applies the proposal only if its expected base version still matches; otherwise the proposal becomes stale and requires resubmission.
+对于会替换当前线上值的文本，例如昵称，待审或疑似文本保存为带版本的提案。当前已批准值继续展示，审核通过后才替换。批准时必须校验提案基于的旧版本仍然有效；如果已被其他修改覆盖，则将提案标为过期并要求重新提交。
 
-New entities that contain reviewable text, such as a review or private catalog submission, remain non-public until approved. A single mutation's eligible short fields are normalized and combined into one labeled TMS request to reduce calls. The highest-risk field determines the mutation result.
+对于评价、私有目录申请等新实体，符合范围的文本在批准前完全不公开。一次业务提交中的多个短字段经过标准化后，使用字段标签合并成一次 TMS 请求，以减少调用次数；任一字段命中风险时，整个提交采用最高风险结果。
 
-## Media Flow
+## 图片流程
 
-### Images
+1. 保留现有 COS 直传意图和文件校验流程，继续负责上传授权、类型、大小、尺寸、ETag 稳定性和图片处理。
+2. 上传完成后创建媒体记录：`status = active`、`processing_status = ready`、`moderation_status = pending`。
+3. API 按媒体 ID 和 ETag 创建审核任务，再用指定策略将 COS 对象 Key 提交至 CI 图片审核。
+4. 审核通过前，上传者只能看到状态占位，不能获得预览、下载或 COS 签名地址。
+5. 其他用户、公开分享、统计数量、标签、下载、预览和直连媒体接口均视该媒体不存在。
+6. `Pass`：在同一事务中将媒体和任务改为 `approved`。
+7. `Review`：改为 `review`，进入管理员复核队列。
+8. `Block`：改为 `rejected`，并创建幂等对象清理任务。
 
-1. The existing COS direct-upload intent and file validation flow remains responsible for authorization, type, size, dimensions, ETag stability, and image processing.
-2. Finalization creates the media row with `status = active`, `processing_status = ready`, and `moderation_status = pending`.
-3. The API creates a moderation job keyed by media ID and ETag, then submits the COS object key to CI image moderation using the configured policy.
-4. Until approval, the uploader may see a status placeholder but receives no preview, download, or directly signed COS URL.
-5. Other users, public shares, counts, tags, downloads, previews, and direct-media endpoints behave as if the media does not exist.
-6. `Pass` changes the media and job to `approved` in one transaction.
-7. `Review` changes them to `review` and adds the item to the administrator queue.
-8. `Block` changes them to `rejected` and creates an idempotent object-cleanup job.
+## 视频流程
 
-### Videos
+1. 上传、探测和转码继续负责视频的技术有效性。
+2. 源对象稳定后，媒体进入 `moderation_status = pending`，提交 CI 视频画面和音轨审核。
+3. 视频技术处理完成不代表内容审核通过；播放地址、封面、预览、下载和公开统计仍然受审核状态限制。
+4. 腾讯云结果沿用图片的 `Pass`、`Review` 和 `Block` 状态迁移。
+5. 视频被拒绝时，通过现有清理架构为平台拥有的源文件、展示文件和封面对象分别创建幂等清理任务。
 
-1. Upload and transcoding/inspection remain responsible for technical validity.
-2. Once the source object is stable, the media row enters `moderation_status = pending` and CI video moderation is submitted for configured frame and audio checks.
-3. Video processing readiness does not imply moderation approval. Playback URLs, covers, previews, downloads, and public counts remain gated.
-4. Provider results use the same `Pass`, `Review`, and `Block` transitions as images.
-5. A rejected video schedules cleanup for every owned source, display, and cover object through the existing cleanup architecture.
+## 文本流程
 
-## Text Flow
+TMS 审核统一发生在 API 服务边界，客户端不能直接调用。业务服务收集并标准化带标签字段，创建审核任务或文本提案，再调用 TMS。
 
-TMS moderation occurs at API service boundaries, never in the client. The covered mutation gathers normalized labeled fields, creates a moderation job/proposal, and calls TMS.
+- `Pass`：保存或应用提交文本，任务标记为 `approved`。
+- `Block`：使用稳定业务错误码拒绝提交，只保存运营需要的受限审计摘要。
+- `Review`：保留隐藏提案，返回稳定的“待人工复核”结果；原有已批准文本不变。
+- 超时、权限错误、额度错误或结果格式异常：隐藏提案进入 `error` 并排队重试，接口按场景返回“审核中”或服务暂不可用；不得发布文本。
 
-- `Pass`: persist or apply the submitted text and mark the job approved.
-- `Block`: reject the request with a stable application error code and store only the bounded audit record required for operations.
-- `Review`: retain a hidden proposal and return a stable pending-review result. Existing approved text remains unchanged.
-- Provider timeout, permission error, quota error, or malformed result: retain the hidden proposal as `error`, enqueue a retry, and return a service-unavailable or pending response appropriate to the mutation. The text is not published.
+客户端只展示克制、统一的中文提示，例如“内容正在审核”或“内容未通过安全审核”。普通用户不能看到腾讯云标签、置信分数或命中敏感词。
 
-The client receives neutral Chinese messages such as “内容正在审核” or “内容未通过安全审核”. Provider labels, confidence scores, and sensitive matched terms are not exposed to ordinary users.
+## 可见性与访问规则
 
-## Visibility and Access Rules
+数据库审核状态是唯一发布依据：
 
-Database moderation state is the sole publishing authority.
+- 普通相册列表、公开分享、统计数量、标签查询和下载选择只包含 `approved` 与 `approved_legacy` 媒体。
+- 上传者的私有管理视图可以包含未批准记录，但只能返回不带媒体 URL 的状态占位。
+- 预览、缩略图、视频流、下载和直连签名 URL 接口必须分别再次校验审核状态，不能只依赖列表查询过滤。
+- 管理员通过专用授权接口查看待审媒体，使用短时 URL，并记录访问审计。
+- COS 冻结回调或对象 403 不等同于审核通过，也不能自动改变业务状态。
 
-- Ordinary album lists, public shares, aggregate counts, tag queries, and download selections include only `approved` and `approved_legacy` media.
-- The uploader's private management view may include non-approved rows but only as metadata-only status placeholders.
-- Preview, thumbnail, video stream, download, and direct signed-URL endpoints independently re-check moderation state. A list-query filter alone is not considered sufficient.
-- Administrators access review media through a dedicated authorized endpoint with short-lived URLs and audit logging.
-- A COS freeze callback or 403 must not be interpreted as approval or automatically change application state.
+## 腾讯云接入与配置
 
-## Provider Integration and Configuration
+新增职责清晰的内容审核模块：
 
-Create a focused moderation module with separate responsibilities:
+- 配置校验和生产环境关闭式失败策略。
+- 腾讯云请求签名与客户端适配器。
+- CI 图片和视频任务提交。
+- TMS 同步文本审核。
+- 将腾讯云结果统一映射为 `pass`、`review`、`block`。
+- 审核任务持久化、重试认领和状态迁移。
+- 回调认证与幂等处理。
 
-- Configuration validation and production fail-closed policy.
-- Tencent Cloud request signing/client adapters.
-- CI image and video submission.
-- TMS synchronous text moderation.
-- Provider-result normalization into `pass`, `review`, and `block`.
-- Job persistence, retry claiming, and state transitions.
-- Callback authentication and idempotent processing.
+密钥只存放在 API 环境变量中。生产配置至少包含腾讯云凭证或工作负载身份、地域、图片/视频/文本策略标识、回调 URL，以及在无法使用腾讯云原生验签时使用的高强度回调令牌。开发和自动化测试注入假客户端；生产环境缺少必需配置时，必须阻止新内容发布链路启用。
 
-Secrets remain in API environment variables. Required production configuration includes Tencent Cloud credentials or workload identity, region, image/video/text policy identifiers, callback URL, and a high-entropy callback token when provider-native request verification is unavailable. Development and tests use injected fake clients; production must refuse to enable new publishing paths if required moderation configuration is missing.
+CAM 权限遵循最小权限原则：只允许提交和查询所需审核任务，只读相关 COS 前缀，并尽量仅通过现有受控存储路径执行冻结或删除。
 
-CAM permissions follow least privilege: submit and inspect the required moderation jobs, read only the relevant COS object prefixes, and freeze/delete only through the existing controlled storage path where possible.
+## 回调安全与幂等
 
-## Callback Security and Idempotency
+回调接口不要求用户登录，但必须认证腾讯云事件：
 
-The callback endpoint does not require a user login but must authenticate the provider event. It must:
+1. 校验腾讯云支持的签名；如该回调类型无原生验签，则校验高强度回调令牌。
+2. 使用严格的请求体大小限制解析数据，拒绝未知事件结构。
+3. 同时匹配腾讯云任务 ID、不可猜测的 `data_id`、业务对象 ID、对象 Key 和不可变 ETag 或文本摘要。
+4. 状态迁移前锁定审核任务和业务对象记录。
+5. 对完全重复的终态回调执行幂等成功响应。
+6. 拒绝或记录已被新版本替代的过期回调。
+7. 低优先级或旧结果不得覆盖管理员决定。
+8. 对已认证的重复回调返回成功，避免腾讯云无限重试。
 
-1. Validate provider-supported signatures or the configured high-entropy callback token.
-2. Parse with a strict body-size limit and reject unknown event shapes.
-3. Match provider job ID, opaque data ID, subject ID, object key, and immutable ETag/digest.
-4. Lock the moderation job and subject row before transition.
-5. Ignore exact duplicate terminal callbacks.
-6. Reject or record stale callbacks for superseded subject versions.
-7. Prevent a lower-authority or older result from replacing an administrator decision.
-8. Return success for authenticated duplicates so Tencent Cloud does not retry indefinitely.
+## 重试与故障恢复
 
-## Retry and Failure Recovery
+新增周期性审核任务 Worker，采用租约认领任务，并复用现有媒体清理任务的并发控制模式。网络错误、超时、限流和腾讯云 5xx 使用带随机抖动的有限指数退避重试。认证、权限、策略、额度和欠费错误立即告警，内容保持隐藏。
 
-A recurring moderation worker claims jobs using a lease, mirroring the existing media cleanup job pattern. It retries transient network, timeout, rate-limit, and provider 5xx failures with bounded exponential backoff and jitter. Authentication, permission, policy, quota, and billing failures generate an immediate operational alert and remain hidden.
+重试按业务对象不可变版本和腾讯云请求标识保证幂等。超过重试上限的任务保持 `error`，继续不可见，并进入管理员队列供重新提交或拒绝。任何超时都不能触发自动批准。
 
-Retries are idempotent by subject version and provider request identifier. Jobs exceeding the retry budget stay in `error`, remain invisible, and appear in the administrator queue for resubmission or rejection. There is no timeout-based automatic approval.
+## 管理员人工复核
 
-## Administrator Review
+在现有管理后台新增“内容审核”页面。
 
-Add a minimal “内容审核” page to the existing administrator web application.
+队列支持按内容类型、审核状态、腾讯云标签和提交时间筛选。每条记录展示安全预览、上传者、关联拼车或实体、机审建议、标签、分数、尝试次数和时间。
 
-The queue supports filters for subject type, moderation status, provider label, and submission time. Each row shows safe preview data, uploader, related session/entity, machine suggestion, label, score, attempts, and timestamps.
+管理员可以：
 
-Administrators can:
+- 通过 `review` 或 `error` 内容。
+- 拒绝 `review` 或 `error` 内容，且必须填写原因。
+- 重试 `error` 内容，但不改变其可见性。
 
-- Approve a `review` or `error` item.
-- Reject a `review` or `error` item with a required reason.
-- Retry an `error` item without changing visibility.
+每次操作记录管理员 ID、动作、原因、原状态、新状态和时间。管理员结论对当前不可变版本为终态，优先于之后到达的重复腾讯云回调。
 
-Every action records the administrator ID, action, reason, previous state, resulting state, and timestamp. An administrator decision is terminal for that immutable version and wins over later duplicate provider callbacks.
+被拒绝用户只看到中性原因与联系客服指引。申诉流程和账号自动处罚不在本期范围内。
 
-Rejected users receive a neutral reason and customer-service guidance. Appeals and automated account penalties are outside this phase.
+## COS 自动审核
 
-## COS Automatic Moderation
+针对准确的相册图片和视频上传前缀配置 CI 自动审核与自动冻结。策略覆盖色情、政治/违法、暴恐、广告或二维码（按运营需要）、图片 OCR 文本、视频画面和视频音轨。
 
-Configure CI automatic moderation and automatic freezing for the exact album image and video upload prefixes. Use policies covering pornography, political/illegal content, terrorism/violence, advertising/QR codes where operationally desired, image OCR text, video frames, and video audio.
+这是应用改造之外的云控制台和部署要求。每日审核上限不能导致内容静默漏审，监控应在接近额度时告警。COS 保持私有读；自动冻结只是兜底，不能替代数据库发布判断。
 
-This is a cloud-console/deployment requirement as well as an application change. Daily audit limits must not silently leave content unreviewed; monitoring must alert before limits are exhausted. COS remains private-read, and automatic freezing is a fallback rather than the application publishing decision.
+## 测试
 
-## Testing
+### 单元测试
 
-### Unit tests
+- 腾讯云正常、疑似、违规、未知和畸形响应的统一映射。
+- 合法与非法审核状态迁移。
+- 文本字段标准化和确定性摘要生成。
+- 回调认证、不可变版本匹配、重复事件和过期事件。
+- 重试分类、租约、退避和需要运营介入的终态错误。
 
-- Provider response normalization for pass, review, block, unknown, and malformed responses.
-- Legal and illegal moderation state transitions.
-- Text field normalization and deterministic digest generation.
-- Callback authentication, immutable-version matching, duplicates, and stale events.
-- Retry classification, leases, backoff, and terminal operational errors.
+### 服务与集成测试
 
-### Service and integration tests
+- 新图片上传完成后是 `pending`，不能立即公开。
+- 新视频技术处理完成不能绕过审核。
+- `pending`、`review`、`rejected`、`error` 媒体不会从成员列表、分享、统计、预览、视频流、下载或签名 URL 接口泄露。
+- 上传者管理响应只包含状态占位，不包含媒体 URL。
+- `Pass` 只发布一个不可变版本。
+- `Block` 只创建一次清理任务。
+- `Review` 进入管理员队列；管理员通过后发布，拒绝后清理。
+- 昵称进入人工复核时，旧昵称继续显示。
+- 文本被阻断时，底层业务实体不发生变更。
+- 腾讯云故障时内容保持隐藏并生成可重试任务。
 
-- New image finalization produces `pending`, not an immediately visible active image.
-- New video processing readiness does not bypass moderation.
-- Pending, review, rejected, and error media are absent from member lists, shares, counts, previews, streams, downloads, and signed-URL endpoints.
-- Uploader management responses contain metadata-only placeholders and no media URL before approval.
-- Pass publishes exactly one immutable version.
-- Block schedules cleanup exactly once.
-- Review enters the administrator queue; administrator approval publishes and rejection removes the content.
-- Nickname review leaves the old nickname visible until approval.
-- Text block does not mutate the underlying entity.
-- Provider failure leaves content hidden and creates a retryable job.
+自动化测试使用注入的腾讯云假客户端，以保证结果稳定。生产发布前，在非生产环境使用腾讯云允许的测试样本和不敏感正常样本完成真实服务冒烟测试。
 
-Use injected fake Tencent Cloud clients for deterministic automated tests. Before production rollout, run controlled real-provider smoke tests with Tencent Cloud's permitted test samples and non-sensitive normal samples.
+### 回归验证
 
-### Regression verification
+运行内容审核 API 定向测试、相册图片/视频测试、管理后台运行时测试、小程序媒体测试、迁移检查和仓库级 `npm run check`。验证必须覆盖直连媒体 URL 与公开分享访问，不能只测列表接口。
 
-Run targeted API moderation tests, album image/video tests, administrator runtime tests, mini-program media tests, migration checks, and the repository-wide `npm run check`. Verification must explicitly exercise direct media URLs and public share access, not only list endpoints.
+## 发布步骤
 
-## Rollout
+1. 上线数据库字段、审核模块、查询访问门禁、管理员队列、指标和功能开关；回填内容按 `approved_legacy` 处理。
+2. 配置 CI/TMS 服务、审核策略、CAM 权限、回调路由、COS 自动审核与冻结、费用告警和审核额度。
+3. 在非生产环境验证真实腾讯云提交和回调。
+4. 生产环境依次开启文本、图片、视频审核；每一步观察稳定后再继续。
+5. 现有内容始终可用。各内容类型切换时间点之后创建的每条内容必须具有有效审核任务，否则保持隐藏。
 
-1. Deploy schema additions, moderation modules, query gates, administrator queue, metrics, and feature flags while treating backfilled media as `approved_legacy`.
-2. Configure CI/TMS services, policies, CAM permissions, callback routing, COS automatic moderation/freezing, billing alerts, and audit quotas.
-3. Validate real-provider submission and callback behavior in a non-production environment.
-4. Enable production text moderation first, then image moderation, then video moderation. Observe each stage before advancing.
-5. Keep existing content available throughout. Every item created after its content-type cutover timestamp must have a valid moderation job or remain hidden.
+回滚时关闭受影响类型的新用户提交，不得放宽可见性门禁，也不能自动批准待审内容。
 
-Rollback disables new user submissions for the affected content type; it does not relax visibility gates or auto-approve pending content.
+## 监控与运维
 
-## Monitoring and Operations
+监控并告警：
 
-Track and alert on:
+- `pending`、`review`、`error` 队列数量和最老任务年龄。
+- 提交与回调延迟分位数。
+- 按内容类型和策略统计的通过、疑似、违规比例。
+- 回调认证失败和过期事件数量。
+- 重试次数和超过重试上限的任务。
+- 腾讯云认证、CAM 权限、额度、欠费和策略错误。
+- 没有对应业务审核任务的 COS 自动冻结事件。
+- 对未批准媒体的任何访问尝试。
 
-- Pending, review, and error queue depth and age.
-- Submission and callback latency percentiles.
-- Pass, review, and block rates by content type and policy.
-- Callback authentication failures and stale-event counts.
-- Retry attempts and exhausted retry budgets.
-- Tencent Cloud authentication, CAM permission, quota, billing, and policy errors.
-- COS automatic freeze events that do not have a corresponding application job.
-- Any attempted access to non-approved media.
+运维日志只记录审核任务 ID 和业务对象 ID，不记录完整私密文本或可复用签名 URL。
 
-Operational logs use moderation job IDs and subject IDs, not full private text or reusable signed URLs.
+## 验收标准
 
-## Acceptance Criteria
-
-- Every covered item created after its production cutover is moderated before publication.
-- Only `approved` and `approved_legacy` media can be read by non-administrators; non-approved direct-media access is denied independently of list filtering.
-- A provider outage, timeout, configuration error, quota exhaustion, or billing failure never publishes new content.
-- `Review` items stay hidden until an audited administrator decision.
-- Existing pre-cutover media remains available and is not submitted for historical review.
-- Duplicate and stale callbacks cannot reverse a terminal provider or administrator decision.
-- The full automated verification suite passes, and controlled staging smoke tests demonstrate pass, review, block, timeout, and duplicate-callback flows.
+- 生产切换后创建的每项范围内内容都必须先审核后发布。
+- 普通用户只能读取 `approved` 和 `approved_legacy` 媒体；所有直连媒体接口独立拒绝未批准内容。
+- 腾讯云故障、超时、配置错误、额度耗尽或欠费绝不会导致新内容发布。
+- `Review` 内容保持隐藏，直到产生带审计记录的管理员决定。
+- 切换前现有媒体继续可用，且不提交历史扫描。
+- 重复和过期回调不能推翻腾讯云或管理员的有效终态决定。
+- 完整自动化验证通过；测试环境真实服务冒烟覆盖通过、疑似、违规、超时和重复回调流程。
