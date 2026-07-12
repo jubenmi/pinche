@@ -163,7 +163,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/api/src/modules/core/service.js apps/api/src/server.js scripts/d45-session-reschedule-notifications-check.js
+git add apps/api/src/modules/core/service.js apps/api/src/modules/core/session-reschedule.js apps/api/test/session-reschedule.test.mjs apps/api/test/session-reschedule-service.test.mjs apps/api/src/server.js apps/api/package.json scripts/d45-session-reschedule-notifications-check.js
 git commit -m "feat: add transactional session reschedule API"
 ```
 
