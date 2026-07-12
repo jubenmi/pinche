@@ -43,6 +43,18 @@ const rescheduleHelper = readFileSync(
   new URL("../apps/miniprogram/src/utils/sessionReschedule.js", import.meta.url),
   "utf8"
 );
+const miniSubscribeHelper = readFileSync(
+  new URL("../apps/miniprogram/src/utils/subscribeMessages.js", import.meta.url),
+  "utf8"
+);
+const miniSharePage = readFileSync(
+  new URL("../apps/miniprogram/src/pages/session/share.vue", import.meta.url),
+  "utf8"
+);
+const miniDetailPage = readFileSync(
+  new URL("../apps/miniprogram/src/pages/session/detail.vue", import.meta.url),
+  "utf8"
+);
 
 assertIncludes(migration, "CREATE TABLE IF NOT EXISTS user_notifications");
 assertIncludes(
@@ -124,6 +136,26 @@ assertIncludes(managePage, "await this.ensureManageActionLogin()");
 assertIncludes(managePage, "if (rescheduleConfirmationRequired(error))");
 assertIncludes(managePage, "await this.reload()");
 assertIncludes(managePage, "this.showRescheduleConfirmation(startAt)");
+assertIncludes(miniSubscribeHelper, "member_session_rescheduled");
+assertIncludes(miniSubscribeHelper, "VITE_SUBSCRIBE_TEMPLATE_SESSION_RESCHEDULED");
+assertIncludes(miniSubscribeHelper, "export const TEMPLATE_IDS");
+assertIncludes(miniSubscribeHelper, "export function requestSessionRescheduledSubscription");
+assertIncludes(
+  miniSubscribeHelper,
+  'requestBusinessSubscription("member_session_rescheduled")'
+);
+assertIncludes(miniSharePage, "requestSessionRescheduledSubscription");
+assertIncludes(miniSharePage, 'joinResult === "joined"');
+assertIncludes(miniSharePage, 'result.join_result === "npc_joined"');
+assert.equal(
+  miniSharePage.match(/await requestSessionRescheduledSubscription\(\)\.catch\(\(\) => null\)/g)?.length,
+  2,
+  "only successful direct seat/NPC joins request reschedule subscription, and refusal cannot replace join success"
+);
+assertIncludes(miniDetailPage, "canRequestRescheduleReminder");
+assertIncludes(miniDetailPage, "改期提醒");
+assertIncludes(miniDetailPage, "requestRescheduleReminder");
+assertIncludes(miniDetailPage, "requestSessionRescheduledSubscription");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(

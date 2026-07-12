@@ -1,8 +1,10 @@
 import { dataOf, request } from "./api";
 
-const TEMPLATE_IDS = {
+export const TEMPLATE_IDS = {
   organizer_signup_created: import.meta.env.VITE_SUBSCRIBE_TEMPLATE_SIGNUP_CREATED || "",
-  player_signup_reviewed: import.meta.env.VITE_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED || ""
+  player_signup_reviewed: import.meta.env.VITE_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED || "",
+  member_session_rescheduled:
+    import.meta.env.VITE_SUBSCRIBE_TEMPLATE_SESSION_RESCHEDULED || ""
 };
 
 function normalizeSubscribeResult(templateId, result = {}) {
@@ -79,4 +81,8 @@ export function requestSignupCreatedSubscription() {
 
 export function requestSignupReviewedSubscription() {
   return requestBusinessSubscription("player_signup_reviewed");
+}
+
+export function requestSessionRescheduledSubscription() {
+  return requestBusinessSubscription("member_session_rescheduled");
 }

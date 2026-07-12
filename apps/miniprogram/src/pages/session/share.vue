@@ -106,7 +106,10 @@ import {
   writeCreateFlow
 } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
-import { requestSignupReviewedSubscription } from "../../utils/subscribeMessages";
+import {
+  requestSessionRescheduledSubscription,
+  requestSignupReviewedSubscription
+} from "../../utils/subscribeMessages";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 export default {
@@ -932,6 +935,9 @@ export default {
             }
           });
           const joinResult = dataOf(claimResponse)?.join_result || "joined";
+          if (joinResult === "joined") {
+            await requestSessionRescheduledSubscription().catch(() => null);
+          }
           this.pendingRole = null;
           await this.loadPublishedSession(this.sessionId);
           if (this.isAlbumEntry && joinResult === "joined") {
@@ -1039,6 +1045,7 @@ export default {
         const result = dataOf(response) || {};
         await this.loadPublishedSession(this.sessionId);
         if (result.join_result === "npc_joined") {
+          await requestSessionRescheduledSubscription().catch(() => null);
           this.statusText = "已选择NPC角色。";
           if (this.isAlbumEntry && !this.navigatingAlbum) {
             uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
