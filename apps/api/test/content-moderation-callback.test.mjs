@@ -76,6 +76,10 @@ test("server wires the authenticated callback before the generic JSON body parse
   assert.match(routeBody, /authenticateTencentCallback/);
   assert.match(routeBody, /parseTencentCallbackPayload/);
   assert.match(routeBody, /findModerationJobByDataId/);
-  assert.match(routeBody, /findModerationJobByProviderJobId/);
+  assert.match(routeBody, /findModerationAttemptByProviderJobId/);
+  assert.doesNotMatch(routeBody, /findModerationJobByProviderJobId/);
+  assert.match(routeBody, /provider: "tencent_ci_video"/);
+  assert.match(routeBody, /providerJobId: callback\.providerJobId/);
+  assert.match(routeBody, /stale: true/);
   assert.match(routeBody, /contentModeration\.applyMediaResult/);
 });

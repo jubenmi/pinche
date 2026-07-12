@@ -1,7 +1,21 @@
-import { assertModerationTransition } from "./state-machine.js";
+import {
+  assertModerationTransition,
+  assertTextProposalTransition
+} from "./state-machine.js";
 
 function lockClause(forUpdate) {
   return forUpdate ? " FOR UPDATE" : "";
+}
+
+function idempotencyConflict(message) {
+  const error = new Error(message);
+  error.code = "CONTENT_MODERATION_IDEMPOTENCY_CONFLICT";
+  error.statusCode = 409;
+  return error;
+}
+
+function duplicateKeyError(error) {
+  return error?.code === "ER_DUP_ENTRY" || Number(error?.errno) === 1062;
 }
 
 export async function findModerationJobById(connection, id, { forUpdate = false } = {}) {
@@ -38,6 +52,66 @@ export async function findModerationJobByProviderJobId(
   return rows[0] || null;
 }
 
+export async function findModerationAttemptByProviderJobId(
+  connection,
+  provider,
+  providerJobId,
+  { forUpdate = false } = {}
+) {
+  const [rows] = await connection.query(
+    `SELECT * FROM content_moderation_provider_attempts
+     WHERE provider = ? AND provider_job_id = ? LIMIT 1${lockClause(forUpdate)}`,
+    [String(provider), String(providerJobId)]
+  );
+  return rows[0] || null;
+}
+
+export async function findCurrentModerationAttempt(
+  connection,
+  jobId,
+  { forUpdate = false } = {}
+) {
+  const [rows] = await connection.query(
+    `SELECT * FROM content_moderation_provider_attempts
+     WHERE moderation_job_id = ? AND is_current = 1 LIMIT 1${lockClause(forUpdate)}`,
+    [Number(jobId)]
+  );
+  return rows[0] || null;
+}
+
+export async function retireCurrentModerationAttempt(connection, { jobId }) {
+  const [result] = await connection.query(
+    `UPDATE content_moderation_provider_attempts
+     SET is_current = 0
+     WHERE moderation_job_id = ? AND is_current = 1`,
+    [Number(jobId)]
+  );
+  return Number(result.affectedRows || 0);
+}
+
+export async function createModerationAttempt(connection, input) {
+  const [result] = await connection.query(
+    `INSERT INTO content_moderation_provider_attempts
+      (moderation_job_id, provider, provider_job_id, attempt_no, is_current, response_summary_json)
+     VALUES (?, ?, ?, ?, 1, ?)`,
+    [
+      Number(input.jobId),
+      String(input.provider),
+      String(input.providerJobId),
+      Number(input.attemptNo),
+      input.responseSummary ? JSON.stringify(input.responseSummary) : null
+    ]
+  );
+  return {
+    id: Number(result.insertId),
+    moderation_job_id: Number(input.jobId),
+    provider: String(input.provider),
+    provider_job_id: String(input.providerJobId),
+    attempt_no: Number(input.attemptNo),
+    is_current: 1
+  };
+}
+
 export async function createModerationJob(connection, input) {
   const [result] = await connection.query(
     `INSERT INTO content_moderation_jobs
@@ -58,17 +132,55 @@ export async function createModerationJob(connection, input) {
 
 export async function recordModerationSubmission(
   connection,
-  { jobId, providerJobId, fromStatus = "pending" }
+  {
+    jobId,
+    provider: requestedProvider,
+    providerJobId,
+    fromStatus = "pending",
+    leaseToken = null,
+    responseSummary = null
+  }
 ) {
+  const job = await findModerationJobById(connection, jobId, { forUpdate: true });
+  const provider = String(requestedProvider || job?.provider || "");
+  const normalizedProviderJobId = String(providerJobId || "").trim();
+  if (
+    !job ||
+    !provider ||
+    !normalizedProviderJobId ||
+    String(job.provider) !== provider ||
+    String(job.status) !== String(fromStatus) ||
+    job.decided_by_admin_user_id !== null
+  ) {
+    return false;
+  }
+  if (leaseToken !== null && String(job.lease_token || "") !== String(leaseToken)) {
+    return false;
+  }
+
+  await retireCurrentModerationAttempt(connection, { jobId: job.id });
+  await createModerationAttempt(connection, {
+    jobId: job.id,
+    provider,
+    providerJobId: normalizedProviderJobId,
+    attemptNo: Number(job.attempt_count || 0) + 1,
+    responseSummary
+  });
   const [result] = await connection.query(
     `UPDATE content_moderation_jobs
      SET status = 'processing', provider_job_id = ?, submitted_at = CURRENT_TIMESTAMP,
          attempt_count = attempt_count + 1, last_error_code = NULL,
          next_retry_at = NULL, lease_token = NULL, lease_expires_at = NULL
-     WHERE id = ? AND status = ? AND decided_by_admin_user_id IS NULL`,
-    [providerJobId ? String(providerJobId) : null, Number(jobId), fromStatus]
+     WHERE id = ? AND status = ? AND decided_by_admin_user_id IS NULL
+       AND (? IS NULL OR lease_token = ?)`,
+    [normalizedProviderJobId, Number(jobId), fromStatus, leaseToken, leaseToken]
   );
-  return Number(result.affectedRows || 0) === 1;
+  if (Number(result.affectedRows || 0) !== 1) {
+    const error = new Error("moderation submission changed concurrently");
+    error.code = "CONTENT_MODERATION_SUBMISSION_STALE";
+    throw error;
+  }
+  return true;
 }
 
 export async function transitionModerationJob(connection, input) {
@@ -107,31 +219,84 @@ export async function transitionModerationJob(connection, input) {
 }
 
 export async function createTextProposal(connection, input) {
-  const [result] = await connection.query(
-    `INSERT INTO content_moderation_text_proposals
-      (moderation_job_id, subject_type, subject_id, base_version,
-       normalized_payload_json, payload_digest, status, created_by_user_id)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
-     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
-    [
-      Number(input.jobId),
-      String(input.subjectType),
-      String(input.subjectId),
-      String(input.baseVersion),
-      JSON.stringify(input.normalizedPayload),
-      String(input.payloadDigest),
-      Number(input.userId)
-    ]
+  const byIdempotency = await findTextProposalByIdempotency(connection, input, { forUpdate: true });
+  if (byIdempotency) return compatibleTextProposalId(byIdempotency, input);
+
+  const byJob = await findTextProposalByJobId(connection, input.jobId, { forUpdate: true });
+  if (byJob) return compatibleTextProposalId(byJob, input);
+
+  try {
+    const [result] = await connection.query(
+      `INSERT INTO content_moderation_text_proposals
+        (moderation_job_id, subject_type, subject_id, base_version, action,
+         normalized_payload_json, payload_digest, idempotency_key, status, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      [
+        Number(input.jobId),
+        String(input.subjectType),
+        String(input.subjectId),
+        String(input.baseVersion),
+        String(input.action),
+        JSON.stringify(input.normalizedPayload),
+        String(input.payloadDigest),
+        String(input.idempotencyKey),
+        Number(input.userId)
+      ]
+    );
+    return result.insertId;
+  } catch (error) {
+    if (!duplicateKeyError(error)) throw error;
+    const concurrentProposal = await findTextProposalByIdempotency(connection, input, { forUpdate: true }) ||
+      await findTextProposalByJobId(connection, input.jobId, { forUpdate: true });
+    if (concurrentProposal) return compatibleTextProposalId(concurrentProposal, input);
+    throw idempotencyConflict("text proposal idempotency conflict");
+  }
+}
+
+function compatibleTextProposalId(proposal, input) {
+  if (
+    Number(proposal.moderation_job_id) !== Number(input.jobId) ||
+    String(proposal.payload_digest) !== String(input.payloadDigest) ||
+    String(proposal.action) !== String(input.action) ||
+    String(proposal.idempotency_key) !== String(input.idempotencyKey)
+  ) {
+    throw idempotencyConflict("text proposal idempotency key belongs to another request");
+  }
+  return Number(proposal.id);
+}
+
+export async function findTextProposalByIdempotency(
+  connection,
+  input,
+  { forUpdate = false } = {}
+) {
+  const [rows] = await connection.query(
+    `SELECT * FROM content_moderation_text_proposals
+     WHERE created_by_user_id = ? AND action = ? AND idempotency_key = ?
+     LIMIT 1${lockClause(forUpdate)}`,
+    [Number(input.userId), String(input.action), String(input.idempotencyKey)]
   );
-  return result.insertId;
+  return rows[0] || null;
 }
 
 export async function markTextProposalStatus(connection, { jobId, fromStatus, toStatus }) {
+  assertTextProposalTransition(fromStatus, toStatus);
   const [result] = await connection.query(
     `UPDATE content_moderation_text_proposals
      SET status = ?, applied_at = IF(? = 'approved', CURRENT_TIMESTAMP, applied_at)
      WHERE moderation_job_id = ? AND status = ?`,
     [toStatus, toStatus, Number(jobId), fromStatus]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function markTextProposalStale(connection, { jobId, fromStatus = "pending" }) {
+  assertTextProposalTransition(fromStatus, "stale");
+  const [result] = await connection.query(
+    `UPDATE content_moderation_text_proposals
+     SET status = 'stale'
+     WHERE moderation_job_id = ? AND status = ?`,
+    [Number(jobId), fromStatus]
   );
   return Number(result.affectedRows || 0) === 1;
 }
@@ -243,6 +408,8 @@ export async function claimModerationRetryJobs(connection, input) {
        WHERE id = ? AND decided_by_admin_user_id IS NULL`,
       [input.leaseToken, input.leaseExpiresAt, row.id]
     );
+    row.lease_token = input.leaseToken;
+    row.lease_expires_at = input.leaseExpiresAt;
   }
   return rows;
 }

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import {
   createResponseSummary
 } from "./normalize.js";
+import { MODERATION_ERROR_CODES } from "./constants.js";
 import { moderationStatusForDecision } from "./state-machine.js";
 
 export function createContentModerationService(dependencies) {
@@ -36,11 +37,15 @@ export function createContentModerationService(dependencies) {
         objectKey: job.objectKey,
         dataId: job.data_id || job.dataId
       });
-      await deps.withDatabaseConnection((connection) =>
+      await deps.transaction((connection) =>
         deps.repository.recordModerationSubmission(connection, {
           jobId: job.id,
+          provider: "tencent_ci_video",
           providerJobId: response.JobId || response.jobId || response.TaskId || response.taskId,
-          fromStatus: job.status || "pending"
+          fromStatus: job.status || "pending",
+          responseSummary: {
+            providerJobId: response.JobId || response.jobId || response.TaskId || response.taskId || ""
+          }
         })
       );
       deps.emit("moderation_submission_success", {
@@ -73,6 +78,15 @@ export function createContentModerationService(dependencies) {
     return error;
   }
 
+  function staleResult(job, extra = {}) {
+    return {
+      status: job?.status || null,
+      stale: true,
+      duplicate: false,
+      ...extra
+    };
+  }
+
   async function applyMediaResult(input) {
     return deps.transaction(async (connection) => {
       const job = await deps.repository.findModerationJobById(
@@ -80,28 +94,59 @@ export function createContentModerationService(dependencies) {
         input.jobId,
         { forUpdate: true }
       );
-      if (!job) throw staleCallback("moderation job was not found");
+      if (!job) return staleResult(null);
+      const provider = String(input.provider || "").trim();
+      const providerJobId = String(input.providerJobId || "").trim();
+      if (!provider || !providerJobId || provider !== String(job.provider)) {
+        return staleResult(job);
+      }
+      const attempt = await deps.repository.findModerationAttemptByProviderJobId(
+        connection,
+        provider,
+        providerJobId,
+        { forUpdate: true }
+      );
+      const currentAttempt = await deps.repository.findCurrentModerationAttempt(
+        connection,
+        job.id,
+        { forUpdate: true }
+      );
+      if (
+        !attempt ||
+        Number(attempt.moderation_job_id) !== Number(job.id) ||
+        Number(attempt.is_current) !== 1 ||
+        !currentAttempt ||
+        Number(currentAttempt.id) !== Number(attempt.id)
+      ) {
+        return staleResult(job);
+      }
+      const nextStatus = moderationStatusForDecision(input.result?.decision || "error");
+      if (job.decided_by_admin_user_id !== null && job.decided_by_admin_user_id !== undefined) {
+        return staleResult(job, { adminDecided: true });
+      }
+      if (["approved", "rejected", "review"].includes(job.status)) {
+        return {
+          status: job.status,
+          duplicate: job.status === nextStatus,
+          stale: job.status !== nextStatus
+        };
+      }
       if (String(job.subject_version) !== String(input.subjectVersion)) {
-        throw staleCallback("moderation subject version is stale");
+        return staleResult(job);
       }
       const media = await deps.repository.findModerationMedia(connection, job, { forUpdate: true });
-      if (!media || media.status !== "active") throw staleCallback("moderation media is stale");
+      if (!media || media.status !== "active") return staleResult(job);
       if (
         media.moderation_object_version &&
         String(media.moderation_object_version) !== String(job.subject_version)
       ) {
-        throw staleCallback("moderation media object version is stale");
+        return staleResult(job);
       }
       const currentObjectKey = String(
         job.subject_type === "album_image" ? media.object_key : media.source_url
       ).replace(/^\//, "");
       if (currentObjectKey !== String(input.objectKey).replace(/^\//, "")) {
-        throw staleCallback("moderation object key is stale");
-      }
-      const nextStatus = moderationStatusForDecision(input.result?.decision || "error");
-      if (["approved", "rejected"].includes(job.status)) {
-        if (job.status === nextStatus) return { status: job.status, duplicate: true };
-        throw staleCallback("moderation job already has a terminal decision");
+        return staleResult(job);
       }
       const changed = await deps.repository.transitionModerationJob(connection, {
         jobId: job.id,
@@ -113,7 +158,7 @@ export function createContentModerationService(dependencies) {
         responseSummary: createResponseSummary(input.result),
         errorCode: nextStatus === "error" ? "CONTENT_MODERATION_INVALID_RESPONSE" : null
       });
-      if (!changed) throw staleCallback("moderation job changed concurrently");
+      if (!changed) return staleResult(job);
       const mediaChanged = await deps.repository.transitionMediaModeration(connection, {
         mediaId: media.id,
         fromStatuses: ["pending", "error"],
@@ -199,11 +244,40 @@ export function createContentModerationService(dependencies) {
           if (typeof input.applyTextProposal !== "function") {
             throw publicModerationError(500, "CONTENT_MODERATION_CONFIGURATION_ERROR", "text applicator missing");
           }
-          await input.applyTextProposal(connection, { job, proposal });
+          try {
+            await input.applyTextProposal(connection, { job, proposal });
+          } catch (error) {
+            if (error?.code !== MODERATION_ERROR_CODES.proposalStale) throw error;
+            const proposalChanged = await deps.repository.markTextProposalStale(connection, {
+              jobId: job.id,
+              fromStatus: proposal.status
+            });
+            if (!proposalChanged) {
+              throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "proposal changed concurrently");
+            }
+            await deps.repository.transitionModerationJob(connection, {
+              jobId: job.id,
+              fromStatus: job.status,
+              toStatus: "rejected",
+              source: "admin",
+              adminUserId: input.admin.user.id,
+              reason,
+              errorCode: MODERATION_ERROR_CODES.proposalStale
+            });
+            await deps.repository.createAuditLog(connection, {
+              jobId: job.id,
+              adminUserId: input.admin.user.id,
+              action: "stale",
+              previousStatus: job.status,
+              nextStatus: "rejected",
+              reason: reason || null
+            });
+            return { id: Number(job.id), status: "rejected", stale: true };
+          }
         }
         await deps.repository.markTextProposalStatus(connection, {
           jobId: job.id,
-          fromStatus: job.status,
+          fromStatus: proposal.status,
           toStatus: nextStatus
         });
       }

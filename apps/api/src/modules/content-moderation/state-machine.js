@@ -23,9 +23,22 @@ const ADMIN_TRANSITIONS = Object.freeze({
   rejected: new Set()
 });
 
+const PROPOSAL_TRANSITIONS = Object.freeze({
+  pending: new Set(["approved", "rejected", "stale"]),
+  approved: new Set(),
+  rejected: new Set(),
+  stale: new Set()
+});
+
 function invalidTransition(fromStatus, toStatus) {
   const error = new Error(`invalid moderation transition: ${fromStatus} -> ${toStatus}`);
   error.code = "CONTENT_MODERATION_INVALID_TRANSITION";
+  return error;
+}
+
+function invalidProposalTransition(fromStatus, toStatus) {
+  const error = new Error(`invalid moderation proposal transition: ${fromStatus} -> ${toStatus}`);
+  error.code = "CONTENT_MODERATION_INVALID_PROPOSAL_TRANSITION";
   return error;
 }
 
@@ -51,3 +64,10 @@ export function assertModerationTransition(
   return true;
 }
 
+export function assertTextProposalTransition(fromStatus, toStatus) {
+  if (fromStatus === toStatus) return true;
+  if (!PROPOSAL_TRANSITIONS[fromStatus]?.has(toStatus)) {
+    throw invalidProposalTransition(fromStatus, toStatus);
+  }
+  return true;
+}

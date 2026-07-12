@@ -21,21 +21,22 @@
   - [x] 保留统一数据模型、状态机、读取门禁和腾讯云视频代码。
   - [x] 将通用命名与 provider 值迁移为混合方案。
 
-- [ ] D45.3 校准审核数据模型和状态机。
-  - [ ] 测试微信 trace_id、腾讯云视频 JobId、不可变版本和 provider 唯一约束。
-  - [ ] 新增 provider attempts，保证 `(provider, provider_job_id)` 唯一并标识当前尝试。
-  - [ ] 保留历史媒体 `approved_legacy`，新媒体显式 pending。
-  - [ ] 文本 Review/Error 使用隐藏提案。
-  - [ ] 管理员决定优先于服务商事件。
-  - [ ] 重复和过期结果幂等且不覆盖有效终态。
+- [x] D45.3 校准审核数据模型和状态机。
+  - [x] 以 `stale` 作为文本提案终态；审核任务沿用统一终态并记录 `CONTENT_MODERATION_PROPOSAL_STALE`，避免扩展未约定的全局任务状态。
+  - [x] 测试微信 trace_id、腾讯云视频 JobId、不可变版本和 provider 唯一约束。
+  - [x] 新增 provider attempts，保证 `(provider, provider_job_id)` 唯一并标识当前尝试。
+  - [x] 保留历史媒体 `approved_legacy`，新媒体显式 pending。
+  - [x] 文本 Review/Error 使用隐藏提案。
+  - [x] 管理员决定优先于服务商事件。
+  - [x] 重复和过期结果幂等且不覆盖有效终态。
 
-- [ ] D45.4 实现微信 access token 管理与客户端。
-  - [ ] 先测试 Redis token 缓存、提前刷新、进程/分布式单飞和失效后单次重试。
-  - [ ] 新增共享 `modules/wechat/access-token.js`，并让订阅消息改用共享模块。
-  - [ ] 复用 `WECHAT_APP_ID`/`WECHAT_APP_SECRET`，生产开启微信审核但缺少 Redis 或凭证时关闭式失败。
-  - [ ] 实现 `msgSecCheck` 客户端。
-  - [ ] 实现 `mediaCheckAsync(media_type=2)` 客户端。
-  - [ ] 确认日志和错误摘要不含密钥、token、完整文本或签名 URL。
+- [x] D45.4 实现微信 access token 管理与客户端。
+  - [x] 先测试 Redis token 缓存、提前刷新、进程/分布式单飞和失效后单次重试。
+  - [x] 新增共享 `modules/wechat/access-token.js`，并让订阅消息改用共享模块。
+  - [x] 复用 `WECHAT_APP_ID`/`WECHAT_APP_SECRET`，生产开启微信审核但缺少 Redis 或凭证时关闭式失败。
+  - [x] 实现 `msgSecCheck` 客户端。
+  - [x] 实现 `mediaCheckAsync(media_type=2)` 客户端。
+  - [x] 确认日志和错误摘要不含密钥、token、完整文本或签名 URL。
 
 - [ ] D45.5 接入微信文本审核。
   - [ ] 先覆盖昵称、评价、留言、置顶留言、私有门店/剧本和拼车说明的四类结果测试。
@@ -155,3 +156,6 @@
 - 2026-07-12：按用户确认路线重写三件套，当时尚未开始 D45.2 清理。
 - 2026-07-12：完成 D45.2；腾讯云适配器收窄为视频，移除 TMS/CI 图片配置和运行时调用。内容审核测试 50/50、D42 视频创建 10/10、D42 媒体 47/47、D44 检查及 API 语法检查通过。
 - 2026-07-12：完成 v1.1 spec 校验修正；统一真实配置名，补充共享 token、scene/结果映射、文本 applicator、provider attempts、微信安全回调和额度边界。
+- 2026-07-12：完成 D45.3；腾讯云回调通过 provider attempt 定位并对旧/重复/管理员结果返回 200 幂等响应；版本或对象 Key 过期结果保持隐藏并返回 stale。0025 在任何数据修改或 DDL 前预检任务/提案重复键及现有表、索引、生成列形状，再可重入地规范化历史 provider JobId 冲突、创建/回填 attempts 与提案字段。文本幂等键仅在同任务且相同摘要时复用；没有 provider attempt 身份的媒体结果关闭式失败。内容审核及微信基础回归 98/98 通过。
+- 2026-07-12：完成 D45.3 审查加固；0025 在 DML/DDL 前预检提案基表锚点、`action`/`idempotency_key` 的类型/长度/可恢复阶段/默认值及非生成列形状、`current_job_id` 完整表达式、索引顺序/BTree/非表达式形状，以及 attempts 表的引擎、默认值、必需列和外键。任何不匹配均关闭式失败，新增回归均断言未执行规范化写入。独立复审通过；定向内容审核、微信和迁移回归 112/112 通过，语法与差异检查通过。
+- 2026-07-12：完成 D45.4 审查加固；共享 token 的单一截止时间覆盖请求、正文解析和条件缓存写入，旧 worker 不得覆盖新 token；生产微信审核校验 Redis URL/host/port。D45.4 定向测试 36/36、环境检查与 API 语法检查通过。

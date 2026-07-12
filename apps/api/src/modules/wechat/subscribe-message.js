@@ -1,9 +1,8 @@
 import { config } from "../../config/env.js";
-
-let cachedToken = {
-  accessToken: "",
-  expiresAt: 0
-};
+import {
+  getWechatAccessTokenProvider,
+  requestWithWechatAccessTokenRetry
+} from "./access-token.js";
 
 function skipped(scene, reason) {
   return {
@@ -14,8 +13,8 @@ function skipped(scene, reason) {
   };
 }
 
-function enabledFor(templateId, touser) {
-  if (!config.subscribeMessage.enabled) {
+function enabledFor(runtimeConfig, templateId, touser) {
+  if (!runtimeConfig.subscribeMessage.enabled) {
     return skipped("", "disabled");
   }
   if (!templateId) {
@@ -24,35 +23,10 @@ function enabledFor(templateId, touser) {
   if (!touser) {
     return skipped("", "openid_missing");
   }
-  if (!config.wechat.appId || !config.wechat.appSecret) {
+  if (!runtimeConfig.wechat.appId || !runtimeConfig.wechat.appSecret) {
     return skipped("", "wechat_config_missing");
   }
   return null;
-}
-
-async function fetchAccessToken() {
-  if (cachedToken.accessToken && cachedToken.expiresAt > Date.now() + 60_000) {
-    return cachedToken.accessToken;
-  }
-
-  const url = new URL("https://api.weixin.qq.com/cgi-bin/token");
-  url.searchParams.set("grant_type", "client_credential");
-  url.searchParams.set("appid", config.wechat.appId);
-  url.searchParams.set("secret", config.wechat.appSecret);
-
-  const response = await fetch(url);
-  const payload = await response.json();
-  if (!response.ok || payload.errcode || !payload.access_token) {
-    const error = new Error(payload.errmsg || "WeChat access token request failed");
-    error.details = payload;
-    throw error;
-  }
-
-  cachedToken = {
-    accessToken: payload.access_token,
-    expiresAt: Date.now() + Math.max(Number(payload.expires_in || 7200) - 120, 60) * 1000
-  };
-  return cachedToken.accessToken;
 }
 
 function valueOrFallback(value, fallback) {
@@ -70,28 +44,40 @@ function messageData(payload, resultText = "待审核") {
   };
 }
 
-async function sendSubscribeMessage({ scene, touser, templateId, page, data }) {
-  const skip = enabledFor(templateId, touser);
+export async function sendSubscribeMessage(
+  { scene, touser, templateId, page, data },
+  {
+    runtimeConfig = config,
+    tokenProvider = null,
+    fetchImpl = globalThis.fetch
+  } = {}
+) {
+  const skip = enabledFor(runtimeConfig, templateId, touser);
   if (skip) {
     return { ...skip, scene };
   }
 
-  const accessToken = await fetchAccessToken();
-  const url = new URL("https://api.weixin.qq.com/cgi-bin/message/subscribe/send");
-  url.searchParams.set("access_token", accessToken);
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      touser,
-      template_id: templateId,
-      page,
-      miniprogram_state: config.nodeEnv === "production" ? "formal" : "developer",
-      lang: "zh_CN",
-      data
-    })
+  const result = await requestWithWechatAccessTokenRetry({
+    tokenProvider: tokenProvider || getWechatAccessTokenProvider(),
+    request: async (accessToken) => {
+      const url = new URL("https://api.weixin.qq.com/cgi-bin/message/subscribe/send");
+      url.searchParams.set("access_token", accessToken);
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          touser,
+          template_id: templateId,
+          page,
+          miniprogram_state: runtimeConfig.nodeEnv === "production" ? "formal" : "developer",
+          lang: "zh_CN",
+          data
+        })
+      });
+      return { response, payload: await response.json() };
+    }
   });
-  const payload = await response.json();
+  const { response, payload } = result;
   if (!response.ok || payload.errcode) {
     return {
       ok: false,

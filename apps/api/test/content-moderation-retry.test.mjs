@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -44,6 +45,8 @@ test("claim SQL leases due jobs with skip locked and respects retry limit", asyn
   assert.match(calls[0].sql, /FOR UPDATE SKIP LOCKED/);
   assert.match(calls[0].sql, /attempt_count < \?/);
   assert.match(calls[1].sql, /lease_token = \?/);
+  assert.equal(rows[0].lease_token, "lease");
+  assert.equal(rows[0].lease_expires_at.getTime(), 61_000);
 });
 
 test("retry batch processes each lease and persists failures without auto-approval", async () => {
@@ -71,4 +74,15 @@ test("retry batch processes each lease and persists failures without auto-approv
   assert.equal(state.failures[0].nextRetryAt.getTime(), 31_000);
   assert.equal(state.failures[1].exhausted, true);
   assert.deepEqual(result, { claimed: 2, failed: 2 });
+});
+
+test("retry submission rolls over provider attempts inside one transaction", async () => {
+  const source = await readFile(
+    new URL("../src/jobs/content-moderation-retry.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(source, /withTransaction\(\(connection\) => repository\.recordModerationSubmission/);
+  assert.match(source, /provider: "tencent_ci_video"/);
+  assert.match(source, /leaseToken: job\.lease_token/);
 });

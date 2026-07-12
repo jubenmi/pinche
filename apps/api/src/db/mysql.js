@@ -13,7 +13,11 @@ export const requiredSchemaTables = Object.freeze([
   "store_scripts",
   "wechat_identities",
   "session_album_upload_intents",
-  "session_album_object_cleanup_jobs"
+  "session_album_object_cleanup_jobs",
+  "content_moderation_jobs",
+  "content_moderation_provider_attempts",
+  "content_moderation_text_proposals",
+  "content_moderation_audit_logs"
 ]);
 
 export function serverConnectionOptions() {

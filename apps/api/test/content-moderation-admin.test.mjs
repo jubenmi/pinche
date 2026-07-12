@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { createContentModerationService } from "../src/modules/content-moderation/service.js";
 
 function harness({ subjectType = "album_image", status = "review" } = {}) {
-  const state = { jobStatus: status, media: [], audits: [], proposals: [], applied: [] };
+  const state = {
+    jobStatus: status,
+    media: [],
+    audits: [],
+    proposals: [],
+    applied: [],
+    transitions: []
+  };
   const job = {
     id: 7,
     subject_type: subjectType,
@@ -21,11 +29,12 @@ function harness({ subjectType = "album_image", status = "review" } = {}) {
     }),
     findTextProposalByJobId: async () => ({
       moderation_job_id: 7,
-      status: state.jobStatus,
+      status: "pending",
       base_version: "v1",
       normalized_payload_json: JSON.stringify({ body: { nickname: "Alice" } })
     }),
     transitionModerationJob: async (_connection, input) => {
+      state.transitions.push(input);
       state.jobStatus = input.toStatus;
       return true;
     },
@@ -36,6 +45,10 @@ function harness({ subjectType = "album_image", status = "review" } = {}) {
     enqueueRejectedMediaCleanup: async () => 99,
     markTextProposalStatus: async (_connection, input) => {
       state.proposals.push(input);
+      return true;
+    },
+    markTextProposalStale: async (_connection, input) => {
+      state.proposals.push({ ...input, toStatus: "stale" });
       return true;
     },
     createAuditLog: async (_connection, input) => state.audits.push(input),
@@ -87,6 +100,31 @@ test("text approval invokes the atomic proposal applicator and marks proposal ap
   });
   assert.deepEqual(state.applied, ["user_nickname"]);
   assert.equal(state.proposals[0].toStatus, "approved");
+  assert.equal(state.proposals[0].fromStatus, "pending");
+});
+
+test("a stale text proposal is terminal and closes its job without adding a stale job status", async () => {
+  const { service, state } = harness({ subjectType: "user_nickname" });
+  const stale = Object.assign(new Error("base version changed"), {
+    code: "CONTENT_MODERATION_PROPOSAL_STALE"
+  });
+
+  const result = await service.decideAsAdmin({
+    admin: { user: { id: 2 }, roles: ["system_admin"] },
+    jobId: 7,
+    action: "approve",
+    applyTextProposal: async () => { throw stale; }
+  });
+
+  assert.deepEqual(result, { id: 7, status: "rejected", stale: true });
+  assert.deepEqual(state.proposals[0], {
+    jobId: 7,
+    fromStatus: "pending",
+    toStatus: "stale"
+  });
+  assert.equal(state.transitions[0].toStatus, "rejected");
+  assert.equal(state.transitions[0].errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
+  assert.equal(state.audits[0].action, "stale");
 });
 
 test("retry leaves content hidden and requeues only error jobs", async () => {
@@ -95,4 +133,20 @@ test("retry leaves content hidden and requeues only error jobs", async () => {
     admin: { user: { id: 2 }, roles: ["system_admin"] }, jobId: 7, action: "retry"
   });
   assert.equal(result.status, "pending");
+});
+
+test("server injects provider attempts and stale proposal transition into the moderation service", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const serviceStart = source.indexOf("const contentModeration = createContentModerationService({");
+  const serviceEnd = source.indexOf("async function applyApprovedTextProposal", serviceStart);
+  const serviceDefinition = source.slice(serviceStart, serviceEnd);
+
+  for (const name of [
+    "findModerationAttemptByProviderJobId",
+    "findCurrentModerationAttempt",
+    "markTextProposalStale"
+  ]) {
+    assert.match(source, new RegExp(`${name},`));
+    assert.match(serviceDefinition, new RegExp(`${name},`));
+  }
 });

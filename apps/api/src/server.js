@@ -155,12 +155,14 @@ import {
   createTextProposal,
   enqueueRejectedMediaCleanup,
   findTextProposalByJobId,
+  findCurrentModerationAttempt,
+  findModerationAttemptByProviderJobId,
   findModerationJobById,
   findModerationJobByDataId,
-  findModerationJobByProviderJobId,
   findModerationMedia,
   recordModerationSubmission,
   markTextProposalStatus,
+  markTextProposalStale,
   createAuditLog,
   getAdminModerationJob,
   listAdminModerationJobs,
@@ -228,10 +230,13 @@ const contentModeration = createContentModerationService({
     createTextProposal,
     enqueueRejectedMediaCleanup,
     findTextProposalByJobId,
+    findCurrentModerationAttempt,
+    findModerationAttemptByProviderJobId,
     findModerationJobById,
     findModerationMedia,
     recordModerationSubmission,
     markTextProposalStatus,
+    markTextProposalStale,
     createAuditLog,
     requeueModerationJob,
     transitionMediaModeration,
@@ -2674,24 +2679,27 @@ async function route(request, response) {
     }
     const rawCallback = await readRawBody(request, 256 * 1024);
     const callback = parseTencentCallbackPayload(rawCallback);
-    const job = await withDatabaseConnection(async (connection) => {
-      const byDataId = await findModerationJobByDataId(connection, callback.dataId);
-      const byProviderJobId = await findModerationJobByProviderJobId(
+    const callbackLookup = await withDatabaseConnection(async (connection) => {
+      const job = await findModerationJobByDataId(connection, callback.dataId);
+      const attempt = await findModerationAttemptByProviderJobId(
         connection,
         "tencent_ci_video",
         callback.providerJobId
       );
-      if (!byDataId || !byProviderJobId || Number(byDataId.id) !== Number(byProviderJobId.id)) {
-        throw new AppError(
-          409,
-          "CONTENT_MODERATION_CALLBACK_STALE",
-          "content moderation callback does not match a current job"
-        );
+      if (!job || !attempt || Number(job.id) !== Number(attempt.moderation_job_id)) {
+        return { job: null, stale: true };
       }
-      return byDataId;
+      return { job, stale: false };
     });
+    if (callbackLookup.stale) {
+      jsonResponse(response, 200, { ok: true, data: { stale: true, duplicate: false } });
+      return;
+    }
+    const job = callbackLookup.job;
     const callbackResult = await contentModeration.applyMediaResult({
       jobId: job.id,
+      provider: "tencent_ci_video",
+      providerJobId: callback.providerJobId,
       subjectVersion: job.subject_version,
       objectKey: callback.objectKey,
       result: callback.result

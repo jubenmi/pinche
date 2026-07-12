@@ -1,5 +1,5 @@
 import { config } from "../config/env.js";
-import { withDatabaseConnection, withTransaction } from "../db/mysql.js";
+import { withTransaction } from "../db/mysql.js";
 import * as repository from "../modules/content-moderation/repository.js";
 import { runContentModerationRetryBatch } from "../modules/content-moderation/retry.js";
 import {
@@ -22,10 +22,13 @@ async function processJob(job) {
     objectKey: String(job.media_source_url || "").replace(/^\//, ""),
     dataId: job.data_id
   });
-  await withDatabaseConnection((connection) => repository.recordModerationSubmission(connection, {
+  await withTransaction((connection) => repository.recordModerationSubmission(connection, {
     jobId: job.id,
+    provider: "tencent_ci_video",
     providerJobId: response.JobId || response.TaskId,
-    fromStatus: job.status
+    fromStatus: job.status,
+    leaseToken: job.lease_token,
+    responseSummary: { providerJobId: response.JobId || response.TaskId || "" }
   }));
 }
 

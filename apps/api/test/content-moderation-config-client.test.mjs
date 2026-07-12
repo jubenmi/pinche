@@ -16,6 +16,12 @@ function validEnv(overrides = {}) {
     CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "false",
     CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "false",
     CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "true",
+    REDIS_ENABLED: "true",
+    REDIS_URL: "redis://redis.example.test:6379",
+    WECHAT_APP_ID: "wx-d45-test",
+    WECHAT_APP_SECRET: "wechat-app-secret",
+    WECHAT_CONTENT_SECURITY_EVENT_TOKEN: "wechat-content-security-event-token",
+    WECHAT_CONTENT_SECURITY_EVENT_AES_KEY: "wechat-content-security-event-aes-key",
     TENCENT_CI_VIDEO_REGION: "ap-nanjing",
     TENCENT_CI_VIDEO_BIZ_TYPE: "video-policy",
     TENCENT_CI_VIDEO_CALLBACK_URL: "https://api.example.com/api/internal/content-moderation/tencent-video/callback",
@@ -56,6 +62,90 @@ test("enabled Tencent video moderation fails closed on missing production config
       code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
     });
   }
+});
+
+test("enabled WeChat moderation fails closed in production without Redis, credentials or event secrets", () => {
+  for (const missing of [
+    "REDIS_ENABLED",
+    "WECHAT_APP_ID",
+    "WECHAT_APP_SECRET",
+    "WECHAT_CONTENT_SECURITY_EVENT_TOKEN",
+    "WECHAT_CONTENT_SECURITY_EVENT_AES_KEY"
+  ]) {
+    const config = buildContentModerationConfig(validEnv({
+      CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+      CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "true",
+      [missing]: ""
+    }));
+    assert.throws(() => assertContentModerationConfig(config, { nodeEnv: "production" }), {
+      code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+    });
+  }
+});
+
+test("enabled WeChat moderation requires an explicit Redis URL or host in production", () => {
+  const config = buildContentModerationConfig(validEnv({
+    CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+    CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "true",
+    REDIS_URL: "",
+    REDIS_HOST: ""
+  }));
+
+  assert.throws(
+    () => assertContentModerationConfig(config, { nodeEnv: "production" }),
+    /REDIS_URL or REDIS_HOST/
+  );
+});
+
+test("enabled WeChat moderation rejects malformed Redis URLs and invalid host ports", () => {
+  const invalidEndpoints = [
+    { REDIS_URL: "http://cache.example.test:6379" },
+    { REDIS_URL: "redis://" },
+    { REDIS_URL: "redis://cache.example.test:99999" },
+    { REDIS_URL: "redis://foo_bar:6379" },
+    { REDIS_URL: "rediss://cache..example.test:6380" },
+    { REDIS_URL: "", REDIS_HOST: "not a valid host", REDIS_PORT: "6379" },
+    { REDIS_URL: "", REDIS_HOST: "cache.example.test", REDIS_PORT: "0" },
+    { REDIS_URL: "", REDIS_HOST: "cache.example.test", REDIS_PORT: "not-a-port" }
+  ];
+  for (const endpoint of invalidEndpoints) {
+    const config = buildContentModerationConfig(validEnv({
+      CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+      CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "true",
+      ...endpoint
+    }));
+    assert.throws(() => assertContentModerationConfig(config, { nodeEnv: "production" }), {
+      code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+    });
+  }
+});
+
+test("enabled WeChat moderation accepts redis and rediss URLs or a valid host port", () => {
+  for (const endpoint of [
+    { REDIS_URL: "redis://cache.example.test:6379/3" },
+    { REDIS_URL: "rediss://cache.example.test:6380/3" },
+    { REDIS_URL: "", REDIS_HOST: "10.206.16.15", REDIS_PORT: "6379" }
+  ]) {
+    const config = buildContentModerationConfig(validEnv({
+      CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+      CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "true",
+      ...endpoint
+    }));
+    assert.doesNotThrow(() => assertContentModerationConfig(config, { nodeEnv: "production" }));
+  }
+});
+
+test("a WeChat provider gate cannot bypass production validation through the global flag", () => {
+  const config = buildContentModerationConfig(validEnv({
+    CONTENT_MODERATION_ENABLED: "false",
+    CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+    CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "true",
+    WECHAT_APP_SECRET: ""
+  }));
+
+  assert.throws(() => assertContentModerationConfig(config, { nodeEnv: "production" }), {
+    code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+  });
 });
 
 test("disabled moderation does not require provider configuration", () => {

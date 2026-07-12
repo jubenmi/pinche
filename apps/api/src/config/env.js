@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -169,11 +170,52 @@ function moderationConfigurationError(message) {
   return error;
 }
 
+function validRedisPort(raw) {
+  if (!raw) return true;
+  if (!/^\d+$/.test(raw)) return false;
+  const port = Number(raw);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535;
+}
+
+function validRedisHost(raw) {
+  const host = String(raw || "").trim();
+  if (!host || host.length > 253) return false;
+  const bracketed = host.startsWith("[") || host.endsWith("]");
+  if (bracketed && !(host.startsWith("[") && host.endsWith("]"))) return false;
+  const candidate = bracketed ? host.slice(1, -1) : host;
+  if (isIP(candidate)) return true;
+  if (candidate.includes(":")) return false;
+  return candidate.split(".").every((label) => (
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)
+  ));
+}
+
+function validRedisUrl(raw) {
+  try {
+    const parsed = new URL(raw);
+    return (
+      (parsed.protocol === "redis:" || parsed.protocol === "rediss:") &&
+      validRedisHost(parsed.hostname) &&
+      validRedisPort(parsed.port)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function buildContentModerationConfig(env = process.env) {
   return {
     enabled: booleanValue(env.CONTENT_MODERATION_ENABLED, false),
     wechatTextEnabled: booleanValue(env.CONTENT_MODERATION_WECHAT_TEXT_ENABLED, false),
     wechatImageEnabled: booleanValue(env.CONTENT_MODERATION_WECHAT_IMAGE_ENABLED, false),
+    redisEnabled: booleanValue(env.REDIS_ENABLED, false),
+    redisUrl: stringValue(env, "REDIS_URL"),
+    redisHost: stringValue(env, "REDIS_HOST"),
+    redisPort: stringValue(env, "REDIS_PORT"),
+    wechatAppId: stringValue(env, "WECHAT_APP_ID"),
+    wechatAppSecret: stringValue(env, "WECHAT_APP_SECRET"),
+    wechatEventToken: stringValue(env, "WECHAT_CONTENT_SECURITY_EVENT_TOKEN"),
+    wechatEventAesKey: stringValue(env, "WECHAT_CONTENT_SECURITY_EVENT_AES_KEY"),
     tencentVideoEnabled: booleanValue(env.CONTENT_MODERATION_TENCENT_VIDEO_ENABLED, false),
     tencentVideoRegion:
       stringValue(env, "TENCENT_CI_VIDEO_REGION") || stringValue(env, "COS_REGION"),
@@ -192,8 +234,32 @@ export function assertContentModerationConfig(
   moderationConfig,
   { nodeEnv = process.env.NODE_ENV || "development" } = {}
 ) {
-  if (!moderationConfig?.enabled) return moderationConfig;
+  if (!moderationConfig) return moderationConfig;
   const missing = [];
+  const wechatModerationEnabled = Boolean(
+    moderationConfig.wechatTextEnabled || moderationConfig.wechatImageEnabled
+  );
+  if (nodeEnv === "production" && wechatModerationEnabled) {
+    if (!moderationConfig.redisEnabled) missing.push("REDIS_ENABLED");
+    if (moderationConfig.redisUrl) {
+      if (!validRedisUrl(moderationConfig.redisUrl)) missing.push("valid REDIS_URL");
+    } else if (!moderationConfig.redisHost) {
+      missing.push("REDIS_URL or REDIS_HOST");
+    } else {
+      if (!validRedisHost(moderationConfig.redisHost)) missing.push("valid REDIS_HOST");
+      if (!validRedisPort(moderationConfig.redisPort)) missing.push("valid REDIS_PORT");
+    }
+    if (!moderationConfig.wechatAppId) missing.push("WECHAT_APP_ID");
+    if (!moderationConfig.wechatAppSecret) missing.push("WECHAT_APP_SECRET");
+    if (!moderationConfig.wechatEventToken) missing.push("WECHAT_CONTENT_SECURITY_EVENT_TOKEN");
+    if (!moderationConfig.wechatEventAesKey) missing.push("WECHAT_CONTENT_SECURITY_EVENT_AES_KEY");
+  }
+  if (!moderationConfig.enabled) {
+    if (missing.length > 0) {
+      throw moderationConfigurationError(`content moderation configuration is missing: ${missing.join(", ")}`);
+    }
+    return moderationConfig;
+  }
   if (moderationConfig.tencentVideoEnabled && !moderationConfig.tencentVideoRegion) {
     missing.push("TENCENT_CI_VIDEO_REGION");
   }
@@ -257,7 +323,9 @@ export const config = {
   wechat: {
     mockLogin: booleanEnv("WECHAT_MOCK_LOGIN", true),
     appId: process.env.WECHAT_APP_ID || "wx-placeholder",
-    appSecret: process.env.WECHAT_APP_SECRET || ""
+    appSecret: process.env.WECHAT_APP_SECRET || "",
+    contentSecurityEventToken: process.env.WECHAT_CONTENT_SECURITY_EVENT_TOKEN || "",
+    contentSecurityEventAesKey: process.env.WECHAT_CONTENT_SECURITY_EVENT_AES_KEY || ""
   },
   subscribeMessage: {
     enabled: booleanEnv("WECHAT_SUBSCRIBE_MESSAGE_ENABLED", false),
