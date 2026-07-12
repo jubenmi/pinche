@@ -134,4 +134,10 @@ for (const requiredText of [
   );
 }
 
+assert.match(
+  identityBarSource,
+  /this\.messageRefreshGeneration = generation;\s*this\.notificationsLoadingMore = false;/,
+  "same-identity full refresh must release stale load-more state before starting"
+);
+
 console.log("D25 auth message panel check passed.");

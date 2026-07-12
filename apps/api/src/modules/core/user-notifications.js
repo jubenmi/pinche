@@ -58,11 +58,14 @@ function cursorSignature(payload) {
 }
 
 export function encodeNotificationCursor(userId, row) {
+  if (typeof row.cursor_created_at !== "string" || !row.cursor_created_at) {
+    throw new TypeError("Notification cursor row is missing canonical created_at");
+  }
   const payload = Buffer.from(
     JSON.stringify({
       owner: Number(userId),
       unread: row.read_at === null || row.read_at === undefined ? 1 : 0,
-      created_at: row.created_at,
+      created_at: row.cursor_created_at,
       id: Number(row.id)
     })
   ).toString("base64url");
@@ -135,7 +138,8 @@ export async function listMyNotifications(connection, userId, filters = {}) {
        WHERE user_id = ? AND read_at IS NULL
      ) counts
      LEFT JOIN (
-       SELECT id, type, session_id, title, payload_json, read_at, created_at
+       SELECT id, type, session_id, title, payload_json, read_at, created_at,
+              DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s.%f') AS cursor_created_at
        FROM user_notifications
        WHERE user_id = ?
        ${cursorClause}

@@ -474,3 +474,5 @@ git commit -m "test: cover session reschedule notifications"
 - [x] Hide member reschedule reminder eligibility from the session organizer, including organizer seat/NPC identities.
 - [x] Update D45/D25 assertions and design wording, run the requested focused/aggregate verification, self-review, and commit the blocker fixes.
 - [x] Keep manage overview summary and 时间 row on `formatSessionStartAt` (`Asia/Shanghai`, `YYYY-MM-DD HH:mm`) with no raw ISO output.
+- [x] Encode notification cursors from a DB-native canonical `created_at` string so mysql2 `Date` UTC serialization cannot shift keyset boundaries.
+- [x] Reset stale load-more state immediately when a same-identity full refresh invalidates the prior generation.

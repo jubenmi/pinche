@@ -14,6 +14,7 @@ function row(id, createdAt, readAt = null, unreadCount = 4) {
     payload_json: "{}",
     read_at: readAt,
     created_at: createdAt,
+    cursor_created_at: typeof createdAt === "string" ? `${createdAt}.000000` : undefined,
     unread_count: unreadCount
   };
 }
@@ -56,6 +57,36 @@ test("cursor crosses the unread-to-read boundary without duplicates", async () =
   assert.equal(result.next_cursor, null);
   assert.match(calls[0].sql, /\(read_at IS NULL\) < \?/);
   assert(calls[0].values.every((value, index) => index > 1 || value === 7));
+});
+
+test("cursor binds the DB-native DATETIME key instead of mysql2 Date UTC serialization", async () => {
+  const firstPageCalls = [];
+  const mysqlDate = new Date("2026-07-12T04:05:00.000Z");
+  const firstPage = await listMyNotifications(
+    { async query(sql, values) { firstPageCalls.push({ sql, values }); return [[
+      {
+        ...row(9, mysqlDate),
+        cursor_created_at: "2026-07-12 12:05:00.000000"
+      },
+      {
+        ...row(8, new Date("2026-07-12T04:04:00.000Z")),
+        cursor_created_at: "2026-07-12 12:04:00.000000"
+      }
+    ]]; } },
+    7,
+    { limit: 1 }
+  );
+  assert.match(firstPageCalls[0].sql, /DATE_FORMAT\(created_at, '%Y-%m-%d %H:%i:%s\.%f'\) AS cursor_created_at/);
+
+  const secondPageCalls = [];
+  await listMyNotifications(
+    { async query(sql, values) { secondPageCalls.push({ sql, values }); return [[]]; } },
+    7,
+    { limit: 1, cursor: firstPage.next_cursor }
+  );
+  assert.equal(secondPageCalls[0].values[4], "2026-07-12 12:05:00.000000");
+  assert.equal(secondPageCalls[0].values[6], "2026-07-12 12:05:00.000000");
+  assert(!secondPageCalls[0].values.includes(mysqlDate.toISOString()));
 });
 
 test("rejects invalid and tampered cursors", async () => {

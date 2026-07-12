@@ -603,6 +603,7 @@ export default {
       }
       const generation = this.messageRefreshGeneration + 1;
       this.messageRefreshGeneration = generation;
+      this.notificationsLoadingMore = false;
       const requestContext = { generation, identityKey };
       if (this.activeMessageIdentityKey !== identityKey) {
         this.organizerMessages = [];
