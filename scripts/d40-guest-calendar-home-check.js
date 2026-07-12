@@ -114,9 +114,10 @@ for (const token of [
 }
 for (const token of [
   ".day-card.calendar-empty-day-card {",
-  "border: 0;",
-  "border-radius: 0;",
-  "background: transparent;",
+  "border: 0 !important;",
+  "border-radius: 0 !important;",
+  "background: transparent !important;",
+  "box-shadow: none !important;",
   "white-space: nowrap;"
 ]) {
   assert(calendar.includes(token), `D40 selected empty-state polish must include: ${token}`);

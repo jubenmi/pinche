@@ -1584,9 +1584,10 @@ function signupStatusLabel(status) {
   position: relative;
   overflow: hidden;
   min-height: 640rpx;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .calendar-empty-day-art {
