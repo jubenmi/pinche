@@ -35,6 +35,14 @@ const productionEnvExample = readFileSync(
   new URL("../.env.production.example", import.meta.url),
   "utf8"
 );
+const managePage = readFileSync(
+  new URL("../apps/miniprogram/src/pages/session/manage.vue", import.meta.url),
+  "utf8"
+);
+const rescheduleHelper = readFileSync(
+  new URL("../apps/miniprogram/src/utils/sessionReschedule.js", import.meta.url),
+  "utf8"
+);
 
 assertIncludes(migration, "CREATE TABLE IF NOT EXISTS user_notifications");
 assertIncludes(
@@ -93,6 +101,20 @@ assertIncludes(subscribeMessage, "`/pages/session/detail?id=${payload.sessionId}
 assertIncludes(service, "notifySessionRescheduled");
 assertIncludes(service, "Promise.allSettled");
 assertIncludes(service, "notificationDelivery");
+assertIncludes(rescheduleHelper, "export function parseSessionStartAt");
+assertIncludes(rescheduleHelper, "export function formatSessionStartAt");
+assertIncludes(rescheduleHelper, "export function canRescheduleSession");
+assertIncludes(rescheduleHelper, "export function validateRescheduleSelection");
+assertIncludes(rescheduleHelper, "export function buildRescheduleConfirmation");
+assertIncludes(rescheduleHelper, 'timeZone: "Asia/Shanghai"');
+assertIncludes(managePage, 'v-if="canReschedule"');
+assertIncludes(managePage, '<t-date-time-picker');
+assertIncludes(managePage, ':mode="[\'date\', \'minute\']"');
+assertIncludes(managePage, ':start="rescheduleMinimum"');
+assertIncludes(managePage, '`/api/sessions/${this.sessionId}/reschedule`');
+assertIncludes(managePage, "this.rescheduleSession(validation.startAt, memberCount > 0)");
+assertIncludes(managePage, "notification_delivery");
+assertIncludes(managePage, 'role.status === "active"');
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(
