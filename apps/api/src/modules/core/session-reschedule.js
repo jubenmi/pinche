@@ -76,5 +76,8 @@ export function createSessionRescheduleDedupeKey(sessionId) {
 }
 
 export function sessionRescheduleResponse(result) {
-  return result.session;
+  return {
+    ...result.session,
+    notification_delivery: result.notificationDelivery
+  };
 }

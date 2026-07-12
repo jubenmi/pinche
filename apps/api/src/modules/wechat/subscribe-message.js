@@ -70,6 +70,19 @@ function messageData(payload, resultText = "待审核") {
   };
 }
 
+function rescheduleDate(value, fallback) {
+  return valueOrFallback(value, fallback).replace("T", " ").slice(0, 19);
+}
+
+function rescheduleMessageData(payload) {
+  return {
+    thing1: { value: valueOrFallback(payload.scriptName, "拼车车局").slice(0, 20) },
+    date2: { value: rescheduleDate(payload.oldStartAt, "原时间待定") },
+    date3: { value: rescheduleDate(payload.newStartAt, "新时间待定") },
+    phrase4: { value: "车局已改期" }
+  };
+}
+
 async function sendSubscribeMessage({ scene, touser, templateId, page, data }) {
   const skip = enabledFor(templateId, touser);
   if (skip) {
@@ -130,5 +143,16 @@ export async function notifySignupReviewed(payload = {}) {
     templateId,
     page: `/pages/session/detail?id=${payload.sessionId}`,
     data: messageData(payload, payload.resultText || "已审核")
+  });
+}
+
+export async function notifySessionRescheduled(payload = {}) {
+  payload = payload || {};
+  return sendSubscribeMessage({
+    scene: "session_rescheduled",
+    touser: payload.recipientOpenId,
+    templateId: config.subscribeMessage.sessionRescheduledTemplateId,
+    page: `/pages/session/detail?id=${payload.sessionId}`,
+    data: rescheduleMessageData(payload)
   });
 }

@@ -197,7 +197,9 @@ export const config = {
   subscribeMessage: {
     enabled: booleanEnv("WECHAT_SUBSCRIBE_MESSAGE_ENABLED", false),
     signupCreatedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_CREATED || "",
-    signupReviewedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED || ""
+    signupReviewedTemplateId: process.env.WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED || "",
+    sessionRescheduledTemplateId:
+      process.env.WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID || ""
   },
   map: {
     tencentKey:

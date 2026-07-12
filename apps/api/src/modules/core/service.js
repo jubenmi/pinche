@@ -11,6 +11,7 @@ import { ensureRole } from "../auth/users.js";
 import { isAdmin, requireSessionOwner } from "./session-access.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
 import {
+  notifySessionRescheduled,
   notifySignupCreated,
   notifySignupReviewed
 } from "../wechat/subscribe-message.js";
@@ -4274,9 +4275,45 @@ export async function updateSession(user, id, body) {
 
 export async function rescheduleSession(user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
-  return withTransaction((connection) =>
+  const result = await withTransaction((connection) =>
     rescheduleSessionInTransaction(connection, user, id, body)
   );
+  const settledResults = await Promise.allSettled(
+    result.recipients.map((recipient) =>
+      notifySessionRescheduled({
+        recipientOpenId: recipient.openid,
+        sessionId: id,
+        scriptName: result.notificationPayload.scriptName,
+        oldStartAt: result.notificationPayload.oldStartAt,
+        newStartAt: result.notificationPayload.newStartAt
+      })
+    )
+  );
+  const notificationDelivery = summarizeSessionRescheduleDeliveries(
+    result.recipients,
+    settledResults
+  );
+  if (notificationDelivery.failed > 0) {
+    console.warn("notifySessionRescheduled failed", {
+      failed: notificationDelivery.failed,
+      recipients: notificationDelivery.recipients
+    });
+  }
+  return { ...result, notificationDelivery };
+}
+
+export function summarizeSessionRescheduleDeliveries(recipients, settledResults) {
+  const summary = { recipients: recipients.length, sent: 0, skipped: 0, failed: 0 };
+  for (const settled of settledResults) {
+    if (settled.status === "rejected" || !settled.value?.ok) {
+      summary.failed += 1;
+    } else if (settled.value.skipped) {
+      summary.skipped += 1;
+    } else {
+      summary.sent += 1;
+    }
+  }
+  return summary;
 }
 
 export async function rescheduleSessionInTransaction(connection, user, id, body = {}) {
@@ -4372,7 +4409,12 @@ export async function rescheduleSessionInTransaction(connection, user, id, body 
 
     return {
       session: await findById(connection, "sessions", id),
-      recipients
+      recipients,
+      notificationPayload: {
+        scriptName: payload.script_name,
+        oldStartAt: payload.old_start_at,
+        newStartAt: payload.new_start_at
+      }
     };
 }
 

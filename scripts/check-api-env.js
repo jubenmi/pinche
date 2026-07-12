@@ -3,10 +3,17 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import { assertDatabaseTargetLock, buildRedisUrl } from "../apps/api/src/config/env.js";
+import { config } from "../apps/api/src/config/env.js";
 
 const productionEnvExample = readFileSync(
   new URL("../.env.production.example", import.meta.url),
   "utf8"
+);
+
+assert.equal(
+  config.subscribeMessage.sessionRescheduledTemplateId,
+  process.env.WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID || "",
+  "rescheduled subscription template id should map from the environment"
 );
 
 assert.equal(

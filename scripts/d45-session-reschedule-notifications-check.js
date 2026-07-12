@@ -21,6 +21,11 @@ const server = readFileSync(
   new URL("../apps/api/src/server.js", import.meta.url),
   "utf8"
 );
+const env = readFileSync(new URL("../apps/api/src/config/env.js", import.meta.url), "utf8");
+const subscribeMessage = readFileSync(
+  new URL("../apps/api/src/modules/wechat/subscribe-message.js", import.meta.url),
+  "utf8"
+);
 
 assertIncludes(migration, "CREATE TABLE IF NOT EXISTS user_notifications");
 assertIncludes(
@@ -43,6 +48,19 @@ assertIncludes(service, "SELECT id FROM session_npc_roles WHERE session_id = ? F
 assertIncludes(service, "body.membersConfirmed !== true");
 assertIncludes(service, "USER_NOTIFICATION_TYPES.SESSION_RESCHEDULED");
 assertIncludes(service, "createSessionRescheduleDedupeKey(id)");
+assertIncludes(env, "WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID");
+assertIncludes(env, "sessionRescheduledTemplateId");
+assertIncludes(subscribeMessage, "export async function notifySessionRescheduled");
+assertIncludes(subscribeMessage, 'scene: "session_rescheduled"');
+assertIncludes(subscribeMessage, "rescheduleMessageData");
+assertIncludes(subscribeMessage, 'valueOrFallback(payload.scriptName, "拼车车局")');
+assertIncludes(subscribeMessage, 'rescheduleDate(payload.oldStartAt, "原时间待定")');
+assertIncludes(subscribeMessage, 'rescheduleDate(payload.newStartAt, "新时间待定")');
+assertIncludes(subscribeMessage, 'value: "车局已改期"');
+assertIncludes(subscribeMessage, "`/pages/session/detail?id=${payload.sessionId}`");
+assertIncludes(service, "notifySessionRescheduled");
+assertIncludes(service, "Promise.allSettled");
+assertIncludes(service, "notificationDelivery");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(

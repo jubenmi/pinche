@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { rescheduleSessionInTransaction } from "../src/modules/core/service.js";
+import {
+  rescheduleSessionInTransaction,
+  summarizeSessionRescheduleDeliveries
+} from "../src/modules/core/service.js";
 import { sessionRescheduleResponse } from "../src/modules/core/session-reschedule.js";
 
 const organizer = { user: { id: 7 }, roles: ["organizer"] };
@@ -100,8 +103,30 @@ test("deduplicates seat and NPC membership and locks session, seats, then NPC ro
   assert.match(lockSql[0], /sessions .* FOR UPDATE$/);
   assert.match(lockSql[1], /session_seats .* FOR UPDATE$/);
   assert.match(lockSql[2], /session_npc_roles .* FOR UPDATE$/);
-  assert.deepEqual(sessionRescheduleResponse(result), result.session);
+  assert.deepEqual(sessionRescheduleResponse({
+    ...result,
+    notificationDelivery: { recipients: 1, sent: 0, skipped: 1, failed: 0 }
+  }), {
+    ...result.session,
+    notification_delivery: { recipients: 1, sent: 0, skipped: 1, failed: 0 }
+  });
   assert.equal("recipients" in sessionRescheduleResponse(result), false);
+});
+
+test("delivery summary classifies sent, skipped, failed results and rejections", () => {
+  const recipients = [{}, {}, {}, {}];
+  const settled = [
+    { status: "fulfilled", value: { ok: true, skipped: false } },
+    { status: "fulfilled", value: { ok: true, skipped: true, reason: "disabled" } },
+    { status: "fulfilled", value: { ok: false, skipped: false } },
+    { status: "rejected", reason: new Error("network failed") }
+  ];
+  assert.deepEqual(summarizeSessionRescheduleDeliveries(recipients, settled), {
+    recipients: 4,
+    sent: 1,
+    skipped: 1,
+    failed: 2
+  });
 });
 
 test("notification insert failure rejects the transaction work", async () => {
