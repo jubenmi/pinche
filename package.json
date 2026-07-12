@@ -49,8 +49,9 @@
     "d43:unit": "npm --workspace packages/shared run test:album-media && npm --workspace apps/api run test:album-image && node --test apps/miniprogram/test/albumPhotoUpload.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs && npm --workspace apps/admin-web run test:album-media",
     "d43:smoke": "node scripts/d43-album-media-cos-direct-smoke.js",
     "d44:check": "node scripts/d44-post-session-media-stripe-check.js",
-    "d45:check": "node scripts/d45-session-reschedule-notifications-check.js",
-    "d45:smoke": "node scripts/d45-session-reschedule-notifications-smoke.js"
+    "d45:check": "node scripts/d45-session-reschedule-notifications-safety-check.js && node scripts/d45-session-reschedule-notifications-check.js",
+    "d45:smoke": "node scripts/d45-session-reschedule-notifications-smoke.js",
+    "d45:safety": "node scripts/d45-session-reschedule-notifications-safety-check.js"
   },
   "engines": {
     "node": ">=20"

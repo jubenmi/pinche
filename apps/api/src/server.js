@@ -2292,6 +2292,18 @@ function d40SmokeDatabaseIsIsolated() {
   );
 }
 
+function d45SmokeDatabaseIsIsolated() {
+  const host = String(config.mysql.host || "").trim().toLowerCase();
+  const localHost = ["127.0.0.1", "localhost", "::1"].includes(host);
+  return (
+    config.nodeEnv !== "production" &&
+    config.wechat.mockLogin === true &&
+    process.env.D45_SMOKE_ISOLATED === "1" &&
+    localHost &&
+    config.mysql.database.startsWith("pinche_d45_test")
+  );
+}
+
 async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
@@ -2639,6 +2651,26 @@ async function route(request, response) {
         mode: "d40",
         isolated: true,
         database: config.mysql.database
+      }
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/testing/d45-smoke-target") {
+    if (!d45SmokeDatabaseIsIsolated()) {
+      throw new AppError(
+        409,
+        "SMOKE_DATABASE_NOT_ISOLATED",
+        "D45 smoke requires a dedicated local pinche_d45_test database and mock login"
+      );
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        marker: "d45-session-reschedule-notifications",
+        isolated: true,
+        database: config.mysql.database,
+        wechat_mock_login: true
       }
     });
     return;

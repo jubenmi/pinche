@@ -434,7 +434,12 @@ Add `d45:check` and `d45:smoke`; include the static check and both Mini Program 
 
 - [ ] **Step 4: Run migration and smoke test against the approved local test stack**
 
-Run: `npm run migrate`
+Rebuild a disposable local database named `pinche_d45_test`, then run migrations with explicit
+`MYSQL_HOST=127.0.0.1`, `MYSQL_PORT=3307`, and `MYSQL_DATABASE=pinche_d45_test`. Start the API
+with `D45_SMOKE_ISOLATED=1`, `WECHAT_MOCK_LOGIN=true`, and messaging disabled. The smoke's
+read-only preflight must verify those server-loaded values before login or fixture writes. Drop
+`pinche_d45_test` after the run so bootstrap-admin and uniquely prefixed fixture rows cannot leak
+into later runs. Never run this step against the repository's default `.env`.
 
 Run: `WECHAT_SUBSCRIBE_MESSAGE_ENABLED=false BASE_URL=http://127.0.0.1:3029 node scripts/d45-session-reschedule-notifications-smoke.js`
 

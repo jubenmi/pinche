@@ -1,12 +1,6 @@
-const rawBaseUrl = process.env.BASE_URL || "http://127.0.0.1:3029";
-const baseUrl = new URL(rawBaseUrl);
-const loopbackHosts = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+import { verifyD45SmokePreflight } from "./d45-session-reschedule-notifications-safety.js";
 
-if (baseUrl.protocol !== "http:" || !loopbackHosts.has(baseUrl.hostname)) {
-  throw new Error(
-    `D45 smoke safety rejected non-local BASE_URL before any API write: ${baseUrl.origin}`
-  );
-}
+let baseUrl;
 
 const prefix = `d45-smoke-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 
@@ -25,7 +19,12 @@ async function request(method, path, body, token, expectedStatus = 200) {
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(`${method} ${path} returned non-JSON ${response.status}: ${text.slice(0, 500)}`);
+  }
   const expected = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
   if (!expected.includes(response.status)) {
     throw new Error(`${method} ${path} expected ${expected.join("/")}, got ${response.status}: ${text}`);
@@ -136,10 +135,7 @@ function notificationsOfType(inbox, type, sessionId) {
 }
 
 async function main() {
-  assert(
-    process.env.WECHAT_SUBSCRIBE_MESSAGE_ENABLED === "false",
-    "D45 smoke requires WECHAT_SUBSCRIBE_MESSAGE_ENABLED=false; live WeChat messaging is forbidden"
-  );
+  ({ baseUrl } = await verifyD45SmokePreflight({ env: process.env }));
 
   const admin = await authorizePhone(await login("dev-admin-openid"), "admin-phone");
   const organizer = await authorizePhone(await login(`${prefix}-organizer`), "organizer-phone");
@@ -207,6 +203,14 @@ async function main() {
   assert(rescheduled.data.notification_delivery.recipients === 2, "seat + NPC users must dedupe");
   assert(rescheduled.data.notification_delivery.sent === 0, "disabled messaging must send nothing");
   assert(rescheduled.data.notification_delivery.skipped === 2, "disabled messaging must be skipped");
+  assert(rescheduled.data.notification_delivery.failed === 0, "local disabled delivery must not fail");
+  assert(
+    rescheduled.data.notification_delivery.recipients ===
+      rescheduled.data.notification_delivery.sent +
+        rescheduled.data.notification_delivery.skipped +
+        rescheduled.data.notification_delivery.failed,
+    "delivery recipients must equal sent + skipped + failed"
+  );
   const futureDetail = await request("GET", `/api/sessions/${future.id}`, undefined, organizer.token);
   assert(
     new Date(futureDetail.data.start_at).getTime() === new Date(validNewTime).setMilliseconds(0),
@@ -304,16 +308,16 @@ async function main() {
     "organizer inbox must exclude member-only reschedule notifications"
   );
   assert(
-    notificationsOfType(playerInbox, "signup_reviewed", review.id).some(
+    notificationsOfType(playerInbox, "signup_reviewed", review.id).filter(
       (item) => item.payload.result === "approved"
-    ),
-    "approved signup result must persist"
+    ).length === 1,
+    "approved signup result must persist exactly once"
   );
   assert(
-    notificationsOfType(rejectedInbox, "signup_reviewed", review.id).some(
+    notificationsOfType(rejectedInbox, "signup_reviewed", review.id).filter(
       (item) => item.payload.result === "rejected"
-    ),
-    "rejected signup result must persist"
+    ).length === 1,
+    "rejected signup result must persist exactly once after repeated rejection"
   );
 
   const notification = playerRescheduleNotifications[0];

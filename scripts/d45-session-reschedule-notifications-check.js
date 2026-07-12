@@ -71,6 +71,10 @@ const smoke = readFileSync(
   new URL("./d45-session-reschedule-notifications-smoke.js", import.meta.url),
   "utf8"
 );
+const smokeSafety = readFileSync(
+  new URL("./d45-session-reschedule-notifications-safety.js", import.meta.url),
+  "utf8"
+);
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8")
 );
@@ -210,21 +214,35 @@ assertIncludes(miniAuthIdentityBar, "shouldApplyMessageRefresh(requestContext, c
 assertIncludes(miniAuthIdentityBar, "restorePersistentUnread(");
 assertIncludes(miniAuthIdentityBar, "error?.statusCode === 401");
 for (const token of [
-  "loopbackHosts",
-  "D45 smoke safety rejected non-local BASE_URL before any API write",
-  'WECHAT_SUBSCRIBE_MESSAGE_ENABLED === "false"',
+  "verifyD45SmokePreflight",
+  "returned non-JSON",
   '"session_rescheduled"',
   '"signup_reviewed"',
   "notification_delivery",
+  "delivery recipients must equal sent + skipped + failed",
+  "approved signup result must persist exactly once",
+  "rejected signup result must persist exactly once after repeated rejection",
   "membersConfirmed",
   "/api/users/me/notifications",
   "/read"
 ]) {
   assertIncludes(smoke, token);
 }
+for (const token of [
+  'url.pathname === "/api/testing/d45-smoke-target"',
+  "d45SmokeDatabaseIsIsolated",
+  'process.env.D45_SMOKE_ISOLATED === "1"',
+  'config.mysql.database.startsWith("pinche_d45_test")',
+  'marker: "d45-session-reschedule-notifications"',
+  "wechat_mock_login: true"
+]) {
+  assertIncludes(server, token);
+}
+assertIncludes(smokeSafety, "verifyD45SmokePreflight");
+assertIncludes(smoke, "await verifyD45SmokePreflight");
 assert.equal(
   packageJson.scripts["d45:check"],
-  "node scripts/d45-session-reschedule-notifications-check.js"
+  "node scripts/d45-session-reschedule-notifications-safety-check.js && node scripts/d45-session-reschedule-notifications-check.js"
 );
 assert.equal(
   packageJson.scripts["d45:smoke"],
