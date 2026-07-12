@@ -67,7 +67,10 @@
       </view>
 
       <view v-if="messagesLoading" class="message-empty">正在同步消息...</view>
-      <view v-else-if="messagesError" class="message-empty error">{{ messagesError }}</view>
+      <view
+        v-else-if="messageLoadError && authMessages.length === 0"
+        class="message-empty error"
+      >{{ messageLoadError }}</view>
       <t-empty
         v-else-if="authMessages.length === 0"
         class="message-empty"
@@ -284,9 +287,12 @@ import {
   userGenderLabel
 } from "../utils/api";
 import {
+  authMessageIdentityKey,
   buildOrganizerSignupMessages,
   buildPersistentMessages,
   mergeAuthMessages,
+  restorePersistentUnread,
+  shouldApplyMessageRefresh,
   totalMessageBadgeCount,
   totalOrganizerSignupMessageCount
 } from "../utils/authMessages";
@@ -363,7 +369,10 @@ export default {
       persistentUnreadCount: 0,
       notificationReadInFlight: [],
       messagesLoading: false,
-      messagesError: "",
+      sessionsMessagesError: "",
+      notificationsMessagesError: "",
+      messageRefreshGeneration: 0,
+      activeMessageIdentityKey: "",
       messagePanelVisible: false,
       phoneVisible: false,
       phoneRequired: false,
@@ -481,7 +490,14 @@ export default {
       return totalMessageBadgeCount(this.organizerMessages, this.persistentUnreadCount);
     },
     messageChipVisible() {
-      return Boolean(this.user) && (this.messagesLoading || this.authMessages.length > 0);
+      return Boolean(this.user) &&
+        (this.messagesLoading || this.authMessages.length > 0 || Boolean(this.messageLoadError));
+    },
+    messageLoadError() {
+      if (this.sessionsMessagesError && this.notificationsMessagesError) {
+        return "消息加载失败，请稍后重试。";
+      }
+      return this.sessionsMessagesError || this.notificationsMessagesError;
     },
     messageBadgeText() {
       if (!this.user || this.messageBadgeCount < 1) {
@@ -493,8 +509,10 @@ export default {
       if (this.messagesLoading) {
         return "正在同步消息";
       }
-      if (this.messagesError) {
-        return "稍后可以再试一次";
+      if (this.sessionsMessagesError || this.notificationsMessagesError) {
+        return this.authMessages.length > 0
+          ? `${this.authMessages.length}条消息，部分消息同步失败，请刷新重试`
+          : "部分消息同步失败，请刷新重试";
       }
       if (this.authMessages.length < 1) {
         return "暂无消息";
@@ -547,21 +565,34 @@ export default {
       this.persistentMessages = [];
       this.persistentUnreadCount = 0;
       this.notificationReadInFlight = [];
-      this.messagesError = "";
+      this.sessionsMessagesError = "";
+      this.notificationsMessagesError = "";
+      this.messageRefreshGeneration += 1;
+      this.activeMessageIdentityKey = "";
       this.messagesLoading = false;
       this.messagePanelVisible = false;
     },
     async refreshOrganizerMessages() {
-      if (!this.user || !getToken()) {
+      const token = getToken();
+      const identityKey = authMessageIdentityKey(this.user?.id, token);
+      if (!this.user || !identityKey) {
         this.clearOrganizerMessages();
         return;
       }
-      if (this.messagesLoading) {
-        return;
+      const generation = this.messageRefreshGeneration + 1;
+      this.messageRefreshGeneration = generation;
+      const requestContext = { generation, identityKey };
+      if (this.activeMessageIdentityKey !== identityKey) {
+        this.organizerMessages = [];
+        this.persistentMessages = [];
+        this.persistentUnreadCount = 0;
+        this.notificationReadInFlight = [];
+        this.sessionsMessagesError = "";
+        this.notificationsMessagesError = "";
+        this.activeMessageIdentityKey = identityKey;
       }
 
       this.messagesLoading = true;
-      this.messagesError = "";
       try {
         const [sessionsResult, notificationsResult] = await Promise.allSettled([
           request({ url: "/api/users/me/sessions?limit=50" }),
@@ -570,6 +601,13 @@ export default {
         const authError = [sessionsResult, notificationsResult].find(
           (result) => result.status === "rejected" && result.reason?.statusCode === 401
         );
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (!shouldApplyMessageRefresh(requestContext, currentContext)) {
+          return;
+        }
         if (authError) {
           clearAuth();
           this.refreshIdentity();
@@ -577,24 +615,47 @@ export default {
         }
         if (sessionsResult.status === "fulfilled") {
           this.organizerMessages = buildOrganizerSignupMessages(dataOf(sessionsResult.value) || []);
+          this.sessionsMessagesError = "";
+        } else {
+          this.organizerMessages = [];
+          this.sessionsMessagesError = "待审核申请同步失败。";
         }
         if (notificationsResult.status === "fulfilled") {
           const inbox = dataOf(notificationsResult.value) || {};
           this.persistentMessages = buildPersistentMessages(inbox.items || []);
           this.persistentUnreadCount = Math.max(0, Number(inbox.unread_count) || 0);
-        }
-        if (sessionsResult.status === "rejected" && notificationsResult.status === "rejected") {
-          this.messagesError = "消息加载失败，请稍后重试。";
+          this.notificationsMessagesError = "";
+        } else {
+          this.persistentMessages = [];
+          this.persistentUnreadCount = 0;
+          this.notificationsMessagesError = "通知消息同步失败。";
         }
       } catch (error) {
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (!shouldApplyMessageRefresh(requestContext, currentContext)) {
+          return;
+        }
         if (error?.statusCode === 401) {
           clearAuth();
           this.refreshIdentity();
           return;
         }
-        this.messagesError = "消息加载失败，请稍后重试。";
+        this.organizerMessages = [];
+        this.persistentMessages = [];
+        this.persistentUnreadCount = 0;
+        this.sessionsMessagesError = "待审核申请同步失败。";
+        this.notificationsMessagesError = "通知消息同步失败。";
       } finally {
-        this.messagesLoading = false;
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (shouldApplyMessageRefresh(requestContext, currentContext)) {
+          this.messagesLoading = false;
+        }
       }
     },
     toggleMessagePanel() {
@@ -626,8 +687,10 @@ export default {
         return;
       }
       if (notificationId) {
+        const identityKey = this.activeMessageIdentityKey;
+        const wasUnread = Boolean(message.unread);
         this.notificationReadInFlight = [...this.notificationReadInFlight, notificationId];
-        if (message.unread) {
+        if (wasUnread) {
           this.persistentMessages = this.persistentMessages.map((item) =>
             item.notificationId === notificationId ? { ...item, unread: false } : item
           );
@@ -637,11 +700,31 @@ export default {
           url: `/api/users/me/notifications/${notificationId}/read`,
           method: "POST"
         })
-          .catch(() => {})
+          .catch((error) => {
+            if (identityKey !== this.activeMessageIdentityKey) {
+              return;
+            }
+            if (error?.statusCode === 401) {
+              clearAuth();
+              this.refreshIdentity();
+              return;
+            }
+            if (wasUnread) {
+              const restored = restorePersistentUnread(
+                this.persistentMessages,
+                this.persistentUnreadCount,
+                notificationId
+              );
+              this.persistentMessages = restored.messages;
+              this.persistentUnreadCount = restored.unreadCount;
+            }
+          })
           .finally(() => {
-            this.notificationReadInFlight = this.notificationReadInFlight.filter(
-              (id) => id !== notificationId
-            );
+            if (identityKey === this.activeMessageIdentityKey) {
+              this.notificationReadInFlight = this.notificationReadInFlight.filter(
+                (id) => id !== notificationId
+              );
+            }
           });
       }
       this.messagePanelVisible = false;

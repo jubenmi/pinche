@@ -83,11 +83,16 @@ export function buildPersistentMessages(items = []) {
   return (Array.isArray(items) ? items : []).map((item) => {
     const notificationId = safeId(item?.id);
     const sessionId = safeId(item?.session_id ?? item?.payload?.session?.id);
-    const type = item?.type === "session_rescheduled" ? "session_rescheduled" : "signup_reviewed";
+    const type = ["signup_reviewed", "session_rescheduled"].includes(item?.type)
+      ? item.type
+      : null;
+    if (!notificationId || !type) {
+      return null;
+    }
     const common = {
       kind: "persistent",
       type,
-      key: notificationId ? `notification-${notificationId}` : `notification-unknown-${type}`,
+      key: `notification-${notificationId}`,
       sessionId,
       notificationId,
       unread: !item?.read_at,
@@ -97,7 +102,35 @@ export function buildPersistentMessages(items = []) {
     return type === "session_rescheduled"
       ? rescheduledMessage(item, common)
       : reviewedMessage(item, common);
+  }).filter(Boolean);
+}
+
+export function authMessageIdentityKey(userId, token) {
+  const id = safeId(userId);
+  return id && token ? `${id}:${token}` : "";
+}
+
+export function shouldApplyMessageRefresh(requestContext, currentContext) {
+  return Boolean(
+    requestContext?.identityKey &&
+      requestContext.identityKey === currentContext?.identityKey &&
+      requestContext.generation === currentContext?.generation
+  );
+}
+
+export function restorePersistentUnread(messages = [], unreadCount = 0, notificationId) {
+  let restored = false;
+  const nextMessages = (messages || []).map((message) => {
+    if (!restored && message?.notificationId === notificationId && !message.unread) {
+      restored = true;
+      return { ...message, unread: true };
+    }
+    return message;
   });
+  return {
+    messages: nextMessages,
+    unreadCount: Math.max(0, Number(unreadCount) || 0) + (restored ? 1 : 0)
+  };
 }
 
 export function mergeAuthMessages(pendingMessages = [], persistentMessages = []) {

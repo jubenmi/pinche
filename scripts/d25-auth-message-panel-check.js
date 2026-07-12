@@ -2,9 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import {
+  authMessageIdentityKey,
   buildOrganizerSignupMessages,
   buildPersistentMessages,
   mergeAuthMessages,
+  restorePersistentUnread,
+  shouldApplyMessageRefresh,
   totalMessageBadgeCount,
   totalOrganizerSignupMessageCount
 } from "../apps/miniprogram/src/utils/authMessages.js";
@@ -76,6 +79,24 @@ assert.deepEqual(
   mergeAuthMessages(messages, persistentMessages).map((message) => message.kind),
   ["pending_signup", "pending_signup", "persistent", "persistent"]
 );
+assert.equal(
+  buildPersistentMessages([
+    { id: 30, type: "unsupported" },
+    { id: null, type: "signup_reviewed" }
+  ]).length,
+  0,
+  "unsupported or invalid persistent messages must be filtered"
+);
+const refreshContext = { generation: 2, identityKey: authMessageIdentityKey(7, "token") };
+assert.equal(shouldApplyMessageRefresh(refreshContext, refreshContext), true);
+assert.equal(shouldApplyMessageRefresh({ ...refreshContext, generation: 1 }, refreshContext), false);
+const restoredUnread = restorePersistentUnread(
+  [{ notificationId: 21, unread: false }],
+  0,
+  21
+);
+assert.equal(restoredUnread.unreadCount, 1);
+assert.equal(restoredUnread.messages[0].unread, true);
 
 for (const requiredText of [
   "auth-message-chip",
@@ -89,7 +110,13 @@ for (const requiredText of [
   "handleMessageTap",
   "method: \"POST\"",
   "{{ message.typeTag }}",
-  "message.kind === 'persistent' && message.unread"
+  "message.kind === 'persistent' && message.unread",
+  "sessionsMessagesError",
+  "notificationsMessagesError",
+  "部分消息同步失败，请刷新重试",
+  "shouldApplyMessageRefresh",
+  "restorePersistentUnread",
+  "activeMessageIdentityKey"
 ]) {
   assert(
     identityBarSource.includes(requiredText),

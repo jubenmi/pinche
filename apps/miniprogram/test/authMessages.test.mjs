@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import {
   buildOrganizerSignupMessages,
   buildPersistentMessages,
+  authMessageIdentityKey,
   mergeAuthMessages,
+  restorePersistentUnread,
+  shouldApplyMessageRefresh,
   totalMessageBadgeCount
 } from "../src/utils/authMessages.js";
 
@@ -119,4 +122,46 @@ test("persistent navigation target falls back safely when session is missing", (
   const [message] = buildPersistentMessages([{ id: 5, type: "session_rescheduled" }]);
   assert.equal(message.targetUrl, "");
   assert.equal(message.sessionId, null);
+});
+
+test("filters unsupported notifications and entries without valid IDs", () => {
+  const messages = buildPersistentMessages([
+    { id: 1, type: "future_notification" },
+    { id: 0, type: "signup_reviewed" },
+    { id: "invalid", type: "session_rescheduled" },
+    { id: 2, type: "signup_reviewed" }
+  ]);
+  assert.deepEqual(messages.map(({ key }) => key), ["notification-2"]);
+});
+
+test("applies refresh results only to the current identity generation", () => {
+  const current = { generation: 4, identityKey: authMessageIdentityKey(9, "token-b") };
+  assert.equal(shouldApplyMessageRefresh(current, current), true);
+  assert.equal(
+    shouldApplyMessageRefresh(
+      { generation: 3, identityKey: authMessageIdentityKey(9, "token-b") },
+      current
+    ),
+    false
+  );
+  assert.equal(
+    shouldApplyMessageRefresh(
+      { generation: 4, identityKey: authMessageIdentityKey(8, "token-a") },
+      current
+    ),
+    false
+  );
+});
+
+test("restores optimistic unread state once without double-incrementing", () => {
+  const messages = buildPersistentMessages([
+    { id: 7, type: "signup_reviewed", read_at: "already read" },
+    { id: 8, type: "signup_reviewed", read_at: "already read" }
+  ]);
+  const restored = restorePersistentUnread(messages, 0, 8);
+  assert.equal(restored.messages[1].unread, true);
+  assert.equal(restored.unreadCount, 1);
+  const repeated = restorePersistentUnread(restored.messages, restored.unreadCount, 8);
+  assert.equal(repeated.unreadCount, 1);
+  assert.equal(restorePersistentUnread(messages, 0, 99).unreadCount, 0);
 });
