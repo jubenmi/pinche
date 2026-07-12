@@ -129,7 +129,8 @@ const notificationRows = [
     title: "报名审核已通过",
     payload_json: '{"result":"approved"}',
     read_at: null,
-    created_at: "2026-07-12 10:00:00"
+    created_at: "2026-07-12 10:00:00",
+    unread_count: 3
   }
 ];
 const listQueries = [];
@@ -137,9 +138,6 @@ const listResult = await listMyNotifications(
   {
     async query(sql, values) {
       listQueries.push({ sql, values });
-      if (sql.includes("COUNT(*)")) {
-        return [[{ unread_count: 1 }]];
-      }
       return [notificationRows];
     }
   },
@@ -158,8 +156,9 @@ assert.deepEqual(listResult, {
       created_at: "2026-07-12 10:00:00"
     }
   ],
-  unread_count: 1
+  unread_count: 3
 });
+assert.equal(listQueries.length, 1, "inbox items and unread count must use one DB snapshot");
 assert(listQueries.every(({ values }) => values.includes(7)), "inbox SQL must be owner scoped");
 assert(
   listQueries.some(({ sql }) =>
@@ -167,6 +166,20 @@ assert(
   ),
   "inbox must cap at 50 and order unread first, then newest"
 );
+
+const emptyListQueries = [];
+const emptyListResult = await listMyNotifications(
+  {
+    async query(sql, values) {
+      emptyListQueries.push({ sql, values });
+      return [[]];
+    }
+  },
+  7,
+  50
+);
+assert.deepEqual(emptyListResult, { items: [], unread_count: 0 });
+assert.equal(emptyListQueries.length, 1, "empty inbox must also use one query");
 
 const readQueries = [];
 const readResult = await markMyNotificationRead(
@@ -190,6 +203,10 @@ assert(
 assert(
   readQueries.some(({ sql }) => sql.includes("WHERE id = ? AND user_id = ?")),
   "read update must constrain both notification and owner"
+);
+assert(
+  readQueries.some(({ sql }) => sql.includes("read_at = COALESCE(read_at, CURRENT_TIMESTAMP)")),
+  "repeated mark-read must preserve the original read_at timestamp"
 );
 
 const unchangedOwnedRead = await markMyNotificationRead(
@@ -231,6 +248,16 @@ const approveBody = service.slice(
 const rejectBody = service.slice(
   service.indexOf("export async function rejectSignup"),
   service.indexOf("export async function updateDeposit")
+);
+assert(
+  rejectBody.indexOf('signup.status !== "pending"') <
+    rejectBody.indexOf("UPDATE signups SET status = 'rejected'"),
+  "reject must guard pending status before any mutation"
+);
+assert(
+  rejectBody.indexOf('signup.status !== "pending"') <
+    rejectBody.indexOf("insertSignupReviewedNotification"),
+  "reject must guard pending status before persistent notification insertion"
 );
 assert.equal(
   approveBody.match(/await insertSignupReviewedNotification\(/g)?.length,

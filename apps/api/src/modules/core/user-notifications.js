@@ -52,29 +52,32 @@ export async function listMyNotifications(connection, userId, requestedLimit = 5
   const parsedLimit = Number.parseInt(requestedLimit, 10);
   const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 50;
   const [rows] = await connection.query(
-    `SELECT id, type, session_id, title, payload_json, read_at, created_at
-     FROM user_notifications
-     WHERE user_id = ?
-     ORDER BY (read_at IS NULL) DESC, created_at DESC, id DESC
-     LIMIT ${limit}`,
-    [userId]
-  );
-  const [countRows] = await connection.query(
-    `SELECT COUNT(*) AS unread_count
-     FROM user_notifications
-     WHERE user_id = ? AND read_at IS NULL`,
-    [userId]
+    `SELECT inbox.*, counts.unread_count
+     FROM (
+       SELECT COUNT(*) AS unread_count
+       FROM user_notifications
+       WHERE user_id = ? AND read_at IS NULL
+     ) counts
+     LEFT JOIN (
+       SELECT id, type, session_id, title, payload_json, read_at, created_at
+       FROM user_notifications
+       WHERE user_id = ?
+       ORDER BY (read_at IS NULL) DESC, created_at DESC, id DESC
+       LIMIT ${limit}
+     ) inbox ON TRUE
+     ORDER BY (inbox.read_at IS NULL) DESC, inbox.created_at DESC, inbox.id DESC`,
+    [userId, userId]
   );
   return {
-    items: rows.map(userNotificationResponse),
-    unread_count: Number(countRows[0]?.unread_count || 0)
+    items: rows.filter((row) => row.id !== null && row.id !== undefined).map(userNotificationResponse),
+    unread_count: Number(rows[0]?.unread_count || 0)
   };
 }
 
 export async function markMyNotificationRead(connection, userId, notificationId) {
   await connection.query(
     `UPDATE user_notifications
-     SET read_at = CURRENT_TIMESTAMP
+     SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
      WHERE id = ? AND user_id = ?`,
     [notificationId, userId]
   );

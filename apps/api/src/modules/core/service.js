@@ -5522,6 +5522,9 @@ export async function approveSignup(user, signupId) {
 export async function rejectSignup(user, signupId) {
   const { signup, notification } = await withTransaction(async (connection) => {
     const signup = await requireSignupOwner(connection, signupId, user);
+    if (signup.status !== "pending") {
+      throw badRequest("Only pending signup can be rejected");
+    }
     await connection.query("UPDATE signups SET status = 'rejected' WHERE id = ?", [
       signupId
     ]);
