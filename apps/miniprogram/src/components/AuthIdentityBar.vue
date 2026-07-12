@@ -29,7 +29,7 @@
         </view>
         <view v-if="rolesText" class="auth-roles">{{ rolesText }}</view>
       </button>
-      <view v-if="messageBadgeText" class="auth-side">
+      <view v-if="messageChipVisible" class="auth-side">
         <t-button
           class="auth-message-chip"
           hover-class="auth-message-chip-hover"
@@ -39,7 +39,7 @@
             <text>消息</text>
             <t-badge
               class="auth-message-count"
-              :count="organizerMessageCount"
+              :count="messageBadgeCount"
               :max-count="99"
             />
           </view>
@@ -50,7 +50,7 @@
     <view v-if="messagePanelVisible" class="message-panel" @tap.stop>
       <view class="message-panel-head">
         <view>
-          <view class="message-panel-title">待处理申请</view>
+          <view class="message-panel-title">消息</view>
           <view class="message-panel-subtitle">{{ messagePanelSummary }}</view>
         </view>
         <view class="message-panel-actions">
@@ -69,24 +69,39 @@
       <view v-if="messagesLoading" class="message-empty">正在同步消息...</view>
       <view v-else-if="messagesError" class="message-empty error">{{ messagesError }}</view>
       <t-empty
-        v-else-if="organizerMessages.length === 0"
+        v-else-if="authMessages.length === 0"
         class="message-empty"
-        description="暂无待处理申请。"
+        description="暂无消息。"
       />
       <block v-else>
         <t-button
-          v-for="message in organizerMessages"
+          v-for="message in authMessages"
           :key="message.key"
           class="message-item"
           hover-class="message-item-hover"
-          @tap.stop="goManageFromMessage(message)"
+          @tap.stop="handleMessageTap(message)"
         >
           <view class="message-item-content">
             <view class="message-copy">
               <view class="message-title-row">
                 <text class="message-title">{{ message.title }}</text>
-                <t-tag class="message-count" theme="warning" variant="light" size="small">
+                <t-tag
+                  v-if="message.kind === 'pending_signup'"
+                  class="message-count"
+                  theme="warning"
+                  variant="light"
+                  size="small"
+                >
                   {{ message.count }}待审
+                </t-tag>
+                <t-tag
+                  v-else-if="message.unread"
+                  class="message-count"
+                  theme="danger"
+                  variant="light"
+                  size="small"
+                >
+                  未读
                 </t-tag>
               </view>
               <text class="message-subtitle">{{ message.subtitle }}</text>
@@ -266,6 +281,9 @@ import {
 } from "../utils/api";
 import {
   buildOrganizerSignupMessages,
+  buildPersistentMessages,
+  mergeAuthMessages,
+  totalMessageBadgeCount,
   totalOrganizerSignupMessageCount
 } from "../utils/authMessages";
 import { showToast } from "../utils/tdesignFeedback";
@@ -337,6 +355,9 @@ export default {
       avatarChoosing: false,
       avatarChooseTimer: null,
       organizerMessages: [],
+      persistentMessages: [],
+      persistentUnreadCount: 0,
+      notificationReadInFlight: [],
       messagesLoading: false,
       messagesError: "",
       messagePanelVisible: false,
@@ -449,23 +470,32 @@ export default {
     organizerMessageCount() {
       return totalOrganizerSignupMessageCount(this.organizerMessages);
     },
+    authMessages() {
+      return mergeAuthMessages(this.organizerMessages, this.persistentMessages);
+    },
+    messageBadgeCount() {
+      return totalMessageBadgeCount(this.organizerMessages, this.persistentUnreadCount);
+    },
+    messageChipVisible() {
+      return Boolean(this.user) && (this.messagesLoading || this.authMessages.length > 0);
+    },
     messageBadgeText() {
-      if (!this.user || this.organizerMessageCount < 1) {
+      if (!this.user || this.messageBadgeCount < 1) {
         return "";
       }
-      return this.organizerMessageCount > 99 ? "99+" : String(this.organizerMessageCount);
+      return this.messageBadgeCount > 99 ? "99+" : String(this.messageBadgeCount);
     },
     messagePanelSummary() {
       if (this.messagesLoading) {
-        return "正在同步车头消息";
+        return "正在同步消息";
       }
       if (this.messagesError) {
         return "稍后可以再试一次";
       }
-      if (this.organizerMessageCount < 1) {
-        return "没有新的上车申请";
+      if (this.authMessages.length < 1) {
+        return "暂无消息";
       }
-      return `${this.organizerMessages.length}辆车，${this.organizerMessageCount}个待审核`;
+      return `${this.authMessages.length}条消息，${this.messageBadgeCount}条待处理或未读`;
     }
   },
   created() {
@@ -510,6 +540,9 @@ export default {
     },
     clearOrganizerMessages() {
       this.organizerMessages = [];
+      this.persistentMessages = [];
+      this.persistentUnreadCount = 0;
+      this.notificationReadInFlight = [];
       this.messagesError = "";
       this.messagesLoading = false;
       this.messagePanelVisible = false;
@@ -526,10 +559,28 @@ export default {
       this.messagesLoading = true;
       this.messagesError = "";
       try {
-        const response = await request({ url: "/api/users/me/sessions?limit=50" });
-        this.organizerMessages = buildOrganizerSignupMessages(dataOf(response) || []);
-        if (this.organizerMessages.length === 0) {
-          this.messagePanelVisible = false;
+        const [sessionsResult, notificationsResult] = await Promise.allSettled([
+          request({ url: "/api/users/me/sessions?limit=50" }),
+          request({ url: "/api/users/me/notifications" })
+        ]);
+        const authError = [sessionsResult, notificationsResult].find(
+          (result) => result.status === "rejected" && result.reason?.statusCode === 401
+        );
+        if (authError) {
+          clearAuth();
+          this.refreshIdentity();
+          return;
+        }
+        if (sessionsResult.status === "fulfilled") {
+          this.organizerMessages = buildOrganizerSignupMessages(dataOf(sessionsResult.value) || []);
+        }
+        if (notificationsResult.status === "fulfilled") {
+          const inbox = dataOf(notificationsResult.value) || {};
+          this.persistentMessages = buildPersistentMessages(inbox.items || []);
+          this.persistentUnreadCount = Math.max(0, Number(inbox.unread_count) || 0);
+        }
+        if (sessionsResult.status === "rejected" && notificationsResult.status === "rejected") {
+          this.messagesError = "消息加载失败，请稍后重试。";
         }
       } catch (error) {
         if (error?.statusCode === 401) {
@@ -557,6 +608,40 @@ export default {
       }
       this.messagePanelVisible = false;
       uni.navigateTo({ url: `/pages/session/manage?id=${message.sessionId}` });
+    },
+    handleMessageTap(message) {
+      if (message?.kind === "pending_signup") {
+        this.goManageFromMessage(message);
+        return;
+      }
+      if (!message?.targetUrl) {
+        return;
+      }
+      const notificationId = message.notificationId;
+      if (notificationId && this.notificationReadInFlight.includes(notificationId)) {
+        return;
+      }
+      if (notificationId) {
+        this.notificationReadInFlight = [...this.notificationReadInFlight, notificationId];
+        if (message.unread) {
+          this.persistentMessages = this.persistentMessages.map((item) =>
+            item.notificationId === notificationId ? { ...item, unread: false } : item
+          );
+          this.persistentUnreadCount = Math.max(0, this.persistentUnreadCount - 1);
+        }
+        request({
+          url: `/api/users/me/notifications/${notificationId}/read`,
+          method: "POST"
+        })
+          .catch(() => {})
+          .finally(() => {
+            this.notificationReadInFlight = this.notificationReadInFlight.filter(
+              (id) => id !== notificationId
+            );
+          });
+      }
+      this.messagePanelVisible = false;
+      uni.navigateTo({ url: message.targetUrl });
     },
     clearAvatarChoosing() {
       this.avatarChoosing = false;

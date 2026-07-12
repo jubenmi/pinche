@@ -3,6 +3,9 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import {
   buildOrganizerSignupMessages,
+  buildPersistentMessages,
+  mergeAuthMessages,
+  totalMessageBadgeCount,
   totalOrganizerSignupMessageCount
 } from "../apps/miniprogram/src/utils/authMessages.js";
 
@@ -40,12 +43,47 @@ assert.equal(messages[1].badgeText, "99+", "large message count should be capped
 assert.match(messages[1].subtitle, /店家待定/, "message should have a store fallback");
 assert.match(messages[1].subtitle, /时间待定/, "message should have a time fallback");
 
+const persistentMessages = buildPersistentMessages([
+  {
+    id: 21,
+    type: "signup_reviewed",
+    session_id: 11,
+    payload: { result: "approved", target_label: "侦探位" },
+    read_at: null,
+    created_at: "2026-07-12 11:00:00"
+  },
+  {
+    id: 22,
+    type: "session_rescheduled",
+    session_id: 12,
+    payload: {
+      old_start_at: "2026-07-12T02:00:00.000Z",
+      new_start_at: "2026-07-12T11:30:00.000Z"
+    },
+    read_at: "2026-07-12 12:00:00",
+    created_at: "2026-07-12 12:00:00"
+  }
+]);
+assert.equal(persistentMessages[0].unread, true);
+assert.match(persistentMessages[0].title, /审核已通过/);
+assert.match(persistentMessages[1].subtitle, /2026-07-12 10:00 → 2026-07-12 19:30/);
+assert.equal(totalMessageBadgeCount(messages, 3), 110);
+assert.deepEqual(
+  mergeAuthMessages(messages, persistentMessages).map((message) => message.kind),
+  ["pending_signup", "pending_signup", "persistent", "persistent"]
+);
+
 for (const requiredText of [
   "auth-message-chip",
   "messagePanelVisible",
   "refreshOrganizerMessages",
-  "待处理申请",
-  "/pages/session/manage?id="
+  "message-panel-title\">消息",
+  "/pages/session/manage?id=",
+  "/api/users/me/notifications",
+  "Promise.allSettled",
+  "persistentUnreadCount",
+  "handleMessageTap",
+  "method: \"POST\""
 ]) {
   assert(
     identityBarSource.includes(requiredText),

@@ -59,6 +59,14 @@ const miniMembershipHelper = readFileSync(
   new URL("../apps/miniprogram/src/utils/sessionMembership.js", import.meta.url),
   "utf8"
 );
+const miniAuthMessages = readFileSync(
+  new URL("../apps/miniprogram/src/utils/authMessages.js", import.meta.url),
+  "utf8"
+);
+const miniAuthIdentityBar = readFileSync(
+  new URL("../apps/miniprogram/src/components/AuthIdentityBar.vue", import.meta.url),
+  "utf8"
+);
 
 assertIncludes(migration, "CREATE TABLE IF NOT EXISTS user_notifications");
 assertIncludes(
@@ -172,6 +180,15 @@ assertIncludes(miniDetailPage, "canRequestRescheduleReminder");
 assertIncludes(miniDetailPage, "改期提醒");
 assertIncludes(miniDetailPage, "requestRescheduleReminder");
 assertIncludes(miniDetailPage, "requestSessionRescheduledSubscription");
+assertIncludes(miniAuthMessages, "export function buildPersistentMessages");
+assertIncludes(miniAuthMessages, "formatSessionStartAt");
+assertIncludes(miniAuthMessages, 'kind: "persistent"');
+assertIncludes(miniAuthIdentityBar, 'url: "/api/users/me/notifications"');
+assertIncludes(miniAuthIdentityBar, "Promise.allSettled");
+assertIncludes(miniAuthIdentityBar, "persistentUnreadCount = Math.max(0");
+assertIncludes(miniAuthIdentityBar, "message.kind === 'pending_signup'");
+assertIncludes(miniAuthIdentityBar, "notificationReadInFlight.includes(notificationId)");
+assertIncludes(miniAuthIdentityBar, "method: \"POST\"");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(
