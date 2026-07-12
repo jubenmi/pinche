@@ -7,8 +7,20 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { config, publicConfig } from "./config/env.js";
 import { checkDatabaseReadiness, withDatabaseConnection, withTransaction } from "./db/mysql.js";
-import { AppError, badRequest, forbidden, notFound, unauthorized } from "./http/errors.js";
-import { updateUserPhone, updateUserProfile } from "./modules/auth/users.js";
+import {
+  AppError,
+  badRequest,
+  forbidden,
+  notFound,
+  phoneRequired,
+  unauthorized
+} from "./http/errors.js";
+import {
+  publicUser,
+  updateUserPhone,
+  updateUserProfile,
+  updateUserProfileWithConnection
+} from "./modules/auth/users.js";
 import {
   approveAdminWebLoginTicket,
   createAdminWebLoginTicket,
@@ -59,11 +71,15 @@ import {
   createCatalogRequest,
   createEntityClaim,
   createPrivateScript,
+  createPrivateScriptWithConnection,
   createPrivateStore,
+  createPrivateStoreWithConnection,
   createScript,
   createSeat,
   createSession,
+  createSessionWithConnection,
   createSessionNpcRole,
+  createSessionNpcRoleWithConnection,
   createShareEvent,
   createSignup,
   createStore,
@@ -123,12 +139,15 @@ import {
   updateScript,
   updateSeat,
   updateSession,
+  updateSessionWithConnection,
   updateSessionAlbumVideoProcessingResult,
   updateMySessionAlbumPrivacy,
   updateSessionAlbumPhotoTags,
   updateSessionNpcRole,
+  updateSessionNpcRoleWithConnection,
   updateStore,
   upsertMySessionReview,
+  upsertMySessionReviewWithConnection,
   upsertPerformerProfile,
   insertFinalizedSessionAlbumImage,
   serializeSessionAlbumImage
@@ -172,9 +191,34 @@ import {
 } from "./modules/content-moderation/repository.js";
 import { createContentModerationService } from "./modules/content-moderation/service.js";
 import {
+  createTextBaseline,
+  requireInitialTextModerationTarget
+} from "./modules/content-moderation/text-baseline.js";
+import { createTextProposalApplicator } from "./modules/content-moderation/text-proposal-applicator.js";
+import {
+  buildTextModerationDescriptor,
+  buildTextProposalPayload
+} from "./modules/content-moderation/text-boundaries.js";
+import { projectSafeTextAppliedResult } from "./modules/content-moderation/text-applied-result.js";
+import {
+  profilePatchFromProposalBody,
+  profileTextSnapshot
+} from "./modules/content-moderation/text-profile-patch.js";
+import {
+  createTextMutationIdentity,
+  textCreationTargetSubjectId,
+  textOperationSubjectId,
+  textSessionNpcRoleTargetSubjectId
+} from "./modules/content-moderation/text-request-identity.js";
+import { createWechatContentSecurityClient } from "./modules/content-moderation/wechat-client.js";
+import {
   createTencentVideoModerationClient,
   createTencentVideoModerationTransport
 } from "./modules/content-moderation/tencent-video-client.js";
+import {
+  createSessionMessageWithConnection,
+  updateSessionPinnedMessageWithConnection
+} from "@jubenmi/talk/api";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "..");
@@ -216,9 +260,798 @@ const avatarMimeTypes = {
 const moderationTransport = createTencentVideoModerationTransport({
   config: config.contentModeration
 });
-const moderationClient = createTencentVideoModerationClient({
+const tencentVideoModerationClient = createTencentVideoModerationClient({
   config: config.contentModeration,
   transport: moderationTransport
+});
+const wechatContentSecurityClient = (
+  config.contentModeration.wechatTextEnabled || config.contentModeration.wechatImageEnabled
+)
+  ? createWechatContentSecurityClient()
+  : {};
+const moderationClient = {
+  ...tencentVideoModerationClient,
+  ...wechatContentSecurityClient
+};
+
+function textProposalStale(message) {
+  return new AppError(409, "CONTENT_MODERATION_PROPOSAL_STALE", message);
+}
+
+export function assertModeratedTextResult(result) {
+  if (!projectSafeTextAppliedResult(result)) {
+    throw new AppError(
+      500,
+      "CONTENT_MODERATION_CONFIGURATION_ERROR",
+      "Content moderation did not return a safe application result"
+    );
+  }
+  return result;
+}
+
+function moderationBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+  const { idempotencyKey: _idempotencyKey, idempotency_key: _idempotencyKeySnake, ...rest } = body;
+  return rest;
+}
+
+function textProposalTargetSubjectId({ action, actorUserId, subjectId, context = {} }) {
+  const directTargetId = String(subjectId || "").trim();
+  if (directTargetId) return directTargetId;
+  if (action === "create_session_npc_role") {
+    const sessionId = Number(context.sessionId);
+    if (!Number.isInteger(sessionId) || sessionId <= 0) {
+      throw badRequest("sessionId is required for session NPC role creation");
+    }
+    return textSessionNpcRoleTargetSubjectId(sessionId);
+  }
+  return textCreationTargetSubjectId({ action, actorUserId });
+}
+
+function expectedCreationBase(actorUserId) {
+  return createTextBaseline({ kind: "creation", actor_id: Number(actorUserId) });
+}
+
+function sessionTextSnapshot(row = {}) {
+  return {
+    id: Number(row.id),
+    organizer_user_id: Number(row.organizer_user_id),
+    script_id: Number(row.script_id),
+    store_id: Number(row.store_id),
+    script_name_snapshot: String(row.script_name_snapshot || ""),
+    store_name_snapshot: String(row.store_name_snapshot || ""),
+    start_at: row.start_at || null,
+    dm_user_id: row.dm_user_id ? Number(row.dm_user_id) : null,
+    dm_name_snapshot: String(row.dm_name_snapshot || ""),
+    npc_user_id: row.npc_user_id ? Number(row.npc_user_id) : null,
+    npc_name_snapshot: String(row.npc_name_snapshot || ""),
+    deposit_amount: Number(row.deposit_amount || 0),
+    visibility: String(row.visibility || ""),
+    join_policy: String(row.join_policy || ""),
+    join_phone_required: Number(row.join_phone_required || 0),
+    npc_join_enabled: Number(row.npc_join_enabled || 0),
+    note: String(row.note || ""),
+    status: String(row.status || ""),
+    cancelled_at: row.cancelled_at || null
+  };
+}
+
+async function currentActorTextSnapshot(connection, actorUserId, { forUpdate = false } = {}) {
+  const lock = forUpdate ? " FOR UPDATE" : "";
+  const [rows] = await connection.query(
+    `SELECT id, nickname, avatar_url, gender, phone_verified_at
+     FROM users WHERE id = ? LIMIT 1${lock}`,
+    [Number(actorUserId)]
+  );
+  const user = rows[0];
+  if (!user) return null;
+  const [roleRows] = await connection.query(
+    `SELECT role FROM user_roles
+     WHERE user_id = ? AND status = 'active'
+     ORDER BY role${lock}`,
+    [Number(actorUserId)]
+  );
+  return {
+    id: Number(user.id),
+    nickname: String(user.nickname || ""),
+    avatarUrl: user.avatar_url ? String(user.avatar_url) : null,
+    gender: user.gender ? String(user.gender) : "",
+    phone_verified: Boolean(user.phone_verified_at),
+    roles: roleRows.map((row) => String(row.role))
+  };
+}
+
+function actorAuthoritySnapshot(actor) {
+  return {
+    id: Number(actor.id),
+    is_admin: actor.roles.includes("system_admin")
+  };
+}
+
+function actorSessionCreateSnapshot(actor) {
+  return {
+    id: Number(actor.id),
+    phone_verified: Boolean(actor.phone_verified)
+  };
+}
+
+function actorIsAdmin(actor) {
+  return actor.roles.includes("system_admin");
+}
+
+function assertSessionOwnerPreflight(session, actor) {
+  if (!session) throw notFound("Session not found");
+  if (!actorIsAdmin(actor) && Number(session.organizer_user_id) !== Number(actor.id)) {
+    throw forbidden("Only the session organizer can perform this action");
+  }
+}
+
+function assertSessionParticipantPreflight(session, actor, seats) {
+  if (!session) throw notFound("Session not found");
+  if (actorIsAdmin(actor) || Number(session.organizer_user_id) === Number(actor.id)) return;
+  if (!seats.some((seat) => ["confirmed", "locked"].includes(String(seat.status)))) {
+    throw forbidden("Only onboard players can use session messages");
+  }
+}
+
+function catalogUsableForSessionPreflight(row, actor) {
+  const visibility = String(row.visibility || "public");
+  const reviewStatus = String(row.review_status || "approved");
+  const active = String(row.status || "active") === "active";
+  return (
+    (visibility === "public" && reviewStatus === "approved" && active) ||
+    (
+      visibility === "private" &&
+      Number(row.created_by_user_id) === Number(actor.id) &&
+      ["pending", "needs_changes"].includes(reviewStatus) &&
+      active
+    )
+  );
+}
+
+function assertCatalogSessionPreflight(row, actor, label) {
+  if (!row) throw notFound(`${label} not found`);
+  if (catalogUsableForSessionPreflight(row, actor)) return;
+  if (String(row.visibility || "public") === "private" && Number(row.created_by_user_id) !== Number(actor.id)) {
+    throw notFound(`${label} not found`);
+  }
+  throw badRequest(`${label} is not available for session creation`);
+}
+
+function assertReviewEligiblePreflight(session, signups) {
+  const startAt = new Date(session.start_at).getTime();
+  const cancelledAt = session.cancelled_at ? new Date(session.cancelled_at).getTime() : null;
+  const reviewWindowOpen = Number.isFinite(startAt) && startAt <= Date.now() && (
+    String(session.status) !== "cancelled" ||
+    cancelledAt === null ||
+    cancelledAt >= startAt
+  );
+  if (!reviewWindowOpen || !signups.some((signup) => Boolean(signup.review_eligible_at))) {
+    throw forbidden("Only eligible session participants can write a review after start time");
+  }
+}
+
+async function currentSessionTextBase(
+  connection,
+  sessionId,
+  actorUserId,
+  { forUpdate = false } = {}
+) {
+  const [rows] = await connection.query(
+    `SELECT * FROM sessions WHERE id = ? LIMIT 1${forUpdate ? " FOR UPDATE" : ""}`,
+    [Number(sessionId)]
+  );
+  const session = rows[0];
+  const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
+  if (!session) {
+    if (!forUpdate) requireInitialTextModerationTarget(session, "Session");
+    return "";
+  }
+  if (!actor) {
+    if (!forUpdate) requireInitialTextModerationTarget(actor, "User");
+    return "";
+  }
+  if (!forUpdate) assertSessionOwnerPreflight(session, actor);
+  return createTextBaseline({
+    kind: "session",
+    session: sessionTextSnapshot(session),
+    actor: actorAuthoritySnapshot(actor)
+  });
+}
+
+async function currentSessionCreateTextBase(
+  connection,
+  actorUserId,
+  body,
+  { forUpdate = false } = {}
+) {
+  const lock = forUpdate ? " FOR UPDATE" : "";
+  const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
+  const [storeRows] = await connection.query(
+    `SELECT id, name, status, visibility, review_status, created_by_user_id
+     FROM stores WHERE id = ? LIMIT 1${lock}`,
+    [Number(body?.storeId)]
+  );
+  const [scriptRows] = await connection.query(
+    `SELECT id, name, status, visibility, review_status, created_by_user_id
+     FROM scripts WHERE id = ? LIMIT 1${lock}`,
+    [Number(body?.scriptId)]
+  );
+  const store = storeRows[0];
+  const script = scriptRows[0];
+  if (!actor) {
+    if (!forUpdate) requireInitialTextModerationTarget(actor, "User");
+    return "";
+  }
+  if (!store) {
+    if (!forUpdate) requireInitialTextModerationTarget(store, "Store");
+    return "";
+  }
+  if (!script) {
+    if (!forUpdate) requireInitialTextModerationTarget(script, "Script");
+    return "";
+  }
+  if (!forUpdate) {
+    if (!actor.phone_verified) throw phoneRequired();
+    assertCatalogSessionPreflight(store, actor, "Store");
+    assertCatalogSessionPreflight(script, actor, "Script");
+  }
+  const [roleRows] = await connection.query(
+    `SELECT id, script_id, name, description, role_gender, sort_order, status
+     FROM script_npc_roles
+     WHERE script_id = ? AND status = 'active'
+     ORDER BY sort_order, id${lock}`,
+    [Number(script.id)]
+  );
+  return createTextBaseline({
+    kind: "session_create",
+    actor: actorSessionCreateSnapshot(actor),
+    store,
+    script,
+    script_npc_roles: roleRows
+  });
+}
+
+async function currentNpcRoleTextBase(
+  connection,
+  npcRoleId,
+  actorUserId,
+  { forUpdate = false } = {}
+) {
+  const [rows] = await connection.query(
+    `SELECT role.id, role.session_id, role.script_npc_role_id, role.name,
+            role.description, role.role_gender, role.source, role.bound_user_id,
+            role.sort_order, role.status,
+            session.id AS parent_session_id, session.organizer_user_id,
+            session.script_id, session.store_id, session.script_name_snapshot,
+            session.store_name_snapshot, session.start_at, session.dm_user_id,
+            session.dm_name_snapshot, session.npc_user_id, session.npc_name_snapshot,
+            session.deposit_amount, session.visibility, session.join_policy,
+            session.join_phone_required, session.npc_join_enabled, session.note,
+            session.status AS session_status, session.cancelled_at
+     FROM session_npc_roles AS role
+     JOIN sessions AS session ON session.id = role.session_id
+     WHERE role.id = ? LIMIT 1${forUpdate ? " FOR UPDATE" : ""}`,
+    [Number(npcRoleId)]
+  );
+  const role = rows[0];
+  const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
+  if (!role) {
+    if (!forUpdate) requireInitialTextModerationTarget(role, "Session NPC role");
+    return "";
+  }
+  if (!actor) {
+    if (!forUpdate) requireInitialTextModerationTarget(actor, "User");
+    return "";
+  }
+  const parentSession = sessionTextSnapshot({
+    ...role,
+    id: role.parent_session_id,
+    status: role.session_status
+  });
+  if (!forUpdate) assertSessionOwnerPreflight(parentSession, actor);
+  return createTextBaseline({
+    kind: "session_npc_role",
+    actor: actorAuthoritySnapshot(actor),
+    session: parentSession,
+    role: {
+      id: Number(role.id),
+      session_id: Number(role.session_id),
+      script_npc_role_id: role.script_npc_role_id ? Number(role.script_npc_role_id) : null,
+      name: String(role.name || ""),
+      description: String(role.description || ""),
+      role_gender: String(role.role_gender || ""),
+      source: String(role.source || ""),
+      bound_user_id: role.bound_user_id ? Number(role.bound_user_id) : null,
+      sort_order: Number(role.sort_order || 0),
+      status: String(role.status || "")
+    }
+  });
+}
+
+async function currentReviewTextBase(connection, sessionId, actorUserId, { forUpdate = false } = {}) {
+  const lock = forUpdate ? " FOR UPDATE" : "";
+  const [sessionRows] = await connection.query(
+    `SELECT * FROM sessions WHERE id = ? LIMIT 1${lock}`,
+    [Number(sessionId)]
+  );
+  const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
+  const session = sessionRows[0];
+  if (!session) {
+    if (!forUpdate) requireInitialTextModerationTarget(session, "Session");
+    return "";
+  }
+  if (!actor) {
+    if (!forUpdate) requireInitialTextModerationTarget(actor, "User");
+    return "";
+  }
+  const [signupRows] = await connection.query(
+    `SELECT signup.id, signup.session_id, signup.user_id, signup.seat_id,
+            signup.session_npc_role_id, signup.status, signup.review_eligible_at,
+            seat.status AS seat_status
+     FROM signups AS signup
+     LEFT JOIN session_seats AS seat ON seat.id = signup.seat_id
+     WHERE signup.session_id = ? AND signup.user_id = ?
+     ORDER BY signup.id${lock}`,
+    [Number(sessionId), Number(actorUserId)]
+  );
+  const [reviewRows] = await connection.query(
+    `SELECT id, session_id, user_id, seat_id, rating, content, status
+     FROM session_reviews
+     WHERE session_id = ? AND user_id = ?
+     ORDER BY id${lock}`,
+    [Number(sessionId), Number(actorUserId)]
+  );
+  const reviewIds = reviewRows.map((row) => Number(row.id));
+  let photoRows = [];
+  if (reviewIds.length > 0) {
+    const placeholders = reviewIds.map(() => "?").join(", ");
+    [photoRows] = await connection.query(
+      `SELECT id, review_id, photo_url, sort_order
+       FROM session_review_photos
+       WHERE review_id IN (${placeholders})
+       ORDER BY review_id, sort_order, id${lock}`,
+      reviewIds
+    );
+  }
+  if (!forUpdate) assertReviewEligiblePreflight(session, signupRows);
+  return createTextBaseline({
+    kind: "session_review",
+    actor: { id: Number(actor.id) },
+    session: sessionTextSnapshot(session),
+    signups: signupRows,
+    reviews: reviewRows,
+    photos: photoRows
+  });
+}
+
+async function currentMessageTextBase(connection, sessionId, actorUserId, { forUpdate = false } = {}) {
+  const lock = forUpdate ? " FOR UPDATE" : "";
+  const [sessionRows] = await connection.query(
+    `SELECT * FROM sessions WHERE id = ? LIMIT 1${lock}`,
+    [Number(sessionId)]
+  );
+  const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
+  const session = sessionRows[0];
+  if (!session) {
+    if (!forUpdate) requireInitialTextModerationTarget(session, "Session");
+    return "";
+  }
+  if (!actor) {
+    if (!forUpdate) requireInitialTextModerationTarget(actor, "User");
+    return "";
+  }
+  const [seatRows] = await connection.query(
+    `SELECT id, session_id, confirmed_user_id, status
+     FROM session_seats
+     WHERE session_id = ? AND confirmed_user_id = ?
+     ORDER BY id${lock}`,
+    [Number(sessionId), Number(actorUserId)]
+  );
+  if (!forUpdate) {
+    assertSessionParticipantPreflight(session, actor, seatRows);
+    if (String(session.status) === "cancelled") {
+      throw badRequest("Cancelled session cannot receive messages");
+    }
+  }
+  return createTextBaseline({
+    kind: "session_message",
+    actor: actorAuthoritySnapshot(actor),
+    session: sessionTextSnapshot(session),
+    participant_seats: seatRows
+  });
+}
+
+async function currentPinnedTextBase(connection, sessionId, actorUserId, { forUpdate = false } = {}) {
+  const [rows] = await connection.query(
+    `SELECT session.id AS session_id,
+            session.organizer_user_id, session.script_id, session.store_id,
+            session.script_name_snapshot, session.store_name_snapshot, session.start_at,
+            session.dm_user_id, session.dm_name_snapshot, session.npc_user_id,
+            session.npc_name_snapshot, session.deposit_amount, session.visibility,
+            session.join_policy, session.join_phone_required, session.npc_join_enabled,
+            session.note, session.status AS session_status, session.cancelled_at,
+            room.pinned_message_id,
+            room.id AS room_id, room.status AS room_status,
+            message.id AS message_id, message.room_id AS message_room_id,
+            message.sender_user_id, message.message_type,
+            message.content, message.status AS message_status
+     FROM sessions AS session
+     LEFT JOIN session_chat_rooms AS room ON room.session_id = session.id
+     LEFT JOIN session_messages AS message ON message.id = room.pinned_message_id
+     WHERE session.id = ? LIMIT 1${forUpdate ? " FOR UPDATE" : ""}`,
+    [Number(sessionId)]
+  );
+  const row = rows[0];
+  const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
+  if (!row) {
+    if (!forUpdate) requireInitialTextModerationTarget(row, "Session");
+    return "";
+  }
+  if (!actor) {
+    if (!forUpdate) requireInitialTextModerationTarget(actor, "User");
+    return "";
+  }
+  if (!forUpdate) {
+    assertSessionOwnerPreflight(
+      sessionTextSnapshot({ ...row, id: row.session_id, status: row.session_status }),
+      actor
+    );
+  }
+  return createTextBaseline({
+    kind: "session_pinned_message",
+    actor: actorAuthoritySnapshot(actor),
+    session: sessionTextSnapshot({ ...row, id: row.session_id, status: row.session_status }),
+    room: {
+      id: row.room_id ? Number(row.room_id) : null,
+      status: String(row.room_status || ""),
+      pinned_message_id: row.pinned_message_id ? Number(row.pinned_message_id) : null
+    },
+    message: {
+      id: row.message_id ? Number(row.message_id) : null,
+      room_id: row.message_room_id ? Number(row.message_room_id) : null,
+      sender_user_id: row.sender_user_id ? Number(row.sender_user_id) : null,
+      message_type: String(row.message_type || ""),
+      content: String(row.content || ""),
+      status: String(row.message_status || "")
+    }
+  });
+}
+
+async function captureTextModerationBase({ action, user, subjectId, body, context = {} }) {
+  switch (action) {
+    case "update_nickname":
+      return withDatabaseConnection(async (connection) => {
+        const actor = await currentActorTextSnapshot(connection, user?.user?.id);
+        if (!actor) requireInitialTextModerationTarget(actor, "User");
+        return createTextBaseline({
+          kind: "user_profile",
+          profile: profileTextSnapshot(actor)
+        });
+      });
+    case "create_private_store":
+    case "create_private_script":
+      return expectedCreationBase(user?.user?.id);
+    case "create_session":
+      return withDatabaseConnection((connection) =>
+        currentSessionCreateTextBase(connection, user?.user?.id, body)
+      );
+    case "update_session":
+      return withDatabaseConnection((connection) =>
+        currentSessionTextBase(connection, subjectId, user?.user?.id)
+      );
+    case "create_session_npc_role":
+      return withDatabaseConnection((connection) =>
+        currentSessionTextBase(connection, Number(context.sessionId), user?.user?.id)
+      );
+    case "update_session_npc_role":
+      return withDatabaseConnection((connection) =>
+        currentNpcRoleTextBase(connection, subjectId, user?.user?.id)
+      );
+    case "upsert_session_review":
+      return withDatabaseConnection((connection) =>
+        currentReviewTextBase(connection, subjectId, user?.user?.id)
+      );
+    case "create_session_message":
+      return withDatabaseConnection((connection) =>
+        currentMessageTextBase(connection, subjectId, user?.user?.id)
+      );
+    case "update_session_pinned_message":
+      return withDatabaseConnection((connection) =>
+        currentPinnedTextBase(connection, subjectId, user?.user?.id)
+      );
+    default:
+      throw badRequest("unsupported text moderation action");
+  }
+}
+
+async function moderateCoveredText({ request, user, action, subjectId, body, context = {} }) {
+  if (!config.contentModeration.enabled || !config.contentModeration.wechatTextEnabled) {
+    return null;
+  }
+  const cleanBody = moderationBody(body);
+  const resolvedSubjectId = String(subjectId || "");
+  const proposalTargetId = textProposalTargetSubjectId({
+    action,
+    actorUserId: user.user.id,
+    subjectId: resolvedSubjectId,
+    context
+  });
+  const canonicalPayload = buildTextProposalPayload(action, {
+    body: cleanBody,
+    context: { ...context, targetSubjectId: proposalTargetId }
+  });
+  const baseVersion = await captureTextModerationBase({
+    action,
+    user,
+    subjectId: resolvedSubjectId,
+    body: canonicalPayload.body,
+    context: canonicalPayload.context
+  });
+  const identity = createTextMutationIdentity({
+    request,
+    rawBody: body,
+    action,
+    actorUserId: user.user.id,
+    subjectId: resolvedSubjectId,
+    baseVersion,
+    payload: canonicalPayload
+  });
+  const targetSubjectId = textOperationSubjectId({
+    action,
+    actorUserId: user.user.id,
+    idempotencyKey: identity.idempotencyKey
+  });
+  const descriptor = buildTextModerationDescriptor({
+    action,
+    subjectId: targetSubjectId,
+    actorUserId: user.user.id,
+    openid: user.user.openid,
+    baseVersion,
+    idempotencyKey: identity.idempotencyKey,
+    idempotencyExplicit: identity.explicit,
+    body: canonicalPayload.body,
+    context: canonicalPayload.context
+  });
+  if (!descriptor) return null;
+  return assertModeratedTextResult(await contentModeration.moderateTextMutation(descriptor));
+}
+
+async function loadTextProposalActor(connection, actorUserId) {
+  const [users] = await connection.query(
+    "SELECT * FROM users WHERE id = ? LIMIT 1 FOR UPDATE",
+    [Number(actorUserId)]
+  );
+  if (!users[0]) return null;
+  const [roleRows] = await connection.query(
+    "SELECT role FROM user_roles WHERE user_id = ? AND status = 'active' ORDER BY role",
+    [Number(actorUserId)]
+  );
+  return { user: publicUser(users[0]), roles: roleRows.map((row) => row.role) };
+}
+
+function proposalSessionId(payload) {
+  const sessionId = Number(payload?.context?.sessionId);
+  if (!Number.isInteger(sessionId) || sessionId <= 0) {
+    throw textProposalStale("text moderation session target changed");
+  }
+  return sessionId;
+}
+
+function proposalContextSessionId(payload) {
+  const sessionId = Number(payload?.context?.sessionId);
+  if (!Number.isInteger(sessionId) || sessionId <= 0) {
+    throw textProposalStale("text moderation session target changed");
+  }
+  return sessionId;
+}
+
+function assertProposalBase(proposal, actual) {
+  if (!actual || String(proposal?.base_version) !== String(actual)) {
+    throw textProposalStale("text moderation proposal base version changed");
+  }
+}
+
+function assertProposalOperationTarget({ action, actor, job, proposal, payload, targetSubjectId }) {
+  const target = String(targetSubjectId || "").trim();
+  if (!target || String(payload?.targetSubjectId || "") !== target) {
+    throw textProposalStale("text moderation proposal target changed");
+  }
+  const expectedSubjectId = textOperationSubjectId({
+    action,
+    actorUserId: actor?.user?.id,
+    idempotencyKey: proposal?.idempotency_key
+  });
+  if (String(job?.subject_id || "") !== expectedSubjectId) {
+    throw textProposalStale("text moderation proposal operation changed");
+  }
+}
+
+async function applyNicknameProposal(connection, { actor, job, proposal, payload }) {
+  assertProposalOperationTarget({
+    action: "update_nickname",
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: String(actor.user.id)
+  });
+  const currentActor = await currentActorTextSnapshot(connection, actor.user.id, { forUpdate: true });
+  assertProposalBase(proposal, currentActor
+    ? createTextBaseline({
+      kind: "user_profile",
+      profile: profileTextSnapshot(currentActor)
+    })
+    : "");
+  return updateUserProfileWithConnection(
+    connection,
+    actor.user.id,
+    profilePatchFromProposalBody(payload.body)
+  );
+}
+
+function assertCreationProposal({ action, actor, job, proposal, payload }) {
+  assertProposalOperationTarget({
+    action,
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: textCreationTargetSubjectId({ action, actorUserId: actor.user.id })
+  });
+  assertProposalBase(proposal, expectedCreationBase(actor.user.id));
+}
+
+async function applyPrivateStoreProposal(connection, { actor, job, proposal, payload }) {
+  assertCreationProposal({ action: "create_private_store", actor, job, proposal, payload });
+  return createPrivateStoreWithConnection(connection, actor, payload.body);
+}
+
+async function applyPrivateScriptProposal(connection, { actor, job, proposal, payload }) {
+  assertCreationProposal({ action: "create_private_script", actor, job, proposal, payload });
+  return createPrivateScriptWithConnection(connection, actor, payload.body);
+}
+
+async function applySessionCreateProposal(connection, { actor, job, proposal, payload }) {
+  assertProposalOperationTarget({
+    action: "create_session",
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: textCreationTargetSubjectId({ action: "create_session", actorUserId: actor.user.id })
+  });
+  assertProposalBase(
+    proposal,
+    await currentSessionCreateTextBase(connection, actor.user.id, payload.body, { forUpdate: true })
+  );
+  return createSessionWithConnection(connection, actor, payload.body);
+}
+
+async function applySessionUpdateProposal(connection, { actor, job, proposal, payload }) {
+  const sessionId = proposalSessionId(payload);
+  assertProposalOperationTarget({
+    action: "update_session",
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: String(sessionId)
+  });
+  assertProposalBase(
+    proposal,
+    await currentSessionTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
+  );
+  return updateSessionWithConnection(connection, actor, sessionId, payload.body);
+}
+
+async function applySessionNpcRoleCreateProposal(connection, { actor, job, proposal, payload }) {
+  const sessionId = proposalContextSessionId(payload);
+  assertProposalOperationTarget({
+    action: "create_session_npc_role",
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: textSessionNpcRoleTargetSubjectId(sessionId)
+  });
+  assertProposalBase(
+    proposal,
+    await currentSessionTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
+  );
+  return createSessionNpcRoleWithConnection(connection, actor, sessionId, payload.body);
+}
+
+async function applySessionNpcRoleUpdateProposal(connection, { actor, job, proposal, payload }) {
+  const npcRoleId = Number(payload?.targetSubjectId);
+  if (!Number.isInteger(npcRoleId) || npcRoleId <= 0) {
+    throw textProposalStale("text moderation NPC role target changed");
+  }
+  assertProposalOperationTarget({
+    action: "update_session_npc_role",
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: String(npcRoleId)
+  });
+  assertProposalBase(
+    proposal,
+    await currentNpcRoleTextBase(connection, npcRoleId, actor.user.id, { forUpdate: true })
+  );
+  return updateSessionNpcRoleWithConnection(connection, actor, npcRoleId, payload.body);
+}
+
+async function applySessionReviewProposal(connection, { actor, job, proposal, payload }) {
+  const sessionId = proposalSessionId(payload);
+  assertProposalOperationTarget({
+    action: "upsert_session_review",
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: String(sessionId)
+  });
+  assertProposalBase(
+    proposal,
+    await currentReviewTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
+  );
+  return upsertMySessionReviewWithConnection(connection, actor, sessionId, payload.body);
+}
+
+async function applySessionMessageProposal(connection, { actor, job, proposal, payload }) {
+  const sessionId = proposalSessionId(payload);
+  assertProposalOperationTarget({
+    action: "create_session_message",
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: String(sessionId)
+  });
+  assertProposalBase(
+    proposal,
+    await currentMessageTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
+  );
+  return createSessionMessageWithConnection(connection, actor, sessionId, payload.body);
+}
+
+async function applySessionPinnedMessageProposal(connection, { actor, job, proposal, payload }) {
+  const sessionId = proposalSessionId(payload);
+  assertProposalOperationTarget({
+    action: "update_session_pinned_message",
+    actor,
+    job,
+    proposal,
+    payload,
+    targetSubjectId: String(sessionId)
+  });
+  assertProposalBase(
+    proposal,
+    await currentPinnedTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
+  );
+  const result = await updateSessionPinnedMessageWithConnection(connection, actor, sessionId, payload.body);
+  return {
+    ...result,
+    id: result?.pinnedMessage?.id,
+    kind: "session_pinned_message"
+  };
+}
+
+const textProposalApplicator = createTextProposalApplicator({
+  loadActor: loadTextProposalActor,
+  handlers: {
+    update_nickname: applyNicknameProposal,
+    create_private_store: applyPrivateStoreProposal,
+    create_private_script: applyPrivateScriptProposal,
+    create_session: applySessionCreateProposal,
+    update_session: applySessionUpdateProposal,
+    create_session_npc_role: applySessionNpcRoleCreateProposal,
+    update_session_npc_role: applySessionNpcRoleUpdateProposal,
+    upsert_session_review: applySessionReviewProposal,
+    create_session_message: applySessionMessageProposal,
+    update_session_pinned_message: applySessionPinnedMessageProposal
+  }
 });
 const contentModeration = createContentModerationService({
   config: config.contentModeration,
@@ -242,6 +1075,7 @@ const contentModeration = createContentModerationService({
     transitionMediaModeration,
     transitionModerationJob
   },
+  applyTextProposal: (connection, input) => textProposalApplicator.apply(connection, input),
   emit: (event, fields) => console.log(JSON.stringify({
     type: "content_moderation",
     event,
@@ -251,24 +1085,7 @@ const contentModeration = createContentModerationService({
 });
 
 async function applyApprovedTextProposal(connection, { job, proposal }) {
-  const payload = typeof proposal.normalized_payload_json === "string"
-    ? JSON.parse(proposal.normalized_payload_json)
-    : proposal.normalized_payload_json;
-  if (job.subject_type !== "user_nickname") {
-    const error = new AppError(409, "CONTENT_MODERATION_PROPOSAL_STALE", "text proposal requires a current business applicator");
-    throw error;
-  }
-  const nickname = String(payload?.body?.nickname || "").trim();
-  if (!nickname) throw badRequest("nickname is required");
-  const [result] = await connection.query(
-    `UPDATE users SET nickname = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND (CAST(updated_at AS CHAR) = ? OR nickname = ?)`,
-    [nickname, Number(job.subject_id), String(proposal.base_version), String(proposal.base_version)]
-  );
-  if (Number(result.affectedRows || 0) !== 1) {
-    const error = new AppError(409, "CONTENT_MODERATION_PROPOSAL_STALE", "text proposal base version changed");
-    throw error;
-  }
+  return textProposalApplicator.apply(connection, { job, proposal });
 }
 
 const albumImageUploads = createAlbumImageUploadService({
@@ -371,6 +1188,21 @@ export function normalizeError(error) {
 
   if (error?.code === "WECHAT_UPSTREAM_TIMEOUT") {
     return new AppError(504, "WECHAT_UPSTREAM_TIMEOUT", "WeChat login service timed out");
+  }
+
+  const moderationErrors = {
+    CONTENT_MODERATION_OPENID_REQUIRED: [422, "A verified content producer is required"],
+    CONTENT_MODERATION_REJECTED: [422, "Content did not pass moderation"],
+    CONTENT_MODERATION_REVIEW_PENDING: [202, "Content is pending further moderation"],
+    CONTENT_MODERATION_UNAVAILABLE: [503, "Content moderation is temporarily unavailable"],
+    CONTENT_MODERATION_PROPOSAL_STALE: [409, "Content moderation proposal is stale"],
+    CONTENT_MODERATION_IDEMPOTENCY_CONFLICT: [409, "Content moderation request conflicts with an existing request"],
+    CONTENT_MODERATION_INVALID_TRANSITION: [409, "Content moderation state changed"],
+    CONTENT_MODERATION_CONFIGURATION_ERROR: [500, "Content moderation is not configured"]
+  };
+  if (moderationErrors[error?.code]) {
+    const [statusCode, message] = moderationErrors[error.code];
+    return new AppError(statusCode, error.code, message);
   }
 
   if (error?.code === "ER_DUP_ENTRY") {
@@ -2896,7 +3728,13 @@ async function route(request, response) {
 
   if (request.method === "PATCH" && url.pathname === "/api/users/me") {
     const user = await getAuthUser(request);
-    const updatedUser = await updateUserProfile(user.user.id, body);
+    const updatedUser = await moderateCoveredText({
+      request,
+      user,
+      action: "update_nickname",
+      subjectId: String(user.user.id),
+      body
+    }) ?? await updateUserProfile(user.user.id, body);
     jsonResponse(response, 200, {
       ok: true,
       data: {
@@ -2918,9 +3756,15 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/stores") {
     const user = await getAuthUser(request);
+    const moderated = await moderateCoveredText({
+      request,
+      user,
+      action: "create_private_store",
+      body
+    });
     jsonResponse(response, 201, {
       ok: true,
-      data: await createPrivateStore(user, body)
+      data: moderated ?? await createPrivateStore(user, body)
     });
     return;
   }
@@ -2936,9 +3780,15 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/scripts") {
     const user = await getAuthUser(request);
+    const moderated = await moderateCoveredText({
+      request,
+      user,
+      action: "create_private_script",
+      body
+    });
     jsonResponse(response, 201, {
       ok: true,
-      data: await createPrivateScript(user, body)
+      data: moderated ?? await createPrivateScript(user, body)
     });
     return;
   }
@@ -3295,7 +4145,13 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/sessions") {
     const user = await getAuthUser(request);
-    jsonResponse(response, 201, { ok: true, data: await createSession(user, body) });
+    const moderated = await moderateCoveredText({
+      request,
+      user,
+      action: "create_session",
+      body
+    });
+    jsonResponse(response, 201, { ok: true, data: moderated ?? await createSession(user, body) });
     return;
   }
 
@@ -3315,9 +4171,17 @@ async function route(request, response) {
   }
   if (request.method === "PATCH" && sessionId) {
     const user = await getAuthUser(request);
+    const moderated = await moderateCoveredText({
+      request,
+      user,
+      action: "update_session",
+      subjectId: String(sessionId),
+      body,
+      context: { sessionId: Number(sessionId) }
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await updateSession(user, sessionId, body)
+      data: moderated ?? await updateSession(user, sessionId, body)
     });
     return;
   }
@@ -3333,9 +4197,16 @@ async function route(request, response) {
   }
   if (request.method === "POST" && sessionNpcRolesId) {
     const user = await getAuthUser(request);
+    const moderated = await moderateCoveredText({
+      request,
+      user,
+      action: "create_session_npc_role",
+      body,
+      context: { sessionId: Number(sessionNpcRolesId) }
+    });
     jsonResponse(response, 201, {
       ok: true,
-      data: await createSessionNpcRole(user, sessionNpcRolesId, body)
+      data: moderated ?? await createSessionNpcRole(user, sessionNpcRolesId, body)
     });
     return;
   }
@@ -3343,9 +4214,16 @@ async function route(request, response) {
   const sessionNpcRoleId = idMatch(url.pathname, /^\/api\/session-npc-roles\/(\d+)$/);
   if (request.method === "PATCH" && sessionNpcRoleId) {
     const user = await getAuthUser(request);
+    const moderated = await moderateCoveredText({
+      request,
+      user,
+      action: "update_session_npc_role",
+      subjectId: String(sessionNpcRoleId),
+      body
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await updateSessionNpcRole(user, sessionNpcRoleId, body)
+      data: moderated ?? await updateSessionNpcRole(user, sessionNpcRoleId, body)
     });
     return;
   }
@@ -3743,9 +4621,17 @@ async function route(request, response) {
   }
   if (request.method === "PUT" && mySessionReviewId) {
     const user = await getAuthUser(request);
+    const moderated = await moderateCoveredText({
+      request,
+      user,
+      action: "upsert_session_review",
+      subjectId: String(mySessionReviewId),
+      body,
+      context: { sessionId: Number(mySessionReviewId) }
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await upsertMySessionReview(user, mySessionReviewId, body)
+      data: moderated ?? await upsertMySessionReview(user, mySessionReviewId, body)
     });
     return;
   }
@@ -3771,6 +4657,7 @@ async function route(request, response) {
       getAuthUser,
       idMatch,
       jsonResponse,
+      moderateCoveredText,
       request,
       response,
       url

@@ -1,0 +1,164 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+import { assertModeratedTextResult, normalizeError } from "../src/server.js";
+
+test("public moderation outcomes preserve only stable codes and safe messages", () => {
+  const openidRequired = Object.assign(new Error("private producer text"), {
+    code: "CONTENT_MODERATION_OPENID_REQUIRED",
+    statusCode: 422
+  });
+  const rejected = Object.assign(new Error("provider labels must stay private"), {
+    code: "CONTENT_MODERATION_REJECTED",
+    statusCode: 422
+  });
+
+  const normalizedOpenid = normalizeError(openidRequired);
+  const normalizedRejected = normalizeError(rejected);
+  assert.equal(normalizedOpenid.statusCode, 422);
+  assert.equal(normalizedOpenid.code, "CONTENT_MODERATION_OPENID_REQUIRED");
+  assert.equal(normalizedRejected.statusCode, 422);
+  assert.equal(normalizedRejected.code, "CONTENT_MODERATION_REJECTED");
+  assert.equal(normalizedOpenid.message.includes("private producer text"), false);
+  assert.equal(normalizedRejected.message.includes("provider labels"), false);
+});
+
+test("server routes all D45.5 text mutations through the shared WeChat moderation boundary", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+
+  assert.match(source, /createWechatContentSecurityClient/);
+  assert.match(source, /createTextProposalApplicator/);
+  assert.match(source, /function moderateCoveredText/);
+  assert.match(source, /function applyApprovedTextProposal/);
+  assert.match(source, /applyTextProposal: \(connection, input\) => textProposalApplicator\.apply\(connection, input\)/);
+  for (const action of [
+    "update_nickname",
+    "create_private_store",
+    "create_private_script",
+    "create_session",
+    "update_session",
+    "create_session_npc_role",
+    "update_session_npc_role",
+    "upsert_session_review"
+  ]) {
+    assert.match(source, new RegExp(`action: "${action}"`));
+  }
+});
+
+test("NPC-role proposal application locks its role and parent session before revalidating ownership", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const helperStart = source.indexOf("async function currentNpcRoleTextBase");
+  const helperEnd = source.indexOf("async function currentReviewTextBase", helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+  const handlerStart = source.indexOf("async function applySessionNpcRoleUpdateProposal");
+  const handlerEnd = source.indexOf("async function applySessionReviewProposal", handlerStart);
+  const handler = source.slice(handlerStart, handlerEnd);
+
+  assert.match(helper, /JOIN sessions AS session/);
+  assert.match(helper, /createTextBaseline/);
+  assert.doesNotMatch(helper, /UNIX_TIMESTAMP/);
+  assert.match(helper, /FOR UPDATE/);
+  assert.match(
+    handler,
+    /currentNpcRoleTextBase\(connection, npcRoleId, actor\.user\.id, \{ forUpdate: true \}\)/
+  );
+});
+
+test("initial missing session, NPC, message, and pin targets keep normal not-found handling", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const slices = [
+    ["async function currentSessionTextBase", "async function currentSessionCreateTextBase", /requireInitialTextModerationTarget\(session, "Session"\)/],
+    ["async function currentNpcRoleTextBase", "async function currentReviewTextBase", /requireInitialTextModerationTarget\(role, "Session NPC role"\)/],
+    ["async function currentMessageTextBase", "async function currentPinnedTextBase", /requireInitialTextModerationTarget\(session, "Session"\)/],
+    ["async function currentPinnedTextBase", "async function captureTextModerationBase", /requireInitialTextModerationTarget\(row, "Session"\)/]
+  ];
+
+  for (const [startMarker, endMarker, expected] of slices) {
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start);
+    assert.match(source.slice(start, end), expected);
+  }
+});
+
+test("a cancelled session message is rejected during capture instead of after WeChat passes", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function currentMessageTextBase");
+  const end = source.indexOf("async function currentPinnedTextBase", start);
+  const helper = source.slice(start, end);
+
+  assert.match(helper, /String\(session\.status\) === "cancelled"/);
+  assert.match(helper, /throw badRequest\("Cancelled session cannot receive messages"\)/);
+});
+
+test("profile proposals apply only the canonical nickname/avatar/gender patch", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const profileSource = await readFile(
+    new URL("../src/modules/content-moderation/text-profile-patch.js", import.meta.url),
+    "utf8"
+  );
+  const start = source.indexOf("async function applyNicknameProposal");
+  const end = source.indexOf("function assertCreationProposal", start);
+  const handler = source.slice(start, end);
+
+  assert.match(profileSource, /\["nickname", "avatarUrl", "gender"\]/);
+  assert.match(handler, /profilePatchFromProposalBody\(payload\.body\)/);
+  assert.match(handler, /kind: "user_profile"/);
+  assert.match(profileSource, /avatar_url: actor\.avatarUrl/);
+  assert.match(profileSource, /gender: String\(actor\.gender \|\| ""\)/);
+});
+
+test("each text moderation job uses an operation identity while retaining its real target in the proposal", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const moderateStart = source.indexOf("async function moderateCoveredText");
+  const moderateEnd = source.indexOf("async function loadTextProposalActor", moderateStart);
+  const moderate = source.slice(moderateStart, moderateEnd);
+  const handlersStart = source.indexOf("function assertProposalOperationTarget");
+  const handlersEnd = source.indexOf("const textProposalApplicator", handlersStart);
+  const handlers = source.slice(handlersStart, handlersEnd);
+
+  assert.match(moderate, /textProposalTargetSubjectId/);
+  assert.match(moderate, /targetSubjectId: proposalTargetId/);
+  assert.match(moderate, /textOperationSubjectId/);
+  assert.match(handlers, /String\(payload\?\.targetSubjectId \|\| ""\) !== target/);
+  assert.match(handlers, /idempotencyKey: proposal\?\.idempotency_key/);
+  assert.match(handlers, /currentNpcRoleTextBase\(connection, npcRoleId, actor\.user\.id, \{ forUpdate: true \}\)/);
+});
+
+test("an enabled moderation route cannot fall through to a second business write", async () => {
+  let businessWrites = 0;
+  const routeResult = (moderated) => {
+    const safe = assertModeratedTextResult(moderated);
+    return safe ?? ++businessWrites;
+  };
+
+  assert.throws(() => routeResult(null), {
+    code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+  });
+  assert.equal(businessWrites, 0);
+  assert.deepEqual(routeResult({ id: 88, kind: "create_private_store" }), {
+    id: 88,
+    kind: "create_private_store"
+  });
+  assert.equal(businessWrites, 0);
+
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const moderateStart = source.indexOf("async function moderateCoveredText");
+  const moderateEnd = source.indexOf("async function loadTextProposalActor", moderateStart);
+  assert.match(
+    source.slice(moderateStart, moderateEnd),
+    /assertModeratedTextResult\(await contentModeration\.moderateTextMutation\(descriptor\)\)/
+  );
+  assert.doesNotMatch(source, /moderated \|\|/);
+});
+
+test("pseudo-chat routes use the same moderation boundary for messages and pins", async () => {
+  const source = await readFile(
+    new URL("../../../packages/talk/api/routes.js", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(source, /moderateCoveredText/);
+  assert.match(source, /action: "create_session_message"/);
+  assert.match(source, /action: "update_session_pinned_message"/);
+});

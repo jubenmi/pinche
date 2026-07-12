@@ -55,13 +55,13 @@ function harness({ clientError = null, jobOverrides = {} } = {}) {
   return { service, state };
 }
 
-test("service exposes Tencent video flow but no Tencent image or text methods", () => {
+test("service exposes Tencent video flow and the WeChat text entrypoint without Tencent image methods", () => {
   const { service } = harness();
   assert.equal(typeof service.createVideoJob, "function");
   assert.equal(typeof service.submitVideoJob, "function");
   assert.equal("createImageJob" in service, false);
   assert.equal("submitImageJob" in service, false);
-  assert.equal("moderateTextMutation" in service, false);
+  assert.equal(typeof service.moderateTextMutation, "function");
 });
 
 test("video job uses immutable media facts and Tencent video provider", async () => {

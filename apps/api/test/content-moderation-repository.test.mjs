@@ -17,6 +17,7 @@ import {
   findModerationJobByDataId,
   findModerationJobById,
   findModerationJobByProviderJobId,
+  markTextProposalStatus,
   markTextProposalStale,
   recordModerationSubmission,
   retireCurrentModerationAttempt,
@@ -324,6 +325,33 @@ test("text proposal rejects a changed payload under the same job and idempotency
   assert.equal(connection.calls.some(({ sql }) => /INSERT INTO/.test(sql)), false);
 });
 
+test("a stale proposal permits only an explicit idempotency retry to return its stale result", async () => {
+  const connection = proposalLookupConnection({
+    id: 51,
+    moderation_job_id: 4,
+    payload_digest: "a".repeat(64),
+    action: "update_nickname",
+    idempotency_key: "request-8-1",
+    status: "stale"
+  });
+
+  const proposalId = await createTextProposal(connection, {
+    jobId: 4,
+    subjectType: "user_nickname",
+    subjectId: "8",
+    baseVersion: "v2",
+    action: "update_nickname",
+    idempotencyKey: "request-8-1",
+    allowStaleIdempotencyReplay: true,
+    normalizedPayload: { nickname: "Alice" },
+    payloadDigest: "b".repeat(64),
+    userId: 8
+  });
+
+  assert.equal(proposalId, 51);
+  assert.equal(connection.calls.some(({ sql }) => /INSERT INTO/.test(sql)), false);
+});
+
 test("text proposal resolves a concurrent duplicate insert only when it matches the same request", async () => {
   const calls = [];
   let idempotencyLookups = 0;
@@ -376,4 +404,38 @@ test("text proposal can become terminal stale without adding a global moderation
   assert.match(connection.calls[0].sql, /SET status = 'stale'/);
   assert.match(connection.calls[0].sql, /status = \?/);
   assert.deepEqual(connection.calls[0].params, [41, "pending"]);
+});
+
+test("approved text proposals persist only the safe application result needed for idempotent replay", async () => {
+  const connection = recordingConnection();
+
+  const changed = await markTextProposalStatus(connection, {
+    jobId: 41,
+    fromStatus: "pending",
+    toStatus: "approved",
+    appliedResult: { id: 88, kind: "session" }
+  });
+
+  assert.equal(changed, true);
+  assert.match(connection.calls[0].sql, /applied_result_json = IF\(\? = 'approved', \?, applied_result_json\)/);
+  assert.equal(connection.calls[0].params.includes(JSON.stringify({ id: 88, kind: "session" })), true);
+});
+
+test("approved proposal replay data strips content and URLs", async () => {
+  const connection = recordingConnection();
+
+  await markTextProposalStatus(connection, {
+    jobId: 41,
+    fromStatus: "pending",
+    toStatus: "approved",
+    appliedResult: {
+      id: 88,
+      kind: "session_message",
+      content: "private text",
+      photo_url: "https://private.example.com/signature"
+    }
+  });
+
+  const stored = connection.calls[0].params.find((value) => typeof value === "string" && value.startsWith("{"));
+  assert.deepEqual(JSON.parse(stored), { id: 88, kind: "session_message" });
 });

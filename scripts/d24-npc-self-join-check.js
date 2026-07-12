@@ -89,14 +89,24 @@ assert(
   "normalizeNpcJoinEnabled must default/parse booleans and reject invalid values"
 );
 
-const createSessionBody = functionBody(service, "createSession");
+const createSessionEntryBody = functionBody(service, "createSession");
+assert(
+  createSessionEntryBody.includes("createSessionWithConnection"),
+  "createSession must delegate to its connection-bound transaction helper"
+);
+const createSessionBody = functionBody(service, "createSessionWithConnection");
 assert(
   createSessionBody.includes("npc_join_enabled") &&
-    createSessionBody.includes("normalizeNpcJoinEnabled"),
+    createSessionBody.includes("normalizeNpcJoinEnabled("),
   "createSession must persist normalized npcJoinEnabled"
 );
 
-const updateSessionBody = functionBody(service, "updateSession");
+const updateSessionEntryBody = functionBody(service, "updateSession");
+assert(
+  updateSessionEntryBody.includes("updateSessionWithConnection"),
+  "updateSession must delegate to its connection-bound transaction helper"
+);
+const updateSessionBody = functionBody(service, "updateSessionWithConnection");
 assert(
   updateSessionBody.includes("npcJoinEnabled") && updateSessionBody.includes("npc_join_enabled"),
   "updateSession must allow organizer/admin npcJoinEnabled updates"

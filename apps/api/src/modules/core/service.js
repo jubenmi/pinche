@@ -9,6 +9,14 @@ import {
 } from "../../http/errors.js";
 import { ensureRole } from "../auth/users.js";
 import { isAdmin, requireSessionOwner } from "./session-access.js";
+import {
+  defaultPrivateRoleTemplate,
+  normalizeNpcRoleSource,
+  normalizeNpcRoles,
+  normalizeRoleGender,
+  normalizeRoleTemplateItem,
+  parseRoleTemplate
+} from "./npc-role-normalization.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
 import {
   notifySignupCreated,
@@ -255,14 +263,6 @@ function catalogResponse(row = {}) {
   };
 }
 
-function normalizeRoleGender(value) {
-  const roleGender = String(value || "unlimited").trim();
-  if (!["male", "female", "unlimited"].includes(roleGender)) {
-    throw badRequest("roleGender must be male, female, or unlimited");
-  }
-  return roleGender;
-}
-
 function normalizeJoinPolicy(value) {
   const policy = String(value || "review_required").trim();
   if (!["direct", "review_required"].includes(policy)) {
@@ -350,64 +350,12 @@ function positiveIntValue(value, label) {
   return parsed;
 }
 
-function parseRoleTemplate(value) {
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
-
-  if (Array.isArray(value)) {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    } catch (error) {
-      throw badRequest("defaultSeatTemplate must be a valid JSON array");
-    }
-  }
-
-  throw badRequest("defaultSeatTemplate must be an array");
-}
-
-function normalizeRoleTemplateItem(role = {}, index = 0) {
-  const name = String(
-    role.name || role.roleName || role.role_name || `角色${index + 1}`
-  ).trim();
-  const description = String(
-    role.description ||
-      role.roleDescription ||
-      role.role_description ||
-      role.roleName ||
-      role.role_name ||
-      ""
-  ).trim();
-
-  return {
-    ...(role.id ? { id: String(role.id) } : {}),
-    name: name || `角色${index + 1}`,
-    description,
-    roleGender: normalizeRoleGender(role.roleGender || role.role_gender)
-  };
-}
-
 function roleTemplateJson(value) {
   const parsed = parseRoleTemplate(value);
   if (parsed === null) {
     return null;
   }
   return JSON.stringify(parsed.map(normalizeRoleTemplateItem));
-}
-
-function defaultPrivateRoleTemplate(playerCount) {
-  return Array.from({ length: playerCount }, (_, index) => ({
-    name: `角色${index + 1}`,
-    description: "",
-    roleGender: "unlimited"
-  }));
 }
 
 function privateRoleTemplateJson(value, playerCount) {
@@ -418,78 +366,6 @@ function privateRoleTemplateJson(value, playerCount) {
     assertPublicTextSafe("roleDescription", role.description);
   }
   return JSON.stringify(normalized);
-}
-
-function parseNpcRoles(value) {
-  if (value === undefined || value === null || value === "") {
-    return [];
-  }
-  if (Array.isArray(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    } catch (error) {
-      return String(value)
-        .split(/\r?\n|[，,]/)
-        .map((name) => ({ name }));
-    }
-  }
-  throw badRequest("npcRoles must be an array");
-}
-
-function normalizeNpcRoleSource(value, fallback = "session") {
-  const source = String(value || fallback).trim();
-  if (!["script", "session"].includes(source)) {
-    throw badRequest("npc role source must be script or session");
-  }
-  return source;
-}
-
-function normalizeNpcRole(role = {}, index = 0, options = {}) {
-  const sourceRole = typeof role === "string" ? { name: role } : role || {};
-  const name = String(
-    sourceRole.name || sourceRole.roleName || sourceRole.role_name || sourceRole.label || ""
-  ).trim();
-  if (!name) {
-    return null;
-  }
-  const boundUserValue =
-    sourceRole.boundUserId ?? sourceRole.bound_user_id ?? sourceRole.userId ?? sourceRole.user_id;
-  return {
-    ...(sourceRole.id ? { id: Number(sourceRole.id) } : {}),
-    ...(sourceRole.scriptNpcRoleId || sourceRole.script_npc_role_id
-      ? {
-          scriptNpcRoleId: positiveId(
-            sourceRole.scriptNpcRoleId || sourceRole.script_npc_role_id,
-            "scriptNpcRoleId"
-          )
-        }
-      : {}),
-    name,
-    description: optionalText(
-      sourceRole.description || sourceRole.note || sourceRole.roleDescription || ""
-    ),
-    roleGender: normalizeRoleGender(
-      sourceRole.roleGender || sourceRole.role_gender || sourceRole.gender
-    ),
-    source: normalizeNpcRoleSource(sourceRole.source, options.source || "session"),
-    boundUserId:
-      boundUserValue === undefined || boundUserValue === null || boundUserValue === ""
-        ? null
-        : positiveId(boundUserValue, "boundUserId"),
-    sortOrder: nonNegativeIntValue(sourceRole.sortOrder ?? sourceRole.sort_order ?? index, "sortOrder")
-  };
-}
-
-function normalizeNpcRoles(value, options = {}) {
-  return parseNpcRoles(value)
-    .map((role, index) => normalizeNpcRole(role, index, options))
-    .filter(Boolean);
 }
 
 function assertPayable(basePrice, adjustment) {
@@ -2515,35 +2391,39 @@ export async function replaceStoreScripts(storeId, body = {}) {
   });
 }
 
+export async function createPrivateStoreWithConnection(connection, user, body) {
+  const name = requireValue(body, "name");
+  const city = requireValue(body, "city");
+  const district = optionalText(body.district);
+  const address = optionalText(body.address);
+  const latitude = optionalLatitude(body.latitude);
+  const longitude = optionalLongitude(body.longitude);
+  const contactNote = optionalText(body.contactNote);
+
+  assertPublicTextSafe("name", name);
+  assertPublicTextSafe("city", city);
+  assertPublicTextSafe("district", district);
+  assertPublicTextSafe("address", address);
+  assertPublicTextSafe("contactNote", contactNote);
+
+  const [result] = await connection.query(
+    `
+      INSERT INTO stores
+        (
+          name, city, district, address, latitude, longitude, contact_note, status,
+          visibility, review_status, created_by_user_id
+        )
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
+    `,
+    [name, city, district, address, latitude, longitude, contactNote, user.user.id]
+  );
+  return catalogResponse(await selectInserted(connection, "stores", result));
+}
+
 export async function createPrivateStore(user, body) {
-  return withDatabaseConnection(async (connection) => {
-    const name = requireValue(body, "name");
-    const city = requireValue(body, "city");
-    const district = optionalText(body.district);
-    const address = optionalText(body.address);
-    const latitude = optionalLatitude(body.latitude);
-    const longitude = optionalLongitude(body.longitude);
-    const contactNote = optionalText(body.contactNote);
-
-    assertPublicTextSafe("name", name);
-    assertPublicTextSafe("city", city);
-    assertPublicTextSafe("district", district);
-    assertPublicTextSafe("address", address);
-    assertPublicTextSafe("contactNote", contactNote);
-
-    const [result] = await connection.query(
-      `
-        INSERT INTO stores
-          (
-            name, city, district, address, latitude, longitude, contact_note, status,
-            visibility, review_status, created_by_user_id
-          )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
-      `,
-      [name, city, district, address, latitude, longitude, contactNote, user.user.id]
-    );
-    return catalogResponse(await selectInserted(connection, "stores", result));
-  });
+  return withDatabaseConnection((connection) =>
+    createPrivateStoreWithConnection(connection, user, body)
+  );
 }
 
 export async function createStore(user, body) {
@@ -2655,7 +2535,7 @@ export async function deleteStore(id) {
   );
 }
 
-export async function createPrivateScript(user, body) {
+export async function createPrivateScriptWithConnection(connection, user, body) {
   const name = requireValue(body, "name");
   const playerCount = positiveIntValue(requireValue(body, "playerCount"), "playerCount");
   const typeTags = body.typeTags;
@@ -2672,29 +2552,33 @@ export async function createPrivateScript(user, body) {
   );
   assertPublicTextSafe("summaryNoSpoiler", summaryNoSpoiler);
 
-  return withTransaction(async (connection) => {
-    const [result] = await connection.query(
-      `
-        INSERT INTO scripts
-          (
-            name, type_tags, player_count, summary_no_spoiler,
-            default_seat_template_json, status, visibility, review_status,
-            created_by_user_id
-          )
-        VALUES (?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
-      `,
-      [
-        name,
-        jsonText(typeTags),
-        playerCount,
-        summaryNoSpoiler,
-        defaultSeatTemplateJson,
-        user.user.id
-      ]
-    );
-    const script = await selectInserted(connection, "scripts", result);
-    return scriptWithNpcRoles(connection, catalogResponse(publicScriptRow(script)));
-  });
+  const [result] = await connection.query(
+    `
+      INSERT INTO scripts
+        (
+          name, type_tags, player_count, summary_no_spoiler,
+          default_seat_template_json, status, visibility, review_status,
+          created_by_user_id
+        )
+      VALUES (?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
+    `,
+    [
+      name,
+      jsonText(typeTags),
+      playerCount,
+      summaryNoSpoiler,
+      defaultSeatTemplateJson,
+      user.user.id
+    ]
+  );
+  const script = await selectInserted(connection, "scripts", result);
+  return scriptWithNpcRoles(connection, catalogResponse(publicScriptRow(script)));
+}
+
+export async function createPrivateScript(user, body) {
+  return withTransaction((connection) =>
+    createPrivateScriptWithConnection(connection, user, body)
+  );
 }
 
 export async function createScript(user, body) {
@@ -3352,66 +3236,68 @@ export async function createEntityClaim(user, body) {
   });
 }
 
-export async function createSession(user, body) {
+export async function createSessionWithConnection(connection, user, body) {
   requireVerifiedPhone(user);
 
-  return withTransaction(async (connection) => {
-    assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
-    assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
+  assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
+  assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
 
-    const store = await findById(connection, "stores", requireValue(body, "storeId"));
-    const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
-    assertCatalogUsableForSession(store, user, "Store");
-    assertCatalogUsableForSession(script, user, "Script");
+  const store = await findById(connection, "stores", requireValue(body, "storeId"));
+  const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
+  assertCatalogUsableForSession(store, user, "Store");
+  assertCatalogUsableForSession(script, user, "Script");
 
-    await ensureRole(connection, user.user.id, "organizer");
+  await ensureRole(connection, user.user.id, "organizer");
 
-    const [result] = await connection.query(
-      `
-        INSERT INTO sessions
-          (
-            organizer_user_id, script_id, script_name_snapshot, store_id,
-            store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
-            npc_user_id, npc_name_snapshot, deposit_amount, visibility,
-            join_policy, join_phone_required, npc_join_enabled, note
-          )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        user.user.id,
-        script.id,
-        script.name,
-        store.id,
-        store.name,
-        requireValue(body, "startAt"),
-        body.dmUserId || null,
-        optionalText(body.dmNameSnapshot),
-        body.npcUserId || null,
-        optionalText(body.npcNameSnapshot),
-        intValue(body.depositAmount, 0),
-        normalizeSessionVisibility(body.visibility),
-        normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
-        normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
-        normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
-        optionalText(body.note)
-      ]
-    );
+  const [result] = await connection.query(
+    `
+      INSERT INTO sessions
+        (
+          organizer_user_id, script_id, script_name_snapshot, store_id,
+          store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
+          npc_user_id, npc_name_snapshot, deposit_amount, visibility,
+          join_policy, join_phone_required, npc_join_enabled, note
+        )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      user.user.id,
+      script.id,
+      script.name,
+      store.id,
+      store.name,
+      requireValue(body, "startAt"),
+      body.dmUserId || null,
+      optionalText(body.dmNameSnapshot),
+      body.npcUserId || null,
+      optionalText(body.npcNameSnapshot),
+      intValue(body.depositAmount, 0),
+      normalizeSessionVisibility(body.visibility),
+      normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+      normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
+      normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
+      optionalText(body.note)
+    ]
+  );
 
-    const session = await findById(connection, "sessions", result.insertId);
-    await cloneScriptNpcRolesForSession(connection, session.id, script.id);
-    await insertSessionNpcRoles(
-      connection,
-      session.id,
-      normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, { source: "session" }),
-      { source: "session" }
-    );
-    await runSessionExtensionHook("afterSessionCreated", {
-      connection,
-      session,
-      pinnedMessageText: body.pinnedMessageText
-    });
-    return session;
+  const session = await findById(connection, "sessions", result.insertId);
+  await cloneScriptNpcRolesForSession(connection, session.id, script.id);
+  await insertSessionNpcRoles(
+    connection,
+    session.id,
+    normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, { source: "session" }),
+    { source: "session" }
+  );
+  await runSessionExtensionHook("afterSessionCreated", {
+    connection,
+    session,
+    pinnedMessageText: body.pinnedMessageText
   });
+  return session;
+}
+
+export async function createSession(user, body) {
+  return withTransaction((connection) => createSessionWithConnection(connection, user, body));
 }
 
 function publicSessionAvailable(session) {
@@ -4239,49 +4125,53 @@ export async function relinkMySessionMembership(user, sessionId) {
   });
 }
 
+export async function updateSessionWithConnection(connection, user, id, body) {
+  await requireSessionOwner(connection, id, user);
+  assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
+  assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
+  const normalized = {
+    ...body,
+    visibility:
+      body.visibility === undefined
+        ? undefined
+        : normalizeSessionVisibility(body.visibility),
+    joinPolicy:
+      body.joinPolicy === undefined && body.join_policy === undefined
+        ? undefined
+        : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+    joinPhoneRequired:
+      body.joinPhoneRequired === undefined && body.join_phone_required === undefined
+        ? undefined
+        : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required)
+          ? 1
+          : 0,
+    npcJoinEnabled:
+      body.npcJoinEnabled === undefined && body.npc_join_enabled === undefined
+        ? undefined
+        : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled)
+          ? 1
+          : 0
+  };
+  return updateAllowed(connection, "sessions", id, normalized, [
+    ["startAt", "start_at"],
+    ["dmUserId", "dm_user_id"],
+    ["dmNameSnapshot", "dm_name_snapshot"],
+    ["npcUserId", "npc_user_id"],
+    ["npcNameSnapshot", "npc_name_snapshot"],
+    ["depositAmount", "deposit_amount"],
+    ["visibility", "visibility"],
+    ["joinPolicy", "join_policy"],
+    ["joinPhoneRequired", "join_phone_required"],
+    ["npcJoinEnabled", "npc_join_enabled"],
+    ["note", "note"],
+    ["status", "status"]
+  ]);
+}
+
 export async function updateSession(user, id, body) {
-  return withDatabaseConnection(async (connection) => {
-    await requireSessionOwner(connection, id, user);
-    assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
-    assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
-    const normalized = {
-      ...body,
-      visibility:
-        body.visibility === undefined
-          ? undefined
-          : normalizeSessionVisibility(body.visibility),
-      joinPolicy:
-        body.joinPolicy === undefined && body.join_policy === undefined
-          ? undefined
-          : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
-      joinPhoneRequired:
-        body.joinPhoneRequired === undefined && body.join_phone_required === undefined
-          ? undefined
-          : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required)
-            ? 1
-            : 0,
-      npcJoinEnabled:
-        body.npcJoinEnabled === undefined && body.npc_join_enabled === undefined
-          ? undefined
-          : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled)
-            ? 1
-            : 0
-    };
-    return updateAllowed(connection, "sessions", id, normalized, [
-      ["startAt", "start_at"],
-      ["dmUserId", "dm_user_id"],
-      ["dmNameSnapshot", "dm_name_snapshot"],
-      ["npcUserId", "npc_user_id"],
-      ["npcNameSnapshot", "npc_name_snapshot"],
-      ["depositAmount", "deposit_amount"],
-      ["visibility", "visibility"],
-      ["joinPolicy", "join_policy"],
-      ["joinPhoneRequired", "join_phone_required"],
-      ["npcJoinEnabled", "npc_join_enabled"],
-      ["note", "note"],
-      ["status", "status"]
-    ]);
-  });
+  return withDatabaseConnection((connection) =>
+    updateSessionWithConnection(connection, user, id, body)
+  );
 }
 
 async function requireSessionNpcRoleOwner(connection, npcRoleId, user) {
@@ -4342,69 +4232,77 @@ export async function listSessionNpcRoles(user, sessionId) {
   });
 }
 
-export async function createSessionNpcRole(user, sessionId, body = {}) {
+export async function createSessionNpcRoleWithConnection(connection, user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
-  return withTransaction(async (connection) => {
-    await requireSessionOwner(connection, id, user);
-    const [role] = normalizeNpcRoles([body], { source: "session" });
-    if (!role) {
-      throw badRequest("npc role name is required");
-    }
-    await insertSessionNpcRoles(connection, id, [role], { source: "session" });
-    const roles = await sessionNpcRolesForSession(connection, id);
-    return roles[roles.length - 1] || null;
-  });
+  await requireSessionOwner(connection, id, user);
+  const [role] = normalizeNpcRoles([body], { source: "session" });
+  if (!role) {
+    throw badRequest("npc role name is required");
+  }
+  await insertSessionNpcRoles(connection, id, [role], { source: "session" });
+  const roles = await sessionNpcRolesForSession(connection, id);
+  return roles[roles.length - 1] || null;
+}
+
+export async function createSessionNpcRole(user, sessionId, body = {}) {
+  return withTransaction((connection) =>
+    createSessionNpcRoleWithConnection(connection, user, sessionId, body)
+  );
+}
+
+export async function updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body = {}) {
+  const id = positiveId(npcRoleId, "npcRoleId");
+  const current = await requireSessionNpcRoleOwner(connection, id, user);
+  assertPublicTextSafe("npcRoleName", body.name);
+  assertPublicTextSafe("npcRoleDescription", body.description || body.note);
+  const normalized = {
+    ...body,
+    description:
+      body.description === undefined && body.note === undefined
+        ? undefined
+        : optionalText(body.description ?? body.note),
+    source: body.source === undefined ? undefined : normalizeNpcRoleSource(body.source),
+    roleGender:
+      body.roleGender === undefined && body.role_gender === undefined && body.gender === undefined
+        ? undefined
+        : normalizeRoleGender(body.roleGender ?? body.role_gender ?? body.gender),
+    boundUserId: nullableBoundUserId(body),
+    sortOrder:
+      body.sortOrder === undefined && body.sort_order === undefined
+        ? undefined
+        : nonNegativeIntValue(body.sortOrder ?? body.sort_order, "sortOrder"),
+    status: normalizeNpcRoleStatus(body.status)
+  };
+  const updated = await updateAllowed(connection, "session_npc_roles", id, normalized, [
+    ["name", "name"],
+    ["description", "description"],
+    ["roleGender", "role_gender"],
+    ["source", "source"],
+    ["boundUserId", "bound_user_id"],
+    ["sortOrder", "sort_order"],
+    ["status", "status"]
+  ]);
+  const [withUserRows] = await connection.query(
+    `
+      SELECT
+        role.*,
+        user.nickname AS bound_user_nickname,
+        user.open_id AS bound_user_open_id,
+        user.avatar_url AS bound_user_avatar_url,
+        user.gender AS bound_user_gender
+      FROM session_npc_roles role
+      LEFT JOIN users user ON user.id = role.bound_user_id
+      WHERE role.id = ?
+    `,
+    [updated.id || current.id]
+  );
+  return sessionNpcRoleResponse(withUserRows[0] || updated);
 }
 
 export async function updateSessionNpcRole(user, npcRoleId, body = {}) {
-  const id = positiveId(npcRoleId, "npcRoleId");
-  return withDatabaseConnection(async (connection) => {
-    const current = await requireSessionNpcRoleOwner(connection, id, user);
-    assertPublicTextSafe("npcRoleName", body.name);
-    assertPublicTextSafe("npcRoleDescription", body.description || body.note);
-    const normalized = {
-      ...body,
-      description:
-        body.description === undefined && body.note === undefined
-          ? undefined
-          : optionalText(body.description ?? body.note),
-      source: body.source === undefined ? undefined : normalizeNpcRoleSource(body.source),
-      roleGender:
-        body.roleGender === undefined && body.role_gender === undefined && body.gender === undefined
-          ? undefined
-          : normalizeRoleGender(body.roleGender ?? body.role_gender ?? body.gender),
-      boundUserId: nullableBoundUserId(body),
-      sortOrder:
-        body.sortOrder === undefined && body.sort_order === undefined
-          ? undefined
-          : nonNegativeIntValue(body.sortOrder ?? body.sort_order, "sortOrder"),
-      status: normalizeNpcRoleStatus(body.status)
-    };
-    const updated = await updateAllowed(connection, "session_npc_roles", id, normalized, [
-      ["name", "name"],
-      ["description", "description"],
-      ["roleGender", "role_gender"],
-      ["source", "source"],
-      ["boundUserId", "bound_user_id"],
-      ["sortOrder", "sort_order"],
-      ["status", "status"]
-    ]);
-    const [withUserRows] = await connection.query(
-      `
-        SELECT
-          role.*,
-          user.nickname AS bound_user_nickname,
-          user.open_id AS bound_user_open_id,
-          user.avatar_url AS bound_user_avatar_url,
-          user.gender AS bound_user_gender
-        FROM session_npc_roles role
-        LEFT JOIN users user ON user.id = role.bound_user_id
-        WHERE role.id = ?
-      `,
-      [updated.id || current.id]
-    );
-    return sessionNpcRoleResponse(withUserRows[0] || updated);
-  });
+  return withDatabaseConnection((connection) =>
+    updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body)
+  );
 }
 
 export async function createSeat(user, sessionId, body) {
@@ -6751,62 +6649,66 @@ export async function getMySessionReview(user, sessionId) {
   });
 }
 
-export async function upsertMySessionReview(user, sessionId, body = {}) {
+export async function upsertMySessionReviewWithConnection(connection, user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
   const rating = reviewRating(body.rating);
   const content = reviewContent(body.content);
   const photoUrls = assertSessionReviewPhotoUrls(body.photoUrls);
 
-  return withTransaction(async (connection) => {
-    const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
-    if (!eligibleSignup) {
-      throw forbidden("Only eligible session participants can write a review after start time");
-    }
+  const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
+  if (!eligibleSignup) {
+    throw forbidden("Only eligible session participants can write a review after start time");
+  }
 
+  await connection.query(
+    `
+      INSERT INTO session_reviews
+        (session_id, user_id, seat_id, rating, content, status)
+      VALUES (?, ?, ?, ?, ?, 'active')
+      ON DUPLICATE KEY UPDATE
+        seat_id = VALUES(seat_id),
+        rating = VALUES(rating),
+        content = VALUES(content),
+        status = 'active'
+    `,
+    [id, user.user.id, eligibleSignup.seat_id || null, rating, content]
+  );
+
+  const [reviewRows] = await connection.query(
+    `
+      SELECT *
+      FROM session_reviews
+      WHERE session_id = ?
+        AND user_id = ?
+      LIMIT 1
+    `,
+    [id, user.user.id]
+  );
+  const review = reviewRows[0];
+  await connection.query("DELETE FROM session_review_photos WHERE review_id = ?", [
+    review.id
+  ]);
+  for (const [index, photoUrl] of photoUrls.entries()) {
     await connection.query(
       `
-        INSERT INTO session_reviews
-          (session_id, user_id, seat_id, rating, content, status)
-        VALUES (?, ?, ?, ?, ?, 'active')
-        ON DUPLICATE KEY UPDATE
-          seat_id = VALUES(seat_id),
-          rating = VALUES(rating),
-          content = VALUES(content),
-          status = 'active'
+        INSERT INTO session_review_photos (review_id, photo_url, sort_order)
+        VALUES (?, ?, ?)
       `,
-      [id, user.user.id, eligibleSignup.seat_id || null, rating, content]
+      [review.id, photoUrl, index]
     );
+  }
+  return {
+    ...review,
+    rating,
+    content,
+    photos: photoUrls
+  };
+}
 
-    const [reviewRows] = await connection.query(
-      `
-        SELECT *
-        FROM session_reviews
-        WHERE session_id = ?
-          AND user_id = ?
-        LIMIT 1
-      `,
-      [id, user.user.id]
-    );
-    const review = reviewRows[0];
-    await connection.query("DELETE FROM session_review_photos WHERE review_id = ?", [
-      review.id
-    ]);
-    for (const [index, photoUrl] of photoUrls.entries()) {
-      await connection.query(
-        `
-          INSERT INTO session_review_photos (review_id, photo_url, sort_order)
-          VALUES (?, ?, ?)
-        `,
-        [review.id, photoUrl, index]
-      );
-    }
-    return {
-      ...review,
-      rating,
-      content,
-      photos: photoUrls
-    };
-  });
+export async function upsertMySessionReview(user, sessionId, body = {}) {
+  return withTransaction((connection) =>
+    upsertMySessionReviewWithConnection(connection, user, sessionId, body)
+  );
 }
 
 export async function createShareEvent(eventType, body) {

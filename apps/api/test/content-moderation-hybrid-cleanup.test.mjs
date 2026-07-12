@@ -41,8 +41,7 @@ test("production configuration and runtime contain no legacy Tencent text/image 
     "TENCENT_TMS_BIZ_TYPE",
     "TENCENT_CI_IMAGE_BIZ_TYPE",
     "tencent_tms",
-    "submitImage",
-    "moderateText"
+    "submitImage"
   ]) {
     assert.equal(sources.includes(legacy), false, `legacy moderation token remains: ${legacy}`);
   }

@@ -2,6 +2,7 @@ import {
   assertModerationTransition,
   assertTextProposalTransition
 } from "./state-machine.js";
+import { projectSafeTextAppliedResult } from "./text-applied-result.js";
 
 function lockClause(forUpdate) {
   return forUpdate ? " FOR UPDATE" : "";
@@ -16,6 +17,11 @@ function idempotencyConflict(message) {
 
 function duplicateKeyError(error) {
   return error?.code === "ER_DUP_ENTRY" || Number(error?.errno) === 1062;
+}
+
+function safeAppliedResultJson(result) {
+  const safe = projectSafeTextAppliedResult(result);
+  return safe ? JSON.stringify(safe) : null;
 }
 
 export async function findModerationJobById(connection, id, { forUpdate = false } = {}) {
@@ -256,10 +262,15 @@ export async function createTextProposal(connection, input) {
 function compatibleTextProposalId(proposal, input) {
   if (
     Number(proposal.moderation_job_id) !== Number(input.jobId) ||
-    String(proposal.payload_digest) !== String(input.payloadDigest) ||
     String(proposal.action) !== String(input.action) ||
     String(proposal.idempotency_key) !== String(input.idempotencyKey)
   ) {
+    throw idempotencyConflict("text proposal idempotency key belongs to another request");
+  }
+  if (String(proposal.payload_digest) !== String(input.payloadDigest)) {
+    if (input.allowStaleIdempotencyReplay === true && proposal.status === "stale") {
+      return Number(proposal.id);
+    }
     throw idempotencyConflict("text proposal idempotency key belongs to another request");
   }
   return Number(proposal.id);
@@ -279,13 +290,18 @@ export async function findTextProposalByIdempotency(
   return rows[0] || null;
 }
 
-export async function markTextProposalStatus(connection, { jobId, fromStatus, toStatus }) {
+export async function markTextProposalStatus(
+  connection,
+  { jobId, fromStatus, toStatus, appliedResult = null }
+) {
   assertTextProposalTransition(fromStatus, toStatus);
+  const appliedResultJson = safeAppliedResultJson(appliedResult);
   const [result] = await connection.query(
     `UPDATE content_moderation_text_proposals
-     SET status = ?, applied_at = IF(? = 'approved', CURRENT_TIMESTAMP, applied_at)
+     SET status = ?, applied_at = IF(? = 'approved', CURRENT_TIMESTAMP, applied_at),
+         applied_result_json = IF(? = 'approved', ?, applied_result_json)
      WHERE moderation_job_id = ? AND status = ?`,
-    [toStatus, toStatus, Number(jobId), fromStatus]
+    [toStatus, toStatus, toStatus, appliedResultJson, Number(jobId), fromStatus]
   );
   return Number(result.affectedRows || 0) === 1;
 }
