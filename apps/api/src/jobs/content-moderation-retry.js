@@ -22,14 +22,21 @@ async function processJob(job) {
     objectKey: String(job.media_source_url || "").replace(/^\//, ""),
     dataId: job.data_id
   });
-  await withTransaction((connection) => repository.recordModerationSubmission(connection, {
-    jobId: job.id,
-    provider: "tencent_ci_video",
-    providerJobId: response.JobId || response.TaskId,
-    fromStatus: job.status,
-    leaseToken: job.lease_token,
-    responseSummary: { providerJobId: response.JobId || response.TaskId || "" }
-  }));
+  const recorded = await withTransaction(async (connection) => {
+    return repository.recordModerationSubmission(connection, {
+      jobId: job.id,
+      provider: "tencent_ci_video",
+      providerJobId: response.JobId,
+      fromStatus: job.status,
+      leaseToken: job.lease_token,
+      responseSummary: { providerJobId: response.JobId || "" }
+    });
+  });
+  if (!recorded) {
+    const error = new Error("moderation submission changed before its provider attempt was recorded");
+    error.code = "CONTENT_MODERATION_SUBMISSION_STALE";
+    throw error;
+  }
 }
 
 export async function run() {

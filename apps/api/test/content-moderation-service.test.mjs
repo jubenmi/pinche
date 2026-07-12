@@ -5,6 +5,7 @@ import { createContentModerationService } from "../src/modules/content-moderatio
 
 function harness({
   clientError = null,
+  recordSubmissionResult = true,
   jobOverrides = {},
   mediaOverrides = {},
   attemptOverrides = {}
@@ -23,7 +24,10 @@ function harness({
       state.created.push(input);
       return { id: 7, status: "pending", ...input };
     },
-    recordModerationSubmission: async (_connection, input) => { state.submitted.push(input); return true; },
+    recordModerationSubmission: async (_connection, input) => {
+      state.submitted.push(input);
+      return recordSubmissionResult;
+    },
     transitionModerationJob: async (_connection, input) => {
       state.transitions.push(input);
       state.job.status = input.toStatus;
@@ -93,6 +97,22 @@ test("video submission failure moves task to error and remains hidden", async ()
   assert.equal(state.transitions[0].toStatus, "error");
 });
 
+test("video submission treats an unrecorded provider attempt as a hidden failure", async () => {
+  const { service, state } = harness({ recordSubmissionResult: false });
+  const job = await service.createVideoJob({}, {
+    media: { id: 91 },
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    subjectVersion: "etag"
+  });
+
+  await assert.rejects(service.submitVideoJob(job), {
+    code: "CONTENT_MODERATION_SUBMISSION_STALE"
+  });
+  assert.equal(state.submitted.length, 1);
+  assert.equal(state.transitions.length, 1);
+  assert.equal(state.transitions[0].toStatus, "error");
+});
+
 for (const [decision, expectedStatus] of [["pass", "approved"], ["review", "review"], ["block", "rejected"]]) {
   test(`${decision} video result atomically transitions job and media`, async () => {
     const { service, state } = harness();
@@ -109,6 +129,22 @@ for (const [decision, expectedStatus] of [["pass", "approved"], ["review", "revi
     assert.equal(state.cleanup.length, decision === "block" ? 1 : 0);
   });
 }
+
+test("an unknown Tencent decision transitions the current video to the unified hidden error state", async () => {
+  const { service, state } = harness();
+  const result = await service.applyMediaResult({
+    jobId: 7,
+    provider: "tencent_ci_video",
+    providerJobId: "current-video-job",
+    subjectVersion: "etag-1",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    result: { decision: "error", suggestion: "Unexpected" }
+  });
+  assert.equal(result.status, "error");
+  assert.equal(state.transitions[0].toStatus, "error");
+  assert.equal(state.transitions[0].errorCode, "CONTENT_MODERATION_INVALID_RESPONSE");
+  assert.equal(state.mediaUpdates[0].toStatus, "error");
+});
 
 function wechatImageResult(decision = "pass") {
   return {

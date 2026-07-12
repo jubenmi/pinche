@@ -229,6 +229,10 @@ export function buildContentModerationConfig(env = process.env) {
     tencentVideoPolicyId: stringValue(env, "TENCENT_CI_VIDEO_BIZ_TYPE"),
     tencentVideoCallbackUrl: stringValue(env, "TENCENT_CI_VIDEO_CALLBACK_URL"),
     tencentVideoCallbackToken: stringValue(env, "TENCENT_CI_VIDEO_CALLBACK_TOKEN"),
+    tencentVideoCallbackPreviousToken: stringValue(
+      env,
+      "TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN"
+    ),
     retryLimit: Math.max(1, Math.min(20, integerValue(env.CONTENT_MODERATION_RETRY_LIMIT, 8))),
     cosEnabled: booleanValue(env.COS_ENABLED, false),
     secretId: stringValue(env, "COS_SECRET_ID"),
@@ -273,7 +277,11 @@ export function assertContentModerationConfig(
       if (!moderationConfig.cosRegion) missing.push("COS_REGION");
     }
   }
-  if (!moderationConfig.enabled) {
+  if (
+    !moderationConfig.enabled &&
+    !wechatModerationEnabled &&
+    !moderationConfig.tencentVideoEnabled
+  ) {
     if (missing.length > 0) {
       throw moderationConfigurationError(`content moderation configuration is missing: ${missing.join(", ")}`);
     }
@@ -292,6 +300,12 @@ export function assertContentModerationConfig(
     if (!moderationConfig.tencentVideoCallbackUrl) missing.push("TENCENT_CI_VIDEO_CALLBACK_URL");
     if (!moderationConfig.tencentVideoCallbackToken || moderationConfig.tencentVideoCallbackToken.length < 32) {
       missing.push("TENCENT_CI_VIDEO_CALLBACK_TOKEN");
+    }
+    if (
+      moderationConfig.tencentVideoCallbackPreviousToken &&
+      moderationConfig.tencentVideoCallbackPreviousToken.length < 32
+    ) {
+      missing.push("valid TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN");
     }
     if (nodeEnv === "production" && !/^https:\/\//i.test(moderationConfig.tencentVideoCallbackUrl)) {
       throw moderationConfigurationError("moderation callback URL must use HTTPS in production");

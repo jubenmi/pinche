@@ -27,6 +27,7 @@ function validEnv(overrides = {}) {
     TENCENT_CI_VIDEO_BIZ_TYPE: "video-policy",
     TENCENT_CI_VIDEO_CALLBACK_URL: "https://api.example.com/api/internal/content-moderation/tencent-video/callback",
     TENCENT_CI_VIDEO_CALLBACK_TOKEN: "x".repeat(32),
+    TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN: "",
     CONTENT_MODERATION_RETRY_LIMIT: "8",
     COS_SECRET_ID: "secret-id",
     COS_SECRET_KEY: "secret-key",
@@ -63,6 +64,62 @@ test("enabled Tencent video moderation fails closed on missing production config
       code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
     });
   }
+});
+
+test("Tencent video callback token rotation keeps a valid previous token optional", () => {
+  const current = "c".repeat(32);
+  const previous = "p".repeat(32);
+  const config = buildContentModerationConfig(validEnv({
+    TENCENT_CI_VIDEO_CALLBACK_TOKEN: current,
+    TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN: previous
+  }));
+  assert.equal(config.tencentVideoCallbackToken, current);
+  assert.equal(config.tencentVideoCallbackPreviousToken, previous);
+  assert.doesNotThrow(() => assertContentModerationConfig(config, { nodeEnv: "production" }));
+
+  const invalid = buildContentModerationConfig(validEnv({
+    TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN: "too-short"
+  }));
+  assert.throws(() => assertContentModerationConfig(invalid, { nodeEnv: "production" }), {
+    code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+  });
+});
+
+test("a Tencent provider gate cannot bypass production callback-token validation through the global flag", () => {
+  for (const overrides of [
+    { TENCENT_CI_VIDEO_CALLBACK_TOKEN: "" },
+    { TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN: "too-short" },
+    { TENCENT_CI_VIDEO_REGION: "", COS_REGION: "" },
+    { COS_SECRET_ID: "" },
+    { COS_SECRET_KEY: "" },
+    { COS_BUCKET: "" },
+    { TENCENT_CI_VIDEO_BIZ_TYPE: "" },
+    { TENCENT_CI_VIDEO_CALLBACK_URL: "" }
+  ]) {
+    const config = buildContentModerationConfig(validEnv({
+      CONTENT_MODERATION_ENABLED: "false",
+      CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "true",
+      ...overrides
+    }));
+    assert.throws(() => assertContentModerationConfig(config, { nodeEnv: "production" }), {
+      code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
+    });
+  }
+});
+
+test("Tencent configuration errors never expose callback-token values", () => {
+  const previousToken = "secret-prev-token";
+  const config = buildContentModerationConfig(validEnv({
+    TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN: previousToken
+  }));
+  assert.throws(
+    () => assertContentModerationConfig(config, { nodeEnv: "production" }),
+    (error) => {
+      assert.equal(error.code, "CONTENT_MODERATION_CONFIGURATION_ERROR");
+      assert.equal(error.message.includes(previousToken), false);
+      return true;
+    }
+  );
 });
 
 test("enabled WeChat moderation fails closed in production without Redis, credentials or event secrets", () => {
@@ -193,7 +250,10 @@ test("Tencent client exposes only video submission", async () => {
   const calls = [];
   const client = createTencentVideoModerationClient({
     config: buildContentModerationConfig(validEnv()),
-    transport: async (request) => { calls.push(request); return { JobId: "video-job" }; }
+    transport: async (request) => {
+      calls.push(request);
+      return { JobId: "video-job", DataId: request.dataId, State: "Submitted" };
+    }
   });
   assert.deepEqual(Object.keys(client), ["submitVideo"]);
   await client.submitVideo({ objectKey: "uploads/session-album/videos/source/a.mp4", dataId: "d2" });
@@ -201,9 +261,31 @@ test("Tencent client exposes only video submission", async () => {
   assert.equal(JSON.stringify(calls).includes("secret-key"), false);
 });
 
+test("Tencent video submission rejects non-source or non-MP4 objects before an upstream request", async () => {
+  let calls = 0;
+  const client = createTencentVideoModerationClient({
+    config: buildContentModerationConfig(validEnv()),
+    transport: async () => {
+      calls += 1;
+      return { JobId: "ci-video-1", DataId: "d2", State: "Submitted" };
+    }
+  });
+  for (const objectKey of [
+    "uploads/session-album/videos/display/a.mp4",
+    "uploads/session-album/videos/source/a.mov",
+    "uploads/session-album/display/a.jpg"
+  ]) {
+    await assert.rejects(client.submitVideo({ objectKey, dataId: "d2" }), /video source object/);
+  }
+  assert.equal(calls, 0);
+});
+
 test("Tencent video transport signs CI video request and parses async job", async () => {
   const calls = [];
-  const config = buildContentModerationConfig(validEnv());
+  const config = buildContentModerationConfig(validEnv({
+    TENCENT_CI_VIDEO_CALLBACK_TOKEN: "c".repeat(32),
+    TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN: "p".repeat(32)
+  }));
   const transport = createTencentVideoModerationTransport({
     config,
     now: () => new Date("2026-07-12T00:00:00.000Z"),
@@ -228,7 +310,68 @@ test("Tencent video transport signs CI video request and parses async job", asyn
   assert.equal(calls[0].url, "https://bucket-123.ci.ap-nanjing.myqcloud.com/video/auditing");
   assert.match(calls[0].options.headers.authorization, /^q-sign-algorithm=sha1/);
   assert.match(calls[0].options.body, /<BizType>video-policy<\/BizType>/);
+  assert.match(calls[0].options.body, /<Snapshot><Mode>Average<\/Mode><Count>100<\/Count><\/Snapshot>/);
+  assert.match(calls[0].options.body, /<DetectContent>1<\/DetectContent>/);
+  assert.match(calls[0].options.body, /<CallbackVersion>Detail<\/CallbackVersion>/);
+  assert.match(calls[0].options.body, /<CallbackType>1<\/CallbackType>/);
+  assert.match(calls[0].options.body, new RegExp(`token=${"c".repeat(32)}`));
+  assert.doesNotMatch(calls[0].options.body, new RegExp(`token=${"p".repeat(32)}`));
+  assert.doesNotMatch(calls[0].options.body, /<Async>/);
   assert.equal(JSON.stringify(calls).includes("secret-key"), false);
+});
+
+test("Tencent video transport fails closed on empty, mismatched, failed, or unknown submissions", async () => {
+  const config = buildContentModerationConfig(validEnv());
+  const request = {
+    kind: "video",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    dataId: "d2",
+    policyId: "video-policy",
+    bucket: "bucket-123",
+    callbackUrl: config.tencentVideoCallbackUrl,
+    region: "ap-nanjing"
+  };
+  for (const xml of [
+    "<Response><JobsDetail><DataId>d2</DataId><State>Submitted</State></JobsDetail></Response>",
+    "<Response><JobsDetail><JobId>ci-video-1</JobId><DataId>other</DataId><State>Submitted</State></JobsDetail></Response>",
+    "<Response><JobsDetail><JobId>ci-video-1</JobId><DataId>d2</DataId><State>Failed</State></JobsDetail></Response>",
+    "<Response><JobsDetail><JobId>ci-video-1</JobId><DataId>d2</DataId><State>Unexpected</State></JobsDetail></Response>"
+  ]) {
+    const transport = createTencentVideoModerationTransport({
+      config,
+      fetchImpl: async () => new Response(xml, { status: 200 })
+    });
+    await assert.rejects(transport(request), {
+      code: "CONTENT_MODERATION_UPSTREAM_RESPONSE_INVALID"
+    });
+  }
+});
+
+test("Tencent video client does not trust a custom transport with mismatched submission facts", async () => {
+  const client = createTencentVideoModerationClient({
+    config: buildContentModerationConfig(validEnv()),
+    transport: async () => ({ JobId: "ci-video-1", DataId: "other", State: "Submitted" })
+  });
+  await assert.rejects(client.submitVideo({
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    dataId: "d2"
+  }), { code: "CONTENT_MODERATION_UPSTREAM_RESPONSE_INVALID" });
+});
+
+test("Tencent video client rejects legacy TaskId or lower-case jobId aliases", async () => {
+  for (const response of [
+    { TaskId: "ci-video-1", DataId: "d2", State: "Submitted" },
+    { jobId: "ci-video-1", DataId: "d2", State: "Submitted" }
+  ]) {
+    const client = createTencentVideoModerationClient({
+      config: buildContentModerationConfig(validEnv()),
+      transport: async () => response
+    });
+    await assert.rejects(client.submitVideo({
+      objectKey: "uploads/session-album/videos/source/a.mp4",
+      dataId: "d2"
+    }), { code: "CONTENT_MODERATION_UPSTREAM_RESPONSE_INVALID" });
+  }
 });
 
 test("Tencent transport rejects non-video request kinds", async () => {
@@ -237,4 +380,15 @@ test("Tencent transport rejects non-video request kinds", async () => {
     fetchImpl: async () => new Response("", { status: 200 })
   });
   await assert.rejects(transport({ kind: "image" }), /only Tencent video moderation/);
+});
+
+test("Tencent transport rejects a non-source video object without calling CI", async () => {
+  const transport = createTencentVideoModerationTransport({
+    config: buildContentModerationConfig(validEnv()),
+    fetchImpl: async () => assert.fail("invalid source object must not reach CI")
+  });
+  await assert.rejects(transport({
+    kind: "video",
+    objectKey: "uploads/session-album/videos/display/a.mp4"
+  }), /video source object/);
 });

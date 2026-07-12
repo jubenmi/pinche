@@ -12,6 +12,7 @@ import {
   createAuditLog,
   createModerationJob,
   createTextProposal,
+  enqueueRejectedMediaCleanup,
   findCurrentModerationAttempt,
   findModerationAttemptByProviderJobId,
   findModerationJobByDataId,
@@ -438,4 +439,254 @@ test("approved proposal replay data strips content and URLs", async () => {
 
   const stored = connection.calls[0].params.find((value) => typeof value === "string" && value.startsWith("{"));
   assert.deepEqual(JSON.parse(stored), { id: 88, kind: "session_message" });
+});
+
+test("rejected local video cleanup keeps source, display, and cover as local paths", async () => {
+  const connection = recordingConnection();
+  await enqueueRejectedMediaCleanup(connection, {
+    id: 71,
+    session_id: 8,
+    media_type: "video",
+    moderation_object_version: "local:/uploads/session-album/videos/source/a.mp4:1200",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: "/uploads/session-album/videos/display/a.mp4",
+    cover_url: "/uploads/session-album/videos/cover/a.jpg"
+  });
+
+  const insert = connection.calls.find((call) => /INSERT INTO session_album_object_cleanup_jobs/.test(call.sql));
+  assert.equal(insert.params[2], "multi");
+  assert.deepEqual(JSON.parse(insert.params[5]), [
+    { storageKind: "local", localPath: "/uploads/session-album/videos/source/a.mp4" },
+    { storageKind: "local", localPath: "/uploads/session-album/videos/display/a.mp4" },
+    { storageKind: "local", localPath: "/uploads/session-album/videos/cover/a.jpg" }
+  ]);
+});
+
+test("rejected COS video cleanup keeps every owned source, display, and cover key", async () => {
+  const connection = recordingConnection();
+  await enqueueRejectedMediaCleanup(connection, {
+    id: 72,
+    session_id: 8,
+    media_type: "video",
+    moderation_object_version: "etag-video-72",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: "/uploads/session-album/videos/display/a.mp4",
+    cover_url: "/uploads/session-album/videos/cover/a.jpg"
+  });
+
+  const insert = connection.calls.find((call) => /INSERT INTO session_album_object_cleanup_jobs/.test(call.sql));
+  assert.deepEqual(JSON.parse(insert.params[5]), [
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/source/a.mp4" },
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/display/a.mp4" },
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/cover/a.jpg" }
+  ]);
+});
+
+test("duplicate rejected video cleanup merges a late cover into the same COS job", async () => {
+  const existing = {
+    id: 73,
+    media_id: 73,
+    storage_kind: "multi",
+    object_urls_json: JSON.stringify([
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/source/a.mp4" },
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/display/a.mp4" }
+    ]),
+    status: "leased"
+  };
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (/SELECT \* FROM session_album_object_cleanup_jobs/.test(sql)) return [[existing]];
+      return [{ insertId: 73, affectedRows: 1 }];
+    }
+  };
+
+  await enqueueRejectedMediaCleanup(connection, {
+    id: 73,
+    session_id: 8,
+    media_type: "video",
+    moderation_object_version: "etag-video-73",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: "/uploads/session-album/videos/display/a.mp4",
+    cover_url: "/uploads/session-album/videos/cover/a.jpg"
+  });
+
+  const update = calls.find((call) => /UPDATE session_album_object_cleanup_jobs/.test(call.sql));
+  assert.ok(update, "late output must update the existing cleanup job rather than be discarded");
+  assert.match(calls[0].sql, /WHERE media_id = \? LIMIT 1 FOR UPDATE/);
+  assert.match(update.sql, /status = 'pending'/);
+  assert.match(update.sql, /lease_token = NULL/);
+  assert.doesNotMatch(update.sql, /\battempts\s*=/);
+  assert.deepEqual(JSON.parse(update.params[0]), [
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/source/a.mp4" },
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/display/a.mp4" },
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/cover/a.jpg" }
+  ]);
+});
+
+test("duplicate insert re-reads and merges a late cover even when affectedRows reports one", async () => {
+  const existing = {
+    id: 75,
+    media_id: 75,
+    storage_kind: "multi",
+    object_urls_json: JSON.stringify([
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/source/a.mp4" },
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/display/a.mp4" }
+    ]),
+    status: "pending"
+  };
+  const calls = [];
+  let cleanupReads = 0;
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (/SELECT \* FROM session_album_object_cleanup_jobs/.test(sql)) {
+        cleanupReads += 1;
+        return cleanupReads === 1 ? [[]] : [[existing]];
+      }
+      if (/INSERT INTO session_album_object_cleanup_jobs/.test(sql)) {
+        return [{ insertId: 75, affectedRows: 1 }];
+      }
+      return [{ affectedRows: 1 }];
+    }
+  };
+
+  await enqueueRejectedMediaCleanup(connection, {
+    id: 75,
+    session_id: 8,
+    media_type: "video",
+    moderation_object_version: "etag-video-75",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: "/uploads/session-album/videos/display/a.mp4",
+    cover_url: "/uploads/session-album/videos/cover/a.jpg"
+  });
+
+  assert.equal(cleanupReads, 2);
+  const update = calls.find((call) => /UPDATE session_album_object_cleanup_jobs/.test(call.sql));
+  assert.ok(update);
+  assert.deepEqual(JSON.parse(update.params[0]), [
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/source/a.mp4" },
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/display/a.mp4" },
+    { storageKind: "cos", objectKey: "uploads/session-album/videos/cover/a.jpg" }
+  ]);
+});
+
+for (const status of ["cleaned", "leased"]) {
+  test(`late same-key video output requeues a ${status} cleanup job`, async () => {
+    const expectedEntries = [
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/source/a.mp4" },
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/display/a.mp4" },
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/cover/a.jpg" }
+    ];
+    const existing = {
+      id: status === "cleaned" ? 76 : 77,
+      media_id: status === "cleaned" ? 76 : 77,
+      storage_kind: "multi",
+      object_urls_json: JSON.stringify(expectedEntries),
+      status,
+      lease_token: status === "leased" ? "old-lease" : null,
+      attempts: 5
+    };
+    const calls = [];
+    const connection = {
+      async query(sql, params) {
+        calls.push({ sql, params });
+        if (/SELECT \* FROM session_album_object_cleanup_jobs/.test(sql)) return [[existing]];
+        return [{ affectedRows: 1 }];
+      }
+    };
+
+    await enqueueRejectedMediaCleanup(connection, {
+      id: existing.id,
+      session_id: 8,
+      media_type: "video",
+      moderation_object_version: `etag-video-${existing.id}`,
+      source_url: "/uploads/session-album/videos/source/a.mp4",
+      display_url: "/uploads/session-album/videos/display/a.mp4",
+      cover_url: "/uploads/session-album/videos/cover/a.jpg"
+    }, { lateOutputEvent: true });
+
+    const update = calls.find((call) => /UPDATE session_album_object_cleanup_jobs/.test(call.sql));
+    assert.ok(update, "a validated late output must requeue even when its object key is unchanged");
+    assert.match(update.sql, /status = 'pending'/);
+    assert.match(update.sql, /lease_token = NULL/);
+    assert.match(update.sql, /completed_at = NULL/);
+    assert.doesNotMatch(update.sql, /\battempts\s*=/);
+    assert.deepEqual(JSON.parse(update.params[0]), expectedEntries);
+  });
+}
+
+test("ordinary duplicate rejected video cleanup does not requeue a cleaned job", async () => {
+  const existing = {
+    id: 78,
+    media_id: 78,
+    storage_kind: "multi",
+    object_urls_json: JSON.stringify([
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/source/a.mp4" },
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/display/a.mp4" },
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/cover/a.jpg" }
+    ]),
+    status: "cleaned",
+    attempts: 5
+  };
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (/SELECT \* FROM session_album_object_cleanup_jobs/.test(sql)) return [[existing]];
+      return [{ affectedRows: 1 }];
+    }
+  };
+
+  await enqueueRejectedMediaCleanup(connection, {
+    id: 78,
+    session_id: 8,
+    media_type: "video",
+    moderation_object_version: "etag-video-78",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: "/uploads/session-album/videos/display/a.mp4",
+    cover_url: "/uploads/session-album/videos/cover/a.jpg"
+  });
+
+  assert.equal(calls.some((call) => /UPDATE session_album_object_cleanup_jobs/.test(call.sql)), false);
+});
+
+test("duplicate rejected video cleanup preserves local ownership while merging a late cover", async () => {
+  const existing = {
+    id: 74,
+    media_id: 74,
+    storage_kind: "multi",
+    object_urls_json: JSON.stringify([
+      { storageKind: "local", localPath: "/uploads/session-album/videos/source/a.mp4" },
+      { storageKind: "local", localPath: "/uploads/session-album/videos/display/a.mp4" }
+    ]),
+    status: "pending"
+  };
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (/SELECT \* FROM session_album_object_cleanup_jobs/.test(sql)) return [[existing]];
+      return [{ insertId: 74, affectedRows: 1 }];
+    }
+  };
+
+  await enqueueRejectedMediaCleanup(connection, {
+    id: 74,
+    session_id: 8,
+    media_type: "video",
+    moderation_object_version: "local:/uploads/session-album/videos/source/a.mp4:1200",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: "/uploads/session-album/videos/display/a.mp4",
+    cover_url: "/uploads/session-album/videos/cover/a.jpg"
+  });
+
+  const update = calls.find((call) => /UPDATE session_album_object_cleanup_jobs/.test(call.sql));
+  assert.ok(update);
+  assert.deepEqual(JSON.parse(update.params[0]), [
+    { storageKind: "local", localPath: "/uploads/session-album/videos/source/a.mp4" },
+    { storageKind: "local", localPath: "/uploads/session-album/videos/display/a.mp4" },
+    { storageKind: "local", localPath: "/uploads/session-album/videos/cover/a.jpg" }
+  ]);
 });

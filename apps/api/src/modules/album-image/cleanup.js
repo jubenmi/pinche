@@ -2,6 +2,18 @@ import crypto from "node:crypto";
 
 import { emitAlbumImageEvent } from "./telemetry.js";
 
+const LOCAL_ALBUM_CLEANUP_PATH = /^\/uploads\/session-album\/(?:display\/[A-Za-z0-9._-]+|videos\/(?:source|display|cover)\/[A-Za-z0-9._-]+)$/;
+
+export function assertLocalAlbumCleanupPath(localPath) {
+  const normalized = String(localPath || "");
+  if (!LOCAL_ALBUM_CLEANUP_PATH.test(normalized)) {
+    throw Object.assign(new Error("invalid cleanup local path"), {
+      code: "ALBUM_IMAGE_LOCAL_PATH_INVALID"
+    });
+  }
+  return normalized;
+}
+
 function retryAt(nowMs, attempts) {
   const delaySeconds = Math.min(6 * 60 * 60, 30 * (2 ** Math.min(attempts, 10)));
   return new Date(nowMs + delaySeconds * 1000);
@@ -99,11 +111,12 @@ async function cleanupMedia({
         localPath: row.local_path
       });
     }
-    await withTransaction((connection) => repository.completeMediaCleanup(connection, {
+    const completed = await withTransaction((connection) => repository.completeMediaCleanup(connection, {
       jobId: row.id,
       mediaId: row.media_id,
       leaseToken
     }));
+    if (!completed) return;
     emit("media_deleted", { sessionId: Number(row.session_id), mediaId: Number(row.media_id), outcome: "cleaned" });
   } catch (error) {
     const attempts = Number(row.attempts || 0) + 1;

@@ -356,29 +356,62 @@ export async function transitionMediaModeration(
   return Number(result.affectedRows || 0) === 1;
 }
 
-export async function enqueueRejectedMediaCleanup(connection, media) {
-  const mediaType = media.media_type === "video" ? "video" : "image";
-  let storageKind = "cos";
-  let objectKey = null;
-  let localPath = null;
-  let objectUrls = null;
-  if (mediaType === "image") {
-    if (media.object_key) objectKey = String(media.object_key);
-    else {
-      storageKind = "local";
-      localPath = String(media.photo_url || "");
-    }
-  } else {
-    storageKind = "multi";
-    objectUrls = [...new Set([
-      media.source_url,
-      media.display_url,
-      media.cover_url
-    ].filter(Boolean))].map((value) => ({
-      storageKind: String(value).startsWith("/uploads/") ? "cos" : "cos",
-      objectKey: String(value).replace(/^\//, "")
-    }));
+function normalizeCleanupObjectEntry(entry) {
+  const storageKind = String(entry?.storageKind || "").trim();
+  if (storageKind === "cos") {
+    const objectKey = String(entry?.objectKey || "").trim().replace(/^\//, "");
+    return objectKey ? { storageKind, objectKey } : null;
   }
+  if (storageKind === "local") {
+    const localPath = String(entry?.localPath || "").trim();
+    return localPath ? { storageKind, localPath } : null;
+  }
+  return null;
+}
+
+function cleanupObjectEntries(value) {
+  let entries = value;
+  if (typeof entries === "string") {
+    try {
+      entries = JSON.parse(entries);
+    } catch {
+      entries = [];
+    }
+  }
+  if (!Array.isArray(entries)) return [];
+  return entries.map(normalizeCleanupObjectEntry).filter(Boolean);
+}
+
+function cleanupObjectEntryKey(entry) {
+  return entry.storageKind === "cos"
+    ? `cos:${entry.objectKey}`
+    : `local:${entry.localPath}`;
+}
+
+function mergeCleanupObjectEntries(...groups) {
+  const unique = new Map();
+  for (const group of groups) {
+    for (const entry of cleanupObjectEntries(group)) {
+      const key = cleanupObjectEntryKey(entry);
+      if (!unique.has(key)) unique.set(key, entry);
+    }
+  }
+  return [...unique.values()];
+}
+
+async function findRejectedMediaCleanupJob(connection, mediaId) {
+  const [rows] = await connection.query(
+    `SELECT * FROM session_album_object_cleanup_jobs
+     WHERE media_id = ? LIMIT 1 FOR UPDATE`,
+    [Number(mediaId)]
+  );
+  return rows[0] || null;
+}
+
+async function insertRejectedMediaCleanupJob(
+  connection,
+  { media, storageKind, objectKey, localPath, objectUrls }
+) {
   const [result] = await connection.query(
     `INSERT INTO session_album_object_cleanup_jobs
       (media_id, session_id, storage_kind, object_key, local_path, object_urls_json, status)
@@ -393,6 +426,90 @@ export async function enqueueRejectedMediaCleanup(connection, media) {
       objectUrls ? JSON.stringify(objectUrls) : null
     ]
   );
+  return result;
+}
+
+async function enqueueRejectedVideoCleanup(
+  connection,
+  media,
+  objectUrls,
+  { lateOutputEvent = false } = {}
+) {
+  let cleanupJob = await findRejectedMediaCleanupJob(connection, media.id);
+  if (!cleanupJob) {
+    const result = await insertRejectedMediaCleanupJob(connection, {
+      media,
+      storageKind: "multi",
+      objectKey: null,
+      localPath: null,
+      objectUrls
+    });
+    // Always re-read after the idempotent insert. Depending on MySQL client
+    // flags, affectedRows cannot safely distinguish a fresh insert from the
+    // duplicate-key no-op used to retrieve an existing job id.
+    cleanupJob = await findRejectedMediaCleanupJob(connection, media.id);
+    if (!cleanupJob) return result.insertId;
+  }
+
+  const existingObjectUrls = mergeCleanupObjectEntries(cleanupJob.object_urls_json);
+  const mergedObjectUrls = mergeCleanupObjectEntries(existingObjectUrls, objectUrls);
+  const cleanupChanged =
+    cleanupJob.storage_kind !== "multi" ||
+    JSON.stringify(existingObjectUrls) !== JSON.stringify(mergedObjectUrls);
+  if (!cleanupChanged && !lateOutputEvent) return cleanupJob.id;
+
+  // A validated late callback means CI observed an output event. Requeue even
+  // when it reused the same deterministic key: a worker may have already
+  // deleted the earlier object or still hold its old snapshot. Keep attempts,
+  // error history, and all prior object entries.
+  await connection.query(
+    `UPDATE session_album_object_cleanup_jobs
+     SET storage_kind = 'multi', object_key = NULL, local_path = NULL,
+         object_urls_json = ?, status = 'pending', next_retry_at = NULL,
+         lease_token = NULL, lease_expires_at = NULL, completed_at = NULL
+     WHERE id = ?`,
+    [JSON.stringify(mergedObjectUrls), Number(cleanupJob.id)]
+  );
+  return cleanupJob.id;
+}
+
+export async function enqueueRejectedMediaCleanup(
+  connection,
+  media,
+  { lateOutputEvent = false } = {}
+) {
+  const mediaType = media.media_type === "video" ? "video" : "image";
+  let storageKind = "cos";
+  let objectKey = null;
+  let localPath = null;
+  let objectUrls = null;
+  if (mediaType === "image") {
+    if (media.object_key) objectKey = String(media.object_key);
+    else {
+      storageKind = "local";
+      localPath = String(media.photo_url || "");
+    }
+  } else {
+    storageKind = "multi";
+    const objectUrlsForCleanup = [...new Set([
+      media.source_url,
+      media.display_url,
+      media.cover_url
+    ].filter(Boolean))];
+    const localVideo = String(media.moderation_object_version || "").startsWith("local:");
+    objectUrls = objectUrlsForCleanup.map((value) => localVideo
+      ? { storageKind: "local", localPath: String(value) }
+      : { storageKind: "cos", objectKey: String(value).replace(/^\//, "") }
+    );
+    return enqueueRejectedVideoCleanup(connection, media, objectUrls, { lateOutputEvent });
+  }
+  const result = await insertRejectedMediaCleanupJob(connection, {
+    media,
+    storageKind,
+    objectKey,
+    localPath,
+    objectUrls
+  });
   return result.insertId;
 }
 

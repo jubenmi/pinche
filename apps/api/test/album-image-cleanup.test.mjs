@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runAlbumImageCleanupBatch } from "../src/modules/album-image/cleanup.js";
+import {
+  assertLocalAlbumCleanupPath,
+  runAlbumImageCleanupBatch
+} from "../src/modules/album-image/cleanup.js";
 import {
   claimExpiredAlbumImageIntents,
   claimAlbumObjectCleanupJobs
@@ -39,6 +42,27 @@ function cleanupHarness(items) {
   };
   return { state, repository };
 }
+
+test("local cleanup accepts only owned image and video source/display/cover paths", () => {
+  for (const localPath of [
+    "/uploads/session-album/display/image.jpg",
+    "/uploads/session-album/videos/source/video.mp4",
+    "/uploads/session-album/videos/display/video.mp4",
+    "/uploads/session-album/videos/cover/video.jpg"
+  ]) {
+    assert.equal(assertLocalAlbumCleanupPath(localPath), localPath);
+  }
+  for (const localPath of [
+    "/uploads/session-album/videos/source/../secret.mp4",
+    "/uploads/session-album/videos/other/video.mp4",
+    "/uploads/avatars/avatar.jpg",
+    "uploads/session-album/videos/source/video.mp4"
+  ]) {
+    assert.throws(() => assertLocalAlbumCleanupPath(localPath), {
+      code: "ALBUM_IMAGE_LOCAL_PATH_INVALID"
+    });
+  }
+});
 
 test("orphan 404 is cleaned and retryable failure keeps its anchor", async () => {
   const missing = cleanupHarness([{ type: "intent", row: { id: "i1", object_key: "a.jpg" } }]);
@@ -83,6 +107,22 @@ test("business deletion removes bytes before completing media transaction", asyn
   assert.deepEqual(calls, [["delete", "photo.jpg"], ["db", 91]]);
 });
 
+test("a stale media cleanup lease does not report deletion after completion is rejected", async () => {
+  const events = [];
+  const harness = cleanupHarness([{
+    type: "media",
+    row: { id: 12, media_id: 96, storage_kind: "cos", object_key: "photo.jpg", attempts: 0 }
+  }]);
+  harness.repository.completeMediaCleanup = async () => false;
+  await runAlbumImageCleanupBatch({
+    repository: harness.repository,
+    storage: { delete: async () => {} },
+    withTransaction: async (run) => run({}), now: () => 1000, randomUUID: () => "lease",
+    emit: (event) => events.push(event)
+  });
+  assert.deepEqual(events, []);
+});
+
 test("local deletion treats an already-unlinked file as idempotent", async () => {
   const harness = cleanupHarness([{
     type: "media",
@@ -125,5 +165,66 @@ test("rejected video cleanup deletes every deduplicated owned object before comp
     ["delete", "source.mp4"],
     ["delete", "display.mp4"],
     ["db", 93]
+  ]);
+});
+
+test("late rejected COS cover cleanup deletes the merged source, display, and cover", async () => {
+  const calls = [];
+  const harness = cleanupHarness([{
+    type: "media",
+    row: {
+      id: 11,
+      media_id: 95,
+      storage_kind: "multi",
+      object_urls_json: JSON.stringify([
+        { storageKind: "cos", objectKey: "uploads/session-album/videos/source/video.mp4" },
+        { storageKind: "cos", objectKey: "uploads/session-album/videos/display/video.mp4" },
+        { storageKind: "cos", objectKey: "uploads/session-album/videos/cover/video.jpg" }
+      ])
+    }
+  }]);
+  harness.repository.completeMediaCleanup = async (_c, input) => calls.push(["db", input.mediaId]);
+  await runAlbumImageCleanupBatch({
+    repository: harness.repository,
+    storage: { delete: async (key) => calls.push(["delete", key]) },
+    withTransaction: async (run) => run({}), now: () => 1000, randomUUID: () => "lease",
+    emit: () => {}
+  });
+  assert.deepEqual(calls, [
+    ["delete", "uploads/session-album/videos/source/video.mp4"],
+    ["delete", "uploads/session-album/videos/display/video.mp4"],
+    ["delete", "uploads/session-album/videos/cover/video.jpg"],
+    ["db", 95]
+  ]);
+});
+
+test("rejected local video cleanup unlinks source, display, and cover before completing", async () => {
+  const calls = [];
+  const harness = cleanupHarness([{
+    type: "media",
+    row: {
+      id: 10,
+      media_id: 94,
+      storage_kind: "multi",
+      object_urls_json: JSON.stringify([
+        { storageKind: "local", localPath: "/uploads/session-album/videos/source/video.mp4" },
+        { storageKind: "local", localPath: "/uploads/session-album/videos/display/video.mp4" },
+        { storageKind: "local", localPath: "/uploads/session-album/videos/cover/video.jpg" }
+      ])
+    }
+  }]);
+  harness.repository.completeMediaCleanup = async (_c, input) => calls.push(["db", input.mediaId]);
+  await runAlbumImageCleanupBatch({
+    repository: harness.repository,
+    storage: {},
+    unlinkFile: async (localPath) => calls.push(["unlink", localPath]),
+    withTransaction: async (run) => run({}), now: () => 1000, randomUUID: () => "lease",
+    emit: () => {}
+  });
+  assert.deepEqual(calls, [
+    ["unlink", "/uploads/session-album/videos/source/video.mp4"],
+    ["unlink", "/uploads/session-album/videos/display/video.mp4"],
+    ["unlink", "/uploads/session-album/videos/cover/video.jpg"],
+    ["db", 94]
   ]);
 });

@@ -141,7 +141,9 @@ scene 使用固定映射，业务代码不得自行选择：
 
 ## 6. 腾讯云视频设计
 
-只保留 CI 视频审核能力。视频源对象验证稳定后，以媒体 ID、对象 Key、ETag、内部 `data_id` 提交画面和音轨审核。转码回调只更新 processing 状态；内容审核 Pass 或管理员批准才更新 moderation 状态。
+只保留 CI 视频审核能力。视频源对象验证稳定后，以媒体 ID、对象 Key、ETag、内部 `data_id` 提交画面和音轨审核。转码回调只更新 processing 状态；内容审核 Pass 或管理员批准才更新 moderation 状态。CI Detail 回调只接受 `State=Success` 且将总 `Result` 的 `0/1/2` 分别映射为 Pass/Block/Review；缺失或未知字段一律进入 hidden error。
+
+若视频已 `rejected`，迟到转码回调不得恢复 `display_url`、`cover_url`、处理状态或审核状态。它携带的已校验展示/封面输出在同一事务内按 `media → cleanup job` 顺序合并到原清理任务；即使 CI 重用同一确定性对象 Key，也作为新的输出事件重新排队、撤销旧 lease 并清除完成标记。对象集合保持去重且保留既有 source/display/cover，重试次数与错误历史不重置；普通重复 Block 不带该输出事件标记，不重排已完成任务。旧 worker 用失效 lease 完成时安全失败，下一次清理对已删除对象按幂等删除。
 
 配置只保留：
 
@@ -154,9 +156,12 @@ TENCENT_CI_VIDEO_REGION
 TENCENT_CI_VIDEO_BIZ_TYPE
 TENCENT_CI_VIDEO_CALLBACK_URL
 TENCENT_CI_VIDEO_CALLBACK_TOKEN
+TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN  # 可选，仅令牌轮换期保留
 ```
 
-删除 TMS 策略和 CI 图片策略配置。腾讯云回调与微信事件使用独立路由和鉴权器，避免协议混用。若 CI 只能在回调 URL 携带令牌，反向代理和应用日志必须对该参数脱敏，令牌独立轮换。
+删除 TMS 策略和 CI 图片策略配置。腾讯云回调与微信事件使用独立路由和鉴权器，避免协议混用。若 CI 只能在回调 URL 携带令牌，反向代理和应用日志必须对该参数脱敏；新提交只携带当前令牌，接收端在轮换窗口同时接受当前与上一枚令牌，旧任务完成后清空上一枚令牌。
+
+腾讯视频 Detail 回调原始 body 仅此路由允许最多 1 MiB，以容纳 100 帧与全部音频片段的合法结果；仍在读取前后受限并且不持久化片段文本。微信安全事件继续保持 256 KiB 上限，不与腾讯回调共用该例外。
 
 ## 7. 状态机与错误处理
 

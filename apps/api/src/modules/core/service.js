@@ -27,6 +27,7 @@ import {
   albumMediaCountSql,
   visibleSignupAlbumMediaCount
 } from "./session-album-media-count.js";
+import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -634,9 +635,12 @@ function albumVideoProcessingError(value) {
   return text ? text.slice(0, 255) : null;
 }
 
-async function findSessionAlbumVideoForProcessing(connection, { mediaId, sourceUrl, ciJobId }) {
+async function findSessionAlbumVideoForProcessing(
+  connection,
+  { mediaId, sourceUrl, ciJobId, forUpdate = false }
+) {
   if (mediaId) {
-    const media = await findById(connection, "session_album_photos", mediaId);
+    const media = await findById(connection, "session_album_photos", mediaId, { forUpdate });
     if (media && media.status === "active" && albumMediaType(media) === "video") {
       return media;
     }
@@ -650,7 +654,7 @@ async function findSessionAlbumVideoForProcessing(connection, { mediaId, sourceU
         WHERE media_type = 'video'
           AND status = 'active'
           AND source_url = ?
-        LIMIT 1
+        LIMIT 1${forUpdate ? " FOR UPDATE" : ""}
       `,
       [sourceUrl]
     );
@@ -672,7 +676,7 @@ async function findSessionAlbumVideoForProcessing(connection, { mediaId, sourceU
             OR ci_job_id LIKE ?
             OR ci_job_id LIKE ?
           )
-        LIMIT 1
+        LIMIT 1${forUpdate ? " FOR UPDATE" : ""}
       `,
       [ciJobId, `${ciJobId},%`, `%,${ciJobId}`, `%,${ciJobId},%`]
     );
@@ -6124,7 +6128,13 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   return sessionAlbumVideoCreateResponse(media, processingStatus, user.user.id);
 }
 
-export async function updateSessionAlbumVideoProcessingResult(body = {}) {
+export async function updateSessionAlbumVideoProcessingResult(
+  body = {},
+  {
+    withTransaction: runWithTransaction = withTransaction,
+    enqueueRejectedMediaCleanup: enqueueRejectedCleanup = enqueueRejectedMediaCleanup
+  } = {}
+) {
   const mediaId = optionalPositiveInteger(body.mediaId ?? body.media_id, "mediaId");
   const ciJobId = normalizeCiJobId(body.ciJobId || body.ci_job_id || body.jobId || body.job_id);
   const status = albumVideoProcessingCallbackStatus(
@@ -6167,14 +6177,31 @@ export async function updateSessionAlbumVideoProcessingResult(body = {}) {
     throw badRequest("video processing callback must include mediaId, sourceUrl, or ciJobId");
   }
 
-  return withTransaction(async (connection) => {
+  return runWithTransaction(async (connection) => {
     const media = await findSessionAlbumVideoForProcessing(connection, {
       mediaId,
       sourceUrl,
-      ciJobId
+      ciJobId,
+      forUpdate: true
     });
     if (!media) {
       throw notFound("Album video not found for processing callback");
+    }
+    if (media.moderation_status === "rejected") {
+      const lateOutputEvent = Boolean(displayUrl || coverUrl);
+      await enqueueRejectedCleanup(connection, {
+        ...media,
+        source_url: media.source_url,
+        display_url: displayUrl || media.display_url || null,
+        cover_url: coverUrl || media.cover_url || null
+      }, lateOutputEvent ? { lateOutputEvent: true } : undefined);
+      return {
+        id: Number(media.id),
+        session_id: Number(media.session_id),
+        media_type: "video",
+        processing_status: albumMediaProcessingStatus(media),
+        ignored: "moderation_rejected"
+      };
     }
 
     const nextCiJobId = mergeCiJobIds(media.ci_job_id, ciJobId);

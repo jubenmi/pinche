@@ -74,13 +74,15 @@
   - [x] 使用事务行锁执行状态迁移。
   - [x] 管理员决定后的事件不得覆盖当前状态。
 
-- [ ] D45.8 收窄并验证腾讯云视频审核。
-  - [ ] 客户端只暴露视频画面与音轨审核方法。
-  - [ ] 源对象稳定后按媒体 ID 与 ETag 幂等提交。
-  - [ ] 转码 ready 不修改内容审核状态。
-  - [ ] 回调验证任务、data_id、对象 Key 与 ETag。
-  - [ ] 回调 URL 令牌在网关和应用日志中脱敏并支持轮换。
-  - [ ] Block 幂等清理源、展示和封面对象。
+- [x] D45.8 收窄并验证腾讯云视频审核。
+  - 已完成：CI 仅提交视频源对象，使用 Average 截帧、`DetectContent=1`、Detail 回调与当前令牌；Detail 回调独立限为 1 MiB（微信安全事件仍为 256 KiB），不提前实施 D45.10 的多 provider 重试调度。
+  - [x] 客户端只暴露视频画面与音轨审核方法。
+  - [x] 源对象稳定后按媒体 ID 与 ETag 幂等提交。
+  - [x] 转码 ready 不修改内容审核状态。
+  - [x] 回调验证任务、data_id、对象 Key 与 ETag。
+  - [x] 回调 URL 令牌在网关和应用日志中脱敏并支持轮换。
+  - [x] Block 幂等清理源、展示和封面对象。
+  - [x] 已拒绝视频的迟到转码输出原子合并至同一清理任务；同 key 重写也重新排队、撤销旧租约，且不恢复媒体字段。
 
 - [ ] D45.9 封闭全部媒体读取路径。
   - [ ] 普通列表、公开分享、计数、标签和批量下载只包含 approved/approved_legacy。
@@ -173,3 +175,4 @@
 - 2026-07-12：完成 D45.5。微信文本审核覆盖昵称、私有门店/剧本、拼车创建/更新、独立 NPC 角色创建/编辑、评价、消息和置顶消息；通过结果仅在同一事务 applicator 中应用，Review/Error 保持隐藏提案，risky 拒绝、未知值关闭式进入 error。文本 `subject_version` 始终为标签化文本摘要；每次操作用独立 `text-op` 身份并在 applicator 重验真实业务目标。提案仅保存 action 白名单 payload 与安全结果 ID/类型；同秒基线、资料 PATCH、权限/领域变化、旧/新幂等键、管理员批准回放、终态重复请求和置顶 `null` 默认文案均有回归。独立规格复核与高风险质量复核通过；新鲜内容审核/微信回归 171/171、文本/API 定向 84/84、API 语法 48 files、D19/D24/D26/D28 与差异检查通过。真实 MySQL 并发集成留待 D45.17/D45.18 验证。
 - 2026-07-12：完成 D45.6/D45.7。图片 finalize 在事务内创建 `wechat_sec_check` 任务，提交后以 60 秒 GET 签名 URL、上传者数据库 openid 和 `scene=4` 调用微信；仅 trace_id 作为当前 attempt 持久化，缺 openid/上游失败保持隐藏 error。旧 retry Worker 只认领当前支持的腾讯视频，防止在 D45.10 实现微信分发前抢占微信图片任务。安全回调仅接受本期约定的加密 JSON 事件，验证 SHA-1 签名、AES-256-CBC/PKCS#7/AppID、256KiB 上限，以 trace_id 关联并从锁定媒体读取对象 Key/ETag；重复、旧、删除、版本变化和管理员事件均 200 幂等且不覆盖。独立规格/安全/质量复核通过；新鲜图片+审核+微信回归 262/262、API 语法 49 files、环境和差异检查通过。微信控制台 URL 验证与真实回调协议在 D45.18 非生产联调中确认。
 - 2026-07-12：完成 D45.7。新增微信安全模式 JSON 事件接收：`msg_signature` 验签、43 位 EncodingAESKey 的 AES-256-CBC/PKCS#7 解密、AppID 校验和严格 `wxa_media_check` 结构归一化；未知 suggestion 关闭式写 error。回调只通过 trace_id 定位 provider attempt/任务，媒体 ETag、对象 Key、当前尝试和管理员优先级在事务锁内重验，重复、旧、未知、删除或过期事件均 200 幂等且不放行。独立安全复核未发现 P0/P1；回调/服务/配置定向 40/40、内容审核与微信回归 196/196、相册图片 66/66、API 语法与差异检查通过。未实现 GET handshake：当前已确认范围仅为微信安全模式 POST JSON 事件，未引入未定义的握手协议。
+- 2026-07-13：完成 D45.8。腾讯视频请求仅接受 `videos/source/*.mp4`，明确 Average 100 帧、画面+音轨、Detail 回调，提交响应严格要求 `JobId`/`DataId`/允许状态；Detail 回调严格按 `State=Success` 与 `Result=0/1/2` 映射，未知或失败保持 hidden error。当前/上一枚回调令牌可轮换，任何单独 provider 开关均不能绕过生产配置校验；已记录的旧 attempt 返回 200 stale，仅尚未记录 attempt 的已知 pending/error 任务返回 503 重试。腾讯 Detail raw body 独立上限为 1 MiB，微信保持 256 KiB。本地/COS 拒绝清理覆盖视频 source/display/cover，拒绝后转码回调不再恢复展示或封面。质量复核曾发现“迟到转码同 key 重写”会遗留对象的 P1；现已在媒体行锁内将经校验输出合并/重排同一清理任务，撤销旧 lease、保留对象与重试历史，普通重复 Block 不重排，修复后独立复审通过。D42 COS inspection 断言已补齐既有的 ETag 返回值，未修改生产行为。本轮 P1 聚焦 47/47、内容审核 210/210、相册 72/72、D42 API server 14/14 与 stream 10/10、环境/API 语法/差异检查通过。根 `npm run check` 仍仅由未改动 D14 静态断言（期望 `config.subscribeMessage.enabled`，实现为既有 `runtimeConfig.subscribeMessage.enabled`）失败。

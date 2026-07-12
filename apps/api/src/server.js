@@ -169,8 +169,10 @@ import {
   buildWechatImageModerationUrl
 } from "./modules/album-image/signed-urls.js";
 import {
+  TENCENT_VIDEO_CALLBACK_MAX_BYTES,
   authenticateTencentCallback,
-  parseTencentCallbackPayload
+  parseTencentCallbackPayload,
+  resolveTencentVideoCallback
 } from "./modules/content-moderation/callback.js";
 import {
   dispatchWechatImageModerationEvent,
@@ -3541,7 +3543,10 @@ async function route(request, response) {
       url.searchParams.get("token") || request.headers["x-content-moderation-token"] || "";
     if (!authenticateTencentCallback(
       providedToken,
-          config.contentModeration.tencentVideoCallbackToken
+      [
+        config.contentModeration.tencentVideoCallbackToken,
+        config.contentModeration.tencentVideoCallbackPreviousToken
+      ]
     )) {
       throw new AppError(
         401,
@@ -3549,20 +3554,25 @@ async function route(request, response) {
         "content moderation callback is unauthorized"
       );
     }
-    const rawCallback = await readRawBody(request, 256 * 1024);
+    const rawCallback = await readRawBody(request, TENCENT_VIDEO_CALLBACK_MAX_BYTES);
     const callback = parseTencentCallbackPayload(rawCallback);
-    const callbackLookup = await withDatabaseConnection(async (connection) => {
-      const job = await findModerationJobByDataId(connection, callback.dataId);
-      const attempt = await findModerationAttemptByProviderJobId(
-        connection,
-        "tencent_ci_video",
-        callback.providerJobId
-      );
-      if (!job || !attempt || Number(job.id) !== Number(attempt.moderation_job_id)) {
-        return { job: null, stale: true };
+    const callbackLookup = await resolveTencentVideoCallback({
+      callback,
+      withDatabaseConnection,
+      repository: {
+        findModerationJobByDataId,
+        findModerationAttemptByProviderJobId
       }
-      return { job, stale: false };
     });
+    if (callbackLookup.retryable) {
+      errorResponse(
+        response,
+        503,
+        "CONTENT_MODERATION_CALLBACK_RETRY",
+        "content moderation callback is waiting for submission"
+      );
+      return;
+    }
     if (callbackLookup.stale) {
       jsonResponse(response, 200, { ok: true, data: { stale: true, duplicate: false } });
       return;

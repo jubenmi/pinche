@@ -172,17 +172,22 @@ export function createContentModerationService(dependencies) {
         objectKey: job.objectKey,
         dataId: job.data_id || job.dataId
       });
-      await deps.transaction((connection) =>
+      const recorded = await deps.transaction((connection) =>
         deps.repository.recordModerationSubmission(connection, {
           jobId: job.id,
           provider: "tencent_ci_video",
-          providerJobId: response.JobId || response.jobId || response.TaskId || response.taskId,
+          providerJobId: response.JobId,
           fromStatus: job.status || "pending",
           responseSummary: {
-            providerJobId: response.JobId || response.jobId || response.TaskId || response.taskId || ""
+            providerJobId: response.JobId || ""
           }
         })
       );
+      if (!recorded) {
+        const error = new Error("moderation submission changed before its provider attempt was recorded");
+        error.code = "CONTENT_MODERATION_SUBMISSION_STALE";
+        throw error;
+      }
       deps.emit("moderation_submission_success", {
         subjectType: "album_video",
         outcome: "processing"

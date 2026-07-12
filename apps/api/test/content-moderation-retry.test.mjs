@@ -143,7 +143,9 @@ test("retry submission rolls over provider attempts inside one transaction", asy
     "utf8"
   );
 
-  assert.match(source, /withTransaction\(\(connection\) => repository\.recordModerationSubmission/);
+  assert.match(source, /const recorded = await withTransaction\(/);
+  assert.match(source, /return repository\.recordModerationSubmission/);
+  assert.match(source, /if \(!recorded\)[\s\S]*CONTENT_MODERATION_SUBMISSION_STALE/);
   assert.match(source, /provider: "tencent_ci_video"/);
   assert.match(source, /leaseToken: job\.lease_token/);
   assert.match(source, /claimFilter:\s*\{[\s\S]*providers:\s*\["tencent_ci_video"\]/);
