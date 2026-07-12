@@ -1580,7 +1580,7 @@ function signupStatusLabel(status) {
   bottom: 0;
 }
 
-.calendar-empty-day-card {
+.day-card.calendar-empty-day-card {
   position: relative;
   overflow: hidden;
   min-height: 640rpx;

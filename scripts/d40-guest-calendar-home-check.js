@@ -113,7 +113,7 @@ for (const token of [
   assert(calendar.includes(token), `D40 empty state must reuse the real day-band timeline: ${token}`);
 }
 for (const token of [
-  ".calendar-empty-day-card {",
+  ".day-card.calendar-empty-day-card {",
   "border: 0;",
   "border-radius: 0;",
   "background: transparent;",
