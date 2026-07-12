@@ -90,11 +90,51 @@
           </t-button>
         </view>
 
-        <t-empty
+        <view
           v-if="filteredCalendarItems.length === 0 && !isCalendarLoading"
-          class="calendar-empty"
-          :description="calendarEmptyText"
-        />
+          class="calendar-empty-route"
+        >
+          <t-image
+            class="calendar-empty-route-art"
+            src="/static/art/ink-home-landscape.jpg"
+            mode="aspectFill"
+          />
+          <view class="calendar-empty-route-axis" aria-hidden="true">
+            <view
+              v-for="tick in emptyDateTicks"
+              :key="tick.key"
+              class="calendar-empty-route-tick"
+              :class="{ active: tick.active }"
+            >
+              <text class="calendar-empty-route-date">{{ tick.label }}</text>
+              <view class="calendar-empty-route-dot"></view>
+            </view>
+          </view>
+          <view class="calendar-empty-route-content">
+            <view class="calendar-empty-route-title">{{ calendarEmptyTitle }}</view>
+            <view class="calendar-empty-route-text">{{ calendarEmptyBody }}</view>
+            <t-button class="calendar-empty-route-refresh" @tap="refreshCalendar">
+              <view class="calendar-empty-route-action-inner">
+                <t-image
+                  class="calendar-empty-route-action-icon"
+                  src="/static/icons/return-green.svg"
+                  mode="aspectFit"
+                />
+                <text>刷新车局</text>
+              </view>
+            </t-button>
+            <t-button class="calendar-empty-route-date-action" @tap="openCalendarDatePicker">
+              <view class="calendar-empty-route-action-inner">
+                <t-image
+                  class="calendar-empty-route-action-icon"
+                  src="/static/icons/calendar-green.svg"
+                  mode="aspectFit"
+                />
+                <text>选择其他日期</text>
+              </view>
+            </t-button>
+          </view>
+        </view>
 
         <view class="day-list">
           <view
@@ -201,6 +241,7 @@
         </view>
 
         <view
+          v-if="filteredCalendarItems.length > 0"
           class="load-more"
           :class="{ disabled: !hasOlderCalendarItems }"
           @tap="loadMoreDates"
@@ -366,17 +407,26 @@ const cityLocationPromptText = computed(() => {
 const cityLocationActionText = computed(() =>
   cityLocationState.value === "denied" ? "开启定位" : "重试定位"
 );
-const calendarEmptyText = computed(() => {
+const calendarEmptyTitle = computed(() => {
   if (activeCalendarFilter.value === "guest") {
-    return "暂无近期车局。";
+    return selectedDateKey.value ? "这天还没有公开车局" : "今天还没有公开车局";
   }
   if (activeCalendarFilter.value !== "city") {
-    return "暂无符合条件的车局。你的拼车会按日期汇总在这里。";
+    return selectedDateKey.value ? "这天还没有你的车局" : "今天还没有你的车局";
   }
   if (cityMode.value === "city" && cityName.value) {
-    return `${cityName.value}暂无可报名车局。`;
+    return `${cityName.value}暂时没有可报名车局`;
   }
-  return "暂无可报名车局。";
+  return "附近暂时没有可报名车局";
+});
+const calendarEmptyBody = computed(() => {
+  if (activeCalendarFilter.value === "guest") {
+    return "下一场公开车局发布后，会出现在日期轴上";
+  }
+  if (activeCalendarFilter.value === "mine") {
+    return "创建或加入车局后，会按日期出现在这里";
+  }
+  return "新的同城车局发布后，会按日期出现在这里";
 });
 const visibleCalendarItems = computed(() =>
   filteredCalendarItems.value.slice(0, loadedCalendarCount.value)
@@ -424,6 +474,17 @@ const calendarMoreHintText = computed(() => {
   return "已显示全部车局";
 });
 const selectedDatePickerValue = computed(() => selectedDateKey.value || dateKey(todayStart()));
+const emptyDateTicks = computed(() => {
+  const selectedDate = dateFromKey(selectedDatePickerValue.value) || todayStart();
+  return [-1, 0, 1, 2].map((offset) => {
+    const date = addDays(selectedDate, offset);
+    return {
+      key: dateKey(date),
+      label: `${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`,
+      active: offset === 0
+    };
+  });
+});
 
 watch(
   () => props.calendarMode,
@@ -1537,26 +1598,153 @@ function signupStatusLabel(status) {
   opacity: 0.72;
 }
 
-.calendar-empty {
-  margin: 12rpx 0 22rpx 64rpx;
-  padding: 30rpx 28rpx;
-  border: 1rpx solid rgba(226, 217, 204, 0.9);
-  border-radius: 16rpx;
-  background: rgba(255, 255, 252, 0.84);
-  text-align: center;
+.calendar-empty-route {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 116rpx minmax(0, 1fr);
+  min-height: 650rpx;
+  margin: 14rpx 8rpx 0;
+  padding: 54rpx 30rpx 58rpx 12rpx;
+  box-sizing: border-box;
 }
 
-.calendar-empty-title {
-  color: #23483e;
-  font-size: 28rpx;
+.calendar-empty-route-art {
+  position: absolute;
+  right: -70rpx;
+  bottom: -34rpx;
+  width: 560rpx;
+  height: 290rpx;
+  opacity: 0.11;
+}
+
+.calendar-empty-route-axis {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  flex-direction: column;
+  min-height: 500rpx;
+  padding: 0 0 4rpx;
+}
+
+.calendar-empty-route-axis::after {
+  position: absolute;
+  top: 18rpx;
+  bottom: 18rpx;
+  left: 82rpx;
+  width: 2rpx;
+  background: rgba(195, 173, 126, 0.62);
+  content: "";
+}
+
+.calendar-empty-route-tick {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 66rpx 34rpx;
+  align-items: center;
+  gap: 6rpx;
+  color: #9b896b;
+}
+
+.calendar-empty-route-date {
+  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
+  font-size: 20rpx;
+  line-height: 1;
+  text-align: right;
+}
+
+.calendar-empty-route-dot {
+  width: 12rpx;
+  height: 12rpx;
+  margin-left: 10rpx;
+  border: 4rpx solid rgba(253, 251, 246, 0.98);
+  border-radius: 50%;
+  background: #c3ad7e;
+  box-shadow: 0 0 0 1rpx rgba(195, 173, 126, 0.36);
+  box-sizing: content-box;
+}
+
+.calendar-empty-route-tick.active {
+  color: #1f6f5b;
   font-weight: 700;
 }
 
-.calendar-empty-text {
-  margin-top: 10rpx;
-  color: #708090;
+.calendar-empty-route-tick.active .calendar-empty-route-dot {
+  width: 24rpx;
+  height: 24rpx;
+  margin-left: 4rpx;
+  border-width: 6rpx;
+  background: #1f6f5b;
+  box-shadow: 0 0 0 5rpx rgba(195, 173, 126, 0.2);
+}
+
+.calendar-empty-route-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  min-width: 0;
+  padding: 74rpx 6rpx 46rpx 22rpx;
+  text-align: center;
+}
+
+.calendar-empty-route-title {
+  color: #175f4d;
+  font-family: "PincheBrand", "Songti SC", "STSong", "PingFang SC", sans-serif;
+  font-size: 36rpx;
+  font-weight: 700;
+  line-height: 1.36;
+  letter-spacing: 1rpx;
+}
+
+.calendar-empty-route-text {
+  max-width: 430rpx;
+  margin-top: 18rpx;
+  color: #746f67;
   font-size: 24rpx;
-  line-height: 1.55;
+  line-height: 1.65;
+}
+
+.calendar-empty-route-refresh {
+  width: 268rpx;
+  height: 72rpx;
+  margin: 46rpx 0 0;
+  padding: 0 20rpx;
+  border: 1rpx solid rgba(36, 116, 95, 0.52);
+  border-radius: 12rpx;
+  background: rgba(255, 255, 252, 0.92);
+  color: #1f6f5b;
+  font-size: 25rpx;
+  font-weight: 600;
+  line-height: 72rpx;
+}
+
+.calendar-empty-route-date-action {
+  height: 62rpx;
+  margin: 14rpx 0 0;
+  padding: 0 18rpx;
+  border: 0;
+  background: transparent;
+  color: #527e72;
+  font-size: 23rpx;
+  line-height: 62rpx;
+}
+
+.calendar-empty-route-action-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14rpx;
+}
+
+.calendar-empty-route-action-icon {
+  width: 30rpx;
+  height: 30rpx;
 }
 
 .day-list {

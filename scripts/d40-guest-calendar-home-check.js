@@ -97,6 +97,27 @@ assert(
   "D40 calendar must expose an explicit guest/member mode prop"
 );
 assert(calendar.includes("近期车局"), "D40 guest calendar filter must be labelled 近期车局");
+for (const token of [
+  'class="calendar-empty-route"',
+  "今天还没有公开车局",
+  "下一场公开车局发布后，会出现在日期轴上",
+  "刷新车局",
+  "选择其他日期",
+  '@tap="refreshCalendar"',
+  '@tap="openCalendarDatePicker"',
+  '/static/icons/return-green.svg',
+  '/static/icons/calendar-green.svg',
+  '/static/art/ink-home-landscape.jpg',
+  "emptyDateTicks",
+  "addDays"
+]) {
+  assert(calendar.includes(token), `D40 route-timeline empty state must reuse: ${token}`);
+}
+assert(
+  calendar.includes('v-if="filteredCalendarItems.length > 0"') &&
+    !calendar.includes(':description="calendarEmptyText"'),
+  "D40 empty calendar must replace the generic empty node and hide the redundant load-more footer"
+);
 assert(
   calendar.includes("/pages/session/detail?id=${id}&entry=guest"),
   "D40 guest cards must mark the detail entry as guest"
