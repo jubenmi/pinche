@@ -128,4 +128,22 @@ assert(
   "production env example should point MySQL at the locked cloud database"
 );
 
+for (const requiredModerationEnv of [
+  "CONTENT_MODERATION_ENABLED=false",
+  "CONTENT_MODERATION_TEXT_ENABLED=false",
+  "CONTENT_MODERATION_IMAGE_ENABLED=false",
+  "CONTENT_MODERATION_VIDEO_ENABLED=false",
+  "TENCENT_CI_IMAGE_BIZ_TYPE=",
+  "TENCENT_CI_VIDEO_BIZ_TYPE=",
+  "TENCENT_TMS_BIZ_TYPE=",
+  "TENCENT_MODERATION_CALLBACK_URL=https://",
+  "TENCENT_MODERATION_CALLBACK_TOKEN=",
+  "CONTENT_MODERATION_RETRY_LIMIT=8"
+]) {
+  assert(
+    productionEnvExample.includes(requiredModerationEnv),
+    `production env example should include ${requiredModerationEnv}`
+  );
+}
+
 console.log("API env check passed");

@@ -71,6 +71,11 @@ function integerValue(raw, fallback) {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
+function booleanValue(raw, fallback = false) {
+  if (raw === undefined || raw === "") return fallback;
+  return ["1", "true", "yes", "on"].includes(String(raw).toLowerCase());
+}
+
 function listEnv(name) {
   const raw = process.env[name] ?? "";
   return raw
@@ -158,6 +163,68 @@ export function assertDatabaseTargetLock(mysqlConfig, env = process.env) {
   }
 }
 
+function moderationConfigurationError(message) {
+  const error = new Error(message);
+  error.code = "CONTENT_MODERATION_CONFIGURATION_ERROR";
+  return error;
+}
+
+export function buildContentModerationConfig(env = process.env) {
+  return {
+    enabled: booleanValue(env.CONTENT_MODERATION_ENABLED, false),
+    textEnabled: booleanValue(env.CONTENT_MODERATION_TEXT_ENABLED, false),
+    imageEnabled: booleanValue(env.CONTENT_MODERATION_IMAGE_ENABLED, false),
+    videoEnabled: booleanValue(env.CONTENT_MODERATION_VIDEO_ENABLED, false),
+    region: stringValue(env, "TENCENT_MODERATION_REGION") || stringValue(env, "COS_REGION"),
+    imagePolicyId: stringValue(env, "TENCENT_CI_IMAGE_BIZ_TYPE"),
+    videoPolicyId: stringValue(env, "TENCENT_CI_VIDEO_BIZ_TYPE"),
+    textPolicyId: stringValue(env, "TENCENT_TMS_BIZ_TYPE"),
+    callbackUrl: stringValue(env, "TENCENT_MODERATION_CALLBACK_URL"),
+    callbackToken: stringValue(env, "TENCENT_MODERATION_CALLBACK_TOKEN"),
+    retryLimit: Math.max(1, Math.min(20, integerValue(env.CONTENT_MODERATION_RETRY_LIMIT, 8))),
+    secretId: stringValue(env, "COS_SECRET_ID"),
+    secretKey: stringValue(env, "COS_SECRET_KEY"),
+    bucket: stringValue(env, "COS_BUCKET"),
+    cosRegion: stringValue(env, "COS_REGION")
+  };
+}
+
+export function assertContentModerationConfig(
+  moderationConfig,
+  { nodeEnv = process.env.NODE_ENV || "development" } = {}
+) {
+  if (!moderationConfig?.enabled) return moderationConfig;
+  const missing = [];
+  if (!moderationConfig.region) missing.push("TENCENT_MODERATION_REGION");
+  if (!moderationConfig.secretId) missing.push("COS_SECRET_ID");
+  if (!moderationConfig.secretKey) missing.push("COS_SECRET_KEY");
+  if ((moderationConfig.imageEnabled || moderationConfig.videoEnabled) && !moderationConfig.bucket) {
+    missing.push("COS_BUCKET");
+  }
+  if (moderationConfig.imageEnabled && !moderationConfig.imagePolicyId) {
+    missing.push("TENCENT_CI_IMAGE_BIZ_TYPE");
+  }
+  if (moderationConfig.videoEnabled && !moderationConfig.videoPolicyId) {
+    missing.push("TENCENT_CI_VIDEO_BIZ_TYPE");
+  }
+  if (moderationConfig.textEnabled && !moderationConfig.textPolicyId) {
+    missing.push("TENCENT_TMS_BIZ_TYPE");
+  }
+  if ((moderationConfig.imageEnabled || moderationConfig.videoEnabled)) {
+    if (!moderationConfig.callbackUrl) missing.push("TENCENT_MODERATION_CALLBACK_URL");
+    if (!moderationConfig.callbackToken || moderationConfig.callbackToken.length < 32) {
+      missing.push("TENCENT_MODERATION_CALLBACK_TOKEN");
+    }
+    if (nodeEnv === "production" && !/^https:\/\//i.test(moderationConfig.callbackUrl)) {
+      throw moderationConfigurationError("moderation callback URL must use HTTPS in production");
+    }
+  }
+  if (missing.length > 0) {
+    throw moderationConfigurationError(`content moderation configuration is missing: ${missing.join(", ")}`);
+  }
+  return moderationConfig;
+}
+
 const mysqlConfig = {
   host: process.env.MYSQL_HOST || "127.0.0.1",
   port: integerEnv("MYSQL_PORT", 3307),
@@ -167,6 +234,10 @@ const mysqlConfig = {
 };
 
 assertDatabaseTargetLock(mysqlConfig);
+const contentModerationConfig = buildContentModerationConfig();
+assertContentModerationConfig(contentModerationConfig, {
+  nodeEnv: process.env.NODE_ENV || "development"
+});
 
 export const config = {
   nodeEnv: process.env.NODE_ENV || "development",
@@ -189,6 +260,7 @@ export const config = {
     directMediaUrls: booleanEnv("COS_DIRECT_MEDIA_URLS", false),
     directUploadRequired: booleanEnv("COS_DIRECT_UPLOAD_REQUIRED", false)
   },
+  contentModeration: contentModerationConfig,
   wechat: {
     mockLogin: booleanEnv("WECHAT_MOCK_LOGIN", true),
     appId: process.env.WECHAT_APP_ID || "wx-placeholder",
