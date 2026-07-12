@@ -25,6 +25,16 @@
           <span class="nav-icon">用</span>
           <span class="nav-text">网页小程序</span>
         </button>
+        <button
+          v-if="canReviewContent"
+          class="nav-item"
+          :class="{ active: activeView === 'moderation' }"
+          type="button"
+          @click="switchActiveView('moderation')"
+        >
+          <span class="nav-icon">审</span>
+          <span class="nav-text">内容审核</span>
+        </button>
       </nav>
       <button class="sidebar-collapse" type="button" @click="sidebarCollapsed = !sidebarCollapsed">
         {{ sidebarCollapsed ? "展开" : "收起" }}
@@ -86,6 +96,13 @@
         </div>
       </header>
       <CatalogWorkspace v-if="activeView === 'catalog'" :initial-tab="initialRoute.catalogTab" />
+      <ContentModerationWorkspace v-else-if="activeView === 'moderation' && canReviewContent" />
+      <section v-else-if="activeView === 'moderation'" class="moderation-access-denied">
+        <p class="eyebrow">ACCESS RESTRICTED</p>
+        <h2>无内容审核权限</h2>
+        <p>内容审核仅限系统管理员使用。</p>
+        <button class="secondary-action" type="button" @click="switchActiveView('catalog')">返回管理界面</button>
+      </section>
       <MiniProgramWorkspace
         v-else
         :initial-screen="initialRoute.miniScreen"
@@ -104,6 +121,7 @@ import { computed, ref } from "vue";
 import { assetUrl, clearStoredAuth, getStoredAuth } from "./api";
 import { parseAdminRouteQuery, writeAdminRoute } from "./adminRoute";
 import CatalogWorkspace from "./components/CatalogWorkspace.vue";
+import ContentModerationWorkspace from "./components/ContentModerationWorkspace.vue";
 import LoginPanel from "./components/LoginPanel.vue";
 import MiniProgramWorkspace from "./components/MiniProgramWorkspace.vue";
 
@@ -116,6 +134,7 @@ const activeView = ref(initialRoute.value.activeView);
 const buildVersion = `版本号 ${__PINCHE_BUILD_TIME__}`;
 const user = computed(() => auth.value.user || {});
 const roles = computed(() => auth.value.roles || []);
+const canReviewContent = computed(() => roles.value.includes("system_admin"));
 const rolesText = computed(() => (roles.value.length > 0 ? roles.value.join(" / ") : "无"));
 const avatarUrl = computed(() => user.value.avatarUrl || user.value.avatar_url || "");
 const displayName = computed(() => {
@@ -175,6 +194,9 @@ const fullProfileRows = computed(() => [
   { label: "角色", value: rolesText.value }
 ]);
 const pageTitle = computed(() => {
+  if (activeView.value === "moderation") {
+    return "内容审核";
+  }
   if (activeView.value === "miniapp") {
     return "网页小程序";
   }

@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test:runtime-config": "node test/runtimeConfig.test.mjs && node test/runtimeConfigEntrypoint.test.mjs",
-    "test:album-media": "node --test test/albumMedia.test.mjs"
+    "test:album-media": "node --test test/albumMedia.test.mjs",
+    "test:content-moderation": "node --test test/contentModeration.test.mjs"
   },
   "dependencies": {
     "@pinche/shared": "file:../../packages/shared",

@@ -2,6 +2,7 @@ const TOKEN_KEY = "pinche_admin_web_token";
 const USER_KEY = "pinche_admin_web_user";
 const ROLES_KEY = "pinche_admin_web_roles";
 import { shouldAttachAdminAuthorization } from "./albumMedia";
+import { buildModerationListFilters } from "./contentModeration";
 let cosClient = null;
 let cosSdkConstructor = null;
 const albumUploadsByKey = new Map();
@@ -358,6 +359,36 @@ export function pollLoginTicket(ticket) {
       ticket.ticketSecret
     )}`
   );
+}
+
+export function listContentModerationJobs(filters = {}) {
+  const query = new URLSearchParams(buildModerationListFilters(filters)).toString();
+  return apiRequest(`/api/admin/content-moderation?${query}`);
+}
+
+export function getContentModerationJob(jobId) {
+  return apiRequest(`/api/admin/content-moderation/${encodeURIComponent(jobId)}`);
+}
+
+export function approveContentModerationJob(jobId) {
+  return apiRequest(`/api/admin/content-moderation/${encodeURIComponent(jobId)}/approve`, {
+    method: "POST",
+    body: {}
+  });
+}
+
+export function rejectContentModerationJob(jobId, reason) {
+  return apiRequest(`/api/admin/content-moderation/${encodeURIComponent(jobId)}/reject`, {
+    method: "POST",
+    body: { reason }
+  });
+}
+
+export function retryContentModerationJob(jobId) {
+  return apiRequest(`/api/admin/content-moderation/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+    body: {}
+  });
 }
 
 export function listStores(filters) {
