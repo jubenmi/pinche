@@ -1592,11 +1592,11 @@ function signupStatusLabel(status) {
 
 .calendar-empty-day-art {
   position: absolute;
-  right: -48rpx;
-  bottom: -20rpx;
-  width: 660rpx;
-  height: 330rpx;
-  opacity: 0.1;
+  right: -30rpx;
+  bottom: -8rpx;
+  width: 680rpx;
+  height: 380rpx;
+  opacity: 0.18;
 }
 
 .calendar-empty-day-content {
