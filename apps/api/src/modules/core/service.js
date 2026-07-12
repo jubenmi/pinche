@@ -5659,8 +5659,8 @@ export async function insertFinalizedSessionAlbumImage(connection, { intent, met
     `INSERT INTO session_album_photos
       (session_id, uploader_user_id, media_type, photo_url, object_key, object_etag,
        image_width, image_height, image_byte_size, image_content_type,
-       processing_status, status)
-     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'active')`,
+       processing_status, moderation_status, status)
+     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'pending', 'active')`,
     [
       Number(intent.session_id),
       Number(intent.user_id),
@@ -5960,9 +5960,10 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
             image_byte_size,
             image_content_type,
             processing_status,
+            moderation_status,
             status
           )
-        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', 'active')
+        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', 'pending', 'active')
       `,
       [
         id,
@@ -6129,9 +6130,10 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
               video_content_type,
               ci_job_id,
               processing_status,
+              moderation_status,
               status
             )
-          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'active')
         `,
         [
           id,
