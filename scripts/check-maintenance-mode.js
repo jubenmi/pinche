@@ -15,6 +15,10 @@ const requests = [];
 let requestHandler = null;
 
 globalThis.getApp = () => app;
+globalThis.wx = {
+  canIUse: () => false,
+  getFileSystemManager: () => ({})
+};
 globalThis.uni = {
   $emit(event, payload) {
     emitted.push({ event, payload });
