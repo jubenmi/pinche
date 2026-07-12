@@ -14,6 +14,10 @@
 
 进度：已完成；门禁已通过红—绿验证，可捕获最终包中的裸模块 `require`。
 
+CI 备注：GitHub Actions 的干净工作区没有被忽略的 `dist`，首次 develop run `29175525732` 因 ENOENT 失败。相册媒体测试脚本已收紧为先执行生产构建再运行产物门禁，避免本地残留构建包造成假通过。
+
+Node 检查备注：静态 COS import 会在 `check-maintenance-mode.js` 导入 `api.js` 时读取微信全局对象；该既有检查现提供与相册上传单测一致的最小 `wx` 桩，生产代码不受影响。
+
 **Files:**
 - Create: `apps/miniprogram/test/cosSdkBundle.test.mjs`
 - Inspect: `apps/miniprogram/dist/build/mp-weixin/utils/api.js`
