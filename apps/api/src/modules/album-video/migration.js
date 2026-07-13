@@ -385,7 +385,7 @@ async function inspectAttemptsTable(connection) {
     ["response_summary_json", "json", "YES", { default: null, extra: "" }],
     ["current_job_id", "bigint unsigned", "YES", {
       default: null,
-      extra: "stored generated",
+      extra: "virtual generated",
       generated: true
     }],
     ["created_at", "datetime", "NO", { default: "current_timestamp", extra: "default_generated" }],
@@ -418,7 +418,7 @@ async function inspectAttemptsTable(connection) {
       throw schemaMismatch(`${CONTENT_MODERATION_ATTEMPTS_TABLE}.${name}`, {
         expected: {
           ...options,
-          extra: "STORED GENERATED",
+          extra: "VIRTUAL GENERATED",
           generationExpression: CURRENT_ATTEMPT_JOB_GENERATION_EXPRESSION
         },
         actual: column
@@ -494,7 +494,7 @@ function contentModerationAttemptsTableSql() {
     current_job_id BIGINT UNSIGNED
       GENERATED ALWAYS AS (
         CASE WHEN is_current = 1 THEN moderation_job_id ELSE NULL END
-      ) STORED,
+      ) VIRTUAL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uniq_moderation_attempt_provider_job (provider, provider_job_id),

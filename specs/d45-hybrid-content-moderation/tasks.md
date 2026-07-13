@@ -21,10 +21,12 @@
   - [x] 保留统一数据模型、状态机、读取门禁和腾讯云视频代码。
   - [x] 将通用命名与 provider 值迁移为混合方案。
 
-- [x] D45.3 校准审核数据模型和状态机。
+- [ ] D45.3 校准审核数据模型和状态机。
   - [x] 以 `stale` 作为文本提案终态；审核任务沿用统一终态并记录 `CONTENT_MODERATION_PROPOSAL_STALE`，避免扩展未约定的全局任务状态。
   - [x] 测试微信 trace_id、腾讯云视频 JobId、不可变版本和 provider 唯一约束。
   - [x] 新增 provider attempts，保证 `(provider, provider_job_id)` 唯一并标识当前尝试。
+  - [ ] 修复 provider attempts 的 MySQL 生成列与级联外键兼容性。
+    - 2026-07-13：生产迁移 `0025` 在创建外键时返回 `Cannot add foreign key constraint`；已定位为 `STORED` 生成列的基列不能与 `ON DELETE CASCADE` 共用。当前以最小兼容修复与回归验证处理中，未重试生产迁移。
   - [x] 保留历史媒体 `approved_legacy`，新媒体显式 pending。
   - [x] 文本 Review/Error 使用隐藏提案。
   - [x] 管理员决定优先于服务商事件。

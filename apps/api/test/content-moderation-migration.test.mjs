@@ -109,7 +109,7 @@ function moderationMigrationConnection({
     ["submitted_at", "datetime", "NO", "DEFAULT_GENERATED", "", "CURRENT_TIMESTAMP"],
     ["response_summary_json", "json", "YES", "", "", null],
     [
-      "current_job_id", "bigint unsigned", "YES", "STORED GENERATED",
+      "current_job_id", "bigint unsigned", "YES", "VIRTUAL GENERATED",
       "case when (`is_current` = 1) then `moderation_job_id` else NULL end", null
     ],
     ["created_at", "datetime", "NO", "DEFAULT_GENERATED", "", "CURRENT_TIMESTAMP"],
@@ -246,6 +246,25 @@ const fullyReconciledIndexes = {
   uniq_moderation_attempt_current_job: true,
   idx_moderation_attempt_job_current: true
 };
+
+test("D45 provider-attempt migration keeps the cascading foreign key compatible with generated columns", async () => {
+  const connection = moderationMigrationConnection();
+
+  await prepareMigration(connection, CONTENT_MODERATION_PROVIDER_ATTEMPTS_MIGRATION);
+
+  const createTable = connection.calls.find(({ sql }) => (
+    /CREATE TABLE IF NOT EXISTS content_moderation_provider_attempts/i.test(sql)
+  ));
+  assert.ok(createTable);
+  assert.match(
+    createTable.sql,
+    /current_job_id BIGINT UNSIGNED\s+GENERATED ALWAYS AS \([\s\S]*?\) VIRTUAL,/i
+  );
+  assert.match(
+    createTable.sql,
+    /FOREIGN KEY \(moderation_job_id\) REFERENCES content_moderation_jobs\(id\) ON DELETE CASCADE/i
+  );
+});
 
 test("D45 migration deterministically normalizes historical provider-job duplicates before adding constraints", async () => {
   const connection = moderationMigrationConnection({
