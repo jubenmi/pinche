@@ -6,6 +6,7 @@ import {
   buildContentModerationConfig
 } from "../src/config/env.js";
 import {
+  createTencentProductionPreflightVideoModerationTransport,
   createTencentVideoModerationClient,
   createTencentVideoModerationTransport
 } from "../src/modules/content-moderation/tencent-video-client.js";
@@ -369,6 +370,51 @@ test("Tencent video transport signs CI video request and parses async job", asyn
   assert.doesNotMatch(calls[0].options.body, new RegExp(`token=${"p".repeat(32)}`));
   assert.doesNotMatch(calls[0].options.body, /<Async>/);
   assert.equal(JSON.stringify(calls).includes("secret-key"), false);
+});
+
+test("Tencent production preflight transport accepts only its derived private video key", async () => {
+  const calls = [];
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const objectKey = `system/content-moderation-preflight/${runId}/video-v1.mp4`;
+  const config = buildContentModerationConfig(validEnv());
+  const transport = createTencentProductionPreflightVideoModerationTransport({
+    config,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return new Response(
+        `<Response><JobsDetail><JobId>ci-video-1</JobId><State>Submitted</State><DataId>${runId}</DataId></JobsDetail></Response>`,
+        { status: 200 }
+      );
+    }
+  });
+
+  const response = await transport({
+    kind: "video",
+    runId,
+    objectKey,
+    dataId: runId,
+    policyId: config.tencentVideoPolicyId,
+    bucket: config.bucket,
+    callbackUrl: config.tencentVideoCallbackUrl,
+    region: config.tencentVideoRegion
+  });
+
+  assert.equal(response.JobId, "ci-video-1");
+  assert.match(calls[0].options.body, new RegExp(`<Object>${objectKey}</Object>`));
+  await assert.rejects(
+    transport({
+      kind: "video",
+      runId,
+      objectKey: "uploads/session-album/videos/source/user.mp4",
+      dataId: runId,
+      policyId: config.tencentVideoPolicyId,
+      bucket: config.bucket,
+      callbackUrl: config.tencentVideoCallbackUrl,
+      region: config.tencentVideoRegion
+    }),
+    /invalid production preflight video object key/
+  );
+  assert.equal(calls.length, 1);
 });
 
 test("Tencent video response body reading shares the request deadline", async () => {

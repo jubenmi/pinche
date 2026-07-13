@@ -66,6 +66,9 @@ CONTENT_MODERATION_IMAGE_INTAKE_MODE=closed
 CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=false
 CONTENT_MODERATION_VIDEO_INTAKE_MODE=closed
 CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=false
+CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CALLBACK_TIMEOUT_MS=900000
+CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TIMEOUT_POLL_MS=60000
+CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TIMEOUT_BATCH_SIZE=10
 REDIS_ENABLED=true
 REDIS_URL=redis://...                 # 或有效 REDIS_HOST/REDIS_PORT
 WECHAT_APP_ID=...
@@ -229,5 +232,9 @@ D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
 ```
 
 文本预演是同步结果，成功时应记录为 `passed`。图片与视频预演是异步结果：一次性 Job 提交成功后可能先返回 `awaiting_callback`，此时必须继续等待微信安全事件或腾讯云 CI Detail 回调命中预演 HMAC。只有对应 preflight run 最终变为 `passed`，且 `cleanup_status=deleted`，才算该 case 完成。若回调返回 `review`、`block`、`error`、超时或清理失败，均视为预演失败；保持三个入口 `closed`，查看脱敏 preflight run 状态，先处理清理失败、鉴权失败或回调失败，再重试。不要上传危险样本做真实生产验证。
+
+`content-moderation-production-preflight-timeout` 是与普通重试队列隔离的常驻 Worker。它默认每分钟检查一次已超过 15 分钟的 `started`、`submitting` 或 `awaiting_callback` 预演；文本只写失败并释放锁，图片/视频删除并核验对应私有对象后再原子写失败和释放 provider 锁。可通过上述三个有界配置调整超时、轮询和批量；该 Worker 即使预演功能当前关闭也应保持运行，以便清理之前遗留的预演对象。清理失败同样记录 `cleanup_failed` 并发出高优先级告警，不得开启任何 intake。
+
+若需暂停或回滚预演，先将 `CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=false`，但在所有既有 run 终态且对象清理完成前保留 `REFERENCE_HMAC_KEY`、两个认证回调路由和该超时 Worker。回调命中旧预演关联后仍会按关闭后的 guard 将其失败收口并清理；未命中的普通用户回调继续走原链，不因旧预演而被延迟。
 
 记录仅保存 case、服务商、结果类别、耗时、配置/镜像指纹和清理结论；不保存完整敏感文本、违规媒体、原始 trace/job/DataId、对象 key、callback body、token 或可复用 URL。

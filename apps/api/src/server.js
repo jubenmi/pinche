@@ -186,10 +186,11 @@ import {
   assertProductionPreflightGuards
 } from "./modules/content-moderation/production-preflight.js";
 import {
+  hasActiveProductionPreflightWechatImageRun,
   findProductionPreflightAttemptByAssociation,
-  finishProductionPreflightRun,
-  recordProductionPreflightAssociation,
-  releaseProductionPreflightLock
+  findProductionPreflightRun,
+  finalizeProductionPreflightRun,
+  recordProductionPreflightAssociation
 } from "./modules/content-moderation/production-preflight-repository.js";
 import {
   parseTencentProductionPreflightCallbackPayload
@@ -1160,19 +1161,26 @@ function createProductionPreflightCallbackRepository() {
       withDatabaseConnection((connection) =>
         findProductionPreflightAttemptByAssociation({ connection, ...input })
       ),
+    findRun: (input) =>
+      withDatabaseConnection((connection) =>
+        findProductionPreflightRun({ connection, ...input })
+      ),
     recordAssociation: (input) =>
       withDatabaseConnection((connection) =>
         recordProductionPreflightAssociation({ connection, ...input })
       ),
-    finishRun: (input) =>
+    finalizeRun: (input) =>
       withDatabaseConnection((connection) =>
-        finishProductionPreflightRun({ connection, ...input })
+        finalizeProductionPreflightRun({ connection, ...input })
       ),
-    releaseLock: (input) =>
+    hasActiveWechatImagePreflight: () =>
       withDatabaseConnection((connection) =>
-        releaseProductionPreflightLock({ connection, ...input })
+        hasActiveProductionPreflightWechatImageRun({ connection })
       ),
-    hasAwaitingWechatImageTrace: async () => false
+    findOrdinaryWechatImageAttempt: ({ traceId }) =>
+      withDatabaseConnection((connection) =>
+        findModerationAttemptByProviderJobId(connection, "wechat_sec_check", traceId)
+      )
   };
 }
 
@@ -1206,7 +1214,7 @@ async function buildProductionPreflightCallbackRuntime() {
   return {
     nodeEnv: config.contentModeration.nodeEnv,
     preflightEnabled: Boolean(config.contentModeration.productionPreflight?.enabled),
-    confirmation: config.contentModeration.productionPreflight?.confirmation || "",
+    confirmation: "",
     expectedConfirmation: config.contentModeration.productionPreflight?.confirmation || "",
     operatorUserId,
     operatorRole: "system_admin",
@@ -1223,7 +1231,9 @@ async function buildProductionPreflightCallbackRuntime() {
       cos: Boolean(config.contentModeration.cosEnabled && config.contentModeration.bucket && config.contentModeration.cosRegion),
       redis: Boolean(config.contentModeration.redisEnabled && (config.contentModeration.redisUrl || config.contentModeration.redisHost)),
       callback: Boolean(config.contentModeration.tencentVideoCallbackToken || config.contentModeration.wechatEventToken)
-    }
+    },
+    releaseFingerprint: config.contentModeration.productionPreflight?.releaseFingerprint,
+    appId: config.contentModeration.wechatAppId
   };
 }
 
@@ -3766,10 +3776,7 @@ async function route(request, response) {
       );
     }
     const rawCallback = await readRawBody(request, TENCENT_VIDEO_CALLBACK_MAX_BYTES);
-    if (
-      config.contentModeration.productionPreflight?.enabled &&
-      config.contentModeration.productionPreflight?.referenceHmacKey
-    ) {
+    if (config.contentModeration.productionPreflight?.referenceHmacKey) {
       try {
         const preflightResult = await tryHandleProductionPreflightTencentCallback({
           payload: parseTencentProductionPreflightCallbackPayload(rawCallback),
@@ -3777,7 +3784,12 @@ async function route(request, response) {
           hmacKey: config.contentModeration.productionPreflight.referenceHmacKey,
           guards: assertProductionPreflightGuards,
           repository: createProductionPreflightCallbackRepository(),
-          cleanupObject: cleanupProductionPreflightCallbackObject
+          cleanupObject: cleanupProductionPreflightCallbackObject,
+          onCleanupFailure: () => emitContentModerationEvent("moderation_operational_alert", {
+            outcome: "error",
+            errorCode: "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED",
+            priority: "high"
+          })
         });
         if (preflightResult.status === "handled") {
           jsonResponse(response, 200, { ok: true, data: { preflight: true } });
@@ -3870,17 +3882,19 @@ async function route(request, response) {
       });
       throw error;
     }
-    if (
-      config.contentModeration.productionPreflight?.enabled &&
-      config.contentModeration.productionPreflight?.referenceHmacKey
-    ) {
+    if (config.contentModeration.productionPreflight?.referenceHmacKey) {
       const preflightResult = await tryHandleProductionPreflightWechatImageCallback({
         event: callback,
         runtime: await buildProductionPreflightCallbackRuntime(),
         hmacKey: config.contentModeration.productionPreflight.referenceHmacKey,
         guards: assertProductionPreflightGuards,
         repository: createProductionPreflightCallbackRepository(),
-        cleanupObject: cleanupProductionPreflightCallbackObject
+        cleanupObject: cleanupProductionPreflightCallbackObject,
+        onCleanupFailure: () => emitContentModerationEvent("moderation_operational_alert", {
+          outcome: "error",
+          errorCode: "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED",
+          priority: "high"
+        })
       });
       if (preflightResult.status === "handled") {
         jsonResponse(response, 200, { ok: true, data: { preflight: true } });

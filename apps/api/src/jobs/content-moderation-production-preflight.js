@@ -11,16 +11,17 @@ import {
 } from "../modules/content-moderation/production-preflight.js";
 import {
   acquireProductionPreflightRun,
+  finalizeProductionPreflightRun,
   findProductionPreflightAttemptByAssociation,
-  finishProductionPreflightRun,
   markProductionPreflightRunAwaitingCallback,
-  recordProductionPreflightAssociation,
-  releaseProductionPreflightLock
+  markProductionPreflightRunSubmitting,
+  recordProductionPreflightAssociation
 } from "../modules/content-moderation/production-preflight-repository.js";
 import {
   createTencentProductionPreflightVideoModerationClient,
-  createTencentVideoModerationTransport
+  createTencentProductionPreflightVideoModerationTransport
 } from "../modules/content-moderation/tencent-video-client.js";
+import { emitContentModerationEvent } from "../modules/content-moderation/telemetry.js";
 import { createWechatContentSecurityClient } from "../modules/content-moderation/wechat-client.js";
 import { deleteCosObject, headCosObject, putCosObject } from "../storage/cos.js";
 
@@ -53,28 +54,44 @@ export async function main({
       await connection.end();
     }
   } catch (error) {
-    stderr.write(JSON.stringify({ ok: false, error: String(error.message || error) }) + "\n");
+    stderr.write(JSON.stringify({
+      ok: false,
+      code: "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_JOB_FAILED"
+    }) + "\n");
     exit(1);
   }
 }
 
-export function createProductionPreflightRunnerFromRuntime({ connection, moderationConfig }) {
-  const tencentTransport = createTencentVideoModerationTransport({
-    config: moderationConfig
+export function createProductionPreflightRunnerFromRuntime({
+  connection,
+  moderationConfig,
+  env = process.env,
+  fetchImpl,
+  wechatClient
+}) {
+  const tencentTransport = createTencentProductionPreflightVideoModerationTransport({
+    config: moderationConfig,
+    ...(typeof fetchImpl === "function" ? { fetchImpl } : {})
   });
   return createProductionPreflightRunner({
     hmacKey: moderationConfig.productionPreflight.referenceHmacKey,
     guards: assertProductionPreflightGuards,
+    refreshRuntime: () => buildProductionPreflightRuntime({
+      connection,
+      moderationConfig,
+      env
+    }),
     repository: bindProductionPreflightRepository(connection),
     userRepository: {
       getOpenIdForUserId: (userId) => getOpenIdForUserId(connection, userId)
     },
-    wechatClient: createWechatContentSecurityClient(),
+    wechatClient: wechatClient || createWechatContentSecurityClient(),
     tencentVideoClient: createTencentProductionPreflightVideoModerationClient({
       config: moderationConfig,
       transport: {
         submitVideo: (input) => tencentTransport({
           kind: "video",
+          runId: input.runId,
           policyId: moderationConfig.tencentVideoPolicyId,
           dataId: input.dataId,
           objectKey: input.objectKey,
@@ -96,6 +113,11 @@ export function createProductionPreflightRunnerFromRuntime({ connection, moderat
       deleteObject: (key) => deleteCosObject({ key, config: config.cos }),
       headObject: (key) => headCosObject({ key, config: config.cos })
     },
+    onCleanupFailure: () => emitContentModerationEvent("moderation_operational_alert", {
+      outcome: "error",
+      errorCode: "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED",
+      priority: "high"
+    }),
     clock: () => new Date()
   });
 }
@@ -135,9 +157,9 @@ function bindProductionPreflightRepository(connection) {
     acquireRun: (input) => acquireProductionPreflightRun({ connection, ...input }),
     recordAssociation: (input) => recordProductionPreflightAssociation({ connection, ...input }),
     findAttemptByAssociation: (input) => findProductionPreflightAttemptByAssociation({ connection, ...input }),
+    markSubmitting: (input) => markProductionPreflightRunSubmitting({ connection, ...input }),
     markAwaitingCallback: (input) => markProductionPreflightRunAwaitingCallback({ connection, ...input }),
-    finishRun: (input) => finishProductionPreflightRun({ connection, ...input }),
-    releaseLock: (input) => releaseProductionPreflightLock({ connection, ...input })
+    finalizeRun: (input) => finalizeProductionPreflightRun({ connection, ...input })
   };
 }
 

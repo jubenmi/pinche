@@ -198,13 +198,49 @@ export function createTencentVideoModerationTransport({
   now = () => new Date(),
   timeoutMs = 15_000
 }) {
+  return createTencentVideoModerationTransportWithObjectValidator({
+    config,
+    fetchImpl,
+    now,
+    timeoutMs,
+    validateObjectKey: (request) => requiredVideoSourceObjectKey(request.objectKey)
+  });
+}
+
+export function createTencentProductionPreflightVideoModerationTransport({
+  config,
+  fetchImpl = globalThis.fetch,
+  now = () => new Date(),
+  timeoutMs = 15_000
+}) {
+  return createTencentVideoModerationTransportWithObjectValidator({
+    config,
+    fetchImpl,
+    now,
+    timeoutMs,
+    validateObjectKey: (request) => {
+      const runId = required(request.runId, "runId");
+      const objectKey = required(request.objectKey, "objectKey");
+      validateProductionPreflightVideoObjectKey(runId, objectKey);
+      return objectKey;
+    }
+  });
+}
+
+function createTencentVideoModerationTransportWithObjectValidator({
+  config,
+  fetchImpl,
+  now,
+  timeoutMs,
+  validateObjectKey
+}) {
   if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required");
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs >= 30_000) {
     throw new TypeError("timeoutMs must be a positive duration shorter than the retry lease");
   }
   return async function transport(request) {
     if (request.kind !== "video") throw new TypeError("only Tencent video moderation is supported");
-    requiredVideoSourceObjectKey(request.objectKey);
+    validateObjectKey(request);
     const endpoint = "video/auditing";
     const host = `${required(request.bucket, "bucket")}.ci.${required(request.region, "region")}.myqcloud.com`;
     const callbackUrl = callbackWithToken(
@@ -286,6 +322,7 @@ export function createTencentProductionPreflightVideoModerationClient({ config, 
     async submitProductionPreflightVideo({ runId, objectKey, dataId }) {
       validateProductionPreflightVideoObjectKey(runId, objectKey);
       return transport.submitVideo({
+        runId,
         objectKey,
         dataId,
         bizType: config.tencentVideoPolicyId

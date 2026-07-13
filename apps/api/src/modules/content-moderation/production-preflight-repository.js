@@ -123,6 +123,65 @@ export async function findProductionPreflightAttemptByAssociation({ connection, 
     : null;
 }
 
+export async function findProductionPreflightRun({ connection, runId }) {
+  const [rows] = await connection.execute(
+    `SELECT id, case_id, provider, state, config_fingerprint, started_at, updated_at
+     FROM content_moderation_production_preflight_runs
+     WHERE id = ?
+     LIMIT 1`,
+    [runId]
+  );
+  const row = rows[0];
+  return row
+    ? {
+        id: row.id,
+        caseId: row.case_id,
+        provider: row.provider,
+        state: row.state,
+        configFingerprint: row.config_fingerprint,
+        startedAt: row.started_at,
+        updatedAt: row.updated_at
+      }
+    : null;
+}
+
+export async function hasActiveProductionPreflightWechatImageRun({ connection }) {
+  const [rows] = await connection.execute(
+    `SELECT 1
+     FROM content_moderation_production_preflight_runs
+     WHERE provider = 'wechat_image'
+       AND state IN ('submitting', 'awaiting_callback')
+     LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
+export async function listTimedOutProductionPreflightRuns({ connection, cutoff, limit }) {
+  const cutoffAt = new Date(cutoff);
+  const batchSize = Number(limit);
+  if (!Number.isFinite(cutoffAt.getTime())) {
+    throw new TypeError("production preflight timeout cutoff is invalid");
+  }
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+    throw new TypeError("production preflight timeout batch size is invalid");
+  }
+  const [rows] = await connection.execute(
+    `SELECT id, provider, case_id, config_fingerprint
+     FROM content_moderation_production_preflight_runs
+     WHERE state IN ('started', 'submitting', 'awaiting_callback')
+       AND updated_at <= ?
+     ORDER BY updated_at ASC
+     LIMIT ?`,
+    [toSqlDateTime(cutoffAt), batchSize]
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    provider: row.provider,
+    caseId: row.case_id,
+    configFingerprint: row.config_fingerprint
+  }));
+}
+
 export async function finishProductionPreflightRun({
   connection,
   runId,
@@ -133,7 +192,7 @@ export async function finishProductionPreflightRun({
   failureCode = null,
   failureMessage = null
 }) {
-  await connection.execute(
+  const [result] = await connection.execute(
     `UPDATE content_moderation_production_preflight_runs
      SET state = ?,
          result_category = ?,
@@ -142,9 +201,138 @@ export async function finishProductionPreflightRun({
          failure_code = ?,
          failure_message = ?,
          completed_at = CURRENT_TIMESTAMP(3)
-     WHERE id = ?`,
+     WHERE id = ? AND state IN ('started', 'submitting')`,
     [state, resultCategory, cleanupStatus, elapsedMs, failureCode, failureMessage, runId]
   );
+  return result.affectedRows === 1;
+}
+
+export async function finalizeProductionPreflightRun({
+  connection,
+  runId,
+  provider,
+  resultCategory,
+  cleanupObject,
+  failureCode = null,
+  expectedStates = ["awaiting_callback"],
+  now = new Date()
+}) {
+  assertProvider(provider);
+  const allowedStates = Array.isArray(expectedStates) && expectedStates.length > 0
+    ? new Set(expectedStates.map((state) => String(state)))
+    : new Set(["awaiting_callback"]);
+  await connection.beginTransaction();
+  try {
+    const [rows] = await connection.execute(
+      `SELECT id, provider, case_id, state, started_at
+       FROM content_moderation_production_preflight_runs
+       WHERE id = ? AND provider = ?
+       FOR UPDATE`,
+      [runId, provider]
+    );
+    const run = rows[0];
+    if (!run || !allowedStates.has(run.state)) {
+      await connection.commit();
+      return { finalized: false, state: run?.state || "missing" };
+    }
+
+    let finalResultCategory = normalizedPreflightResultCategory(resultCategory);
+    let finalState = finalResultCategory === "pass" ? "passed" : "failed";
+    let cleanupStatus = "not_required";
+    let finalFailureCode = finalState === "passed"
+      ? null
+      : failureCode || "PRODUCTION_PREFLIGHT_NON_PASS";
+    let failureMessage = finalState === "passed"
+      ? null
+      : `provider returned ${finalResultCategory}`;
+
+    try {
+      if (typeof cleanupObject === "function") {
+        await cleanupObject({
+          runId,
+          provider,
+          caseId: run.case_id,
+          state: finalState
+        });
+        cleanupStatus = "deleted";
+      }
+    } catch {
+      finalResultCategory = "error";
+      finalState = "failed";
+      cleanupStatus = "cleanup_failed";
+      finalFailureCode = "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED";
+      failureMessage = "production preflight cleanup failed";
+    }
+
+    const [updated] = await connection.execute(
+      `UPDATE content_moderation_production_preflight_runs
+       SET state = ?,
+           result_category = ?,
+           cleanup_status = ?,
+           elapsed_ms = ?,
+           failure_code = ?,
+           failure_message = ?,
+           completed_at = CURRENT_TIMESTAMP(3)
+       WHERE id = ? AND state = ?`,
+      [
+        finalState,
+        finalResultCategory,
+        cleanupStatus,
+        elapsedMilliseconds(run.started_at, now),
+        finalFailureCode,
+        failureMessage,
+        runId,
+        run.state
+      ]
+    );
+    if (updated.affectedRows !== 1) {
+      throw new Error("production preflight finalization state transition failed");
+    }
+    await connection.execute(
+      `UPDATE content_moderation_production_preflight_provider_locks
+       SET active_run_id = NULL
+       WHERE provider = ? AND active_run_id = ?`,
+      [provider, runId]
+    );
+    await connection.commit();
+    return {
+      finalized: true,
+      state: finalState,
+      resultCategory: finalResultCategory,
+      cleanupStatus
+    };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  }
+}
+
+function normalizedPreflightResultCategory(value) {
+  const category = String(value || "").trim().toLowerCase();
+  return ["pass", "review", "block", "error"].includes(category) ? category : "error";
+}
+
+function elapsedMilliseconds(startedAt, now) {
+  const started = new Date(startedAt).getTime();
+  const ended = new Date(now).getTime();
+  if (!Number.isFinite(started) || !Number.isFinite(ended)) return 0;
+  return Math.max(0, ended - started);
+}
+
+export async function markProductionPreflightRunSubmitting({ connection, runId }) {
+  const [result] = await connection.execute(
+    `UPDATE content_moderation_production_preflight_runs
+     SET state = 'submitting',
+         result_category = NULL,
+         cleanup_status = 'pending',
+         elapsed_ms = NULL,
+         failure_code = NULL,
+         failure_message = NULL,
+         completed_at = NULL
+     WHERE id = ? AND state = 'started'`,
+    [runId]
+  );
+  return result.affectedRows === 1;
 }
 
 export async function markProductionPreflightRunAwaitingCallback({
@@ -154,7 +342,7 @@ export async function markProductionPreflightRunAwaitingCallback({
   cleanupStatus = "pending",
   elapsedMs
 }) {
-  await connection.execute(
+  const [result] = await connection.execute(
     `UPDATE content_moderation_production_preflight_runs
      SET state = 'awaiting_callback',
          result_category = ?,
@@ -163,9 +351,10 @@ export async function markProductionPreflightRunAwaitingCallback({
          failure_code = NULL,
          failure_message = NULL,
          completed_at = NULL
-     WHERE id = ?`,
+     WHERE id = ? AND state = 'submitting'`,
     [resultCategory, cleanupStatus, elapsedMs, runId]
   );
+  return result.affectedRows === 1;
 }
 
 export async function releaseProductionPreflightLock({ connection, provider, runId }) {
