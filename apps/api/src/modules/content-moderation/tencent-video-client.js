@@ -46,6 +46,18 @@ function requiredVideoSourceObjectKey(value) {
   return objectKey;
 }
 
+export function validateTencentVideoSourceObjectKey(value) {
+  return requiredVideoSourceObjectKey(value);
+}
+
+export function validateProductionPreflightVideoObjectKey(runId, objectKey) {
+  const expected = `system/content-moderation-preflight/${runId}/video-v1.mp4`;
+  if (objectKey !== expected) {
+    throw new TypeError("invalid production preflight video object key");
+  }
+  return true;
+}
+
 function xml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -261,6 +273,23 @@ export function createTencentVideoModerationClient({ config, transport }) {
         callbackUrl: config.tencentVideoCallbackUrl
       };
       return validateTencentVideoSubmission(await transport(request), request.dataId);
+    }
+  };
+}
+
+export function createTencentProductionPreflightVideoModerationClient({ config, transport }) {
+  if (!config || typeof config !== "object") throw new TypeError("moderation config is required");
+  if (!transport || typeof transport.submitVideo !== "function") {
+    throw new TypeError("production preflight Tencent transport is required");
+  }
+  return {
+    async submitProductionPreflightVideo({ runId, objectKey, dataId }) {
+      validateProductionPreflightVideoObjectKey(runId, objectKey);
+      return transport.submitVideo({
+        objectKey,
+        dataId,
+        bizType: config.tencentVideoPolicyId
+      });
     }
   };
 }

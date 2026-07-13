@@ -13,7 +13,9 @@ import {
 import {
   assertProductionPreflightGuards,
   createProductionPreflightConfigFingerprint,
-  parseProductionPreflightCliArgs
+  createProductionPreflightRunner,
+  parseProductionPreflightCliArgs,
+  runProductionPreflightCase
 } from "../src/modules/content-moderation/production-preflight.js";
 
 function validRuntime(overrides = {}) {
@@ -139,4 +141,123 @@ test("createProductionPreflightConfigFingerprint is stable and redacted", () => 
   });
   assert.match(fingerprint, /^[0-9a-f]{64}$/);
   assert.equal(fingerprint.includes("do-not-include"), false);
+});
+
+test("runProductionPreflightCase sends WeChat text directly and writes no normal moderation state", async () => {
+  const calls = [];
+  const runner = createProductionPreflightRunner({
+    guards: () => undefined,
+    repository: {
+      acquireRun: async () => ({ id: "11111111-1111-4111-8111-111111111111" }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    userRepository: {
+      getOpenIdForUserId: async () => "openid-in-memory-only"
+    },
+    wechatClient: {
+      checkText: async (input) => {
+        calls.push({ name: "checkText", input });
+        return { resultCategory: "pass" };
+      }
+    },
+    normalModeration: {
+      applyMediaResult: async () => calls.push({ name: "forbidden-normal-apply" })
+    },
+    clock: () => new Date("2026-07-13T00:00:00.000Z")
+  });
+
+  const result = await runProductionPreflightCase(runner, {
+    caseId: "wechat-text-v1",
+    runtime: validRuntime()
+  });
+
+  assert.equal(result.state, "passed");
+  assert.equal(calls.some((call) => call.name === "forbidden-normal-apply"), false);
+  assert.equal(calls.some((call) => call.input?.openid === "openid-in-memory-only"), true);
+});
+
+test("runProductionPreflightCase uploads image to private COS, stores trace HMAC, and cleans up on pass", async () => {
+  const calls = [];
+  const runner = createProductionPreflightRunner({
+    guards: () => undefined,
+    repository: {
+      acquireRun: async () => ({ id: "11111111-1111-4111-8111-111111111111" }),
+      recordAssociation: async (input) => calls.push({ name: "recordAssociation", input }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    userRepository: {
+      getOpenIdForUserId: async () => "openid-in-memory-only"
+    },
+    cos: {
+      putObject: async (input) => calls.push({ name: "putObject", input }),
+      buildSignedUrl: async (key) => `https://private.example/${encodeURIComponent(key)}`,
+      deleteObject: async (key) => calls.push({ name: "deleteObject", key }),
+      headObject: async () => {
+        const error = new Error("not found");
+        error.code = "COS_OBJECT_NOT_FOUND";
+        throw error;
+      }
+    },
+    wechatClient: {
+      checkImage: async () => ({ traceId: "raw-trace-id", resultCategory: "pass" })
+    },
+    hmacKey: "01234567890123456789012345678901",
+    clock: () => new Date("2026-07-13T00:00:00.000Z")
+  });
+
+  const result = await runProductionPreflightCase(runner, {
+    caseId: "wechat-image-v1",
+    runtime: validRuntime()
+  });
+
+  assert.equal(result.state, "passed");
+  assert.equal(
+    calls.find((call) => call.name === "putObject").input.key,
+    "system/content-moderation-preflight/11111111-1111-4111-8111-111111111111/image-v1.png"
+  );
+  assert.equal(calls.some((call) => call.name === "deleteObject"), true);
+  assert.equal(JSON.stringify(calls).includes("raw-trace-id"), false);
+});
+
+test("runProductionPreflightCase fails when COS cleanup verification fails", async () => {
+  const runner = createProductionPreflightRunner({
+    guards: () => undefined,
+    repository: {
+      acquireRun: async () => ({ id: "11111111-1111-4111-8111-111111111111" }),
+      recordAssociation: async () => undefined,
+      finishRun: async (input) => {
+        assert.equal(input.cleanupStatus, "cleanup_failed");
+      },
+      releaseLock: async () => undefined
+    },
+    userRepository: {
+      getOpenIdForUserId: async () => "openid-in-memory-only"
+    },
+    cos: {
+      putObject: async () => undefined,
+      buildSignedUrl: async () => "https://private.example/image",
+      deleteObject: async () => undefined,
+      headObject: async () => ({ exists: true })
+    },
+    wechatClient: {
+      checkImage: async () => ({ traceId: "raw-trace-id", resultCategory: "pass" })
+    },
+    hmacKey: "01234567890123456789012345678901",
+    clock: () => new Date("2026-07-13T00:00:00.000Z")
+  });
+
+  await assert.rejects(
+    runProductionPreflightCase(runner, { caseId: "wechat-image-v1", runtime: validRuntime() }),
+    /cleanup verification failed/
+  );
+});
+
+test("normal Tencent video validator still rejects production preflight keys", async () => {
+  const { validateTencentVideoSourceObjectKey } = await import("../src/modules/content-moderation/tencent-video-client.js");
+  assert.throws(
+    () => validateTencentVideoSourceObjectKey("system/content-moderation-preflight/11111111-1111-4111-8111-111111111111/video-v1.mp4"),
+    /video source object/
+  );
 });
