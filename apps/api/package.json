@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@jubenmi/talk": "file:../../packages/talk",
+    "@pinche/shared": "file:../../packages/shared",
     "mysql2": "^3.11.5",
     "redis": "^4.7.1",
     "sharp": "^0.35.2"
