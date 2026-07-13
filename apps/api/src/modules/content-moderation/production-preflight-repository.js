@@ -147,6 +147,27 @@ export async function finishProductionPreflightRun({
   );
 }
 
+export async function markProductionPreflightRunAwaitingCallback({
+  connection,
+  runId,
+  resultCategory = "submitted",
+  cleanupStatus = "pending",
+  elapsedMs
+}) {
+  await connection.execute(
+    `UPDATE content_moderation_production_preflight_runs
+     SET state = 'awaiting_callback',
+         result_category = ?,
+         cleanup_status = ?,
+         elapsed_ms = ?,
+         failure_code = NULL,
+         failure_message = NULL,
+         completed_at = NULL
+     WHERE id = ?`,
+    [resultCategory, cleanupStatus, elapsedMs, runId]
+  );
+}
+
 export async function releaseProductionPreflightLock({ connection, provider, runId }) {
   assertProvider(provider);
   await connection.execute(

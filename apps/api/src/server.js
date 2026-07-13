@@ -1176,6 +1176,23 @@ function createProductionPreflightCallbackRepository() {
   };
 }
 
+async function cleanupProductionPreflightCallbackObject({ objectKey }) {
+  await deleteCosObject({ key: objectKey, config: config.cos });
+  try {
+    await headCosObject({ key: objectKey, config: config.cos });
+  } catch (error) {
+    if (error?.code === "COS_OBJECT_NOT_FOUND") {
+      return;
+    }
+    throw error;
+  }
+  throw new AppError(
+    500,
+    "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED",
+    "production preflight object cleanup verification failed"
+  );
+}
+
 async function buildProductionPreflightCallbackRuntime() {
   const operatorUserId = Number(config.contentModeration.productionPreflight?.operatorUserId || 0);
   const operatorStatus = await withDatabaseConnection(async (connection) => {
@@ -3759,7 +3776,8 @@ async function route(request, response) {
           runtime: await buildProductionPreflightCallbackRuntime(),
           hmacKey: config.contentModeration.productionPreflight.referenceHmacKey,
           guards: assertProductionPreflightGuards,
-          repository: createProductionPreflightCallbackRepository()
+          repository: createProductionPreflightCallbackRepository(),
+          cleanupObject: cleanupProductionPreflightCallbackObject
         });
         if (preflightResult.status === "handled") {
           jsonResponse(response, 200, { ok: true, data: { preflight: true } });
@@ -3861,7 +3879,8 @@ async function route(request, response) {
         runtime: await buildProductionPreflightCallbackRuntime(),
         hmacKey: config.contentModeration.productionPreflight.referenceHmacKey,
         guards: assertProductionPreflightGuards,
-        repository: createProductionPreflightCallbackRepository()
+        repository: createProductionPreflightCallbackRepository(),
+        cleanupObject: cleanupProductionPreflightCallbackObject
       });
       if (preflightResult.status === "handled") {
         jsonResponse(response, 200, { ok: true, data: { preflight: true } });
