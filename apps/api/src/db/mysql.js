@@ -18,7 +18,10 @@ export const requiredSchemaTables = Object.freeze([
   "content_moderation_provider_attempts",
   "content_moderation_text_proposals",
   "content_moderation_audit_logs",
-  "content_moderation_orphan_scan_state"
+  "content_moderation_orphan_scan_state",
+  "content_moderation_production_preflight_provider_locks",
+  "content_moderation_production_preflight_runs",
+  "content_moderation_production_preflight_attempts"
 ]);
 
 export function serverConnectionOptions() {
