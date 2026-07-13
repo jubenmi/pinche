@@ -324,7 +324,25 @@ export function buildContentModerationConfig(env = process.env) {
     secretId: stringValue(env, "COS_SECRET_ID"),
     secretKey: stringValue(env, "COS_SECRET_KEY"),
     bucket: stringValue(env, "COS_BUCKET"),
-    cosRegion: stringValue(env, "COS_REGION")
+    cosRegion: stringValue(env, "COS_REGION"),
+    productionPreflight: {
+      enabled: booleanValue(env.CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED, false),
+      confirmation: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CONFIRMATION"),
+      operatorUserId: boundedModerationInteger(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_OPERATOR_USER_ID", {
+        fallback: 0,
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER
+      }),
+      testAdminUserId: boundedModerationInteger(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TEST_ADMIN_USER_ID", {
+        fallback: 0,
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER
+      }),
+      referenceHmacKey: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_REFERENCE_HMAC_KEY"),
+      imageFingerprint: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_IMAGE_FINGERPRINT"),
+      videoFingerprint: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_VIDEO_FINGERPRINT"),
+      releaseFingerprint: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_RELEASE_FINGERPRINT")
+    }
   };
 }
 
@@ -384,9 +402,35 @@ export function assertContentModerationConfig(
     }
   }
   if (
+    moderationConfig.productionPreflight?.enabled
+  ) {
+    if (!moderationConfig.productionPreflight.confirmation || moderationConfig.productionPreflight.confirmation.length < 32) {
+      missing.push("CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CONFIRMATION");
+    }
+    if (!moderationConfig.productionPreflight.operatorUserId) {
+      missing.push("CONTENT_MODERATION_PRODUCTION_PREFLIGHT_OPERATOR_USER_ID");
+    }
+    if (!moderationConfig.productionPreflight.testAdminUserId) {
+      missing.push("CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TEST_ADMIN_USER_ID");
+    }
+    if (!moderationConfig.productionPreflight.referenceHmacKey || moderationConfig.productionPreflight.referenceHmacKey.length < 32) {
+      missing.push("CONTENT_MODERATION_PRODUCTION_PREFLIGHT_REFERENCE_HMAC_KEY");
+    }
+    if (!moderationConfig.productionPreflight.imageFingerprint) {
+      missing.push("CONTENT_MODERATION_PRODUCTION_PREFLIGHT_IMAGE_FINGERPRINT");
+    }
+    if (!moderationConfig.productionPreflight.videoFingerprint) {
+      missing.push("CONTENT_MODERATION_PRODUCTION_PREFLIGHT_VIDEO_FINGERPRINT");
+    }
+    if (!moderationConfig.productionPreflight.releaseFingerprint) {
+      missing.push("CONTENT_MODERATION_PRODUCTION_PREFLIGHT_RELEASE_FINGERPRINT");
+    }
+  }
+  if (
     !moderationConfig.enabled &&
     !wechatModerationEnabled &&
-    !moderationConfig.tencentVideoEnabled
+    !moderationConfig.tencentVideoEnabled &&
+    !moderationConfig.productionPreflight?.enabled
   ) {
     if (missing.length > 0) {
       throw moderationConfigurationError(`content moderation configuration is missing: ${missing.join(", ")}`);
