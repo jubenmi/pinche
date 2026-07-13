@@ -20,7 +20,8 @@ function createFakePreflightConnection() {
     runs: new Map(),
     attempts: new Map(),
     tx: [],
-    sql: []
+    sql: [],
+    params: []
   };
   return {
     state,
@@ -35,6 +36,7 @@ function createFakePreflightConnection() {
     },
     async execute(sql, params = []) {
       state.sql.push(sql.replace(/\s+/g, " ").trim());
+      state.params.push(params);
       if (sql.includes("INSERT INTO content_moderation_production_preflight_provider_locks")) {
         const [provider] = params;
         if (!state.locks.has(provider)) {
@@ -95,7 +97,8 @@ function createFakePreflightConnection() {
         return [run && run.provider === provider ? [run] : []];
       }
       if (sql.includes("SELECT id, provider, case_id") && sql.includes("updated_at <=")) {
-        const [cutoff, limit] = params;
+        const [cutoff] = params;
+        const limit = Number(sql.match(/LIMIT (\d+)/)?.[1]);
         const cutoffAt = new Date(`${cutoff.replace(" ", "T")}Z`).getTime();
         const rows = [...state.runs.values()]
           .filter((run) =>
@@ -440,6 +443,11 @@ test("repository lists only expired asynchronous preflight runs", async () => {
     caseId: "wechat-image-v1",
     configFingerprint: "old-cfg"
   }]);
+  const listQuery = connection.state.sql.find((sql) => sql.includes("SELECT id, provider, case_id"));
+  assert.match(listQuery, /LIMIT 10$/);
+  assert.doesNotMatch(listQuery, /LIMIT \?/);
+  const listQueryIndex = connection.state.sql.indexOf(listQuery);
+  assert.deepEqual(connection.state.params[listQueryIndex], ["2026-07-13 00:10:00.000"]);
 });
 
 test("repository also lists an expired started preflight for recovery", async () => {
