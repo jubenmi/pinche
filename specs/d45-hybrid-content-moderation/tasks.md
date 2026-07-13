@@ -21,14 +21,18 @@
   - [x] 保留统一数据模型、状态机、读取门禁和腾讯云视频代码。
   - [x] 将通用命名与 provider 值迁移为混合方案。
 
-- [ ] D45.3 校准审核数据模型和状态机。
+- [x] D45.3 校准审核数据模型和状态机。
   - [x] 以 `stale` 作为文本提案终态；审核任务沿用统一终态并记录 `CONTENT_MODERATION_PROPOSAL_STALE`，避免扩展未约定的全局任务状态。
   - [x] 测试微信 trace_id、腾讯云视频 JobId、不可变版本和 provider 唯一约束。
   - [x] 新增 provider attempts，保证 `(provider, provider_job_id)` 唯一并标识当前尝试。
-  - [ ] 修复 provider attempts 的 MySQL 生成列与级联外键兼容性。
+  - [x] 修复 provider attempts 的 MySQL 生成列与级联外键兼容性。
     - 2026-07-13：生产迁移 `0025` 在创建外键时返回 `Cannot add foreign key constraint`；已定位为 `STORED` 生成列的基列不能与 `ON DELETE CASCADE` 共用。当前以最小兼容修复与回归验证处理中，未重试生产迁移。
     - 2026-07-13：`0025` 兼容修复发布后，生产迁移在 `0026` 的 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 被目标 MySQL 8.0 语法拒绝；`0027` 存在同类写法。API 与 Worker 尚未更新，当前按同一 D45.3 子项以幂等 schema reconciliation、失败回归和完整验证修复，三类 intake 继续保持 `closed`。
     - 2026-07-13：`0026` 与 `0027` 已改为迁移 runner 的幂等 schema reconciliation：先严格校验锚点/目标列形状，只在目标列缺失时执行兼容的裸 `ADD COLUMN`；目标列正确但此前未记版本时安全补记，不匹配时关闭式失败。已覆盖 DDL 成功但迁移记录失败后的两次重跑，并完成定向 40/40、`d45:unit` 436/436、`d45:check`、`d45:smoke` 71/71；待完整根检查、发布和生产一次性迁移成功后才勾选本项。
+    - 2026-07-13：已重新执行完整 `npm run check`，退出码 0。生产一次性迁移第三次创建仍被 Portainer 的“从现有 API 复制”流程错误解析为旧摘要镜像并重复拼接私有仓库前缀，容器未创建；现有 API 和三个审核 Worker 未改动。待获得 Docker 宿主机受控命令入口后，使用同一已发布镜像和现有运行配置执行一次性迁移，再继续服务替换。
+    - 2026-07-14：已获得目标 Docker 宿主机的交互终端，并确认现有 API 与三个 D45 Worker 均在运行。当前仅核验 API 容器的镜像、网络和启动配置；未读取或输出环境变量/密钥，未执行迁移或替换，三个 intake 继续保持 `closed`。
+    - 2026-07-14：主机现运行镜像已核验为 `hkccr.ccs.tencentyun.com/murder/pinche:latest`（本地镜像 ID `sha256:486a79aa2bdbcc1bb09bba7f36acfdaa10ea6ff21850da9c4a45a1098dd0a5d5`），并确认镜像内含 `0025`–`0029` 及显式 `npm run migrate` 入口。已重新执行完整 `npm run check`，退出码 0。待当次生产数据库迁移确认后，以现有 API 的受保护运行环境在 `pinche_internal` 网络执行一次性迁移；API/Worker 仍未替换，三个 intake 保持 `closed`。
+    - 2026-07-14：生产 API 入口日志已实证迁移结果 `ok: true`、`database: pinche`、`executed: []`、`total: 31`，说明包括 `0025`–`0029` 在内的全部迁移版本已成功记录；本项据此完成。随后发现该镜像因 API 包未声明直接导入的 `@pinche/shared` 而在迁移后重启，未监听端口；新建的测试先失败再通过，修复正待发布为新镜像。三个 intake 未打开，D45.18 仍未执行。
   - [x] 保留历史媒体 `approved_legacy`，新媒体显式 pending。
   - [x] 文本 Review/Error 使用隐藏提案。
   - [x] 管理员决定优先于服务商事件。
