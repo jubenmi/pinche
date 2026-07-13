@@ -171,8 +171,8 @@ export async function listTimedOutProductionPreflightRuns({ connection, cutoff, 
      WHERE state IN ('started', 'submitting', 'awaiting_callback')
        AND updated_at <= ?
      ORDER BY updated_at ASC
-     LIMIT ?`,
-    [toSqlDateTime(cutoffAt), batchSize]
+     LIMIT ${batchSize}`,
+    [toSqlDateTime(cutoffAt)]
   );
   return rows.map((row) => ({
     id: row.id,
