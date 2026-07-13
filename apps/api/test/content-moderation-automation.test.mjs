@@ -16,7 +16,7 @@ test("D45 automation commands keep unit, static checks, and fake-provider smoke 
 
   assert.equal(
     rootPackage.scripts["d45:unit"],
-    "node --test apps/api/test/content-moderation-*.test.mjs apps/api/test/wechat-access-token.test.mjs apps/miniprogram/test/contentModeration.test.mjs"
+    "npm --workspace @jubenmi/talk run test && node --test apps/api/test/content-moderation-*.test.mjs apps/api/test/wechat-access-token.test.mjs apps/miniprogram/test/contentModeration.test.mjs"
   );
   assert.equal(rootPackage.scripts["d45:check"], "node scripts/d45-content-moderation-check.js");
   assert.equal(rootPackage.scripts["d45:smoke"], "node scripts/d45-content-moderation-smoke.js");

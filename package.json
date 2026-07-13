@@ -49,7 +49,7 @@
     "d43:unit": "npm --workspace packages/shared run test:album-media && npm --workspace apps/api run test:album-image && node --test apps/miniprogram/test/albumPhotoUpload.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs && npm --workspace apps/admin-web run test:album-media",
     "d43:smoke": "node scripts/d43-album-media-cos-direct-smoke.js",
     "d44:check": "node scripts/d44-post-session-media-stripe-check.js",
-    "d45:unit": "node --test apps/api/test/content-moderation-*.test.mjs apps/api/test/wechat-access-token.test.mjs apps/miniprogram/test/contentModeration.test.mjs",
+    "d45:unit": "npm --workspace @jubenmi/talk run test && node --test apps/api/test/content-moderation-*.test.mjs apps/api/test/wechat-access-token.test.mjs apps/miniprogram/test/contentModeration.test.mjs",
     "d45:check": "node scripts/d45-content-moderation-check.js",
     "d45:smoke": "node scripts/d45-content-moderation-smoke.js"
   },
