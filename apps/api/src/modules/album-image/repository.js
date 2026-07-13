@@ -196,6 +196,13 @@ export async function completeMediaCleanup(
   connection,
   { jobId, mediaId, leaseToken }
 ) {
+  // Callback processing locks the media before its cleanup job. Keep the
+  // completion path in the same order so a late output can invalidate this
+  // lease without a media/job lock inversion.
+  const [mediaRows] = await connection.query(
+    "SELECT * FROM session_album_photos WHERE id = ? LIMIT 1 FOR UPDATE",
+    [mediaId]
+  );
   const [jobs] = await connection.query(
     `SELECT * FROM session_album_object_cleanup_jobs
      WHERE id = ? AND status = 'leased' AND lease_token = ?
@@ -203,10 +210,6 @@ export async function completeMediaCleanup(
     [jobId, leaseToken]
   );
   if (!jobs[0] || Number(jobs[0].media_id) !== Number(mediaId)) return false;
-  const [mediaRows] = await connection.query(
-    "SELECT * FROM session_album_photos WHERE id = ? LIMIT 1 FOR UPDATE",
-    [mediaId]
-  );
   if (mediaRows[0]) {
     await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [mediaId]);
     await connection.query("DELETE FROM session_album_photos WHERE id = ? AND status = 'deleting'", [mediaId]);

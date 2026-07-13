@@ -269,6 +269,10 @@ export default {
       return latest?.id ? String(latest.id) : "";
     },
     messageErrorText(error) {
+      const moderationMessage = this.authTools.contentModerationErrorText?.(error);
+      if (moderationMessage) {
+        return moderationMessage;
+      }
       if (error?.statusCode === 401) {
         return "登录并上车后可查看车内聊天。";
       }

@@ -7,7 +7,11 @@ import { emitAlbumImageEvent } from "../src/modules/album-image/telemetry.js";
 const nowMs = Date.parse("2026-07-11T01:00:00.000Z");
 const user = { user: { id: 9 }, roles: [] };
 
-function buildService({ cosEnabled = true, directUploadRequired = false } = {}) {
+function buildService({
+  cosEnabled = true,
+  directUploadRequired = false,
+  assertImageIntake = () => {}
+} = {}) {
   const state = { inserted: null, events: [] };
   const service = createAlbumImageUploadService({
     now: () => nowMs,
@@ -21,6 +25,7 @@ function buildService({ cosEnabled = true, directUploadRequired = false } = {}) 
       region: cosEnabled ? "region" : ""
     },
     directUploadRequired,
+    assertImageIntake,
     transaction: async (run) => run({}),
     access: async (_connection, _user, input) => ({ id: Number(input.sessionId) }),
     repository: {
@@ -33,6 +38,29 @@ function buildService({ cosEnabled = true, directUploadRequired = false } = {}) 
   });
   return { service, state };
 }
+
+test("a closed intake rejects v2 image intent before creating a persisted upload", async () => {
+  const { service, state } = buildService({
+    assertImageIntake: () => {
+      throw Object.assign(new Error("closed"), {
+        code: "CONTENT_MODERATION_INTAKE_CLOSED",
+        statusCode: 503
+      });
+    }
+  });
+
+  await assert.rejects(service.createIntent({
+    user,
+    body: {
+      kind: "sessionAlbumPhoto",
+      sessionId: 8,
+      extension: ".jpg",
+      contentType: "image/jpeg",
+      byteSize: 1
+    }
+  }), { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 });
+  assert.equal(state.inserted, null);
+});
 
 test("v2 intent fixes key, timing, source facts, processing, and no fallback", async () => {
   const { service, state } = buildService();

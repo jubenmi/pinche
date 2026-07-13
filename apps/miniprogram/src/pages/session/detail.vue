@@ -168,6 +168,7 @@ import {
   queryString,
   request
 } from "../../utils/api";
+import { contentModerationErrorText } from "../../utils/contentModeration";
 import { showToast } from "../../utils/tdesignFeedback";
 
 function coordinateNumber(value, min, max) {
@@ -226,7 +227,7 @@ export default {
       );
     },
     authTools() {
-      return { dataOf, ensureLoggedIn, request };
+      return { dataOf, ensureLoggedIn, request, contentModerationErrorText };
     },
     albumButtonText() {
       return this.isAlbumOpen() ? "车局相册" : "相册·发车后";

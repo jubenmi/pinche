@@ -89,6 +89,7 @@ test("image serialization exposes storage facts only as explicit internal projec
     session_id: 5,
     uploader_user_id: 9,
     media_type: "image",
+    moderation_status: "approved",
     status: "active",
     object_key: "uploads/session-album/display/a.jpg",
     object_etag: "etag",

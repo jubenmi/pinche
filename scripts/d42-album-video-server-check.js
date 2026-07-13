@@ -157,7 +157,11 @@ check("COS inspection binds the 12-byte Range read to the authoritative HEAD ETa
     }
   });
   const result = await inspectSessionAlbumVideoObject({ sourceUrl: SOURCE_URL, storageAdapter: adapter });
-  assert.deepEqual(result, { byteSize: VIDEO_BYTES.length, contentType: "video/mp4" });
+  assert.deepEqual(result, {
+    byteSize: VIDEO_BYTES.length,
+    contentType: "video/mp4",
+    etag: '"d42-object-version"'
+  });
   assert.equal(calls[0].operation, "HEAD");
   assert.deepEqual(
     {
@@ -440,6 +444,54 @@ check("local server playback returns real HEAD, 200, 206, 416 and 404 responses"
   } finally {
     await rm(sourceDir, { recursive: true, force: true });
   }
+});
+
+check("COS video redirect does not bind playback authorization to the first byte range", async () => {
+  const media = {
+    source_url: SOURCE_URL,
+    display_url: "",
+    video_content_type: "video/mp4"
+  };
+  const redirects = [];
+  for (const range of ["bytes=0-1023", "bytes=1024-2047"]) {
+    const response = new MemoryResponse();
+    await serveUploadedSessionAlbumVideoFile(media, response, {
+      cosEnabled: true,
+      method: "GET",
+      range
+    });
+    assert.equal(response.statusCode, 302);
+    redirects.push(new URL(response.headers.location));
+  }
+  for (const redirect of redirects) {
+    assert.equal(redirect.searchParams.get("q-header-list"), "host");
+  }
+  assert.equal(redirects[0].pathname, redirects[1].pathname);
+});
+
+check("COS video HEAD stays on the authenticated API URL before GET playback", async () => {
+  const response = new MemoryResponse();
+  const headCalls = [];
+  await serveUploadedSessionAlbumVideoFile({ source_url: SOURCE_URL }, response, {
+    cosEnabled: true,
+    method: "HEAD",
+    headObject: async (options) => {
+      headCalls.push(options);
+      return {
+        headers: {
+          "content-length": String(VIDEO_BYTES.length),
+          "content-type": "video/mp4"
+        }
+      };
+    }
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers.location, undefined);
+  assert.equal(response.headers["content-length"], VIDEO_BYTES.length);
+  assert.equal(response.headers["content-type"], "video/mp4");
+  assert.equal(response.headers["accept-ranges"], "bytes");
+  assert.equal(response.body.length, 0);
+  assert.equal(headCalls.length, 1);
 });
 
 check("production video fallback is streamed and immutable", async () => {

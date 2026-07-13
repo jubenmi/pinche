@@ -29,7 +29,8 @@ for (const token of [
 const service = read("apps/api/src/modules/core/service.js");
 for (const token of [
   "role_gender: row.role_gender || \"unlimited\"",
-  "roleGender: normalizeRoleGender",
+  "npc-role-normalization.js",
+  "normalizeRoleGender",
   "role.roleGender",
   "script_npc_roles",
   "session_npc_roles",
@@ -37,6 +38,16 @@ for (const token of [
   "npc_role.role_gender AS npc_role_gender"
 ]) {
   assert(service.includes(token), `service must include ${token}`);
+}
+
+const normalization = read("apps/api/src/modules/core/npc-role-normalization.js");
+for (const token of [
+  "export function normalizeRoleGender",
+  "roleGender: normalizeRoleGender",
+  "role.roleGender",
+  "role.role_gender"
+]) {
+  assert(normalization.includes(token), `shared NPC normalization must include ${token}`);
 }
 
 const scriptDrawer = read("apps/admin-web/src/components/ScriptDrawer.vue");

@@ -50,6 +50,7 @@ for (const testCase of stripeCases) {
 
 const expectedAlbumMediaCountSql =
   "COUNT(DISTINCT CASE WHEN album_media.status = 'active' " +
+  "AND album_media.moderation_status IN ('approved', 'approved_legacy') " +
   "AND (album_media.media_type = 'image' OR " +
   "(album_media.media_type = 'video' AND album_media.processing_status <> 'failed')) " +
   "THEN album_media.id END)";

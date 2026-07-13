@@ -153,7 +153,14 @@ test("generic album video continues using generic fallback upload", async () => 
 
 test("admin refresh is single-flight and merges URLs without resetting controls", async () => {
   const state = {
-    album: { photos: [{ id: 1, preview_display_url: "old", display_url: "blob:loaded" }] },
+    album: {
+      photos: [{
+        id: 1,
+        moderation_status: "approved",
+        preview_display_url: "old",
+        display_url: "blob:loaded"
+      }]
+    },
     activeFilter: "mine",
     selectedIds: [1],
     scrollTop: 420
@@ -164,7 +171,7 @@ test("admin refresh is single-flight and merges URLs without resetting controls"
     writeAlbum: (album) => { state.album = album; },
     reloadAlbum: async () => {
       loads += 1;
-      return { photos: [{ id: 1, preview_display_url: "new" }] };
+      return { photos: [{ id: 1, moderation_status: "approved", preview_display_url: "new" }] };
     },
     setTimer: () => 1,
     clearTimer: () => {},

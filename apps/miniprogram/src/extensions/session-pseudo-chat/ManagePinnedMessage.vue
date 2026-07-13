@@ -91,6 +91,10 @@ export default {
       }
     },
     actionErrorText(error) {
+      const moderationMessage = this.authTools.contentModerationErrorText?.(error);
+      if (moderationMessage) {
+        return moderationMessage;
+      }
       if (error?.statusCode === 403) {
         return "只有车头可以管理本车。";
       }

@@ -211,7 +211,7 @@ export async function updateUserPhone(userId, phoneEncrypted) {
   });
 }
 
-export async function updateUserProfile(userId, patch = {}) {
+export async function updateUserProfileWithConnection(connection, userId, patch = {}) {
   const assignments = [];
   const values = [];
 
@@ -234,19 +234,23 @@ export async function updateUserProfile(userId, patch = {}) {
     throw badRequest("at least one profile field is required");
   }
 
-  return withDatabaseConnection(async (connection) => {
-    await connection.query(
-      `
-        UPDATE users
-        SET ${assignments.join(", ")}
-        WHERE id = ?
-      `,
-      [...values, userId]
-    );
+  await connection.query(
+    `
+      UPDATE users
+      SET ${assignments.join(", ")}
+      WHERE id = ?
+    `,
+    [...values, userId]
+  );
 
-    const [rows] = await connection.query("SELECT * FROM users WHERE id = ?", [userId]);
-    return publicUser(rows[0]);
-  });
+  const [rows] = await connection.query("SELECT * FROM users WHERE id = ?", [userId]);
+  return publicUser(rows[0]);
+}
+
+export async function updateUserProfile(userId, patch = {}) {
+  return withDatabaseConnection((connection) =>
+    updateUserProfileWithConnection(connection, userId, patch)
+  );
 }
 
 export async function updateUserGender(userId, gender) {

@@ -115,18 +115,22 @@ assert(
   "requireJoinPhoneIfNeeded must gate phone verification from session.join_phone_required"
 );
 
-const createSessionBody = functionBody(service, "createSession");
+const createSessionEntryBody = functionBody(service, "createSession");
+const createSessionBody = functionBody(service, "createSessionWithConnection");
 assert(
-  createSessionBody.includes("join_phone_required") &&
+  createSessionEntryBody.includes("createSessionWithConnection") &&
+    createSessionBody.includes("join_phone_required") &&
     createSessionBody.includes("normalizeJoinPhoneRequired"),
-  "createSession must persist normalized joinPhoneRequired"
+  "createSession must delegate normalized joinPhoneRequired persistence to its connection-bound helper"
 );
 
-const updateSessionBody = functionBody(service, "updateSession");
+const updateSessionEntryBody = functionBody(service, "updateSession");
+const updateSessionBody = functionBody(service, "updateSessionWithConnection");
 assert(
-  updateSessionBody.includes("joinPhoneRequired") &&
+  updateSessionEntryBody.includes("updateSessionWithConnection") &&
+    updateSessionBody.includes("joinPhoneRequired") &&
     updateSessionBody.includes("join_phone_required"),
-  "updateSession must allow organizer/admin joinPhoneRequired updates"
+  "updateSession must delegate joinPhoneRequired updates to its connection-bound helper"
 );
 
 const getSessionBody = functionBody(service, "getSession");

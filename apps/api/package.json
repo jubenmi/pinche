@@ -8,6 +8,9 @@
     "test:album-image": "node --test test/album-image-*.test.mjs",
     "job:album-image-cleanup": "node src/jobs/album-image-cleanup.js",
     "job:album-image-backfill": "node src/jobs/backfill-album-image-object-keys.js",
+    "job:content-moderation-retry": "node src/jobs/content-moderation-retry.js",
+    "job:content-moderation-orphan-scan": "node src/jobs/content-moderation-orphan-scan.js",
+    "job:content-moderation-production-preflight": "node src/jobs/content-moderation-production-preflight.js",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "migrate": "node src/db/migrate.js"
@@ -15,6 +18,7 @@
   "dependencies": {
     "@jubenmi/talk": "file:../../packages/talk",
     "mysql2": "^3.11.5",
+    "redis": "^4.7.1",
     "sharp": "^0.35.2"
   }
 }

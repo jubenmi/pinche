@@ -76,6 +76,7 @@ import {
   request,
   uploadSessionReviewPhoto
 } from "../../utils/api";
+import { contentModerationErrorText } from "../../utils/contentModeration";
 import { showToast } from "../../utils/tdesignFeedback";
 
 export default {
@@ -188,6 +189,11 @@ export default {
           uni.navigateBack();
         }, 350);
       } catch (error) {
+        const moderationMessage = contentModerationErrorText(error);
+        if (moderationMessage) {
+          this.statusText = moderationMessage;
+          return;
+        }
         if (error?.statusCode === 403) {
           this.statusText = "只有已上车玩家可以写记录。";
         } else if (error?.statusCode === 400) {
