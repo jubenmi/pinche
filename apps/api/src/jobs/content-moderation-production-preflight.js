@@ -13,6 +13,7 @@ import {
   acquireProductionPreflightRun,
   findProductionPreflightAttemptByAssociation,
   finishProductionPreflightRun,
+  markProductionPreflightRunAwaitingCallback,
   recordProductionPreflightAssociation,
   releaseProductionPreflightLock
 } from "../modules/content-moderation/production-preflight-repository.js";
@@ -134,6 +135,7 @@ function bindProductionPreflightRepository(connection) {
     acquireRun: (input) => acquireProductionPreflightRun({ connection, ...input }),
     recordAssociation: (input) => recordProductionPreflightAssociation({ connection, ...input }),
     findAttemptByAssociation: (input) => findProductionPreflightAttemptByAssociation({ connection, ...input }),
+    markAwaitingCallback: (input) => markProductionPreflightRunAwaitingCallback({ connection, ...input }),
     finishRun: (input) => finishProductionPreflightRun({ connection, ...input }),
     releaseLock: (input) => releaseProductionPreflightLock({ connection, ...input })
   };
