@@ -154,7 +154,9 @@
 - [ ] Add `d45:unit`, `d45:check`, `d45:smoke` and wire them into root check; smoke must use fake clients only.
 - [ ] Run D45 commands, album tests, web/miniprogram builds, migration check, and `npm run check`. Record actual output in `tasks.md`. Commit `chore: verify D45 hybrid moderation`.
 
-### Task 9: D45.18 Staging live integration
+### Task 9: D45.18 Deferred real non-production integration
+
+> **2026-07-13 status:** Deferred. The temporary logical database and dedicated account used for the earlier D45 staging proposal have been deleted. Do not recreate or use production resources under this task. Until separately isolated non-production MySQL/Redis/private COS/HTTPS callbacks and provider configuration are available, the only permitted activity is the source-locked offline `dry_run_deferred` preflight. The authoritative current status is `specs/d45-hybrid-content-moderation/tasks.md` D45.18.
 
 **Files:**
 - Create: `scripts/d45-content-moderation-live-contract.js`
