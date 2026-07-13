@@ -215,11 +215,19 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 手动执行：
 
 ```bash
-docker compose run --rm --no-deps api npm run job:content-moderation-production-preflight -- --case=wechat-text-v1
-docker compose run --rm --no-deps api npm run job:content-moderation-production-preflight -- --case=wechat-image-v1
-docker compose run --rm --no-deps api npm run job:content-moderation-production-preflight -- --case=tencent-video-v1
+D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
+  docker compose run --rm --no-deps api \
+  npm run job:content-moderation-production-preflight -- --case=wechat-text-v1
+
+D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
+  docker compose run --rm --no-deps api \
+  npm run job:content-moderation-production-preflight -- --case=wechat-image-v1
+
+D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
+  docker compose run --rm --no-deps api \
+  npm run job:content-moderation-production-preflight -- --case=tencent-video-v1
 ```
 
-成功只代表固定 harmless 样本的生产链路可用。失败时保持三个入口 `closed`，查看脱敏 preflight run 状态，先处理清理失败、鉴权失败或回调失败，再重试。不要上传危险样本做真实生产验证。
+文本预演是同步结果，成功时应记录为 `passed`。图片与视频预演是异步结果：一次性 Job 提交成功后可能先返回 `awaiting_callback`，此时必须继续等待微信安全事件或腾讯云 CI Detail 回调命中预演 HMAC。只有对应 preflight run 最终变为 `passed`，且 `cleanup_status=deleted`，才算该 case 完成。若回调返回 `review`、`block`、`error`、超时或清理失败，均视为预演失败；保持三个入口 `closed`，查看脱敏 preflight run 状态，先处理清理失败、鉴权失败或回调失败，再重试。不要上传危险样本做真实生产验证。
 
 记录仅保存 case、服务商、结果类别、耗时、配置/镜像指纹和清理结论；不保存完整敏感文本、违规媒体、原始 trace/job/DataId、对象 key、callback body、token 或可复用 URL。
