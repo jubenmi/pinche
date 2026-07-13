@@ -4,8 +4,13 @@ export const SESSION_ALBUM_VIDEO_SOURCE_INDEX =
   "uniq_session_album_video_source_url";
 export const CONTENT_MODERATION_PROVIDER_ATTEMPTS_MIGRATION =
   "0025_content_moderation_provider_attempts.sql";
+export const CONTENT_MODERATION_TEXT_PROPOSAL_RESULT_MIGRATION =
+  "0026_content_moderation_text_proposal_result.sql";
+export const CONTENT_MODERATION_RETRY_EXHAUSTION_MIGRATION =
+  "0027_content_moderation_retry_exhaustion.sql";
 
 const CONTENT_MODERATION_ATTEMPTS_TABLE = "content_moderation_provider_attempts";
+const CONTENT_MODERATION_JOBS_TABLE = "content_moderation_jobs";
 const CONTENT_MODERATION_TEXT_PROPOSALS_TABLE = "content_moderation_text_proposals";
 const CONTENT_MODERATION_PROVIDER_JOB_DUPLICATE =
   "CONTENT_MODERATION_LEGACY_PROVIDER_JOB_DUPLICATE";
@@ -29,6 +34,46 @@ const TEXT_PROPOSAL_COLUMN_LIFECYCLE_STATES = new Set([
   "NO:YES",
   "NO:NO"
 ]);
+const TEXT_PROPOSAL_APPLIED_RESULT_COLUMN = {
+  tableName: CONTENT_MODERATION_TEXT_PROPOSALS_TABLE,
+  anchorColumn: "applied_at",
+  anchorExpected: {
+    type: "datetime",
+    nullable: "YES",
+    default: null,
+    extra: "",
+    generationExpression: ""
+  },
+  columnName: "applied_result_json",
+  expected: {
+    type: "json",
+    nullable: "YES",
+    default: null,
+    extra: "",
+    generationExpression: ""
+  },
+  ddl: "ALTER TABLE content_moderation_text_proposals ADD COLUMN applied_result_json JSON NULL AFTER applied_at"
+};
+const RETRY_EXHAUSTION_COLUMN = {
+  tableName: CONTENT_MODERATION_JOBS_TABLE,
+  anchorColumn: "next_retry_at",
+  anchorExpected: {
+    type: "datetime",
+    nullable: "YES",
+    default: null,
+    extra: "",
+    generationExpression: ""
+  },
+  columnName: "retry_exhausted_at",
+  expected: {
+    type: "datetime",
+    nullable: "YES",
+    default: null,
+    extra: "",
+    generationExpression: ""
+  },
+  ddl: "ALTER TABLE content_moderation_jobs ADD COLUMN retry_exhausted_at DATETIME NULL AFTER next_retry_at"
+};
 
 export const DUPLICATE_SESSION_ALBUM_VIDEO_SOURCE_QUERY = `
   SELECT
@@ -223,7 +268,7 @@ function normalizeColumnMetadata(value) {
   return normalizeSchemaText(value).replace(/\(\)/g, "");
 }
 
-async function inspectTextProposalColumns(connection) {
+async function inspectModerationTableColumns(connection, tableName) {
   const [rows] = await connection.query(
     `SELECT
        COLUMN_NAME AS column_name,
@@ -235,9 +280,74 @@ async function inspectTextProposalColumns(connection) {
      FROM information_schema.columns
      WHERE table_schema = DATABASE()
        AND table_name = ?`,
-    [CONTENT_MODERATION_TEXT_PROPOSALS_TABLE]
+    [tableName]
   );
-  const columns = new Map(rows.map((row) => [String(row.column_name), row]));
+  return new Map(rows.map((row) => [String(row.column_name), row]));
+}
+
+function normalizedModerationColumnShape(column) {
+  return {
+    type: normalizeSchemaText(column.column_type),
+    nullable: String(column.is_nullable || "").toUpperCase(),
+    default: normalizeColumnMetadata(column.column_default),
+    extra: normalizeColumnMetadata(column.extra),
+    generationExpression: normalizeGeneratedExpression(column.generation_expression)
+  };
+}
+
+function assertModerationColumnShape(definition, columnName, column, expected) {
+  const actual = normalizedModerationColumnShape(column);
+  const exact = actual.type === expected.type &&
+    actual.nullable === expected.nullable &&
+    actual.default === expected.default &&
+    actual.extra === expected.extra &&
+    actual.generationExpression === expected.generationExpression;
+  if (!exact) {
+    throw schemaMismatch(`${definition.tableName}.${columnName}`, {
+      expected,
+      actual: column
+    });
+  }
+}
+
+async function reconcileModerationAdditiveColumn(connection, definition) {
+  const columns = await inspectModerationTableColumns(connection, definition.tableName);
+  if (!columns.has(definition.anchorColumn)) {
+    throw schemaMismatch(`${definition.tableName}.${definition.anchorColumn}`, {
+      expected: { required: true },
+      actual: null
+    });
+  }
+  assertModerationColumnShape(
+    definition,
+    definition.anchorColumn,
+    columns.get(definition.anchorColumn),
+    definition.anchorExpected
+  );
+
+  const column = columns.get(definition.columnName);
+  if (!column) {
+    await connection.query(definition.ddl);
+    return { added: true };
+  }
+
+  assertModerationColumnShape(definition, definition.columnName, column, definition.expected);
+  return { added: false };
+}
+
+async function reconcileContentModerationTextProposalResult(connection) {
+  return reconcileModerationAdditiveColumn(connection, TEXT_PROPOSAL_APPLIED_RESULT_COLUMN);
+}
+
+async function reconcileContentModerationRetryExhaustion(connection) {
+  return reconcileModerationAdditiveColumn(connection, RETRY_EXHAUSTION_COLUMN);
+}
+
+async function inspectTextProposalColumns(connection) {
+  const columns = await inspectModerationTableColumns(
+    connection,
+    CONTENT_MODERATION_TEXT_PROPOSALS_TABLE
+  );
   for (const name of TEXT_PROPOSAL_RECONCILIATION_COLUMNS) {
     if (!columns.has(name)) {
       throw schemaMismatch(`${CONTENT_MODERATION_TEXT_PROPOSALS_TABLE}.${name}`, {
@@ -646,6 +756,14 @@ export async function reconcileContentModerationProviderAttempts(connection) {
 export async function prepareMigration(connection, filename) {
   if (filename === CONTENT_MODERATION_PROVIDER_ATTEMPTS_MIGRATION) {
     await reconcileContentModerationProviderAttempts(connection);
+    return { skipStatements: true, reconciledContentModeration: true };
+  }
+  if (filename === CONTENT_MODERATION_TEXT_PROPOSAL_RESULT_MIGRATION) {
+    await reconcileContentModerationTextProposalResult(connection);
+    return { skipStatements: true, reconciledContentModeration: true };
+  }
+  if (filename === CONTENT_MODERATION_RETRY_EXHAUSTION_MIGRATION) {
+    await reconcileContentModerationRetryExhaustion(connection);
     return { skipStatements: true, reconciledContentModeration: true };
   }
   if (filename !== SESSION_ALBUM_VIDEO_HARDENING_MIGRATION) {

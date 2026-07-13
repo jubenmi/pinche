@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { requiredSchemaTables } from "../src/db/mysql.js";
+import { applyMigration } from "../src/db/migrate.js";
 import {
   CONTENT_MODERATION_PROVIDER_ATTEMPTS_MIGRATION,
   prepareMigration,
@@ -42,8 +43,9 @@ test("D45 migration creates moderation jobs, text proposals, audit logs, and med
 
 test("D45 retry exhaustion migration adds a nullable terminal marker without rewriting attempt history", async () => {
   const sql = await readFile(retryExhaustionMigrationUrl, "utf8");
-  assert.match(sql, /ALTER TABLE content_moderation_jobs/i);
-  assert.match(sql, /ADD COLUMN IF NOT EXISTS retry_exhausted_at DATETIME NULL/i);
+  assert.match(sql, /reconciled by prepareMigration/i);
+  assert.match(sql, /SELECT 1/i);
+  assert.doesNotMatch(sql, /ALTER TABLE|ADD COLUMN IF NOT EXISTS/i);
   assert.doesNotMatch(sql, /attempt_count\s*=/i);
 });
 
@@ -238,6 +240,95 @@ function assertNoMigrationNormalization(calls) {
   )), false);
 }
 
+function contentModerationAddColumnConnection({
+  tableName,
+  anchorColumn,
+  anchorOverrides = {},
+  existingColumn = null
+}) {
+  const calls = [];
+  const columns = anchorColumn ? [
+    {
+      column_name: anchorColumn,
+      column_type: "datetime",
+      is_nullable: "YES",
+      column_default: null,
+      extra: "",
+      generation_expression: "",
+      ...anchorOverrides
+    }
+  ] : [];
+  if (existingColumn) columns.push(existingColumn);
+
+  return {
+    calls,
+    async query(sql, params = []) {
+      const text = String(sql);
+      calls.push({ sql: text, params });
+      if (text.includes("information_schema.columns") && text.includes("COLUMN_TYPE")) {
+        assert.deepEqual(params, [tableName]);
+        return [columns];
+      }
+      return [{ affectedRows: 1 }];
+    }
+  };
+}
+
+function additiveMigrationRunnerConnection({ tableName, anchorColumn, columnName, columnType }) {
+  const calls = [];
+  let columnExists = false;
+  let failMigrationRecordOnce = true;
+  const anchor = {
+    column_name: anchorColumn,
+    column_type: "datetime",
+    is_nullable: "YES",
+    column_default: null,
+    extra: "",
+    generation_expression: ""
+  };
+  const target = {
+    column_name: columnName,
+    column_type: columnType,
+    is_nullable: "YES",
+    column_default: null,
+    extra: "",
+    generation_expression: ""
+  };
+
+  return {
+    calls,
+    async beginTransaction() {
+      calls.push({ sql: "BEGIN" });
+    },
+    async commit() {
+      calls.push({ sql: "COMMIT" });
+    },
+    async rollback() {
+      calls.push({ sql: "ROLLBACK" });
+    },
+    async query(sql, params = []) {
+      const text = String(sql);
+      calls.push({ sql: text, params });
+      if (text.includes("information_schema.columns") && text.includes("COLUMN_TYPE")) {
+        assert.deepEqual(params, [tableName]);
+        return [[anchor, ...(columnExists ? [target] : [])]];
+      }
+      if (/^ALTER TABLE/i.test(text)) {
+        columnExists = true;
+        return [{ affectedRows: 0 }];
+      }
+      if (text === "INSERT INTO schema_migrations (version) VALUES (?)") {
+        if (failMigrationRecordOnce) {
+          failMigrationRecordOnce = false;
+          throw new Error("simulated schema_migrations write failure");
+        }
+        return [{ affectedRows: 1 }];
+      }
+      return [{ affectedRows: 1 }];
+    }
+  };
+}
+
 const fullyReconciledIndexes = {
   uniq_moderation_subject_version_provider: true,
   uniq_moderation_text_actor_action_idempotency: true,
@@ -246,6 +337,237 @@ const fullyReconciledIndexes = {
   uniq_moderation_attempt_current_job: true,
   idx_moderation_attempt_job_current: true
 };
+
+test("D45 text proposal result migration reconciles an absent result column before recording its version", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_text_proposals",
+    anchorColumn: "applied_at"
+  });
+
+  const result = await prepareMigration(
+    connection,
+    "0026_content_moderation_text_proposal_result.sql"
+  );
+
+  assert.equal(result.skipStatements, true);
+  assert.equal(connection.calls.some(({ sql }) => (
+    /ALTER TABLE content_moderation_text_proposals\s+ADD COLUMN applied_result_json JSON NULL AFTER applied_at/i.test(sql)
+  )), true);
+});
+
+test("D45 text proposal result migration accepts a valid result column after a prior DDL crash", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_text_proposals",
+    anchorColumn: "applied_at",
+    existingColumn: {
+      column_name: "applied_result_json",
+      column_type: "json",
+      is_nullable: "YES",
+      column_default: null,
+      extra: "",
+      generation_expression: ""
+    }
+  });
+
+  const result = await prepareMigration(
+    connection,
+    "0026_content_moderation_text_proposal_result.sql"
+  );
+
+  assert.equal(result.skipStatements, true);
+  assert.equal(connection.calls.some(({ sql }) => /ALTER TABLE/i.test(sql)), false);
+});
+
+test("D45 text proposal result migration rejects an incompatible existing result column", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_text_proposals",
+    anchorColumn: "applied_at",
+    existingColumn: {
+      column_name: "applied_result_json",
+      column_type: "varchar(255)",
+      is_nullable: "YES",
+      column_default: null,
+      extra: "",
+      generation_expression: ""
+    }
+  });
+
+  await assert.rejects(
+    prepareMigration(connection, "0026_content_moderation_text_proposal_result.sql"),
+    { code: "CONTENT_MODERATION_MIGRATION_SCHEMA_MISMATCH" }
+  );
+  assert.equal(connection.calls.some(({ sql }) => /ALTER TABLE/i.test(sql)), false);
+});
+
+test("D45 text proposal result migration rejects a missing placement anchor", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_text_proposals",
+    anchorColumn: null
+  });
+
+  await assert.rejects(
+    prepareMigration(connection, "0026_content_moderation_text_proposal_result.sql"),
+    { code: "CONTENT_MODERATION_MIGRATION_SCHEMA_MISMATCH" }
+  );
+  assert.equal(connection.calls.some(({ sql }) => /ALTER TABLE/i.test(sql)), false);
+});
+
+test("D45 text proposal result migration rejects an incompatible placement anchor", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_text_proposals",
+    anchorColumn: "applied_at",
+    anchorOverrides: { column_type: "varchar(64)" }
+  });
+
+  await assert.rejects(
+    prepareMigration(connection, "0026_content_moderation_text_proposal_result.sql"),
+    { code: "CONTENT_MODERATION_MIGRATION_SCHEMA_MISMATCH" }
+  );
+  assert.equal(connection.calls.some(({ sql }) => /ALTER TABLE/i.test(sql)), false);
+});
+
+test("D45 text proposal result migration records safely after a DDL-only crash", async () => {
+  const connection = additiveMigrationRunnerConnection({
+    tableName: "content_moderation_text_proposals",
+    anchorColumn: "applied_at",
+    columnName: "applied_result_json",
+    columnType: "json"
+  });
+  const file = "0026_content_moderation_text_proposal_result.sql";
+  const sql = await readFile(
+    new URL("../migrations/0026_content_moderation_text_proposal_result.sql", import.meta.url),
+    "utf8"
+  );
+
+  await assert.rejects(
+    applyMigration(connection, { file, sql }),
+    /simulated schema_migrations write failure/
+  );
+  await applyMigration(connection, { file, sql });
+
+  assert.equal(connection.calls.filter(({ sql: statement }) => /^ALTER TABLE/i.test(statement)).length, 1);
+  assert.equal(connection.calls.filter(({ sql: statement }) => statement === "BEGIN").length, 2);
+  assert.equal(connection.calls.filter(({ sql: statement }) => statement === "ROLLBACK").length, 1);
+  assert.equal(connection.calls.filter(({ sql: statement }) => statement === "COMMIT").length, 1);
+  assert.equal(connection.calls.filter(({ sql: statement }) => (
+    statement === "INSERT INTO schema_migrations (version) VALUES (?)"
+  )).length, 2);
+  assert.equal(connection.calls.some(({ sql: statement }) => statement === "SELECT 1"), false);
+});
+
+test("D45 retry exhaustion migration reconciles an absent terminal marker before recording its version", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_jobs",
+    anchorColumn: "next_retry_at"
+  });
+
+  const result = await prepareMigration(
+    connection,
+    "0027_content_moderation_retry_exhaustion.sql"
+  );
+
+  assert.equal(result.skipStatements, true);
+  assert.equal(connection.calls.some(({ sql }) => (
+    /ALTER TABLE content_moderation_jobs\s+ADD COLUMN retry_exhausted_at DATETIME NULL AFTER next_retry_at/i.test(sql)
+  )), true);
+});
+
+test("D45 retry exhaustion migration accepts a valid terminal marker after a prior DDL crash", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_jobs",
+    anchorColumn: "next_retry_at",
+    existingColumn: {
+      column_name: "retry_exhausted_at",
+      column_type: "datetime",
+      is_nullable: "YES",
+      column_default: null,
+      extra: "",
+      generation_expression: ""
+    }
+  });
+
+  const result = await prepareMigration(
+    connection,
+    "0027_content_moderation_retry_exhaustion.sql"
+  );
+
+  assert.equal(result.skipStatements, true);
+  assert.equal(connection.calls.some(({ sql }) => /ALTER TABLE/i.test(sql)), false);
+});
+
+test("D45 retry exhaustion migration rejects an incompatible existing terminal marker", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_jobs",
+    anchorColumn: "next_retry_at",
+    existingColumn: {
+      column_name: "retry_exhausted_at",
+      column_type: "varchar(64)",
+      is_nullable: "YES",
+      column_default: null,
+      extra: "",
+      generation_expression: ""
+    }
+  });
+
+  await assert.rejects(
+    prepareMigration(connection, "0027_content_moderation_retry_exhaustion.sql"),
+    { code: "CONTENT_MODERATION_MIGRATION_SCHEMA_MISMATCH" }
+  );
+  assert.equal(connection.calls.some(({ sql }) => /ALTER TABLE/i.test(sql)), false);
+});
+
+test("D45 retry exhaustion migration rejects a missing placement anchor", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_jobs",
+    anchorColumn: null
+  });
+
+  await assert.rejects(
+    prepareMigration(connection, "0027_content_moderation_retry_exhaustion.sql"),
+    { code: "CONTENT_MODERATION_MIGRATION_SCHEMA_MISMATCH" }
+  );
+  assert.equal(connection.calls.some(({ sql }) => /ALTER TABLE/i.test(sql)), false);
+});
+
+test("D45 retry exhaustion migration rejects an incompatible placement anchor", async () => {
+  const connection = contentModerationAddColumnConnection({
+    tableName: "content_moderation_jobs",
+    anchorColumn: "next_retry_at",
+    anchorOverrides: { extra: "VIRTUAL GENERATED" }
+  });
+
+  await assert.rejects(
+    prepareMigration(connection, "0027_content_moderation_retry_exhaustion.sql"),
+    { code: "CONTENT_MODERATION_MIGRATION_SCHEMA_MISMATCH" }
+  );
+  assert.equal(connection.calls.some(({ sql }) => /ALTER TABLE/i.test(sql)), false);
+});
+
+test("D45 retry exhaustion migration records safely after a DDL-only crash", async () => {
+  const connection = additiveMigrationRunnerConnection({
+    tableName: "content_moderation_jobs",
+    anchorColumn: "next_retry_at",
+    columnName: "retry_exhausted_at",
+    columnType: "datetime"
+  });
+  const file = "0027_content_moderation_retry_exhaustion.sql";
+  const sql = await readFile(retryExhaustionMigrationUrl, "utf8");
+
+  await assert.rejects(
+    applyMigration(connection, { file, sql }),
+    /simulated schema_migrations write failure/
+  );
+  await applyMigration(connection, { file, sql });
+
+  assert.equal(connection.calls.filter(({ sql: statement }) => /^ALTER TABLE/i.test(statement)).length, 1);
+  assert.equal(connection.calls.filter(({ sql: statement }) => statement === "BEGIN").length, 2);
+  assert.equal(connection.calls.filter(({ sql: statement }) => statement === "ROLLBACK").length, 1);
+  assert.equal(connection.calls.filter(({ sql: statement }) => statement === "COMMIT").length, 1);
+  assert.equal(connection.calls.filter(({ sql: statement }) => (
+    statement === "INSERT INTO schema_migrations (version) VALUES (?)"
+  )).length, 2);
+  assert.equal(connection.calls.some(({ sql: statement }) => statement === "SELECT 1"), false);
+});
 
 test("D45 provider-attempt migration keeps the cascading foreign key compatible with generated columns", async () => {
   const connection = moderationMigrationConnection();

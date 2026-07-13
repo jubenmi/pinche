@@ -27,6 +27,8 @@
   - [x] 新增 provider attempts，保证 `(provider, provider_job_id)` 唯一并标识当前尝试。
   - [ ] 修复 provider attempts 的 MySQL 生成列与级联外键兼容性。
     - 2026-07-13：生产迁移 `0025` 在创建外键时返回 `Cannot add foreign key constraint`；已定位为 `STORED` 生成列的基列不能与 `ON DELETE CASCADE` 共用。当前以最小兼容修复与回归验证处理中，未重试生产迁移。
+    - 2026-07-13：`0025` 兼容修复发布后，生产迁移在 `0026` 的 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 被目标 MySQL 8.0 语法拒绝；`0027` 存在同类写法。API 与 Worker 尚未更新，当前按同一 D45.3 子项以幂等 schema reconciliation、失败回归和完整验证修复，三类 intake 继续保持 `closed`。
+    - 2026-07-13：`0026` 与 `0027` 已改为迁移 runner 的幂等 schema reconciliation：先严格校验锚点/目标列形状，只在目标列缺失时执行兼容的裸 `ADD COLUMN`；目标列正确但此前未记版本时安全补记，不匹配时关闭式失败。已覆盖 DDL 成功但迁移记录失败后的两次重跑，并完成定向 40/40、`d45:unit` 436/436、`d45:check`、`d45:smoke` 71/71；待完整根检查、发布和生产一次性迁移成功后才勾选本项。
   - [x] 保留历史媒体 `approved_legacy`，新媒体显式 pending。
   - [x] 文本 Review/Error 使用隐藏提案。
   - [x] 管理员决定优先于服务商事件。
