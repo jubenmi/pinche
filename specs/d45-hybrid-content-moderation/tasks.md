@@ -34,6 +34,7 @@
     - 2026-07-14：主机现运行镜像已核验为 `hkccr.ccs.tencentyun.com/murder/pinche:latest`（本地镜像 ID `sha256:486a79aa2bdbcc1bb09bba7f36acfdaa10ea6ff21850da9c4a45a1098dd0a5d5`），并确认镜像内含 `0025`–`0029` 及显式 `npm run migrate` 入口。已重新执行完整 `npm run check`，退出码 0。待当次生产数据库迁移确认后，以现有 API 的受保护运行环境在 `pinche_internal` 网络执行一次性迁移；API/Worker 仍未替换，三个 intake 保持 `closed`。
     - 2026-07-14：生产 API 入口日志已实证迁移结果 `ok: true`、`database: pinche`、`executed: []`、`total: 31`，说明包括 `0025`–`0029` 在内的全部迁移版本已成功记录；本项据此完成。随后发现该镜像因 API 包未声明直接导入的 `@pinche/shared` 而在迁移后重启，未监听端口；新建的测试先失败再通过，修复正待发布为新镜像。三个 intake 未打开，D45.18 仍未执行。
     - 2026-07-14：恢复后的预检超时 Worker 在目标集群报 `ER_WRONG_ARGUMENTS`；根因是该兼容 MySQL 实现不接受预编译语句中的 `LIMIT ?`。查询仅将已验证的 1–100 批大小内联，仍只绑定截止时间；回归测试同时断言不再向 `LIMIT` 传参。完整 `npm run check` 已通过，待发布修复镜像并恢复该 Worker。
+    - 2026-07-14：兼容性修复已按 develop → main → publish 受控流水线发布；生产使用不可变 API 镜像摘要 `sha256:1292232da897279e8d9faf9a931e865abb5c1cc9be4c1dc7cfce5b024757b618`。API、retry、orphan scan 与 preflight timeout 四个目标容器均持续运行且重启次数为 0；内部和外部 `/health` 均返回 200、数据库 schema 就绪，三类 intake 明确为 `closed`。未执行 D45.18 真实服务商/预检调用。
   - [x] 保留历史媒体 `approved_legacy`，新媒体显式 pending。
   - [x] 文本 Review/Error 使用隐藏提案。
   - [x] 管理员决定优先于服务商事件。
