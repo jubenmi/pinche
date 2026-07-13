@@ -341,7 +341,22 @@ export function buildContentModerationConfig(env = process.env) {
       referenceHmacKey: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_REFERENCE_HMAC_KEY"),
       imageFingerprint: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_IMAGE_FINGERPRINT"),
       videoFingerprint: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_VIDEO_FINGERPRINT"),
-      releaseFingerprint: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_RELEASE_FINGERPRINT")
+      releaseFingerprint: stringValue(env, "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_RELEASE_FINGERPRINT"),
+      callbackTimeoutMs: boundedModerationInteger(
+        env,
+        "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CALLBACK_TIMEOUT_MS",
+        { fallback: 15 * 60 * 1000, minimum: 60_000, maximum: 60 * 60 * 1000 }
+      ),
+      timeoutPollMs: boundedModerationInteger(
+        env,
+        "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TIMEOUT_POLL_MS",
+        { fallback: 60_000, minimum: 10_000, maximum: 300_000 }
+      ),
+      timeoutBatchSize: boundedModerationInteger(
+        env,
+        "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TIMEOUT_BATCH_SIZE",
+        { fallback: 10, minimum: 1, maximum: 100 }
+      )
     }
   };
 }

@@ -217,6 +217,12 @@ test("server places the WeChat image callback before generic parsing and never u
   assert.match(routeBody, /readRawBody\(request, 256 \* 1024\)/);
   assert.match(routeBody, /parseWechatSecureImageEvent/);
   assert.match(routeBody, /tryHandleProductionPreflightWechatImageCallback/);
+  assert.match(routeBody, /if \(\s*config\.contentModeration\.productionPreflight\?\.referenceHmacKey\s*\)/);
+  assert.doesNotMatch(routeBody, /productionPreflight\?\.enabled\s*&&/);
+  assert.match(routeBody, /onCleanupFailure/);
+  assert.match(routeBody, /CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED/);
+  assert.match(server, /hasActiveProductionPreflightWechatImageRun/);
+  assert.doesNotMatch(server, /hasAwaitingWechatImageTrace:\s*async \(\) => false/);
   assert.ok(
     routeBody.indexOf("tryHandleProductionPreflightWechatImageCallback") <
       routeBody.indexOf("dispatchWechatImageModerationEvent")

@@ -3,8 +3,12 @@ import test from "node:test";
 
 import {
   acquireProductionPreflightRun,
+  finalizeProductionPreflightRun,
   finishProductionPreflightRun,
   findProductionPreflightAttemptByAssociation,
+  listTimedOutProductionPreflightRuns,
+  markProductionPreflightRunAwaitingCallback,
+  markProductionPreflightRunSubmitting,
   productionPreflightReferenceHmac,
   recordProductionPreflightAssociation,
   releaseProductionPreflightLock
@@ -84,6 +88,72 @@ function createFakePreflightConnection() {
         const [provider, kind, hmac] = params;
         const row = state.attempts.get(`${provider}:${kind}:${hmac}`);
         return [row ? [row] : []];
+      }
+      if (sql.includes("SELECT id, provider, case_id, state, started_at") && sql.includes("FOR UPDATE")) {
+        const [runId, provider] = params;
+        const run = state.runs.get(runId);
+        return [run && run.provider === provider ? [run] : []];
+      }
+      if (sql.includes("SELECT id, provider, case_id") && sql.includes("updated_at <=")) {
+        const [cutoff, limit] = params;
+        const cutoffAt = new Date(`${cutoff.replace(" ", "T")}Z`).getTime();
+        const rows = [...state.runs.values()]
+          .filter((run) =>
+            ["submitting", "awaiting_callback", ...(sql.includes("'started'") ? ["started"] : [])].includes(run.state) &&
+            new Date(run.updated_at).getTime() <= cutoffAt
+          )
+          .slice(0, limit);
+        return [rows];
+      }
+      if (sql.includes("SET state = 'submitting'")) {
+        const [runId] = params;
+        const run = state.runs.get(runId);
+        if (run?.state !== "started") return [{ affectedRows: 0 }];
+        state.runs.set(runId, { ...run, state: "submitting" });
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("SET state = 'awaiting_callback'")) {
+        const [resultCategory, cleanupStatus, elapsedMs, runId] = params;
+        const run = state.runs.get(runId);
+        if (run?.state !== "submitting") return [{ affectedRows: 0 }];
+        state.runs.set(runId, {
+          ...run,
+          state: "awaiting_callback",
+          result_category: resultCategory,
+          cleanup_status: cleanupStatus,
+          elapsed_ms: elapsedMs
+        });
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("WHERE id = ? AND state = ?")) {
+        const [runState, resultCategory, cleanupStatus, elapsedMs, failureCode, failureMessage, runId, expectedState] = params;
+        const run = state.runs.get(runId);
+        if (run?.state !== expectedState) return [{ affectedRows: 0 }];
+        state.runs.set(runId, {
+          ...run,
+          state: runState,
+          result_category: resultCategory,
+          cleanup_status: cleanupStatus,
+          elapsed_ms: elapsedMs,
+          failure_code: failureCode,
+          failure_message: failureMessage
+        });
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("WHERE id = ? AND state IN ('started', 'submitting')")) {
+        const [runState, resultCategory, cleanupStatus, elapsedMs, failureCode, failureMessage, runId] = params;
+        const run = state.runs.get(runId);
+        if (!["started", "submitting"].includes(run?.state)) return [{ affectedRows: 0 }];
+        state.runs.set(runId, {
+          ...run,
+          state: runState,
+          result_category: resultCategory,
+          cleanup_status: cleanupStatus,
+          elapsed_ms: elapsedMs,
+          failure_code: failureCode,
+          failure_message: failureMessage
+        });
+        return [{ affectedRows: 1 }];
       }
       if (sql.includes("UPDATE content_moderation_production_preflight_runs")) {
         const [runState, resultCategory, cleanupStatus, elapsedMs, failureCode, failureMessage, runId] = params;
@@ -212,4 +282,187 @@ test("finish and release only update preflight tables", async () => {
   await releaseProductionPreflightLock({ connection, provider: "wechat_text", runId: "run-1" });
 
   assert.ok(connection.state.sql.every((sql) => sql.includes("production_preflight")));
+});
+
+test("async preflight run transitions only advance from their expected state", async () => {
+  const connection = createFakePreflightConnection();
+  connection.state.runs.set("run-1", { id: "run-1", state: "started" });
+
+  assert.equal(
+    await markProductionPreflightRunSubmitting({ connection, runId: "run-1" }),
+    true
+  );
+  assert.equal(
+    await markProductionPreflightRunAwaitingCallback({
+      connection,
+      runId: "run-1",
+      elapsedMs: 10
+    }),
+    true
+  );
+  assert.equal(
+    await markProductionPreflightRunAwaitingCallback({
+      connection,
+      runId: "run-1",
+      elapsedMs: 20
+    }),
+    false
+  );
+  assert.equal(connection.state.runs.get("run-1").state, "awaiting_callback");
+});
+
+test("callback finalization records cleanup failure and releases the provider lock", async () => {
+  const connection = createFakePreflightConnection();
+  connection.state.runs.set("run-1", {
+    id: "run-1",
+    provider: "wechat_image",
+    case_id: "wechat-image-v1",
+    state: "awaiting_callback",
+    started_at: new Date("2026-07-13T00:00:00.000Z")
+  });
+  connection.state.locks.set("wechat_image", {
+    provider: "wechat_image",
+    last_started_at: new Date("2026-07-13T00:00:00.000Z"),
+    active_run_id: "run-1"
+  });
+
+  const result = await finalizeProductionPreflightRun({
+    connection,
+    runId: "run-1",
+    provider: "wechat_image",
+    resultCategory: "pass",
+    cleanupObject: async () => {
+      throw new Error("private COS delete failed");
+    },
+    now: new Date("2026-07-13T00:01:00.000Z")
+  });
+
+  assert.deepEqual(result, {
+    finalized: true,
+    state: "failed",
+    resultCategory: "error",
+    cleanupStatus: "cleanup_failed"
+  });
+  assert.equal(connection.state.runs.get("run-1").state, "failed");
+  assert.equal(connection.state.runs.get("run-1").cleanup_status, "cleanup_failed");
+  assert.equal(connection.state.locks.get("wechat_image").active_run_id, null);
+  assert.equal(JSON.stringify(connection.state).includes("private COS delete failed"), false);
+});
+
+test("callback finalization is idempotent and does not clean a terminal run twice", async () => {
+  const connection = createFakePreflightConnection();
+  connection.state.runs.set("run-1", {
+    id: "run-1",
+    provider: "tencent_video",
+    case_id: "tencent-video-v1",
+    state: "awaiting_callback",
+    started_at: new Date("2026-07-13T00:00:00.000Z")
+  });
+  connection.state.locks.set("tencent_video", {
+    provider: "tencent_video",
+    last_started_at: new Date("2026-07-13T00:00:00.000Z"),
+    active_run_id: "run-1"
+  });
+  let cleanupCount = 0;
+  const input = {
+    connection,
+    runId: "run-1",
+    provider: "tencent_video",
+    resultCategory: "pass",
+    cleanupObject: async () => {
+      cleanupCount += 1;
+    }
+  };
+
+  const first = await finalizeProductionPreflightRun(input);
+  const duplicate = await finalizeProductionPreflightRun(input);
+
+  assert.equal(first.finalized, true);
+  assert.deepEqual(duplicate, { finalized: false, state: "passed" });
+  assert.equal(cleanupCount, 1);
+});
+
+test("runner finish cannot overwrite a terminal preflight result", async () => {
+  const connection = createFakePreflightConnection();
+  connection.state.runs.set("run-1", { id: "run-1", state: "passed" });
+
+  const finished = await finishProductionPreflightRun({
+    connection,
+    runId: "run-1",
+    state: "failed",
+    resultCategory: "error",
+    cleanupStatus: "not_required",
+    elapsedMs: 10,
+    failureCode: "PRODUCTION_PREFLIGHT_FAILED",
+    failureMessage: "submission failed"
+  });
+
+  assert.equal(finished, false);
+  assert.equal(connection.state.runs.get("run-1").state, "passed");
+});
+
+test("repository lists only expired asynchronous preflight runs", async () => {
+  const connection = createFakePreflightConnection();
+  connection.state.runs.set("old", {
+    id: "old",
+    provider: "wechat_image",
+    case_id: "wechat-image-v1",
+    state: "awaiting_callback",
+    config_fingerprint: "old-cfg",
+    updated_at: new Date("2026-07-13T00:00:00.000Z")
+  });
+  connection.state.runs.set("recent", {
+    id: "recent",
+    provider: "tencent_video",
+    case_id: "tencent-video-v1",
+    state: "awaiting_callback",
+    config_fingerprint: "recent-cfg",
+    updated_at: new Date("2026-07-13T00:14:00.000Z")
+  });
+  connection.state.runs.set("done", {
+    id: "done",
+    provider: "wechat_image",
+    case_id: "wechat-image-v1",
+    state: "passed",
+    config_fingerprint: "done-cfg",
+    updated_at: new Date("2026-07-13T00:00:00.000Z")
+  });
+
+  const runs = await listTimedOutProductionPreflightRuns({
+    connection,
+    cutoff: new Date("2026-07-13T00:10:00.000Z"),
+    limit: 10
+  });
+
+  assert.deepEqual(runs, [{
+    id: "old",
+    provider: "wechat_image",
+    caseId: "wechat-image-v1",
+    configFingerprint: "old-cfg"
+  }]);
+});
+
+test("repository also lists an expired started preflight for recovery", async () => {
+  const connection = createFakePreflightConnection();
+  connection.state.runs.set("started", {
+    id: "started",
+    provider: "tencent_video",
+    case_id: "tencent-video-v1",
+    state: "started",
+    config_fingerprint: "started-cfg",
+    updated_at: new Date("2026-07-13T00:00:00.000Z")
+  });
+
+  const runs = await listTimedOutProductionPreflightRuns({
+    connection,
+    cutoff: new Date("2026-07-13T00:10:00.000Z"),
+    limit: 10
+  });
+
+  assert.deepEqual(runs, [{
+    id: "started",
+    provider: "tencent_video",
+    caseId: "tencent-video-v1",
+    configFingerprint: "started-cfg"
+  }]);
 });

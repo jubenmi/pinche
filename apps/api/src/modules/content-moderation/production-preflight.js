@@ -14,6 +14,12 @@ const PROVIDER_FLAGS_BY_CASE = Object.freeze({
   "tencent-video-v1": ["tencentVideo", "cos", "callback"]
 });
 
+const WECHAT_TEXT_RESULT_CATEGORY_BY_SUGGESTION = Object.freeze({
+  pass: "pass",
+  review: "review",
+  risky: "block"
+});
+
 export function parseProductionPreflightCliArgs(argv) {
   if (argv.length !== 1 || !argv[0].startsWith("--case=")) {
     throw new Error("production preflight accepts exactly one --case argument");
@@ -24,23 +30,39 @@ export function parseProductionPreflightCliArgs(argv) {
 }
 
 export function createProductionPreflightConfigFingerprint(input) {
+  const confirmationProof = productionPreflightConfirmationProof({
+    confirmation: input.confirmation,
+    hmacKey: input.hmacKey
+  });
   const redacted = {
     release: input.release,
     provider: input.provider,
-    appId: input.appId
+    appId: input.appId,
+    confirmationProof
   };
   return crypto.createHash("sha256").update(JSON.stringify(redacted)).digest("hex");
 }
 
-export function assertProductionPreflightGuards(runtime, caseId) {
-  getProductionPreflightCase(caseId);
+export function assertProductionPreflightGuards(runtime, caseId, options = {}) {
+  const sample = getProductionPreflightCase(caseId);
   if (runtime.nodeEnv !== "production") {
     throw new Error("production preflight requires NODE_ENV=production");
   }
   if (!runtime.preflightEnabled) {
     throw new Error("production preflight is disabled");
   }
-  if (!timingSafeEqual(runtime.confirmation, runtime.expectedConfirmation)) {
+  if (Object.hasOwn(options, "configFingerprint")) {
+    const expectedFingerprint = createProductionPreflightConfigFingerprint({
+      release: runtime.releaseFingerprint || "d45-production-controlled-preflight",
+      provider: sample.provider,
+      appId: runtime.appId || "",
+      confirmation: runtime.expectedConfirmation,
+      hmacKey: options.hmacKey
+    });
+    if (!timingSafeEqual(options.configFingerprint, expectedFingerprint)) {
+      throw new Error("production preflight confirmation mismatch");
+    }
+  } else if (!timingSafeEqual(runtime.confirmation, runtime.expectedConfirmation)) {
     throw new Error("production preflight confirmation mismatch");
   }
   if (runtime.operatorRole !== "system_admin" || runtime.operatorStatus !== "active") {
@@ -65,61 +87,76 @@ export function createProductionPreflightRunner(dependencies) {
 
 export async function runProductionPreflightCase(runner, { caseId, runtime }) {
   const sample = getProductionPreflightCase(caseId);
-  runner.guards(runtime, caseId);
+  const initialRuntime = await assertCurrentPreflightGuards(runner, runtime, caseId);
   const startedAt = runner.clock ? runner.clock() : new Date();
   const run = await runner.repository.acquireRun({
     provider: sample.provider,
     caseId: sample.caseId,
-    operatorUserId: runtime.operatorUserId,
+    operatorUserId: initialRuntime.operatorUserId,
     configFingerprint: createProductionPreflightConfigFingerprint({
-      release: runtime.releaseFingerprint || "d45-production-controlled-preflight",
+      release: initialRuntime.releaseFingerprint || "d45-production-controlled-preflight",
       provider: sample.provider,
-      appId: runtime.appId || ""
+      appId: initialRuntime.appId || "",
+      confirmation: initialRuntime.confirmation,
+      hmacKey: runner.hmacKey
     }),
     assetFingerprint: `${sample.assetFingerprint}:${productionPreflightAssetSha256(sample)}`,
     now: startedAt
   });
 
-  let releaseLock = true;
+  const execution = { objectKey: null };
+  const cleanupFailureAlert = { sent: false };
   try {
-    const result = await executeProviderCase(runner, run, sample, runtime);
-    runner.guards(runtime, caseId);
+    const markedSubmitting = await runner.repository.markSubmitting({ runId: run.id });
+    if (!markedSubmitting) {
+      throw new Error("production preflight submission state transition failed");
+    }
+    const result = await executeProviderCase(runner, run, sample, runtime, execution);
+    await assertCurrentPreflightGuards(runner, runtime, caseId);
     if (result.awaitingCallback) {
-      await runner.repository.markAwaitingCallback({
+      const markedAwaitingCallback = await runner.repository.markAwaitingCallback({
         runId: run.id,
         resultCategory: "submitted",
         cleanupStatus: "pending",
         elapsedMs: elapsedMs(startedAt, runner.clock)
       });
-      releaseLock = false;
+      if (!markedAwaitingCallback) {
+        throw new Error("production preflight awaiting callback state transition failed");
+      }
       return { state: "awaiting_callback", runId: run.id };
     }
     if (result.resultCategory !== "pass") {
-      throw new Error(`production preflight expected pass but got ${result.resultCategory}`);
+      const error = new Error(`production preflight expected pass but got ${result.resultCategory}`);
+      error.resultCategory = result.resultCategory;
+      throw error;
     }
-    await runner.repository.finishRun({
+    const finalized = await finalizePreflightRunAndNotify(runner, {
       runId: run.id,
-      state: "passed",
+      provider: sample.provider,
       resultCategory: "pass",
-      cleanupStatus: result.cleanupStatus || "not_required",
-      elapsedMs: elapsedMs(startedAt, runner.clock)
-    });
+      expectedStates: ["submitting"],
+      now: runner.clock ? runner.clock() : new Date(),
+      ...preflightCleanupInput(runner, execution.objectKey)
+    }, sample.provider, cleanupFailureAlert);
+    if (!finalized?.finalized || finalized.state !== "passed" || finalized.resultCategory !== "pass") {
+      const error = new Error("production preflight completion finalization failed");
+      error.code = finalized?.cleanupStatus === "cleanup_failed"
+        ? "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED"
+        : "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_FINALIZATION_FAILED";
+      throw error;
+    }
     return { state: "passed", runId: run.id };
   } catch (error) {
-    await runner.repository.finishRun({
+    await finalizePreflightRunAndNotify(runner, {
       runId: run.id,
-      state: "failed",
-      resultCategory: "error",
-      cleanupStatus: error.cleanupStatus || "not_required",
-      elapsedMs: elapsedMs(startedAt, runner.clock),
+      provider: sample.provider,
+      resultCategory: error.resultCategory || "error",
+      expectedStates: ["started", "submitting"],
+      now: runner.clock ? runner.clock() : new Date(),
       failureCode: error.code || "PRODUCTION_PREFLIGHT_FAILED",
-      failureMessage: String(error.message || error).slice(0, 255)
-    });
+      ...preflightCleanupInput(runner, execution.objectKey)
+    }, sample.provider, cleanupFailureAlert);
     throw error;
-  } finally {
-    if (releaseLock) {
-      await runner.repository.releaseLock({ provider: sample.provider, runId: run.id });
-    }
   }
 }
 
@@ -135,20 +172,40 @@ function timingSafeEqual(left, right) {
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-async function executeProviderCase(runner, run, sample, runtime) {
+function productionPreflightConfirmationProof({ confirmation, hmacKey }) {
+  if (typeof confirmation !== "string" || confirmation.length === 0) return "";
+  if (typeof hmacKey !== "string" || hmacKey.length < 32) return "";
+  return crypto
+    .createHmac("sha256", hmacKey)
+    .update(`production-preflight-confirmation:${confirmation}`, "utf8")
+    .digest("hex");
+}
+
+async function executeProviderCase(runner, run, sample, runtime, execution) {
   if (sample.kind === "text") {
+    const currentRuntime = await assertCurrentPreflightGuards(runner, runtime, sample.caseId);
     const openid = await runner.userRepository.getOpenIdForUserId(
-      runtime.testAdminUserId || runtime.operatorUserId
+      currentRuntime.testAdminUserId || currentRuntime.operatorUserId
     );
-    return runner.wechatClient.checkText({
+    await assertCurrentPreflightGuards(runner, runtime, sample.caseId);
+    const providerResult = await runner.wechatClient.checkText({
       content: sample.text,
       openid,
       scene: 1,
       subjectType: 1
     });
+    return {
+      ...providerResult,
+      resultCategory: normalizeWechatTextResultCategory(providerResult)
+    };
   }
   if (sample.kind === "image") {
-    return runCosBackedProviderCase(runner, run, sample, runtime, async ({ mediaUrl, openid }) => {
+    return runCosBackedProviderCase(runner, run, sample, runtime, execution, async ({
+      mediaUrl,
+      openid,
+      assertExternalOutbound
+    }) => {
+      await assertExternalOutbound();
       const providerResult = await runner.wechatClient.checkImage({
         mediaUrl,
         openid,
@@ -170,7 +227,10 @@ async function executeProviderCase(runner, run, sample, runtime) {
     });
   }
   if (sample.kind === "video") {
-    return runCosBackedProviderCase(runner, run, sample, runtime, async ({ objectKey }) => {
+    return runCosBackedProviderCase(runner, run, sample, runtime, execution, async ({
+      objectKey,
+      assertExternalOutbound
+    }) => {
       const dataId = run.id;
       await runner.repository.recordAssociation({
         runId: run.id,
@@ -183,6 +243,7 @@ async function executeProviderCase(runner, run, sample, runtime) {
           value: dataId
         })
       });
+      await assertExternalOutbound();
       const providerResult = await runner.tencentVideoClient.submitProductionPreflightVideo({
         runId: run.id,
         objectKey,
@@ -207,33 +268,69 @@ async function executeProviderCase(runner, run, sample, runtime) {
   throw new Error(`unsupported production preflight sample kind: ${sample.kind}`);
 }
 
-async function runCosBackedProviderCase(runner, run, sample, runtime, providerCall) {
+function normalizeWechatTextResultCategory(result) {
+  const suggestion = String(result?.suggestion || "").trim().toLowerCase();
+  return WECHAT_TEXT_RESULT_CATEGORY_BY_SUGGESTION[suggestion] || "error";
+}
+
+async function runCosBackedProviderCase(runner, run, sample, runtime, execution, providerCall) {
   const objectKey = buildProductionPreflightCosKey(run.id, sample);
+  await assertCurrentPreflightGuards(runner, runtime, sample.caseId);
   await runner.cos.putObject({
     key: objectKey,
     body: readProductionPreflightFixture(sample),
     forbidOverwrite: true
   });
-  try {
-    const mediaUrl = sample.kind === "image" ? await runner.cos.buildSignedUrl(objectKey) : null;
-    const openid = sample.kind === "image"
-      ? await runner.userRepository.getOpenIdForUserId(runtime.testAdminUserId || runtime.operatorUserId)
-      : null;
-    const providerResult = await providerCall({ objectKey, mediaUrl, openid });
-    if (!providerResult.resultCategory && isAsyncSubmissionResult(sample, providerResult)) {
-      return { awaitingCallback: true };
-    }
-    await cleanupPreflightObject(runner, objectKey);
-    return { ...providerResult, cleanupStatus: "deleted" };
-  } catch (error) {
-    try {
-      await cleanupPreflightObject(runner, objectKey);
-    } catch (cleanupError) {
-      cleanupError.cleanupStatus = "cleanup_failed";
-      throw cleanupError;
-    }
-    throw error;
+  execution.objectKey = objectKey;
+  const currentRuntime = await assertCurrentPreflightGuards(runner, runtime, sample.caseId);
+  const mediaUrl = sample.kind === "image" ? await runner.cos.buildSignedUrl(objectKey) : null;
+  const openid = sample.kind === "image"
+    ? await runner.userRepository.getOpenIdForUserId(
+        currentRuntime.testAdminUserId || currentRuntime.operatorUserId
+      )
+    : null;
+  const providerResult = await providerCall({
+    objectKey,
+    mediaUrl,
+    openid,
+    assertExternalOutbound: () => assertCurrentPreflightGuards(runner, runtime, sample.caseId)
+  });
+  if (!providerResult.resultCategory && isAsyncSubmissionResult(sample, providerResult)) {
+    return { awaitingCallback: true };
   }
+  return providerResult;
+}
+
+function preflightCleanupInput(runner, objectKey) {
+  if (!objectKey) return {};
+  return {
+    cleanupObject: () => cleanupPreflightObject(runner, objectKey)
+  };
+}
+
+async function finalizePreflightRunAndNotify(runner, input, provider, cleanupFailureAlert) {
+  const finalized = await runner.repository.finalizeRun(input);
+  if (
+    !cleanupFailureAlert.sent &&
+    finalized?.cleanupStatus === "cleanup_failed" &&
+    typeof runner.onCleanupFailure === "function"
+  ) {
+    cleanupFailureAlert.sent = true;
+    try {
+      await runner.onCleanupFailure({ provider });
+    } catch {
+      // Observability must not change the preflight terminal state or CLI result.
+    }
+  }
+  return finalized;
+}
+
+async function assertCurrentPreflightGuards(runner, runtime, caseId) {
+  const currentRuntime = typeof runner.refreshRuntime === "function"
+    ? await runner.refreshRuntime(runtime)
+    : runtime;
+  runner.guards(currentRuntime, caseId);
+  return currentRuntime;
 }
 
 function isAsyncSubmissionResult(sample, providerResult) {

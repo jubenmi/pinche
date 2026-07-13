@@ -14,6 +14,7 @@ const [
   migration29,
   moderationEnv,
   preflightJob,
+  preflightTimeoutJob,
   moderationIntakeGate,
   albumImageUploadService,
   coreService,
@@ -31,6 +32,7 @@ const [
   text("apps/api/migrations/0029_content_moderation_production_preflight.sql"),
   text("apps/api/src/config/env.js"),
   text("apps/api/src/jobs/content-moderation-production-preflight.js"),
+  text("apps/api/src/jobs/content-moderation-production-preflight-timeout.js"),
   text("apps/api/src/modules/content-moderation/intake-gate.js"),
   text("apps/api/src/modules/album-image/upload-service.js"),
   text("apps/api/src/modules/core/service.js"),
@@ -71,7 +73,10 @@ for (const key of [
   "CONTENT_MODERATION_VIDEO_INTAKE_MODE",
   "CONTENT_MODERATION_ORPHAN_SCAN_ENABLED",
   "CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED",
-  "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED"
+  "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED",
+  "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CALLBACK_TIMEOUT_MS",
+  "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TIMEOUT_POLL_MS",
+  "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TIMEOUT_BATCH_SIZE"
 ]) {
   assert.equal(moderationEnv.includes(key), true, `missing moderation config: ${key}`);
 }
@@ -118,10 +123,20 @@ assert.doesNotMatch(server, /\/api\/(?:admin\/)?content-moderation\/preflight/);
 assert.equal(apiPackage.scripts["job:content-moderation-retry"], "node src/jobs/content-moderation-retry.js");
 assert.equal(apiPackage.scripts["job:content-moderation-orphan-scan"], "node src/jobs/content-moderation-orphan-scan.js");
 assert.equal(apiPackage.scripts["job:content-moderation-production-preflight"], "node src/jobs/content-moderation-production-preflight.js");
+assert.equal(
+  apiPackage.scripts["job:content-moderation-production-preflight-timeout"],
+  "node src/jobs/content-moderation-production-preflight-timeout.js"
+);
 assert.match(preflightJob, /parseProductionPreflightCliArgs/);
 assert.doesNotMatch(preflightJob, /server\.js/);
+assert.match(preflightTimeoutJob, /runProductionPreflightTimeoutBatch/);
+assert.doesNotMatch(preflightTimeoutJob, /server\.js/);
 assert.match(compose, /content-moderation-retry:[\s\S]*job:content-moderation-retry/);
 assert.match(compose, /content-moderation-orphan-scan:[\s\S]*job:content-moderation-orphan-scan/);
+assert.match(
+  compose,
+  /content-moderation-production-preflight-timeout:[\s\S]*job:content-moderation-production-preflight-timeout/
+);
 
 for (const statement of [
   "微信免费",
@@ -130,6 +145,7 @@ for (const statement of [
   "私有 COS",
   "CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED",
   "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED",
+  "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CALLBACK_TIMEOUT_MS",
   "不启用腾讯云 TMS、腾讯云 CI 图片审核、COS 图片自动审核",
   "CONTENT_MODERATION_INTAKE_CLOSED",
   "审核 provider 开关不是流量开关",

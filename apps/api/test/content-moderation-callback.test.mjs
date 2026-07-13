@@ -237,6 +237,10 @@ test("server wires the authenticated callback before the generic JSON body parse
   const routeBody = server.slice(route, genericBody);
   assert.match(routeBody, /authenticateTencentCallback/);
   assert.match(routeBody, /tryHandleProductionPreflightTencentCallback/);
+  assert.match(routeBody, /if \(\s*config\.contentModeration\.productionPreflight\?\.referenceHmacKey\s*\)/);
+  assert.doesNotMatch(routeBody, /productionPreflight\?\.enabled\s*&&/);
+  assert.match(routeBody, /onCleanupFailure/);
+  assert.match(routeBody, /CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED/);
   assert.ok(
     routeBody.indexOf("tryHandleProductionPreflightTencentCallback") <
       routeBody.indexOf("parseTencentCallbackPayload")
