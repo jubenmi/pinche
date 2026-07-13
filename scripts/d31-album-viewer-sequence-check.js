@@ -188,6 +188,12 @@ function swipeOneLogicalStep(instance, emitted, direction) {
     );
     assert.equal(instance.swiperGeneration, generation + 1);
     assert.equal(instance.currentIndex, expectedIndex);
+    instance.handleSwiperAnimationFinish(
+      nativeSwiperEvent(instance, instance.activeWindowIndex, {
+        generation: instance.swiperGeneration,
+        source: ""
+      })
+    );
     instance.handleSwiperChange(
       nativeSwiperEvent(instance, instance.activeWindowIndex, { source: "" })
     );
@@ -362,6 +368,33 @@ function runGenerationSafeEdgeRebaseCheck(component) {
   assert.equal(instance.swiperGeneration, rebasedGeneration, "old native events must preserve generation");
   assertPending(instance, rebasedGeneration, 6, "old-generation native events");
   assert.equal(changeEvents(emitted).length, 3, "old native events must not emit business changes");
+}
+
+function runRapidRebaseDurationCheck(component) {
+  const { instance, emitted } = openViewer(component, 30, 2);
+  const oldGeneration = instance.swiperGeneration;
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 4, { generation: oldGeneration }));
+  const changesAfterSwipe = changeEvents(emitted).length;
+  instance.handleSwiperAnimationFinish(
+    nativeSwiperEvent(instance, 4, { generation: oldGeneration })
+  );
+  const rebaseGeneration = instance.swiperGeneration;
+  assert.equal(instance.swiperDuration, 0);
+
+  instance.handleSwiperChange(nativeSwiperEvent(instance, 0, { generation: oldGeneration }));
+  instance.handleSwiperAnimationFinish(
+    nativeSwiperEvent(instance, 0, { generation: oldGeneration })
+  );
+  assert.equal(changeEvents(emitted).length, changesAfterSwipe);
+  assert.equal(instance.currentIndex, 4);
+
+  instance.handleSwiperAnimationFinish(
+    nativeSwiperEvent(instance, instance.activeWindowIndex, {
+      generation: rebaseGeneration,
+      source: ""
+    })
+  );
+  assert.equal(instance.swiperDuration, 220);
 }
 
 function runReopenGenerationCheck(component) {
@@ -657,7 +690,10 @@ function runAlbumPageMediaWindowCheck(component) {
   );
   const ensurePreviewMediaAround = methodFromSource(albumSource, "ensurePreviewMediaAround");
 
-  const photos = makePhotos(7);
+  const photos = makePhotos(7).map((photo) => ({
+    ...photo,
+    moderation_status: "approved"
+  }));
   photos[3] = {
     ...photos[3],
     media_type: "video",
@@ -675,10 +711,23 @@ function runAlbumPageMediaWindowCheck(component) {
 
   const requests = [];
   const state = reactive({
+    photos,
     previewPhotos: photos,
     previewCurrentIndex: 3,
     mediaProgressById,
     visiblePhotoMedia: {},
+    isPublishedAlbumMedia(photo) {
+      return photo?.moderation_status === "approved";
+    },
+    isCurrentPublishedAlbumMedia(photo) {
+      return (
+        this.isPublishedAlbumMedia(photo) &&
+        this.photos.some(
+          (row) =>
+            String(row.id) === String(photo?.id) && this.isPublishedAlbumMedia(row)
+        )
+      );
+    },
     albumMediaProgressKey(photoId, variant = "preview") {
       return String(photoId) + ":" + variant;
     },
@@ -805,6 +854,7 @@ function runSequenceCheck() {
   runOpeningPositionCheck(component);
   runNonEdgeChangeCheck(component);
   runGenerationSafeEdgeRebaseCheck(component);
+  runRapidRebaseDurationCheck(component);
   runReopenGenerationCheck(component);
   runDynamicInitialIndexCheck(component);
   runFullTraversalCheck(component);

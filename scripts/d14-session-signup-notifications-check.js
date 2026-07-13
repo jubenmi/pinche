@@ -75,7 +75,7 @@ if (!fs.existsSync(path.join(root, subscribeHelperPath))) {
 const backendSubscribeSource = read("apps/api/src/modules/wechat/subscribe-message.js");
 for (const requiredText of [
   "skipped",
-  "config.subscribeMessage.enabled",
+  "runtimeConfig.subscribeMessage.enabled",
   "template_missing",
   "openid_missing",
   "wechat_config_missing"

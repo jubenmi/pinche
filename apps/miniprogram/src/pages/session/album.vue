@@ -236,6 +236,9 @@
                 <view v-if="photo.media_type === 'video'" class="video-placeholder-copy">
                   {{ videoStateText(photo) }}
                 </view>
+                <view v-else-if="mediaModerationStatusText(photo)" class="moderation-placeholder-copy">
+                  {{ mediaModerationStatusText(photo) }}
+                </view>
                 <view v-else class="photo-loading-dot"></view>
               </view>
               <view v-if="photo.media_type === 'video'" class="video-overlay">
@@ -261,7 +264,10 @@
             </view>
             <view v-else class="photo-meta">
               <view class="photo-caption-body">
-                <view class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
+                <view v-if="mediaModerationStatusText(photo)" class="photo-moderation-status">
+                  {{ mediaModerationStatusText(photo) }}
+                </view>
+                <view v-else class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
                   {{ tagSummary(photo) }}
                 </view>
               </view>
@@ -290,7 +296,7 @@
                     标注
                   </t-button>
                   <t-button
-                    v-if="photo.media_type === 'image'"
+                    v-if="isDownloadableAlbumImage(photo)"
                     class="photo-action-text"
                     :disabled="albumBusy"
                     @tap.stop="downloadSinglePhoto(photo)"
@@ -362,6 +368,9 @@
                 <view v-if="photo.media_type === 'video'" class="video-placeholder-copy">
                   {{ videoStateText(photo) }}
                 </view>
+                <view v-else-if="mediaModerationStatusText(photo)" class="moderation-placeholder-copy">
+                  {{ mediaModerationStatusText(photo) }}
+                </view>
                 <view v-else class="photo-loading-dot"></view>
               </view>
               <view v-if="photo.media_type === 'video'" class="video-overlay">
@@ -387,7 +396,10 @@
             </view>
             <view v-else class="photo-meta">
               <view class="photo-caption-body">
-                <view class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
+                <view v-if="mediaModerationStatusText(photo)" class="photo-moderation-status">
+                  {{ mediaModerationStatusText(photo) }}
+                </view>
+                <view v-else class="photo-caption-title" :class="{ pending: photo.tags.length === 0 }">
                   {{ tagSummary(photo) }}
                 </view>
               </view>
@@ -416,7 +428,7 @@
                     标注
                   </t-button>
                   <t-button
-                    v-if="photo.media_type === 'image'"
+                    v-if="isDownloadableAlbumImage(photo)"
                     class="photo-action-text"
                     :disabled="albumBusy"
                     @tap.stop="downloadSinglePhoto(photo)"
@@ -569,11 +581,21 @@ import {
   uploadSessionAlbumVideo,
   reportAlbumMediaEvent
 } from "../../utils/api";
-import { albumMediaError } from "@pinche/shared";
+import {
+  albumMediaError,
+  isApprovedAlbumImageDownloadCandidate,
+  isModerationPublished
+} from "@pinche/shared";
 import { uploadAlbumPhoto } from "../../utils/albumPhotoUpload";
 import {
+  clearAlbumMediaRequestIfCurrent,
+  createAlbumListRequestAuthority,
   createAlbumMediaRefreshController,
-  normalizeAlbumImageUrls
+  createAlbumWaterfallRenderAuthority,
+  findCurrentAlbumMediaRow,
+  isCurrentPublishedAlbumMedia as isCurrentPublishedAlbumMediaRow,
+  normalizeAlbumImageUrls,
+  pruneUnpublishedAlbumMediaCache
 } from "../../utils/albumMediaUrls";
 import {
   canOpenAlbumMediaPreview,
@@ -585,6 +607,7 @@ import {
 } from "../../utils/albumVideo";
 import { classifyAlbumMediaSelection } from "../../utils/albumMediaSelection";
 import { runExclusiveAlbumMediaTask } from "../../utils/albumMediaOperation";
+import { contentModerationStatusText } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
@@ -655,6 +678,8 @@ export default {
       previewInitialIndex: 0,
       previewMediaUrlRefreshRequest: null,
       albumMediaRefresh: null,
+      albumListRequestAuthority: createAlbumListRequestAuthority(),
+      albumWaterfallRenderAuthority: createAlbumWaterfallRenderAuthority(),
       mediaRefreshAttempts: {},
       previewVideoUrlRequests: {},
       filters: [
@@ -676,10 +701,14 @@ export default {
       return !this.timelineMode && this.canUpload && this.isSystemAdmin;
     },
     downloadablePhotos() {
-      return this.photos.filter((photo) => photo.media_type === "image");
+      return this.photos.filter((photo) =>
+        isApprovedAlbumImageDownloadCandidate(photo, this.mediaUrlForPhoto(photo, "download"))
+      );
     },
     filteredDownloadablePhotos() {
-      return this.filteredPhotos.filter((photo) => photo.media_type === "image");
+      return this.filteredPhotos.filter((photo) =>
+        isApprovedAlbumImageDownloadCandidate(photo, this.mediaUrlForPhoto(photo, "download"))
+      );
     },
     previewCurrentPhoto() {
       return this.previewPhotos[this.previewCurrentIndex] || null;
@@ -961,7 +990,7 @@ export default {
     }
     if (this.timelineMode) {
       if (this.sessionId && this.albumShareToken) {
-        await this.albumMediaRefresh?.checkNow();
+        await this.albumMediaRefresh?.refresh();
       }
       return;
     }
@@ -969,7 +998,7 @@ export default {
     this.currentUserId = auth.user?.id || this.currentUserId;
     this.currentRoles = auth.roles || this.currentRoles;
     if (this.sessionId && this.currentUserId) {
-      await this.albumMediaRefresh?.checkNow();
+      await this.albumMediaRefresh?.refresh();
       await this.ensureAlbumShareToken();
     }
   },
@@ -1324,18 +1353,24 @@ export default {
         this.selectedRoleFilter = "";
       }
     },
+    beginAlbumListRequest() {
+      return this.albumListRequestAuthority.begin();
+    },
+    isCurrentAlbumListRequest(listRequest) {
+      return this.albumListRequestAuthority.isCurrent(listRequest);
+    },
     initializeAlbumMediaRefreshController() {
       this.albumMediaRefresh?.dispose();
       this.albumMediaRefresh = createAlbumMediaRefreshController({
         readAlbum: () => ({ photos: this.photos }),
         writeAlbum: (next) => {
+          this.mediaLoadSerial += 1;
           this.photos = (next.photos || []).map((photo) => this.normalizePhotoMedia(photo));
-          this.previewPhotos = this.previewPhotos.map((preview) => {
-            return this.photos.find((photo) => Number(photo.id) === Number(preview.id)) || preview;
-          });
+          this.pruneUnpublishedAlbumMediaState(this.photos);
           this.refreshWaterfall();
         },
         reloadAlbum: async () => {
+          const listRequest = this.beginAlbumListRequest();
           try {
             const response = await request({
               url: this.timelineMode
@@ -1345,16 +1380,29 @@ export default {
                 : `/api/sessions/${this.sessionId}/album`,
               suppressMaintenance: true
             });
+            if (!this.isCurrentAlbumListRequest(listRequest)) {
+              return null;
+            }
             const data = dataOf(response) || {};
             reportAlbumMediaEvent("media_refresh_success", { sessionId: Number(this.sessionId) });
             return {
-              photos: (data.photos || []).map((photo) => this.normalizePhotoMedia(photo))
+              photos: (data.photos || []).map((photo) => this.normalizePhotoMedia(photo)),
+              isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
             };
           } catch (error) {
+            if (!this.isCurrentAlbumListRequest(listRequest)) {
+              return null;
+            }
             reportAlbumMediaEvent("media_refresh_failure", {
               sessionId: Number(this.sessionId),
               errorCode: error?.code || "MEDIA_REFRESH_FAILED"
             });
+            if (error?.statusCode === 401 || error?.statusCode === 403) {
+              return {
+                photos: [],
+                isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
+              };
+            }
             throw error;
           }
         }
@@ -1365,8 +1413,12 @@ export default {
         return;
       }
       this.loadingAlbum = true;
+      const listRequest = this.beginAlbumListRequest();
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album` });
+        if (!this.isCurrentAlbumListRequest(listRequest)) {
+          return;
+        }
         const data = dataOf(response) || {};
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
@@ -1374,7 +1426,9 @@ export default {
         this.mediaProgressById = {};
         this.listThumbnailLoadedById = {};
         this.listThumbnailFailedById = {};
+        this.mediaLoadSerial += 1;
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+        this.pruneUnpublishedAlbumMediaState(this.photos);
         this.albumSession = this.albumSessionSummary(data);
         this.hiddenCount = Number(data.hidden_count || 0);
         this.canUpload = Boolean(data.can_upload);
@@ -1390,8 +1444,13 @@ export default {
         this.applyAlbumNavigationTitle();
         this.albumMediaRefresh?.schedule();
       } catch (error) {
-        if (error?.statusCode === 403) {
+        if (!this.isCurrentAlbumListRequest(listRequest)) {
+          return;
+        }
+        if (error?.statusCode === 401 || error?.statusCode === 403) {
+          this.mediaLoadSerial += 1;
           this.photos = [];
+          this.pruneUnpublishedAlbumMediaState(this.photos);
           this.albumSession = null;
           this.canUpload = false;
           this.statusText = "车局相册发车后仅同车成员可查看。";
@@ -1414,12 +1473,16 @@ export default {
         return;
       }
       this.loadingAlbum = true;
+      const listRequest = this.beginAlbumListRequest();
       try {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/album/public-share${queryString({
             token: this.albumShareToken
           })}`
         });
+        if (!this.isCurrentAlbumListRequest(listRequest)) {
+          return;
+        }
         const data = dataOf(response) || {};
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
@@ -1427,18 +1490,25 @@ export default {
         this.mediaProgressById = {};
         this.listThumbnailLoadedById = {};
         this.listThumbnailFailedById = {};
+        this.mediaLoadSerial += 1;
         this.people = [];
         this.canUpload = false;
         this.hiddenCount = 0;
         this.albumSession = this.albumSessionSummary(data);
         this.shareSubject = data.share_subject || this.shareSubject;
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+        this.pruneUnpublishedAlbumMediaState(this.photos);
         this.statusText = "";
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
         this.albumMediaRefresh?.schedule();
       } catch (error) {
+        if (!this.isCurrentAlbumListRequest(listRequest)) {
+          return;
+        }
+        this.mediaLoadSerial += 1;
         this.photos = [];
+        this.pruneUnpublishedAlbumMediaState(this.photos);
         this.albumSession = null;
         this.canUpload = false;
         this.statusText =
@@ -1465,37 +1535,57 @@ export default {
     },
     normalizePhotoMedia(photo) {
       const mediaType = photo.media_type === "video" ? "video" : "image";
+      const moderationStatus = photo.moderation_status || "";
+      const published = isModerationPublished(moderationStatus);
       if (mediaType === "video") {
         return {
           ...photo,
           media_type: "video",
+          moderation_status: moderationStatus,
           processing_status: photo.processing_status || "processing",
-          tags: photo.tags || [],
-          cover_url: this.normalizeAlbumMediaUrl(photo.cover_url || ""),
-          video_url: this.normalizeAlbumMediaUrl(photo.video_url || ""),
-          video_display_url: photo.video_display_url || "",
+          tags: published ? photo.tags || [] : [],
+          can_tag: published && Boolean(photo.can_tag),
+          cover_url: published ? this.normalizeAlbumMediaUrl(photo.cover_url || "") : "",
+          video_url: published ? this.normalizeAlbumMediaUrl(photo.video_url || "") : "",
+          video_display_url: published ? photo.video_display_url || "" : "",
           video_load_failed: Boolean(photo.video_load_failed),
           duration_seconds: Number(photo.duration_seconds || 0),
           display_url: ""
         };
       }
-      const selectedUrls = normalizeAlbumImageUrls(photo);
-      const rawImageUrl = photo.image_url || photo.preview_url || selectedUrls.previewUrl || "";
-      const rawPreviewUrl = photo.preview_url || rawImageUrl;
-      const rawThumbnailUrl = photo.thumbnail_url || rawPreviewUrl || rawImageUrl;
+      const selectedUrls = published
+        ? normalizeAlbumImageUrls(photo)
+        : { thumbnailUrl: "", previewUrl: "", downloadUrl: "", expiresAt: "" };
+      const rawImageUrl = published
+        ? photo.image_url || photo.preview_url || selectedUrls.previewUrl || ""
+        : "";
+      const rawPreviewUrl = published ? photo.preview_url || rawImageUrl : "";
+      const rawThumbnailUrl = published ? photo.thumbnail_url || rawPreviewUrl || rawImageUrl : "";
       const imageUrl = this.normalizeAlbumMediaUrl(rawImageUrl);
       const previewUrl = this.normalizeAlbumMediaUrl(rawPreviewUrl);
       const thumbnailUrl = this.normalizeAlbumMediaUrl(rawThumbnailUrl);
-      const previewLoadUrl = this.normalizeAlbumMediaUrl(photo.preview_load_url || "");
-      const thumbnailLoadUrl = this.normalizeAlbumMediaUrl(photo.thumbnail_load_url || "");
-      const thumbnailDisplayUrl = this.normalizeAlbumMediaUrl(selectedUrls.thumbnailUrl);
-      const previewDisplayUrl = this.normalizeAlbumMediaUrl(selectedUrls.previewUrl);
-      const downloadUrl = this.normalizeAlbumMediaUrl(selectedUrls.downloadUrl);
+      const previewLoadUrl = published
+        ? this.normalizeAlbumMediaUrl(photo.preview_load_url || "")
+        : "";
+      const thumbnailLoadUrl = published
+        ? this.normalizeAlbumMediaUrl(photo.thumbnail_load_url || "")
+        : "";
+      const thumbnailDisplayUrl = published
+        ? this.normalizeAlbumMediaUrl(selectedUrls.thumbnailUrl)
+        : "";
+      const previewDisplayUrl = published
+        ? this.normalizeAlbumMediaUrl(selectedUrls.previewUrl)
+        : "";
+      const downloadUrl = published
+        ? this.normalizeAlbumMediaUrl(selectedUrls.downloadUrl)
+        : "";
       return {
         ...photo,
         media_type: "image",
+        moderation_status: moderationStatus,
         processing_status: photo.processing_status || "ready",
-        tags: photo.tags || [],
+        tags: published ? photo.tags || [] : [],
+        can_tag: published && Boolean(photo.can_tag),
         image_url: imageUrl || previewLoadUrl,
         preview_url: previewUrl || previewLoadUrl,
         thumbnail_url: thumbnailUrl || thumbnailLoadUrl || previewLoadUrl,
@@ -1505,10 +1595,13 @@ export default {
         preview_display_url: previewDisplayUrl,
         download_url: downloadUrl,
         media_url_expires_at: selectedUrls.expiresAt,
-        display_url: photo.display_url || ""
+        display_url: published ? photo.display_url || "" : ""
       };
     },
     mediaUrlForPhoto(photo, variant = "preview") {
+      if (!isModerationPublished(photo?.moderation_status)) {
+        return "";
+      }
       if (photo?.media_type === "video") {
         return variant === "thumbnail" ? photo.cover_url || "" : "";
       }
@@ -1573,6 +1666,10 @@ export default {
       return `${String(photoId)}:${variant}`;
     },
     setAlbumMediaProgress(photoId, variant, values) {
+      const currentPhoto = this.photos.find((photo) => Number(photo.id) === Number(photoId));
+      if (!this.isPublishedAlbumMedia(currentPhoto)) {
+        return;
+      }
       const key = this.albumMediaProgressKey(photoId, variant);
       this.mediaProgressById[key] = {
         ...(this.mediaProgressById[key] || {}),
@@ -1596,66 +1693,25 @@ export default {
       }
       const photoId = String(photo.id);
       return (
-        this.previewPhotos.find((item) => String(item.id) === photoId) ||
         this.photos.find((item) => String(item.id) === photoId) ||
+        this.previewPhotos.find((item) => String(item.id) === photoId) ||
         photo
       );
     },
-    mediaFieldsFromPhoto(photo) {
-      const normalized = this.normalizePhotoMedia(photo || {});
-      if (normalized.media_type === "video") {
-        return {
-          cover_url: normalized.cover_url,
-          video_url: normalized.video_url,
-          video_display_url: normalized.video_display_url,
-          video_load_failed: normalized.video_load_failed,
-          processing_status: normalized.processing_status
-        };
-      }
-      return {
-        image_url: normalized.image_url,
-        preview_url: normalized.preview_url,
-        thumbnail_url: normalized.thumbnail_url,
-        preview_load_url: normalized.preview_load_url,
-        thumbnail_load_url: normalized.thumbnail_load_url,
-        thumbnail_display_url: normalized.thumbnail_display_url,
-        preview_display_url: normalized.preview_display_url,
-        download_url: normalized.download_url,
-        media_url_expires_at: normalized.media_url_expires_at
-      };
-    },
-    mergeFreshPhotoMedia(photo, freshMediaById) {
-      if (!photo || photo.id === undefined || photo.id === null) {
-        return photo;
-      }
-      const freshPhoto = freshMediaById.get(String(photo.id));
-      if (!freshPhoto) {
-        return photo;
-      }
-      return {
-        ...photo,
-        ...this.mediaFieldsFromPhoto(freshPhoto)
-      };
-    },
     applyFreshAlbumMediaUrls(freshPhotos = []) {
-      const freshMediaById = new Map(
-        (freshPhotos || [])
+      const currentMediaById = new Map(
+        this.photos
           .filter((photo) => photo && photo.id !== undefined && photo.id !== null)
           .map((photo) => [String(photo.id), photo])
       );
-      if (!freshMediaById.size) {
-        return;
-      }
-      this.photos = this.photos.map((photo) => this.mergeFreshPhotoMedia(photo, freshMediaById));
-      this.previewPhotos = this.previewPhotos.map((photo) =>
-        this.mergeFreshPhotoMedia(photo, freshMediaById)
-      );
-      this.waterfallList1 = this.waterfallList1.map((photo) =>
-        this.mergeFreshPhotoMedia(photo, freshMediaById)
-      );
-      this.waterfallList2 = this.waterfallList2.map((photo) =>
-        this.mergeFreshPhotoMedia(photo, freshMediaById)
-      );
+      this.mediaLoadSerial += 1;
+      this.photos = (freshPhotos || [])
+        .filter((photo) => photo && photo.id !== undefined && photo.id !== null)
+        .map((photo) =>
+          this.normalizePhotoMedia({ ...currentMediaById.get(String(photo.id)), ...photo })
+        );
+      this.pruneUnpublishedAlbumMediaState(this.photos);
+      this.refreshWaterfall();
     },
     refreshAlbumMediaUrlsForPreview() {
       if (!this.sessionId || !this.albumMediaRefresh) {
@@ -1665,11 +1721,17 @@ export default {
     },
     async downloadAlbumImage(photo, variant = "preview", options = {}) {
       let targetPhoto = this.latestPreviewPhoto(photo);
+      if (!this.isCurrentPublishedAlbumMedia(targetPhoto)) {
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+      }
       if (!options.skipRefresh && this.shouldRefreshAlbumMediaBeforeDownload(targetPhoto, variant)) {
         const refreshed = await this.refreshAlbumMediaUrlsForPreview();
         if (refreshed) {
           targetPhoto = this.latestPreviewPhoto(targetPhoto);
         }
+      }
+      if (!this.isCurrentPublishedAlbumMedia(targetPhoto)) {
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
       }
       try {
         return await this.downloadAlbumImageOnce(targetPhoto, variant);
@@ -1695,6 +1757,9 @@ export default {
         throw albumMediaError("MEDIA_URL_EXPIRED", "图片地址刷新失败");
       }
       const current = this.latestPreviewPhoto(photo);
+      if (!this.isCurrentPublishedAlbumMedia(current)) {
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+      }
       try {
         return await this.downloadAlbumImageOnce(current, variant);
       } catch (error) {
@@ -1956,10 +2021,17 @@ export default {
       const photos = this.photos || [];
       const hydrated = await Promise.all(
         photos.map(async (photo) => {
+          if (!this.isCurrentPublishedAlbumMedia(photo)) {
+            return { ...photo, display_url: "" };
+          }
           try {
+            const displayUrl = await this.downloadAlbumImage(photo);
+            if (!this.isCurrentPublishedAlbumMedia(photo)) {
+              return { ...photo, display_url: "" };
+            }
             return {
               ...photo,
-              display_url: await this.downloadAlbumImage(photo)
+              display_url: displayUrl
             };
           } catch (error) {
             return {
@@ -1970,10 +2042,15 @@ export default {
         })
       );
       if (serial === this.mediaLoadSerial) {
-        this.photos = hydrated;
+        this.photos = hydrated.map((photo) => this.normalizePhotoMedia(photo));
+        this.pruneUnpublishedAlbumMediaState(this.photos);
       }
     },
     updatePhotoDisplayUrl(photoId, displayUrl) {
+      const currentPhoto = this.photos.find((photo) => Number(photo.id) === Number(photoId));
+      if (!this.isPublishedAlbumMedia(currentPhoto)) {
+        return;
+      }
       this.photos = this.photos.map((photo) =>
         Number(photo.id) === Number(photoId)
           ? {
@@ -1983,7 +2060,62 @@ export default {
           : photo
       );
     },
+    pruneUnpublishedAlbumMediaState(photos = this.photos) {
+      const publishedIds = new Set(
+        (photos || [])
+          .filter((photo) => this.isPublishedAlbumMedia(photo))
+          .map((photo) => String(photo.id))
+      );
+      const keepPhotoId = (photoId) => publishedIds.has(String(photoId));
+      const keepMediaKey = (key) => keepPhotoId(String(key).split(":")[0]);
+      this.visiblePhotoMedia = pruneUnpublishedAlbumMediaCache(this.visiblePhotoMedia, photos);
+      this.visiblePhotoMediaRequests = Object.fromEntries(
+        Object.entries(this.visiblePhotoMediaRequests || {}).filter(([key]) => keepMediaKey(key))
+      );
+      this.mediaProgressById = Object.fromEntries(
+        Object.entries(this.mediaProgressById || {}).filter(([key]) => keepMediaKey(key))
+      );
+      this.listThumbnailLoadedById = Object.fromEntries(
+        Object.entries(this.listThumbnailLoadedById || {}).filter(([key]) => keepPhotoId(key))
+      );
+      this.listThumbnailFailedById = Object.fromEntries(
+        Object.entries(this.listThumbnailFailedById || {}).filter(([key]) => keepPhotoId(key))
+      );
+      this.previewVideoUrlRequests = Object.fromEntries(
+        Object.entries(this.previewVideoUrlRequests || {}).filter(([key]) => keepPhotoId(key))
+      );
+      this.mediaRefreshAttempts = Object.fromEntries(
+        Object.entries(this.mediaRefreshAttempts || {}).filter(([key]) => keepMediaKey(key))
+      );
+
+      const activePreviewId = this.previewOverlayVisible
+        ? this.previewPhotos[this.previewCurrentIndex]?.id
+        : null;
+      const photosById = new Map((photos || []).map((photo) => [String(photo.id), photo]));
+      const nextPreviewPhotos = this.previewPhotos
+        .map((preview) => photosById.get(String(preview.id)))
+        .filter((photo) => this.isPublishedAlbumMedia(photo));
+      const activeStillPublished =
+        activePreviewId === null ||
+        nextPreviewPhotos.some((photo) => String(photo.id) === String(activePreviewId));
+      this.previewPhotos = nextPreviewPhotos;
+      if (this.previewOverlayVisible && !activeStillPublished) {
+        this.closePhotoPreview();
+        return;
+      }
+      if (this.previewOverlayVisible && nextPreviewPhotos.length > 0) {
+        const currentIndex = nextPreviewPhotos.findIndex(
+          (photo) => String(photo.id) === String(activePreviewId)
+        );
+        this.previewCurrentIndex = Math.max(0, currentIndex);
+        this.previewInitialIndex = this.previewCurrentIndex;
+      }
+    },
     setVisiblePhotoMedia(photoId, values) {
+      const currentPhoto = this.photos.find((photo) => Number(photo.id) === Number(photoId));
+      if (!this.isPublishedAlbumMedia(currentPhoto)) {
+        return;
+      }
       const key = String(photoId);
       this.visiblePhotoMedia = {
         ...this.visiblePhotoMedia,
@@ -1996,6 +2128,10 @@ export default {
     updatePreviewPhotoDisplayMedia(photoId, values) {
       const key = photoId === undefined || photoId === null ? "" : String(photoId);
       if (!key || !this.previewPhotos.length) {
+        return;
+      }
+      const currentPhoto = this.photos.find((photo) => String(photo.id) === key);
+      if (!this.isPublishedAlbumMedia(currentPhoto)) {
         return;
       }
       const photoIndex = this.previewPhotos.findIndex((photo) => String(photo.id) === key);
@@ -2020,7 +2156,7 @@ export default {
     },
     setListThumbnailState(photo, values) {
       const key = this.listThumbnailStateKey(photo);
-      if (!key) {
+      if (!key || !this.isCurrentPublishedAlbumMedia(photo)) {
         return;
       }
       if (Object.prototype.hasOwnProperty.call(values, "loaded")) {
@@ -2043,6 +2179,9 @@ export default {
       this.setListThumbnailState(photo, { loaded: false, failed: true });
     },
     canOpenPhotoPreview(photo) {
+      if (!isModerationPublished(photo?.moderation_status) || !this.isCurrentPublishedAlbumMedia(photo)) {
+        return false;
+      }
       if (
         !canOpenAlbumMediaPreview({
           timelineMode: this.timelineMode,
@@ -2059,6 +2198,9 @@ export default {
       return Boolean(key && this.visiblePhotoMedia[key]?.thumbnail && this.listThumbnailLoaded(photo));
     },
     async loadVisiblePhotoMedia(photo, variant = "thumbnail") {
+      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+        return "";
+      }
       const key = String(photo.id);
       const requestKey = `${key}:${variant}`;
       const current = this.visiblePhotoMedia[key] || {};
@@ -2081,6 +2223,9 @@ export default {
       });
       const loadRequest = this.downloadAlbumImage(photo, variant)
         .then((displayUrl) => {
+          if (!this.isCurrentPublishedAlbumMedia(photo)) {
+            return "";
+          }
           this.setVisiblePhotoMedia(photo.id, {
             [variant]: displayUrl,
             [loadingKey]: false
@@ -2100,6 +2245,9 @@ export default {
           return displayUrl;
         })
         .catch((error) => {
+          if (!this.isCurrentPublishedAlbumMedia(photo)) {
+            return "";
+          }
           this.setVisiblePhotoMedia(photo.id, {
             [loadingKey]: false,
             [`${variant}Failed`]: true
@@ -2116,9 +2264,11 @@ export default {
           return "";
         })
         .finally(() => {
-          const requests = { ...(this.visiblePhotoMediaRequests || {}) };
-          delete requests[requestKey];
-          this.visiblePhotoMediaRequests = requests;
+          this.visiblePhotoMediaRequests = clearAlbumMediaRequestIfCurrent(
+            this.visiblePhotoMediaRequests,
+            requestKey,
+            loadRequest
+          );
         });
       this.visiblePhotoMediaRequests = {
         ...(this.visiblePhotoMediaRequests || {}),
@@ -2131,6 +2281,9 @@ export default {
       }
     },
     onPhotoVisible(photo) {
+      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+        return;
+      }
       if (photo?.media_type === "video" && !photo.cover_url) {
         return;
       }
@@ -2173,6 +2326,7 @@ export default {
       });
     },
     refreshWaterfall() {
+      const waterfallRender = this.albumWaterfallRenderAuthority.begin();
       this.disconnectPhotoObservers();
       const nextPhotos = this.filteredPhotos.map((photo) => ({ ...photo }));
       this.waterfallList1 = [];
@@ -2182,8 +2336,16 @@ export default {
       }
       this.waterfallPhotos = [];
       this.$nextTick(() => {
+        if (!this.albumWaterfallRenderAuthority.isCurrent(waterfallRender)) {
+          return;
+        }
         this.waterfallPhotos = nextPhotos;
-        this.$nextTick(() => this.observeVisiblePhotos());
+        this.$nextTick(() => {
+          if (!this.albumWaterfallRenderAuthority.isCurrent(waterfallRender)) {
+            return;
+          }
+          this.observeVisiblePhotos();
+        });
       });
     },
     changeWaterfallList(event) {
@@ -2192,7 +2354,11 @@ export default {
         if (!Array.isArray(this[targetListName])) {
           return;
         }
-        this[targetListName].push(event.value);
+        const currentPhoto = findCurrentAlbumMediaRow(this.filteredPhotos, event.value);
+        if (!currentPhoto) {
+          return;
+        }
+        this[targetListName].push(currentPhoto);
         this.$nextTick(() => this.observeVisiblePhotos());
       }
     },
@@ -2320,14 +2486,36 @@ export default {
       }
       return `${photo.media_type === "video" ? "视频" : "照片"}里：${photo.tags.map((tag) => tag.label).join("、")}`;
     },
+    mediaModerationStatusText(photo) {
+      if (this.timelineMode || !photo?.is_mine) {
+        return "";
+      }
+      return contentModerationStatusText(photo.moderation_status);
+    },
     isVideoMedia(photo) {
       return photo?.media_type === "video";
     },
     isImageMedia(photo) {
       return photo?.media_type === "image";
     },
+    isPublishedAlbumMedia(photo) {
+      return isModerationPublished(photo?.moderation_status);
+    },
+    isCurrentPublishedAlbumMedia(photo) {
+      return isCurrentPublishedAlbumMediaRow(this.photos, photo);
+    },
+    isDownloadableAlbumImage(photo) {
+      return (
+        this.isCurrentPublishedAlbumMedia(photo) &&
+        isApprovedAlbumImageDownloadCandidate(photo, this.mediaUrlForPhoto(photo, "download"))
+      );
+    },
     videoReady(photo) {
-      return this.isVideoMedia(photo) && photo.processing_status === "ready";
+      return (
+        this.isVideoMedia(photo) &&
+        this.isPublishedAlbumMedia(photo) &&
+        photo.processing_status === "ready"
+      );
     },
     videoProcessing(photo) {
       return this.isVideoMedia(photo) && photo.processing_status === "processing";
@@ -2338,6 +2526,10 @@ export default {
     videoStateText(photo) {
       if (!this.isVideoMedia(photo)) {
         return "";
+      }
+      const moderationText = this.mediaModerationStatusText(photo);
+      if (moderationText) {
+        return moderationText;
       }
       if (this.videoProcessing(photo)) {
         return "处理中";
@@ -2912,8 +3104,7 @@ export default {
           this.statusText = "";
         }
       } catch (error) {
-        const message = error?.message || error?.userMessage || "相册照片上传失败，请稍后重试。";
-        this.statusText = error?.code ? `${message} [${error.code}]` : message;
+        this.statusText = error?.userMessage || error?.message || "相册照片上传失败，请稍后重试。";
       } finally {
         this.uploading = false;
       }
@@ -2966,6 +3157,16 @@ export default {
       return true;
     },
     viewerPhotoWithCachedMedia(photo) {
+      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+        return {
+          ...photo,
+          thumbnail_display_url: "",
+          preview_display_url: "",
+          video_display_url: "",
+          video_url: "",
+          cover_url: ""
+        };
+      }
       const visibleMedia = this.visiblePhotoMedia[String(photo.id)] || {};
       if (photo?.media_type === "video") {
         return {
@@ -2994,7 +3195,7 @@ export default {
       const start = Math.max(0, center - 2);
       const end = Math.min(this.previewPhotos.length, center + 3);
       this.previewPhotos.slice(start, end).forEach((photo) => {
-        if (!photo || photo.id === undefined || photo.id === null) {
+        if (!photo || photo.id === undefined || photo.id === null || !this.isCurrentPublishedAlbumMedia(photo)) {
           return;
         }
         const visibleMedia = this.visiblePhotoMedia[String(photo.id)] || {};
@@ -3013,15 +3214,18 @@ export default {
       });
     },
     openPhotoPreview(photo) {
+      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+        return;
+      }
       this.resetPreviewVideoViewerState();
-      const previewPhotos = this.filteredPhotos.map((item) => this.viewerPhotoWithCachedMedia(item)).filter(
+      const previewPhotos = this.filteredPhotos
+        .filter((item) => this.isCurrentPublishedAlbumMedia(item))
+        .map((item) => this.viewerPhotoWithCachedMedia(item))
+        .filter(
         (item) =>
           (!this.timelineMode || item.media_type !== "video") &&
           (item.media_type !== "video" || this.videoReady(item))
-      );
-      if (!previewPhotos.some((item) => String(item.id) === String(photo.id))) {
-        previewPhotos.unshift(this.viewerPhotoWithCachedMedia(photo));
-      }
+        );
       const currentIndex = Math.max(
         0,
         previewPhotos.findIndex((item) => String(item.id) === String(photo.id))
@@ -3041,7 +3245,7 @@ export default {
       this.skipNextAlbumRefreshOnShow = false;
     },
     resetPreviewVideoViewerState() {
-      this.visiblePhotoMedia = Object.fromEntries(
+      this.visiblePhotoMedia = pruneUnpublishedAlbumMediaCache(Object.fromEntries(
         Object.entries(this.visiblePhotoMedia || {}).map(([key, media]) => [
           key,
           {
@@ -3050,7 +3254,7 @@ export default {
             videoAutoRefreshUsed: false
           }
         ])
-      );
+      ), this.photos);
     },
     handlePreviewChange(event) {
       const payload = event?.detail || event || {};
@@ -3060,7 +3264,7 @@ export default {
     },
     handlePreviewVideoRequest(event) {
       const payload = event?.detail || event || {};
-      if (!payload.photo || this.timelineMode) {
+      if (!payload.photo || this.timelineMode || !this.isCurrentPublishedAlbumMedia(payload.photo)) {
         return;
       }
       if (payload.retry) {
@@ -3085,7 +3289,7 @@ export default {
     handlePreviewVideoError(event) {
       const payload = event?.detail || event || {};
       const photo = payload.photo;
-      if (!photo || this.timelineMode) {
+      if (!photo || this.timelineMode || !this.isCurrentPublishedAlbumMedia(photo)) {
         return;
       }
       const key = String(photo.id);
@@ -3122,14 +3326,15 @@ export default {
         !photo ||
         photo.id === undefined ||
         photo.id === null ||
+        !this.isCurrentPublishedAlbumMedia(photo) ||
         !this.videoReady(photo)
       ) {
         return Promise.resolve("");
       }
       const key = String(photo.id);
       const cachedPhoto =
-        this.previewPhotos.find((item) => String(item.id) === key) ||
         this.photos.find((item) => String(item.id) === key) ||
+        this.previewPhotos.find((item) => String(item.id) === key) ||
         photo;
       const visibleMedia = this.visiblePhotoMedia[key] || {};
       const cachedUrl = visibleMedia.video || cachedPhoto.video_display_url || "";
@@ -3153,6 +3358,9 @@ export default {
       const videoUrlEndpoint = `/api/session-album/media/${photo.id}/video-url`;
       const loadRequest = request({ url: videoUrlEndpoint })
         .then((response) => {
+          if (!this.isCurrentPublishedAlbumMedia(photo)) {
+            return "";
+          }
           const data = dataOf(response) || {};
           if (!data.url) {
             throw new Error("video url missing");
@@ -3180,9 +3388,11 @@ export default {
           return "";
         })
         .finally(() => {
-          const requests = { ...this.previewVideoUrlRequests };
-          delete requests[key];
-          this.previewVideoUrlRequests = requests;
+          this.previewVideoUrlRequests = clearAlbumMediaRequestIfCurrent(
+            this.previewVideoUrlRequests,
+            key,
+            loadRequest
+          );
         });
       this.previewVideoUrlRequests = {
         ...this.previewVideoUrlRequests,
@@ -3206,14 +3416,17 @@ export default {
         showToast({ title: "视频暂不支持下载", icon: "none" });
         return;
       }
+      if (!this.isDownloadableAlbumImage(photo)) {
+        return;
+      }
       await this.downloadPhotos([photo], {
         confirmContent: "将保存这张照片到系统相册，是否继续？"
       });
     },
     async downloadSelectedPhotos() {
       const selectedIdSet = new Set(this.selectedPhotoIds.map((photoId) => Number(photoId)));
-      const photos = this.filteredPhotos.filter(
-        (photo) => photo.media_type === "image" && selectedIdSet.has(Number(photo.id))
+      const photos = this.filteredDownloadablePhotos.filter(
+        (photo) => selectedIdSet.has(Number(photo.id))
       );
       await this.downloadPhotos(photos, {
         exitSelection: true,
@@ -3246,7 +3459,9 @@ export default {
         return;
       }
       const targets = (photos || []).filter(
-        (photo) => photo.media_type === "image" && this.mediaUrlForPhoto(photo)
+        (photo) =>
+          this.isCurrentPublishedAlbumMedia(photo) &&
+          isApprovedAlbumImageDownloadCandidate(photo, this.mediaUrlForPhoto(photo, "download"))
       );
       if (targets.length === 0) {
         showToast({ title: "暂无可下载照片", icon: "none" });
@@ -3271,9 +3486,12 @@ export default {
         for (const [index, photo] of targets.entries()) {
           this.downloadProgressText = `正在保存 ${index + 1}/${photos.length} 张照片...`;
           try {
+            if (!this.isCurrentPublishedAlbumMedia(photo)) {
+              throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+            }
             const cachedPreview = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
             const filePath = cachedPreview || (await this.downloadAlbumImage(photo, "download"));
-            if (!filePath) {
+            if (!filePath || !this.isCurrentPublishedAlbumMedia(photo)) {
               throw new Error("album photo unavailable");
             }
             await this.saveAlbumImageToPhotosAlbum(filePath);
@@ -3360,7 +3578,7 @@ export default {
         return false;
       }
       if (this.selectionModePurpose === "download") {
-        return photo?.media_type === "image" && Boolean(this.mediaUrlForPhoto(photo));
+        return this.isDownloadableAlbumImage(photo);
       }
       return Boolean(photo.can_tag);
     },
@@ -3844,9 +4062,21 @@ export default {
 }
 
 .video-placeholder-copy {
+  max-width: 82%;
   color: #ffffff;
   font-size: 25rpx;
   font-weight: 700;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.moderation-placeholder-copy {
+  max-width: 82%;
+  color: #7b5d2e;
+  font-size: 25rpx;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: center;
 }
 
 .video-overlay {
@@ -3876,13 +4106,16 @@ export default {
   position: absolute;
   right: 12rpx;
   bottom: 12rpx;
+  max-width: calc(100% - 24rpx);
   border-radius: 8rpx;
   background: rgba(15, 23, 42, 0.68);
   color: #ffffff;
   font-size: 22rpx;
   font-weight: 700;
-  line-height: 36rpx;
-  padding: 0 10rpx;
+  line-height: 1.35;
+  padding: 6rpx 10rpx;
+  text-align: center;
+  white-space: normal;
 }
 
 .selection-checkbox {
@@ -3956,6 +4189,15 @@ export default {
 
 .photo-caption-title.pending {
   color: #9c7440;
+}
+
+.photo-moderation-status {
+  color: #8a5a23;
+  font-size: 23rpx;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .photo-actions-row {

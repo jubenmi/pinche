@@ -74,6 +74,38 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  content-moderation-retry:
+    image: ${PINCHE_API_IMAGE:-hkccr.ccs.tencentyun.com/murder/pinche:latest}
+    pull_policy: always
+    env_file:
+      - .env.production
+    command: npm run job:content-moderation-retry
+    networks:
+      - internal
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 2m
+
+  content-moderation-orphan-scan:
+    image: ${PINCHE_API_IMAGE:-hkccr.ccs.tencentyun.com/murder/pinche:latest}
+    pull_policy: always
+    env_file:
+      - .env.production
+    command: npm run job:content-moderation-orphan-scan
+    networks:
+      - internal
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 2m
+
   mysql:
     image: mysql:8.4
     environment:

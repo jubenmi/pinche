@@ -8,6 +8,10 @@ export const ALBUM_IMAGE_AUTH_SECONDS = 300;
 export const ALBUM_IMAGE_FINALIZE_GRACE_SECONDS = 900;
 export const ALBUM_IMAGE_CLEANUP_GRACE_SECONDS = 600;
 export const ALBUM_IMAGE_URL_SECONDS = 300;
+// This URL authorizes one private object for GET only and is never persisted
+// or returned to a user. Five minutes covers the bounded 90-second provider
+// submission lease plus a finite asynchronous WeChat fetch window.
+export const WECHAT_IMAGE_MODERATION_URL_SECONDS = 5 * 60;
 export const ALBUM_IMAGE_DISPLAY_PROCESS =
   "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip";
 export const ALBUM_IMAGE_THUMBNAIL_PROCESS =

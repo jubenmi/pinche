@@ -32,7 +32,7 @@ export function parseAdminRouteQuery(search = "") {
   const sessionId = normalizedString(params.get("sessionId"));
   const requestedView = params.get("view");
   const activeView =
-    requestedView === "catalog" || requestedView === "miniapp"
+    requestedView === "catalog" || requestedView === "miniapp" || requestedView === "moderation"
       ? requestedView
       : sessionId
         ? "miniapp"
@@ -52,12 +52,14 @@ export function parseAdminRouteQuery(search = "") {
 
 export function buildAdminRouteQuery(route = {}) {
   const params = new URLSearchParams();
-  const activeView = route.activeView === "miniapp" ? "miniapp" : "catalog";
+  const activeView = ["catalog", "miniapp", "moderation"].includes(route.activeView)
+    ? route.activeView
+    : "catalog";
   params.set("view", activeView);
 
   if (activeView === "catalog") {
     params.set("catalogTab", normalizeCatalogTab(route.catalogTab));
-  } else {
+  } else if (activeView === "miniapp") {
     const sessionId = normalizedString(route.sessionId);
     const miniScreen = normalizeMiniScreen(route.miniScreen, sessionId);
     params.set("screen", miniScreen);

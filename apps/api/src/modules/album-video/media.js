@@ -142,7 +142,9 @@ export async function inspectSessionAlbumVideoObject({
   if (!isMp4FileHeader(headerBytes)) {
     throw badRequest("album video must contain an MP4 ftyp header");
   }
-  return authoritativeMetadata;
+  return metadata?.etag
+    ? { ...authoritativeMetadata, etag: metadata.etag }
+    : authoritativeMetadata;
 }
 
 function localFileNotFound(error) {

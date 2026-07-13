@@ -13,7 +13,7 @@
       class="album-image-viewer__swiper"
       :current="swiperIndex"
       :data-generation="generation"
-      :duration="220"
+      :duration="swiperDuration"
       @change="handleSwiperChange"
       @animationfinish="handleSwiperAnimationFinish"
     >
@@ -148,6 +148,7 @@ export default {
       windowStart: 0,
       activeWindowIndex: 0,
       swiperGeneration: 0,
+      internalRebaseGeneration: null,
       pendingWindowRebase: null,
       touchStartX: 0,
       touchStartY: 0,
@@ -161,6 +162,9 @@ export default {
   computed: {
     swiperGenerations() {
       return [this.swiperGeneration];
+    },
+    swiperDuration() {
+      return this.internalRebaseGeneration === this.swiperGeneration ? 0 : 220;
     },
     windowPhotos() {
       return this.photos.slice(
@@ -187,6 +191,7 @@ export default {
       }
       if (!nextValue) {
         this.pendingWindowRebase = null;
+        this.internalRebaseGeneration = null;
         if (previousValue) {
           this.swiperGeneration += 1;
         }
@@ -251,7 +256,7 @@ export default {
       const index = this.photos.findIndex((item) => String(item?.id) === key);
       return index;
     },
-    rebuildWindowAt(logicalIndex, { force = false } = {}) {
+    rebuildWindowAt(logicalIndex, { force = false, internalRebase = false } = {}) {
       const nextIndex = this.clampIndex(logicalIndex);
       const nextWindowStart = this.windowStartForIndex(nextIndex);
       const nextWindowIndex = nextIndex - nextWindowStart;
@@ -267,7 +272,9 @@ export default {
       this.activeWindowIndex = nextWindowIndex;
       this.swiperIndex = nextWindowIndex;
       if (force || stateChanged) {
-        this.swiperGeneration += 1;
+        const nextGeneration = this.swiperGeneration + 1;
+        this.internalRebaseGeneration = internalRebase ? nextGeneration : null;
+        this.swiperGeneration = nextGeneration;
       }
     },
     syncInitialIndex(shouldPausePrevious = false) {
@@ -587,6 +594,10 @@ export default {
       if (!this.isCurrentSwiperEvent(event) || !this.windowPhotos.length) {
         return;
       }
+      if (this.internalRebaseGeneration === this.swiperGeneration) {
+        this.internalRebaseGeneration = null;
+        return;
+      }
       const finishedWindowIndex = this.clampWindowIndex(event?.detail?.current);
       const finishedLogicalIndex = this.logicalIndexForWindowIndex(finishedWindowIndex);
       const pending = this.pendingWindowRebase;
@@ -599,7 +610,7 @@ export default {
         return;
       }
       if (this.windowStartForIndex(this.currentIndex) !== this.windowStart) {
-        this.rebuildWindowAt(this.currentIndex);
+        this.rebuildWindowAt(this.currentIndex, { internalRebase: true });
       }
     },
     handleTouchStart(event) {
@@ -638,6 +649,7 @@ export default {
     },
     close() {
       this.pendingWindowRebase = null;
+      this.internalRebaseGeneration = null;
       this.pauseAllVideos();
       this.$emit("close");
     }

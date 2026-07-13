@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildAlbumImageUrls } from "../src/modules/album-image/signed-urls.js";
+import {
+  buildAlbumImageUrls,
+  buildWechatImageModerationUrl
+} from "../src/modules/album-image/signed-urls.js";
+import { WECHAT_IMAGE_MODERATION_URL_SECONDS } from "../src/modules/album-image/constants.js";
+import { MODERATION_RETRY_LEASE_MIN_MS } from "../src/modules/content-moderation/constants.js";
 import {
   cosQueryEntries,
   renderCosCanonicalQuery,
@@ -53,4 +58,26 @@ test("all album image variants share an exact five-minute expiry", () => {
     assert.equal(url.includes("secret"), false);
   }
   assert.match(urls.download_url, /response-content-disposition=/);
+});
+
+test("WeChat image moderation receives an isolated five-minute GET URL for its bounded fetch window", () => {
+  const url = buildWechatImageModerationUrl({
+    objectKey: "uploads/session-album/display/private.jpg",
+    nowSeconds: 1_000,
+    config
+  });
+
+  assert.match(url, /^https:\/\/pinche-app-1251022382\.cos\.ap-nanjing\.myqcloud\.com\//);
+  // The URL is never returned or stored, but it must outlive the bounded
+  // token-refresh-and-retry submission chain and leave a short window for
+  // WeChat's asynchronous fetch of this one private object.
+  assert.equal(WECHAT_IMAGE_MODERATION_URL_SECONDS, 5 * 60);
+  assert.ok(
+    WECHAT_IMAGE_MODERATION_URL_SECONDS * 1000 >= MODERATION_RETRY_LEASE_MIN_MS + 120_000,
+    "the URL must leave at least two minutes after a full renewed submission lease"
+  );
+  assert.match(url, /q-sign-time=1000;1300/);
+  assert.equal(url.includes("imageMogr2"), false);
+  assert.equal(url.includes("response-content-disposition"), false);
+  assert.equal(url.includes("secret"), false);
 });

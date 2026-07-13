@@ -1444,10 +1444,14 @@ function expectedCreationResponse(row, userId = CREATION_USER_ID) {
     session_id: Number(row.session_id),
     media_type: "video",
     processing_status: row.processing_status,
+    moderation_status: row.moderation_status || "pending",
+    moderation_message: "内容正在审核",
     uploader_user_id: Number(row.uploader_user_id),
     is_mine: isMine,
     can_delete: isMine,
-    can_tag: isMine,
+    // D45: a newly-created video remains a pending moderation placeholder;
+    // ownership allows deletion, but never tag creation before publication.
+    can_tag: false,
     duration_seconds: Number(row.duration_seconds),
     video_width: Number(row.video_width),
     video_height: Number(row.video_height),
@@ -1626,7 +1630,8 @@ test("video creation ignores client metadata claims and stores inspected facts",
       654321,
       "video/mp4",
       null,
-      "ready"
+      "ready",
+      `local:${CREATION_SOURCE_URL}:654321`
     ]);
     assert.deepEqual(result, expectedCreationResponse(row));
   }
