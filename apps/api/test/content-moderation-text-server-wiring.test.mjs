@@ -54,6 +54,37 @@ test("server routes all D45.5 text mutations through the shared WeChat moderatio
   }
 });
 
+test("closed or unready text intake cannot fall back to a direct business write", async () => {
+  const [source, talkRoutes] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../../../packages/talk/api/routes.js", import.meta.url), "utf8")
+  ]);
+  const start = source.indexOf("async function moderateCoveredText");
+  const end = source.indexOf("async function loadTextProposalActor", start);
+  const moderate = source.slice(start, end);
+
+  assert.match(moderate, /assertContentModerationIntake\(config\.contentModeration, "text"\)/);
+  assert.doesNotMatch(
+    moderate,
+    /!config\.contentModeration\.enabled\s*\|\|\s*!config\.contentModeration\.wechatTextEnabled/
+  );
+  assert.doesNotMatch(talkRoutes, /typeof moderateCoveredText === "function"[\s\S]{0,400}: null/);
+  assert.match(talkRoutes, /D45 text moderation boundary must be configured/);
+});
+
+test("the text intake gate leaves profile-only updates outside the D45 text boundary", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function moderateCoveredText");
+  const end = source.indexOf("async function loadTextProposalActor", start);
+  const moderate = source.slice(start, end);
+  const preflight = moderate.indexOf("const preflightDescriptor = buildTextModerationDescriptor");
+  const intake = moderate.indexOf("assertContentModerationIntake(config.contentModeration, \"text\")");
+
+  assert.match(moderate, /if \(config\.contentModeration\.textIntakeMode === "legacy"\) return null;/);
+  assert.ok(preflight >= 0 && preflight < intake, "covered text must be identified before intake is closed");
+  assert.match(moderate, /if \(!preflightDescriptor\) return null;/);
+});
+
 test("NPC-role proposal application locks its role and parent session before revalidating ownership", async () => {
   const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
   const helperStart = source.indexOf("async function currentNpcRoleTextBase");

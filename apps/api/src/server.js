@@ -235,6 +235,7 @@ import {
   createTencentVideoModerationClient,
   createTencentVideoModerationTransport
 } from "./modules/content-moderation/tencent-video-client.js";
+import { assertContentModerationIntake } from "./modules/content-moderation/intake-gate.js";
 import {
   createSessionMessageWithConnection,
   updateSessionPinnedMessageWithConnection
@@ -789,10 +790,16 @@ async function captureTextModerationBase({ action, user, subjectId, body, contex
 }
 
 async function moderateCoveredText({ request, user, action, subjectId, body, context = {} }) {
-  if (!config.contentModeration.enabled || !config.contentModeration.wechatTextEnabled) {
-    return null;
-  }
+  if (config.contentModeration.textIntakeMode === "legacy") return null;
   const cleanBody = moderationBody(body);
+  const preflightDescriptor = buildTextModerationDescriptor({
+    action,
+    body: cleanBody,
+    context
+  });
+  if (!preflightDescriptor) return null;
+  const intake = assertContentModerationIntake(config.contentModeration, "text");
+  if (!intake.moderationRequired) return null;
   const resolvedSubjectId = String(subjectId || "");
   const proposalTargetId = textProposalTargetSubjectId({
     action,
@@ -1172,6 +1179,7 @@ const adminModerationApi = createAdminModerationApi({
 const albumImageUploads = createAlbumImageUploadService({
   cosConfig: config.cos,
   directUploadRequired: config.albumMedia.directUploadRequired,
+  assertImageIntake: () => assertContentModerationIntake(config.contentModeration, "image"),
   transaction: withTransaction,
   access: assertSessionAlbumImageUploadAllowed,
   repository: {
@@ -1812,6 +1820,7 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
     requireRole(user, "system_admin");
     normalizeVideoUploadExtension(extension);
     const session = await assertSessionAlbumUploadAllowed(user, sessionId);
+    assertContentModerationIntake(config.contentModeration, "video");
     const key = `uploads/session-album/videos/source/${uploadFilenameBase(
       `admin-video-${session.id}`,
       uploadUserId
@@ -1865,6 +1874,7 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
     const session = isAdminAlbumUpload
       ? await assertAdminOwnSessionAlbumAllowed(user, sessionId)
       : await assertSessionAlbumUploadAllowed(user, sessionId);
+    assertContentModerationIntake(config.contentModeration, "image");
     const filenamePrefix = isAdminAlbumUpload ? `admin-album-${session.id}` : `album-${session.id}`;
     const key = `uploads/session-album/display/${uploadFilenameBase(
       filenamePrefix,
@@ -2030,13 +2040,16 @@ async function authorizeCosDirectUpload({ body, user }) {
       { user: { id: userId }, roles: [] },
       directUpload.sessionId
     );
+    assertContentModerationIntake(config.contentModeration, "image");
   }
   if (directUpload.kind === "adminSessionAlbumPhoto") {
     await assertAdminOwnSessionAlbumAllowed(user, directUpload.sessionId);
+    assertContentModerationIntake(config.contentModeration, "image");
   }
   if (directUpload.kind === "adminSessionAlbumVideo") {
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, directUpload.sessionId);
+    assertContentModerationIntake(config.contentModeration, "video");
   }
   return {
     authorization: buildCosAuthorization({
@@ -3569,6 +3582,7 @@ async function route(request, response) {
   if (request.method === "POST" && sessionAlbumUploadId) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumUploadId);
+    assertContentModerationIntake(config.contentModeration, "image");
     if (config.albumMedia.directUploadRequired) {
       throw new AppError(
         409,
@@ -3595,6 +3609,7 @@ async function route(request, response) {
   if (request.method === "POST" && adminSessionAlbumUploadId) {
     const user = await getAuthUser(request);
     const session = await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumUploadId);
+    assertContentModerationIntake(config.contentModeration, "image");
     if (config.albumMedia.directUploadRequired) {
       throw new AppError(
         409,
@@ -3623,6 +3638,7 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideoUploadId);
+    assertContentModerationIntake(config.contentModeration, "video");
     const sourceUrl = await saveUploadedSessionAlbumVideo(
       request,
       user.user.id,
@@ -4668,6 +4684,7 @@ async function route(request, response) {
   if (request.method === "POST" && sessionAlbumPhotosId) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumPhotosId);
+    assertContentModerationIntake(config.contentModeration, "image");
     const photoUrl = body.photoUrl || body.photo_url;
     if (isCosUploadStorageEnabled()) {
       const finalized = attachLegacyFinalizedAlbumImageUrls(
@@ -4701,6 +4718,7 @@ async function route(request, response) {
   if (request.method === "POST" && adminSessionAlbumPhotosId) {
     const user = await getAuthUser(request);
     await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumPhotosId);
+    assertContentModerationIntake(config.contentModeration, "image");
     const photoUrl = body.photoUrl || body.photo_url;
     if (isCosUploadStorageEnabled()) {
       const finalized = attachLegacyFinalizedAlbumImageUrls(
@@ -4735,12 +4753,14 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideosId);
+    assertContentModerationIntake(config.contentModeration, "video");
     const storageAdapter = createSessionAlbumVideoStorageAdapter();
     const inspectObject = (sourceUrl) =>
       inspectSessionAlbumVideoObject({ sourceUrl, storageAdapter });
     const video = await createSessionAlbumVideo(user, adminSessionAlbumVideosId, body, {
       inspectObject,
       readyOnCreate: true,
+      assertVideoIntake: () => assertContentModerationIntake(config.contentModeration, "video"),
       createVideoModerationJob: (connection, input) =>
         contentModeration.createVideoJob(connection, input),
       submitVideoModeration: (job) => contentModeration.submitVideoJob(job)

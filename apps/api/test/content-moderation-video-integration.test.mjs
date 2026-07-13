@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { updateSessionAlbumVideoProcessingResult } from "../src/modules/core/service.js";
+import {
+  createSessionAlbumVideo,
+  updateSessionAlbumVideoProcessingResult
+} from "../src/modules/core/service.js";
 
 test("video inspection preserves COS ETag as the immutable moderation version", async () => {
   const [media, server] = await Promise.all([
@@ -23,6 +26,65 @@ test("video insert atomically creates and then submits a moderation job", async 
   assert.match(createVideo, /submitVideoModeration/);
   assert.match(createVideo, /moderation_status/);
   assert.match(createVideo, /subjectVersion:\s*videoObjectVersion/);
+});
+
+test("video intake is closed before object inspection and media insertion", async () => {
+  const [service, server] = await Promise.all([
+    readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/server.js", import.meta.url), "utf8")
+  ]);
+  const createVideo = service.slice(
+    service.indexOf("export async function createSessionAlbumVideo"),
+    service.indexOf("export async function updateSessionAlbumVideoProcessingResult")
+  );
+  assert.match(createVideo, /const assertVideoIntake = options\.assertVideoIntake/);
+  const gate = createVideo.indexOf("assertVideoIntake?.()");
+  const inspect = createVideo.indexOf("await inspectObject(sourceUrl)");
+  assert.ok(gate >= 0 && gate < inspect, "video gate must run before object inspection");
+
+  const directIntent = server.slice(
+    server.indexOf("async function createCosDirectUploadIntent"),
+    server.indexOf("function normalizeCosHeaders")
+  );
+  const authorization = server.slice(
+    server.indexOf("async function authorizeCosDirectUpload"),
+    server.indexOf("async function saveUploadedObject")
+  );
+  assert.match(directIntent, /assertContentModerationIntake\(config\.contentModeration, "video"\)/);
+  assert.match(authorization, /assertContentModerationIntake\(config\.contentModeration, "video"\)/);
+});
+
+test("a closed video intake performs no object inspection or media write", async () => {
+  let inspections = 0;
+  let transactions = 0;
+  await assert.rejects(createSessionAlbumVideo(
+    { user: { id: 3 }, roles: ["system_admin"] },
+    8,
+    {
+      sourceUrl: "/uploads/session-album/videos/source/admin-video-8-3-1-0123456789abcdef.mp4",
+      durationSeconds: 1
+    },
+    {
+      withDatabaseConnection: async (run) => run({}),
+      withTransaction: async (run) => {
+        transactions += 1;
+        return run({});
+      },
+      authorizeSessionAlbumVideoCreate: async () => {},
+      assertVideoIntake: () => {
+        throw Object.assign(new Error("closed"), {
+          code: "CONTENT_MODERATION_INTAKE_CLOSED",
+          statusCode: 503
+        });
+      },
+      inspectObject: async () => {
+        inspections += 1;
+        return { byteSize: 1, contentType: "video/mp4", etag: "unexpected" };
+      }
+    }
+  ), { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 });
+  assert.equal(inspections, 0);
+  assert.equal(transactions, 0);
 });
 
 test("video creation response is a metadata-only pending placeholder", async () => {

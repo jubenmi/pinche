@@ -212,7 +212,9 @@ POST /api/admin/content-moderation/:id/retry
 4. 微信图片开关与事件推送。
 5. 腾讯云视频开关。
 
-回滚只关闭新提交，保留门禁和已有任务处理；不得把 pending/review/error 批量改为 approved。
+每个内容类型使用独立接收模式：`TEXT`、`IMAGE`、`VIDEO` 的 `*_INTAKE_MODE` 为 `closed`、`moderated` 或仅限非生产的 `legacy`。`closed` 在任何业务写入、上传授权、对象检查或媒体插入前以稳定 503 拒绝新提交；`moderated` 要求全局审核和对应 provider 均就绪，否则同样拒绝，绝不回退为未经审核的业务写入。接收模式不影响读取门禁、回调、管理员队列和已有任务 Worker。
+
+provider 与全局审核开关只表示能力是否已配置，不能作为流量开关。发布时生产先保持三个接收模式为 `closed`，分别完成凭证和非生产验证后再将对应类型切为 `moderated`。回滚只把受影响类型接收模式切回 `closed`，保留门禁和已有任务处理；不得把 pending/review/error 批量改为 approved。
 
 ## 11. 测试设计
 

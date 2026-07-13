@@ -10,6 +10,7 @@ import {
 const PENDING_TEXT = "内容正在审核";
 const REVIEW_TEXT = "内容需要进一步审核";
 const REJECTED_TEXT = "内容未通过安全审核，如有疑问请联系客服";
+const INTAKE_CLOSED_TEXT = "当前暂无法提交内容，请稍后再试";
 
 function assertSuccessfulUpdateFollowsRequest(source, requestMarker, successMarker) {
   const requestAt = source.indexOf(requestMarker);
@@ -50,6 +51,13 @@ test("provider failures are reduced to safe user messages without provider detai
       message: "provider temporarily unavailable"
     }),
     PENDING_TEXT
+  );
+  assert.equal(
+    contentModerationErrorText({
+      code: "CONTENT_MODERATION_INTAKE_CLOSED",
+      message: "provider configuration details must not be shown"
+    }),
+    INTAKE_CLOSED_TEXT
   );
   assert.equal(contentModerationErrorText({ code: "UNRELATED", message: "other" }), "");
 });

@@ -31,6 +31,8 @@ function harness() {
     events: [],
     timeline: [],
     getObjectCalls: 0,
+    validationCalls: 0,
+    intakeOpen: true,
     beforeTransaction: null,
     mediaMissing: false
     ,moderationCreated: 0
@@ -80,12 +82,20 @@ function harness() {
     now: () => nowMs,
     withDatabaseConnection: async (run) => run({}),
     transaction,
+    assertImageIntake: () => {
+      if (!state.intakeOpen) {
+        throw new AppError(503, "CONTENT_MODERATION_INTAKE_CLOSED", "closed");
+      }
+    },
     access: async () => {
       if (!state.allowed) throw new AppError(403, "FORBIDDEN", "revoked");
       return { id: 8 };
     },
     repository,
-    validateStoredImage: async () => state.validation,
+    validateStoredImage: async () => {
+      state.validationCalls += 1;
+      return state.validation;
+    },
     insertFinalizedImage: async () => {
       state.insertedMedia.push(photoRow);
       return photoRow;
@@ -113,6 +123,18 @@ function harness() {
   });
   return { service, state, intent, repository };
 }
+
+test("a closed intake rejects image finalize before storage inspection or media insertion", async () => {
+  const { service, state, intent } = harness();
+  state.intakeOpen = false;
+
+  await assert.rejects(service.finalize({ user, uploadId: intent.id }), {
+    code: "CONTENT_MODERATION_INTAKE_CLOSED",
+    statusCode: 503
+  });
+  assert.equal(state.validationCalls, 0);
+  assert.equal(state.insertedMedia.length, 0);
+});
 
 test("status reports ready without creating media", async () => {
   const { service, state } = harness();

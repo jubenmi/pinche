@@ -2431,7 +2431,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     "targetListName",
     "waterfallList",
     "Array.isArray(this[targetListName])",
-    "this[targetListName].push(event.value)"
+    "findCurrentAlbumMediaRow(this.filteredPhotos, event.value)",
+    "this[targetListName].push(currentPhoto)"
   ]) {
     if (!changeWaterfallListSource.includes(requiredWaterfallCallbackText)) {
       fail(`Album waterfall callback must map uv-waterfall names to page lists: ${requiredWaterfallCallbackText}`);
@@ -2931,15 +2932,12 @@ if (!fs.existsSync(pagesJsonPath)) {
   assertBefore(
     albumOnShowSource,
     "consumePreviewReturnRefreshSkip",
-    "albumMediaRefresh?.checkNow",
+    "albumMediaRefresh?.refresh",
     "Album onShow must consume photo-preview return before refreshing the member album"
   );
-  assertBefore(
-    albumOnShowSource,
-    "consumePreviewReturnRefreshSkip",
-    "albumMediaRefresh?.checkNow",
-    "Album onShow must consume photo-preview return before refreshing the public album"
-  );
+  if ((albumOnShowSource.match(/albumMediaRefresh\?\.refresh\(\)/g) || []).length < 2) {
+    fail("Album onShow must consume photo-preview return before refreshing the public album");
+  }
   const albumPageConfig = pages.find((page) => page.path === "pages/session/album") || {};
   const albumUsingComponents = albumPageConfig.style?.usingComponents || {};
   if (albumUsingComponents["t-image-viewer"]) {
@@ -3343,9 +3341,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
   }
   const openPhotoPreviewSource = methodBody(albumSource, "openPhotoPreview");
-  if (
-    !openPhotoPreviewSource.includes("this.filteredPhotos.map")
-  ) {
+  if (!/this\.filteredPhotos\s*\.filter\(/.test(openPhotoPreviewSource)) {
     fail("Album D31 preview must build its preview list from the current filtered photos");
   }
   if (openPhotoPreviewSource.includes(".reverse()")) {

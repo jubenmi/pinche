@@ -12,6 +12,7 @@ import {
 
 function validEnv(overrides = {}) {
   return {
+    NODE_ENV: "production",
     CONTENT_MODERATION_ENABLED: "true",
     CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "false",
     CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "false",
@@ -291,7 +292,7 @@ test("a WeChat provider gate cannot bypass production validation through the glo
 
 test("disabled moderation does not require provider configuration", () => {
   assert.doesNotThrow(() => assertContentModerationConfig(
-    buildContentModerationConfig({}),
+    buildContentModerationConfig({ NODE_ENV: "production" }),
     { nodeEnv: "production" }
   ));
 });

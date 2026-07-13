@@ -13,6 +13,10 @@ const ERROR_STATUS = Object.freeze({
   CONTENT_MODERATION_REJECTED: "rejected"
 });
 
+const ERROR_TEXT = Object.freeze({
+  CONTENT_MODERATION_INTAKE_CLOSED: "当前暂无法提交内容，请稍后再试"
+});
+
 // This is intentionally a closed whitelist. User-facing copy must never
 // inherit a provider name, score, label, or hit word from an API response.
 export function contentModerationStatusText(status) {
@@ -20,5 +24,6 @@ export function contentModerationStatusText(status) {
 }
 
 export function contentModerationErrorText(error = {}) {
-  return contentModerationStatusText(ERROR_STATUS[String(error?.code || "").trim()]);
+  const code = String(error?.code || "").trim();
+  return ERROR_TEXT[code] || contentModerationStatusText(ERROR_STATUS[code]);
 }

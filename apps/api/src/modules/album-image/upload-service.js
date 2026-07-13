@@ -28,6 +28,12 @@ function forbidden(message) {
   return serviceError(403, "ALBUM_UPLOAD_FORBIDDEN", message);
 }
 
+function assertImageIntake(deps) {
+  if (typeof deps.assertImageIntake === "function") {
+    deps.assertImageIntake();
+  }
+}
+
 function normalizeExtension(value) {
   const extension = String(value || "").trim().toLowerCase();
   if (["jpg", "jpeg", "png"].includes(extension)) return `.${extension}`;
@@ -98,6 +104,7 @@ async function checkedAccess(deps, connection, user, intent) {
 }
 
 async function createIntent(deps, { user, body = {} }) {
+  assertImageIntake(deps);
   if (!isAlbumImageKind(body.kind)) {
     throw serviceError(400, "BAD_REQUEST", "Unsupported album image kind");
   }
@@ -175,6 +182,7 @@ async function createIntent(deps, { user, body = {} }) {
 }
 
 async function authorize(deps, { user, body = {} }) {
+  assertImageIntake(deps);
   if (!cosStorageEnabled(deps.cosConfig)) {
     throw serviceError(503, "COS_CONFIGURATION_ERROR", "COS storage is unavailable");
   }
@@ -354,6 +362,7 @@ async function finalizedPhoto(deps, connection, intent, user) {
 }
 
 async function finalize(deps, { user, uploadId }) {
+  assertImageIntake(deps);
   const inspected = await inspectUpload(deps, { user, uploadId });
   const { validation } = inspected;
   if (validation?.validationState === "invalid") {

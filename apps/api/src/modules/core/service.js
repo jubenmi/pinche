@@ -6044,6 +6044,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   const runWithTransaction = options.withTransaction || withTransaction;
   const authorize =
     options.authorizeSessionAlbumVideoCreate || requireSessionAlbumVideoCreateAllowed;
+  const assertVideoIntake = options.assertVideoIntake;
 
   // Authorize before any storage I/O, while deliberately releasing the read
   // connection before HEAD/Range inspection. The insert transaction repeats
@@ -6051,6 +6052,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   await runWithDatabaseConnection((connection) =>
     authorize(connection, id, user, { forUpdate: false })
   );
+  assertVideoIntake?.();
   const {
     byteSize: videoByteSize,
     contentType: videoContentType,
@@ -6071,12 +6073,14 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
     findExisting: (candidateSourceUrl) =>
       runWithTransaction(async (connection) => {
         await authorize(connection, id, user, { forUpdate: true });
+        assertVideoIntake?.();
         return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
           forUpdate: true
         });
       }),
     insert: (candidateSourceUrl) => runWithTransaction(async (connection) => {
       await authorize(connection, id, user, { forUpdate: true });
+      assertVideoIntake?.();
       const [result] = await connection.query(
         `
           INSERT INTO session_album_photos
@@ -6134,6 +6138,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
     findAfterDuplicateOnFreshConnection: (candidateSourceUrl) =>
       runWithTransaction(async (connection) => {
         await authorize(connection, id, user, { forUpdate: true });
+        assertVideoIntake?.();
         return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
           forUpdate: true
         });

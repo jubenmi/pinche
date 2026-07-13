@@ -225,11 +225,41 @@ function validWechatEventAesKey(raw) {
   return decoded.length === 32 && decoded.toString("base64").replace(/=$/, "") === encoded;
 }
 
+const CONTENT_MODERATION_INTAKE_MODES = new Set(["legacy", "closed", "moderated"]);
+
+function moderationNodeEnv(env) {
+  return String(
+    stringValue(env, "NODE_ENV") || (env === process.env ? process.env.NODE_ENV : "") || "development"
+  ).trim().toLowerCase();
+}
+
+function contentModerationIntakeMode(env, name, { nodeEnv = moderationNodeEnv(env) } = {}) {
+  const configured = stringValue(env, name).toLowerCase();
+  const mode = configured || (nodeEnv === "production" ? "closed" : "legacy");
+  if (!CONTENT_MODERATION_INTAKE_MODES.has(mode)) {
+    throw moderationConfigurationError(
+      `${name} must be one of legacy, closed, or moderated`
+    );
+  }
+  return mode;
+}
+
 export function buildContentModerationConfig(env = process.env) {
+  const nodeEnv = moderationNodeEnv(env);
   return {
+    nodeEnv,
     enabled: booleanValue(env.CONTENT_MODERATION_ENABLED, false),
     wechatTextEnabled: booleanValue(env.CONTENT_MODERATION_WECHAT_TEXT_ENABLED, false),
     wechatImageEnabled: booleanValue(env.CONTENT_MODERATION_WECHAT_IMAGE_ENABLED, false),
+    textIntakeMode: contentModerationIntakeMode(env, "CONTENT_MODERATION_TEXT_INTAKE_MODE", {
+      nodeEnv
+    }),
+    imageIntakeMode: contentModerationIntakeMode(env, "CONTENT_MODERATION_IMAGE_INTAKE_MODE", {
+      nodeEnv
+    }),
+    videoIntakeMode: contentModerationIntakeMode(env, "CONTENT_MODERATION_VIDEO_INTAKE_MODE", {
+      nodeEnv
+    }),
     redisEnabled: booleanValue(env.REDIS_ENABLED, false),
     redisUrl: stringValue(env, "REDIS_URL"),
     redisHost: stringValue(env, "REDIS_HOST"),
@@ -303,10 +333,20 @@ export function assertContentModerationConfig(
   { nodeEnv = process.env.NODE_ENV || "development" } = {}
 ) {
   if (!moderationConfig) return moderationConfig;
+  const normalizedNodeEnv = String(nodeEnv || "development").trim().toLowerCase();
   const missing = [];
   const wechatModerationEnabled = Boolean(
     moderationConfig.wechatTextEnabled || moderationConfig.wechatImageEnabled
   );
+  if (normalizedNodeEnv === "production") {
+    for (const [name, mode] of [
+      ["CONTENT_MODERATION_TEXT_INTAKE_MODE", moderationConfig.textIntakeMode],
+      ["CONTENT_MODERATION_IMAGE_INTAKE_MODE", moderationConfig.imageIntakeMode],
+      ["CONTENT_MODERATION_VIDEO_INTAKE_MODE", moderationConfig.videoIntakeMode]
+    ]) {
+      if (mode === "legacy") missing.push(`${name} must not be legacy in production`);
+    }
+  }
   if (moderationConfig.orphanCleanupEnabled && !moderationConfig.orphanScanEnabled) {
     missing.push("CONTENT_MODERATION_ORPHAN_SCAN_ENABLED");
   }
@@ -317,7 +357,7 @@ export function assertContentModerationConfig(
     if (!moderationConfig.bucket) missing.push("COS_BUCKET");
     if (!moderationConfig.cosRegion) missing.push("COS_REGION");
   }
-  if (nodeEnv === "production" && wechatModerationEnabled) {
+  if (normalizedNodeEnv === "production" && wechatModerationEnabled) {
     if (!moderationConfig.redisEnabled) missing.push("REDIS_ENABLED");
     if (moderationConfig.redisUrl) {
       if (!validRedisUrl(moderationConfig.redisUrl)) missing.push("valid REDIS_URL");
@@ -373,7 +413,7 @@ export function assertContentModerationConfig(
     ) {
       missing.push("valid TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN");
     }
-    if (nodeEnv === "production" && !/^https:\/\//i.test(moderationConfig.tencentVideoCallbackUrl)) {
+    if (normalizedNodeEnv === "production" && !/^https:\/\//i.test(moderationConfig.tencentVideoCallbackUrl)) {
       throw moderationConfigurationError("moderation callback URL must use HTTPS in production");
     }
   }
