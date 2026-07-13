@@ -261,3 +261,103 @@ test("normal Tencent video validator still rejects production preflight keys", a
     /video source object/
   );
 });
+
+test("Tencent preflight callback matched by data id updates preflight only", async () => {
+  const {
+    tryHandleProductionPreflightTencentCallback
+  } = await import("../src/modules/content-moderation/production-preflight-callback.js");
+  const calls = [];
+  const handled = await tryHandleProductionPreflightTencentCallback({
+    payload: {
+      dataId: "raw-data-id",
+      jobId: "raw-job-id",
+      resultCategory: "pass"
+    },
+    runtime: validRuntime(),
+    hmacKey: "01234567890123456789012345678901",
+    guards: () => undefined,
+    repository: {
+      findAttemptByAssociation: async ({ kind }) => (kind === "data_id" ? { runId: "run-1" } : null),
+      recordAssociation: async (input) => calls.push({ name: "recordAssociation", input }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    normalModeration: {
+      applyMediaResult: async () => calls.push({ name: "forbidden-normal-apply" })
+    }
+  });
+
+  assert.equal(handled.status, "handled");
+  assert.equal(calls.some((call) => call.name === "forbidden-normal-apply"), false);
+  assert.equal(JSON.stringify(calls).includes("raw-job-id"), false);
+});
+
+test("Tencent preflight early callback returns retry while job association is missing", async () => {
+  const {
+    tryHandleProductionPreflightTencentCallback
+  } = await import("../src/modules/content-moderation/production-preflight-callback.js");
+  const handled = await tryHandleProductionPreflightTencentCallback({
+    payload: {
+      dataId: "raw-data-id",
+      jobId: "raw-job-id",
+      resultCategory: "pass"
+    },
+    runtime: validRuntime(),
+    hmacKey: "01234567890123456789012345678901",
+    guards: () => undefined,
+    repository: {
+      findAttemptByAssociation: async ({ kind }) => (kind === "data_id" ? { runId: "run-1" } : null)
+    },
+    requireJobAssociation: true
+  });
+
+  assert.deepEqual(handled, { status: "retry", httpStatus: 503 });
+});
+
+test("WeChat image preflight callback matched by trace id updates preflight only", async () => {
+  const {
+    tryHandleProductionPreflightWechatImageCallback
+  } = await import("../src/modules/content-moderation/production-preflight-callback.js");
+  const calls = [];
+  const handled = await tryHandleProductionPreflightWechatImageCallback({
+    event: {
+      traceId: "raw-trace-id",
+      resultCategory: "pass"
+    },
+    runtime: validRuntime(),
+    hmacKey: "01234567890123456789012345678901",
+    guards: () => undefined,
+    repository: {
+      findAttemptByAssociation: async () => ({ runId: "run-1" }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    normalModeration: {
+      applyMediaResult: async () => calls.push({ name: "forbidden-normal-apply" })
+    }
+  });
+
+  assert.equal(handled.status, "handled");
+  assert.equal(calls.some((call) => call.name === "forbidden-normal-apply"), false);
+  assert.equal(JSON.stringify(calls).includes("raw-trace-id"), false);
+});
+
+test("unknown preflight callback returns miss so normal path remains responsible", async () => {
+  const {
+    tryHandleProductionPreflightWechatImageCallback
+  } = await import("../src/modules/content-moderation/production-preflight-callback.js");
+  const handled = await tryHandleProductionPreflightWechatImageCallback({
+    event: {
+      traceId: "normal-user-trace",
+      resultCategory: "pass"
+    },
+    runtime: validRuntime(),
+    hmacKey: "01234567890123456789012345678901",
+    guards: () => undefined,
+    repository: {
+      findAttemptByAssociation: async () => null
+    }
+  });
+
+  assert.equal(handled.status, "miss");
+});

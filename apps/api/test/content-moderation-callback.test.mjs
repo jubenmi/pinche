@@ -236,6 +236,11 @@ test("server wires the authenticated callback before the generic JSON body parse
   assert.ok(route > 0 && route < genericBody);
   const routeBody = server.slice(route, genericBody);
   assert.match(routeBody, /authenticateTencentCallback/);
+  assert.match(routeBody, /tryHandleProductionPreflightTencentCallback/);
+  assert.ok(
+    routeBody.indexOf("tryHandleProductionPreflightTencentCallback") <
+      routeBody.indexOf("parseTencentCallbackPayload")
+  );
   assert.match(routeBody, /parseTencentCallbackPayload/);
   assert.match(routeBody, /resolveTencentVideoCallback/);
   assert.doesNotMatch(routeBody, /findModerationJobByProviderJobId/);

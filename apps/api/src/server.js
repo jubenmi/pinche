@@ -179,6 +179,22 @@ import {
   resolveTencentVideoCallback
 } from "./modules/content-moderation/callback.js";
 import {
+  tryHandleProductionPreflightTencentCallback,
+  tryHandleProductionPreflightWechatImageCallback
+} from "./modules/content-moderation/production-preflight-callback.js";
+import {
+  assertProductionPreflightGuards
+} from "./modules/content-moderation/production-preflight.js";
+import {
+  findProductionPreflightAttemptByAssociation,
+  finishProductionPreflightRun,
+  recordProductionPreflightAssociation,
+  releaseProductionPreflightLock
+} from "./modules/content-moderation/production-preflight-repository.js";
+import {
+  parseTencentProductionPreflightCallbackPayload
+} from "./modules/content-moderation/tencent-video-client.js";
+import {
   dispatchWechatImageModerationEvent,
   parseWechatSecureImageEvent
 } from "./modules/content-moderation/wechat-callback.js";
@@ -1137,6 +1153,62 @@ export const contentModeration = createContentModerationService({
   applyTextProposal: (connection, input) => textProposalApplicator.apply(connection, input),
   emit: emitContentModerationEvent
 });
+
+function createProductionPreflightCallbackRepository() {
+  return {
+    findAttemptByAssociation: (input) =>
+      withDatabaseConnection((connection) =>
+        findProductionPreflightAttemptByAssociation({ connection, ...input })
+      ),
+    recordAssociation: (input) =>
+      withDatabaseConnection((connection) =>
+        recordProductionPreflightAssociation({ connection, ...input })
+      ),
+    finishRun: (input) =>
+      withDatabaseConnection((connection) =>
+        finishProductionPreflightRun({ connection, ...input })
+      ),
+    releaseLock: (input) =>
+      withDatabaseConnection((connection) =>
+        releaseProductionPreflightLock({ connection, ...input })
+      ),
+    hasAwaitingWechatImageTrace: async () => false
+  };
+}
+
+async function buildProductionPreflightCallbackRuntime() {
+  const operatorUserId = Number(config.contentModeration.productionPreflight?.operatorUserId || 0);
+  const operatorStatus = await withDatabaseConnection(async (connection) => {
+    const [rows] = await connection.query(
+      "SELECT role, status FROM user_roles WHERE user_id = ? AND role = 'system_admin' LIMIT 1",
+      [operatorUserId]
+    );
+    const row = rows[0];
+    return row?.role === "system_admin" && row?.status === "active" ? "active" : "missing";
+  });
+  return {
+    nodeEnv: config.contentModeration.nodeEnv,
+    preflightEnabled: Boolean(config.contentModeration.productionPreflight?.enabled),
+    confirmation: config.contentModeration.productionPreflight?.confirmation || "",
+    expectedConfirmation: config.contentModeration.productionPreflight?.confirmation || "",
+    operatorUserId,
+    operatorRole: "system_admin",
+    operatorStatus,
+    intakeModes: {
+      text: config.contentModeration.textIntakeMode,
+      image: config.contentModeration.imageIntakeMode,
+      video: config.contentModeration.videoIntakeMode
+    },
+    providerConfig: {
+      wechatText: Boolean(config.contentModeration.wechatTextEnabled && config.contentModeration.wechatAppId && config.contentModeration.wechatAppSecret),
+      wechatImage: Boolean(config.contentModeration.wechatImageEnabled && config.contentModeration.wechatAppId && config.contentModeration.wechatAppSecret),
+      tencentVideo: Boolean(config.contentModeration.tencentVideoEnabled && config.contentModeration.tencentVideoPolicyId),
+      cos: Boolean(config.contentModeration.cosEnabled && config.contentModeration.bucket && config.contentModeration.cosRegion),
+      redis: Boolean(config.contentModeration.redisEnabled && (config.contentModeration.redisUrl || config.contentModeration.redisHost)),
+      callback: Boolean(config.contentModeration.tencentVideoCallbackToken || config.contentModeration.wechatEventToken)
+    }
+  };
+}
 
 async function applyApprovedTextProposal(connection, { job, proposal }) {
   return textProposalApplicator.apply(connection, { job, proposal });
@@ -3677,6 +3749,37 @@ async function route(request, response) {
       );
     }
     const rawCallback = await readRawBody(request, TENCENT_VIDEO_CALLBACK_MAX_BYTES);
+    if (
+      config.contentModeration.productionPreflight?.enabled &&
+      config.contentModeration.productionPreflight?.referenceHmacKey
+    ) {
+      try {
+        const preflightResult = await tryHandleProductionPreflightTencentCallback({
+          payload: parseTencentProductionPreflightCallbackPayload(rawCallback),
+          runtime: await buildProductionPreflightCallbackRuntime(),
+          hmacKey: config.contentModeration.productionPreflight.referenceHmacKey,
+          guards: assertProductionPreflightGuards,
+          repository: createProductionPreflightCallbackRepository()
+        });
+        if (preflightResult.status === "handled") {
+          jsonResponse(response, 200, { ok: true, data: { preflight: true } });
+          return;
+        }
+        if (preflightResult.status === "retry") {
+          errorResponse(
+            response,
+            503,
+            "CONTENT_MODERATION_CALLBACK_RETRY",
+            "content moderation preflight callback is waiting for submission"
+          );
+          return;
+        }
+      } catch (error) {
+        if (!/production preflight Tencent callback missing DataId or JobId/.test(String(error?.message || error))) {
+          throw error;
+        }
+      }
+    }
     const callback = parseTencentCallbackPayload(rawCallback);
     const callbackLookup = await resolveTencentVideoCallback({
       callback,
@@ -3748,6 +3851,31 @@ async function route(request, response) {
           : "CONTENT_MODERATION_INVALID_CALLBACK"
       });
       throw error;
+    }
+    if (
+      config.contentModeration.productionPreflight?.enabled &&
+      config.contentModeration.productionPreflight?.referenceHmacKey
+    ) {
+      const preflightResult = await tryHandleProductionPreflightWechatImageCallback({
+        event: callback,
+        runtime: await buildProductionPreflightCallbackRuntime(),
+        hmacKey: config.contentModeration.productionPreflight.referenceHmacKey,
+        guards: assertProductionPreflightGuards,
+        repository: createProductionPreflightCallbackRepository()
+      });
+      if (preflightResult.status === "handled") {
+        jsonResponse(response, 200, { ok: true, data: { preflight: true } });
+        return;
+      }
+      if (preflightResult.status === "retry") {
+        errorResponse(
+          response,
+          503,
+          "CONTENT_MODERATION_CALLBACK_RETRY",
+          "content moderation preflight callback is waiting for trace association"
+        );
+        return;
+      }
     }
     const callbackResult = await dispatchWechatImageModerationEvent({
       event: callback,

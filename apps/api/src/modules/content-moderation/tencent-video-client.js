@@ -293,3 +293,39 @@ export function createTencentProductionPreflightVideoModerationClient({ config, 
     }
   };
 }
+
+export function parseTencentProductionPreflightCallbackPayload(rawBody) {
+  const body = String(Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : rawBody || "");
+  let detail = null;
+  try {
+    const parsed = JSON.parse(body);
+    detail = parsed.JobsDetail || parsed.jobsDetail || parsed;
+  } catch {
+    detail = {
+      JobId: xmlTag(body, "JobId"),
+      DataId: xmlTag(body, "DataId"),
+      State: xmlTag(body, "State"),
+      Result: xmlTag(body, "Result")
+    };
+  }
+  const dataId = String(detail?.DataId || detail?.dataId || "").trim();
+  const jobId = String(detail?.JobId || detail?.jobId || "").trim();
+  if (!dataId && !jobId) {
+    throw new TypeError("production preflight Tencent callback missing DataId or JobId");
+  }
+  return {
+    dataId,
+    jobId,
+    resultCategory: productionPreflightTencentResultCategory(detail)
+  };
+}
+
+function productionPreflightTencentResultCategory(detail) {
+  const state = String(detail?.State || detail?.state || "").trim();
+  if (state && state !== "Success") return "error";
+  const result = String(detail?.Result ?? detail?.result ?? "").trim();
+  if (result === "0") return "pass";
+  if (result === "1") return "block";
+  if (result === "2") return "review";
+  return "error";
+}
