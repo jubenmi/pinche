@@ -91,4 +91,3 @@ export function createResponseSummary(result, { maxBytes = 4096 } = {}) {
     score: summary.score
   };
 }
-
