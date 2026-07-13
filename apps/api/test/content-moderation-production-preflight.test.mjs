@@ -361,3 +361,24 @@ test("unknown preflight callback returns miss so normal path remains responsible
 
   assert.equal(handled.status, "miss");
 });
+
+test("production preflight job exposes main and redacts confirmation on rejected args", async () => {
+  const job = await import("../src/jobs/content-moderation-production-preflight.js");
+  assert.equal(typeof job.main, "function");
+  const output = [];
+  await assert.rejects(
+    job.main({
+      argv: ["--case=wechat-text-v1", "--openid=forbidden"],
+      env: {
+        D45_PREFLIGHT_CONFIRMATION: "confirm-012345678901234567890123"
+      },
+      stdout: { write: (line) => output.push(String(line)) },
+      stderr: { write: (line) => output.push(String(line)) },
+      exit: (code) => {
+        throw new Error(`exit ${code}`);
+      }
+    }),
+    /exit 1/
+  );
+  assert.equal(output.join("").includes("confirm-012345678901234567890123"), false);
+});

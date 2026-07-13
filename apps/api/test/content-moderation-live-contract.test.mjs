@@ -256,13 +256,15 @@ test("CLI dry-run never emits unrelated credential canaries", () => {
 
 test("D45.18 and every listed live-integration subtask remain unchecked", () => {
   const taskCard = readFileSync(d45TasksPath, "utf8");
-  const sectionStart = taskCard.indexOf("- [ ] D45.18 执行非生产真实联调。");
+  const sectionStart = taskCard.indexOf("- [ ] D45.18 执行生产受控预演与完整放行验证。");
   assert.notEqual(sectionStart, -1);
   const sectionEnd = taskCard.indexOf("\n## ", sectionStart);
   const section = taskCard.slice(sectionStart, sectionEnd === -1 ? undefined : sectionEnd);
-  const checklistLines = section.match(/^(?:- |  - )\[[ x]\] .+$/gm) ?? [];
+  const checklistLines = section.match(/^\s*- \[[ x]\] .+$/gm) ?? [];
 
-  assert.equal(checklistLines.length, 7);
+  assert.match(section, /- \[ \] D45\.18A 实现并验证生产受控预演（有限验证）。/);
+  assert.match(section, /- \[ \] D45\.18B 完整结果与故障放行验证（不由生产预演替代）。/);
+  assert.ok(checklistLines.length >= 10);
   for (const line of checklistLines) {
     assert.match(line, /\[ \]/);
   }

@@ -16,7 +16,7 @@
 ## 1. 上线前的共同前提
 
 - API、`content-moderation-retry`、`content-moderation-orphan-scan` 和迁移任务必须使用同一个 `PINCHE_API_IMAGE` 镜像 digest；不得让不同 schema 版本的 Worker 混跑。
-- 先备份数据库，执行迁移至 `0028_content_moderation_orphan_scan_state.sql`，确认 `npm run migrate` 成功后再启动 API 与 Worker。
+- 先备份数据库，执行迁移至 `0029_content_moderation_production_preflight.sql`，确认 `npm run migrate` 成功后再启动 API 与 Worker。
 - 所有密钥只从生产密钥管理系统注入 `.env.production`；示例文件中的占位值不可用于生产。
 - COS Bucket 必须保持私有。客户端不得拥有任意对象读权限；只有服务端在权限、隐私和审核门禁均通过后签发短时 URL。
 - 上线与联调使用无害测试样本及测试账号；不要将违规样本正文、完整媒体、token 或可复用 URL 保存到记录中。
@@ -65,6 +65,7 @@ CONTENT_MODERATION_WECHAT_IMAGE_ENABLED=false
 CONTENT_MODERATION_IMAGE_INTAKE_MODE=closed
 CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=false
 CONTENT_MODERATION_VIDEO_INTAKE_MODE=closed
+CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=false
 REDIS_ENABLED=true
 REDIS_URL=redis://...                 # 或有效 REDIS_HOST/REDIS_PORT
 WECHAT_APP_ID=...
@@ -182,9 +183,10 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 
 1. **数据结构与门禁**：执行迁移，部署 API、后台、两个 Worker；保持 `CONTENT_MODERATION_ENABLED=true`，并将三个 `*_INTAKE_MODE` 都设为 `closed`。验证新提交返回 `CONTENT_MODERATION_INTAKE_CLOSED`，且未批准媒体仍无法通过列表、预览、下载、range、封面或公开分享读取。
 2. **后台、指标与扫描**：确认管理员队列、审计、上述指标和告警可见。先开启孤儿扫描的 report-only，保持 cleanup 为 `false`。
-3. **微信文本**：先设置 `CONTENT_MODERATION_WECHAT_TEXT_ENABLED=true` 并用非生产无害样本验证 Pass/Review/Block/Error、stale、缺失 openid 和重试；确认指标后才设置 `CONTENT_MODERATION_TEXT_INTAKE_MODE=moderated`，并观察至少一个业务高峰窗口。
-4. **微信图片**：完成安全模式真实回调验证后，先设置 `CONTENT_MODERATION_WECHAT_IMAGE_ENABLED=true`，验证提交、重复/过期事件、Pass/Review/Block/Error 和不泄漏抓取 URL；确认后设置 `CONTENT_MODERATION_IMAGE_INTAKE_MODE=moderated`。
-5. **腾讯视频**：最后先设置 `CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=true`，验证画面+音轨策略、CI Detail 回调、Pass/Review/Block/Error、余额/权限/限流故障和已拒绝视频清理；确认后设置 `CONTENT_MODERATION_VIDEO_INTAKE_MODE=moderated`。
+3. **生产受控预演（D45.18A）**：只在三个 `*_INTAKE_MODE` 均为 `closed` 时运行一次性预演 Job。该步骤只验证 harmless pass、鉴权、私有 COS 读取、回调、标准化结果和清理，不表示可以把任何正常用户入口切到 `moderated`。
+4. **微信文本**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_TEXT_ENABLED=true` 并另行讨论 `CONTENT_MODERATION_TEXT_INTAKE_MODE=moderated`；观察至少一个业务高峰窗口。
+5. **微信图片**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_IMAGE_ENABLED=true` 并另行讨论 `CONTENT_MODERATION_IMAGE_INTAKE_MODE=moderated`。
+6. **腾讯视频**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=true` 并另行讨论 `CONTENT_MODERATION_VIDEO_INTAKE_MODE=moderated`。
 
 每个阶段只在前一阶段的错误率、队列年龄、回调认证失败和人工队列容量满足预设阈值后继续；任何不确定状态均停止推进而不是放宽门禁。
 
@@ -197,13 +199,27 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 - 孤儿清理异常：立即把 `CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED=false`，保留 report-only 扫描，核对引用、历史回填和 CAM 范围。
 - 数据库迁移或门禁异常：停止下一阶段发布，保留迁移结果和受限读取；不要回滚审核状态来恢复流量。
 
-## 8. 非生产真实联调记录
+## 8. 生产受控预演（D45.18A）
 
-完成 D45.18 前不得宣称已完成生产服务商联调。非生产环境分别验证：
+此步骤只使用代码白名单无害样本和专用测试管理员身份。它不接收调用方正文、openid、对象 Key、URL、回调地址或 provider 参数，不写普通审核任务、提案、相册媒体、普通重试队列、通知或用户 URL。
 
-- 微信文本 `Pass`/`Review`/`Block`/`Error`；
-- 微信图片提交、安全模式异步事件、重复和过期事件，以及控制台 URL 验证/握手协议；
-- 腾讯云视频 `Pass`/`Review`/`Block`/`Error`，画面与音轨策略，重复和过期回调；
-- token、权限、超时、额度、CAM、策略和欠费故障均保持内容隐藏并触发告警。
+前置条件：
 
-联调记录仅保存时间、环境、配置版本、结果分类、延迟、策略 ID 的安全引用和处置结论；不保存完整敏感文本、违规媒体或可复用 URL。
+- `CONTENT_MODERATION_TEXT_INTAKE_MODE=closed`
+- `CONTENT_MODERATION_IMAGE_INTAKE_MODE=closed`
+- `CONTENT_MODERATION_VIDEO_INTAKE_MODE=closed`
+- `CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true`
+- 操作人是仍然 active 的 `system_admin`
+- `D45_PREFLIGHT_CONFIRMATION` 由当次人工确认提供，不写入仓库、日志或截图
+
+手动执行：
+
+```bash
+docker compose run --rm --no-deps api npm run job:content-moderation-production-preflight -- --case=wechat-text-v1
+docker compose run --rm --no-deps api npm run job:content-moderation-production-preflight -- --case=wechat-image-v1
+docker compose run --rm --no-deps api npm run job:content-moderation-production-preflight -- --case=tencent-video-v1
+```
+
+成功只代表固定 harmless 样本的生产链路可用。失败时保持三个入口 `closed`，查看脱敏 preflight run 状态，先处理清理失败、鉴权失败或回调失败，再重试。不要上传危险样本做真实生产验证。
+
+记录仅保存 case、服务商、结果类别、耗时、配置/镜像指纹和清理结论；不保存完整敏感文本、违规媒体、原始 trace/job/DataId、对象 key、callback body、token 或可复用 URL。

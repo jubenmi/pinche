@@ -11,7 +11,9 @@ const [
   migrationRunner,
   migration24,
   migration28,
+  migration29,
   moderationEnv,
+  preflightJob,
   moderationIntakeGate,
   albumImageUploadService,
   coreService,
@@ -26,7 +28,9 @@ const [
   text("apps/api/src/db/migrate.js"),
   text("apps/api/migrations/0024_content_moderation.sql"),
   text("apps/api/migrations/0028_content_moderation_orphan_scan_state.sql"),
+  text("apps/api/migrations/0029_content_moderation_production_preflight.sql"),
   text("apps/api/src/config/env.js"),
+  text("apps/api/src/jobs/content-moderation-production-preflight.js"),
   text("apps/api/src/modules/content-moderation/intake-gate.js"),
   text("apps/api/src/modules/album-image/upload-service.js"),
   text("apps/api/src/modules/core/service.js"),
@@ -45,7 +49,8 @@ for (const migration of [
   "0025_content_moderation_provider_attempts.sql",
   "0026_content_moderation_text_proposal_result.sql",
   "0027_content_moderation_retry_exhaustion.sql",
-  "0028_content_moderation_orphan_scan_state.sql"
+  "0028_content_moderation_orphan_scan_state.sql",
+  "0029_content_moderation_production_preflight.sql"
 ]) {
   assert.equal((await text(`apps/api/migrations/${migration}`)).length > 0, true, `missing migration file: ${migration}`);
 }
@@ -53,6 +58,9 @@ assert.match(migrationRunner, /fs\.readdir\(migrationsDir/);
 assert.match(migrationRunner, /migrationFiles\(\)/);
 assert.match(migration24, /content_moderation_jobs/);
 assert.match(migration28, /content_moderation_orphan_scan_state/);
+assert.match(migration29, /content_moderation_production_preflight_runs/);
+assert.match(migration29, /content_moderation_production_preflight_attempts/);
+assert.match(migration29, /content_moderation_production_preflight_provider_locks/);
 
 for (const key of [
   "CONTENT_MODERATION_WECHAT_TEXT_ENABLED",
@@ -62,7 +70,8 @@ for (const key of [
   "CONTENT_MODERATION_IMAGE_INTAKE_MODE",
   "CONTENT_MODERATION_VIDEO_INTAKE_MODE",
   "CONTENT_MODERATION_ORPHAN_SCAN_ENABLED",
-  "CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED"
+  "CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED",
+  "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED"
 ]) {
   assert.equal(moderationEnv.includes(key), true, `missing moderation config: ${key}`);
 }
@@ -102,9 +111,15 @@ for (const getter of [
 }
 assert.match(server, /\/api\/internal\/content-moderation\/wechat-image\/callback/);
 assert.match(server, /\/api\/internal\/content-moderation\/tencent-video\/callback/);
+assert.match(server, /tryHandleProductionPreflightTencentCallback/);
+assert.match(server, /tryHandleProductionPreflightWechatImageCallback/);
+assert.doesNotMatch(server, /\/api\/(?:admin\/)?content-moderation\/preflight/);
 
 assert.equal(apiPackage.scripts["job:content-moderation-retry"], "node src/jobs/content-moderation-retry.js");
 assert.equal(apiPackage.scripts["job:content-moderation-orphan-scan"], "node src/jobs/content-moderation-orphan-scan.js");
+assert.equal(apiPackage.scripts["job:content-moderation-production-preflight"], "node src/jobs/content-moderation-production-preflight.js");
+assert.match(preflightJob, /parseProductionPreflightCliArgs/);
+assert.doesNotMatch(preflightJob, /server\.js/);
 assert.match(compose, /content-moderation-retry:[\s\S]*job:content-moderation-retry/);
 assert.match(compose, /content-moderation-orphan-scan:[\s\S]*job:content-moderation-orphan-scan/);
 
@@ -114,6 +129,7 @@ for (const statement of [
   "腾讯云 CI 视频审核",
   "私有 COS",
   "CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED",
+  "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED",
   "不启用腾讯云 TMS、腾讯云 CI 图片审核、COS 图片自动审核",
   "CONTENT_MODERATION_INTAKE_CLOSED",
   "审核 provider 开关不是流量开关",
@@ -122,6 +138,7 @@ for (const statement of [
   assert.equal(runbook.includes(statement), true, `runbook missing: ${statement}`);
 }
 assert.doesNotMatch(runbook, /CONTENT_MODERATION_ENABLED=false/);
+assert.doesNotMatch(runbook, /非生产真实联调记录/);
 
 for (const command of ["d45:unit", "d45:check", "d45:smoke"]) {
   assert.equal(typeof rootPackage.scripts[command], "string", `missing root command: ${command}`);
