@@ -80,9 +80,20 @@ export async function runProductionPreflightCase(runner, { caseId, runtime }) {
     now: startedAt
   });
 
+  let releaseLock = true;
   try {
     const result = await executeProviderCase(runner, run, sample, runtime);
     runner.guards(runtime, caseId);
+    if (result.awaitingCallback) {
+      await runner.repository.markAwaitingCallback({
+        runId: run.id,
+        resultCategory: "submitted",
+        cleanupStatus: "pending",
+        elapsedMs: elapsedMs(startedAt, runner.clock)
+      });
+      releaseLock = false;
+      return { state: "awaiting_callback", runId: run.id };
+    }
     if (result.resultCategory !== "pass") {
       throw new Error(`production preflight expected pass but got ${result.resultCategory}`);
     }
@@ -106,7 +117,9 @@ export async function runProductionPreflightCase(runner, { caseId, runtime }) {
     });
     throw error;
   } finally {
-    await runner.repository.releaseLock({ provider: sample.provider, runId: run.id });
+    if (releaseLock) {
+      await runner.repository.releaseLock({ provider: sample.provider, runId: run.id });
+    }
   }
 }
 
@@ -207,6 +220,9 @@ async function runCosBackedProviderCase(runner, run, sample, runtime, providerCa
       ? await runner.userRepository.getOpenIdForUserId(runtime.testAdminUserId || runtime.operatorUserId)
       : null;
     const providerResult = await providerCall({ objectKey, mediaUrl, openid });
+    if (!providerResult.resultCategory && isAsyncSubmissionResult(sample, providerResult)) {
+      return { awaitingCallback: true };
+    }
     await cleanupPreflightObject(runner, objectKey);
     return { ...providerResult, cleanupStatus: "deleted" };
   } catch (error) {
@@ -218,6 +234,19 @@ async function runCosBackedProviderCase(runner, run, sample, runtime, providerCa
     }
     throw error;
   }
+}
+
+function isAsyncSubmissionResult(sample, providerResult) {
+  if (!providerResult || typeof providerResult !== "object") {
+    return false;
+  }
+  if (sample.kind === "image") {
+    return Boolean(providerResult.traceId);
+  }
+  if (sample.kind === "video") {
+    return Boolean(providerResult.JobId || providerResult.jobId);
+  }
+  return false;
 }
 
 async function cleanupPreflightObject(runner, objectKey) {

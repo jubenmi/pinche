@@ -1,4 +1,8 @@
 import { productionPreflightReferenceHmac } from "./production-preflight-repository.js";
+import {
+  buildProductionPreflightCosKey,
+  getProductionPreflightCase
+} from "./production-preflight-samples.js";
 
 export async function tryHandleProductionPreflightTencentCallback({
   payload,
@@ -6,6 +10,7 @@ export async function tryHandleProductionPreflightTencentCallback({
   hmacKey,
   guards,
   repository,
+  cleanupObject,
   requireJobAssociation = false
 }) {
   const dataAttempt = payload.dataId
@@ -38,7 +43,9 @@ export async function tryHandleProductionPreflightTencentCallback({
   await finishPreflightCallbackRun(repository, {
     runId: attempt.runId,
     provider: "tencent_video",
-    resultCategory: normalizeResultCategory(payload)
+    resultCategory: normalizeResultCategory(payload),
+    cleanupObject,
+    caseId: "tencent-video-v1"
   });
   return { status: "handled", httpStatus: 200 };
 }
@@ -48,7 +55,8 @@ export async function tryHandleProductionPreflightWechatImageCallback({
   runtime,
   hmacKey,
   guards,
-  repository
+  repository,
+  cleanupObject
 }) {
   const attempt = event.traceId
     ? await lookup(repository, hmacKey, "wechat_image", "trace_id", event.traceId)
@@ -63,7 +71,9 @@ export async function tryHandleProductionPreflightWechatImageCallback({
   await finishPreflightCallbackRun(repository, {
     runId: attempt.runId,
     provider: "wechat_image",
-    resultCategory: normalizeResultCategory(event)
+    resultCategory: normalizeResultCategory(event),
+    cleanupObject,
+    caseId: "wechat-image-v1"
   });
   return { status: "handled", httpStatus: 200 };
 }
@@ -77,16 +87,38 @@ function normalizeResultCategory(payload) {
   return payload.resultCategory || payload.result?.decision || "error";
 }
 
-async function finishPreflightCallbackRun(repository, { runId, provider, resultCategory }) {
+async function finishPreflightCallbackRun(repository, {
+  runId,
+  provider,
+  resultCategory,
+  cleanupObject,
+  caseId
+}) {
   const state = resultCategory === "pass" ? "passed" : "failed";
+  const cleanupStatus = await cleanupPreflightCallbackObject({
+    runId,
+    state,
+    cleanupObject,
+    caseId
+  });
   await repository.finishRun({
     runId,
     state,
     resultCategory,
-    cleanupStatus: "not_required",
+    cleanupStatus,
     elapsedMs: 0,
     failureCode: state === "passed" ? null : "PRODUCTION_PREFLIGHT_NON_PASS",
     failureMessage: state === "passed" ? null : `provider returned ${resultCategory}`
   });
   await repository.releaseLock({ provider, runId });
+}
+
+async function cleanupPreflightCallbackObject({ runId, state, cleanupObject, caseId }) {
+  if (typeof cleanupObject !== "function") {
+    return "not_required";
+  }
+  const sample = getProductionPreflightCase(caseId);
+  const objectKey = buildProductionPreflightCosKey(runId, sample);
+  await cleanupObject({ runId, provider: sample.provider, objectKey, state });
+  return "deleted";
 }

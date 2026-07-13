@@ -221,6 +221,93 @@ test("runProductionPreflightCase uploads image to private COS, stores trace HMAC
   assert.equal(JSON.stringify(calls).includes("raw-trace-id"), false);
 });
 
+test("runProductionPreflightCase leaves async WeChat image preflight awaiting callback without cleanup or lock release", async () => {
+  const calls = [];
+  const runner = createProductionPreflightRunner({
+    guards: () => undefined,
+    repository: {
+      acquireRun: async () => ({ id: "11111111-1111-4111-8111-111111111111" }),
+      recordAssociation: async (input) => calls.push({ name: "recordAssociation", input }),
+      markAwaitingCallback: async (input) => calls.push({ name: "markAwaitingCallback", input }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    userRepository: {
+      getOpenIdForUserId: async () => "openid-in-memory-only"
+    },
+    cos: {
+      putObject: async (input) => calls.push({ name: "putObject", input }),
+      buildSignedUrl: async (key) => `https://private.example/${encodeURIComponent(key)}`,
+      deleteObject: async (key) => calls.push({ name: "deleteObject", key }),
+      headObject: async () => {
+        const error = new Error("not found");
+        error.code = "COS_OBJECT_NOT_FOUND";
+        throw error;
+      }
+    },
+    wechatClient: {
+      checkImage: async () => ({ traceId: "raw-trace-id" })
+    },
+    hmacKey: "01234567890123456789012345678901",
+    clock: () => new Date("2026-07-13T00:00:00.000Z")
+  });
+
+  const result = await runProductionPreflightCase(runner, {
+    caseId: "wechat-image-v1",
+    runtime: validRuntime()
+  });
+
+  assert.equal(result.state, "awaiting_callback");
+  assert.equal(calls.some((call) => call.name === "deleteObject"), false);
+  assert.equal(calls.some((call) => call.name === "releaseLock"), false);
+  assert.equal(calls.some((call) => call.name === "markAwaitingCallback"), true);
+  assert.equal(JSON.stringify(calls).includes("raw-trace-id"), false);
+});
+
+test("runProductionPreflightCase leaves async Tencent video preflight awaiting callback without cleanup or lock release", async () => {
+  const calls = [];
+  const runner = createProductionPreflightRunner({
+    guards: () => undefined,
+    repository: {
+      acquireRun: async () => ({ id: "11111111-1111-4111-8111-111111111111" }),
+      recordAssociation: async (input) => calls.push({ name: "recordAssociation", input }),
+      markAwaitingCallback: async (input) => calls.push({ name: "markAwaitingCallback", input }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    cos: {
+      putObject: async (input) => calls.push({ name: "putObject", input }),
+      buildSignedUrl: async () => "https://private.example/video",
+      deleteObject: async (key) => calls.push({ name: "deleteObject", key }),
+      headObject: async () => {
+        const error = new Error("not found");
+        error.code = "COS_OBJECT_NOT_FOUND";
+        throw error;
+      }
+    },
+    tencentVideoClient: {
+      submitProductionPreflightVideo: async () => ({
+        JobId: "raw-job-id",
+        DataId: "11111111-1111-4111-8111-111111111111",
+        State: "Submitted"
+      })
+    },
+    hmacKey: "01234567890123456789012345678901",
+    clock: () => new Date("2026-07-13T00:00:00.000Z")
+  });
+
+  const result = await runProductionPreflightCase(runner, {
+    caseId: "tencent-video-v1",
+    runtime: validRuntime()
+  });
+
+  assert.equal(result.state, "awaiting_callback");
+  assert.equal(calls.some((call) => call.name === "deleteObject"), false);
+  assert.equal(calls.some((call) => call.name === "releaseLock"), false);
+  assert.equal(calls.some((call) => call.name === "markAwaitingCallback"), true);
+  assert.equal(JSON.stringify(calls).includes("raw-job-id"), false);
+});
+
 test("runProductionPreflightCase fails when COS cleanup verification fails", async () => {
   const runner = createProductionPreflightRunner({
     guards: () => undefined,
@@ -340,6 +427,99 @@ test("WeChat image preflight callback matched by trace id updates preflight only
   assert.equal(handled.status, "handled");
   assert.equal(calls.some((call) => call.name === "forbidden-normal-apply"), false);
   assert.equal(JSON.stringify(calls).includes("raw-trace-id"), false);
+});
+
+test("WeChat image preflight pass callback cleans derived COS object before releasing lock", async () => {
+  const {
+    tryHandleProductionPreflightWechatImageCallback
+  } = await import("../src/modules/content-moderation/production-preflight-callback.js");
+  const calls = [];
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const handled = await tryHandleProductionPreflightWechatImageCallback({
+    event: {
+      traceId: "raw-trace-id",
+      resultCategory: "pass"
+    },
+    runtime: validRuntime(),
+    hmacKey: "01234567890123456789012345678901",
+    guards: () => undefined,
+    repository: {
+      findAttemptByAssociation: async () => ({ runId }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    cleanupObject: async (input) => calls.push({ name: "cleanupObject", input })
+  });
+
+  assert.equal(handled.status, "handled");
+  assert.deepEqual(calls.map((call) => call.name), ["cleanupObject", "finishRun", "releaseLock"]);
+  assert.equal(
+    calls[0].input.objectKey,
+    `system/content-moderation-preflight/${runId}/image-v1.png`
+  );
+  assert.equal(calls.find((call) => call.name === "finishRun").input.cleanupStatus, "deleted");
+});
+
+test("Tencent video preflight pass callback cleans derived COS object before releasing lock", async () => {
+  const {
+    tryHandleProductionPreflightTencentCallback
+  } = await import("../src/modules/content-moderation/production-preflight-callback.js");
+  const calls = [];
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const handled = await tryHandleProductionPreflightTencentCallback({
+    payload: {
+      dataId: runId,
+      jobId: "raw-job-id",
+      resultCategory: "pass"
+    },
+    runtime: validRuntime(),
+    hmacKey: "01234567890123456789012345678901",
+    guards: () => undefined,
+    repository: {
+      findAttemptByAssociation: async ({ kind }) => (kind === "data_id" ? { runId } : null),
+      recordAssociation: async (input) => calls.push({ name: "recordAssociation", input }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    cleanupObject: async (input) => calls.push({ name: "cleanupObject", input })
+  });
+
+  assert.equal(handled.status, "handled");
+  assert.equal(calls.some((call) => call.name === "cleanupObject"), true);
+  assert.equal(
+    calls.find((call) => call.name === "cleanupObject").input.objectKey,
+    `system/content-moderation-preflight/${runId}/video-v1.mp4`
+  );
+  assert.equal(calls.find((call) => call.name === "finishRun").input.cleanupStatus, "deleted");
+  assert.equal(JSON.stringify(calls).includes("raw-job-id"), false);
+});
+
+test("preflight callback cleans derived COS object even when provider returns non-pass", async () => {
+  const {
+    tryHandleProductionPreflightWechatImageCallback
+  } = await import("../src/modules/content-moderation/production-preflight-callback.js");
+  const calls = [];
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const handled = await tryHandleProductionPreflightWechatImageCallback({
+    event: {
+      traceId: "raw-trace-id",
+      resultCategory: "review"
+    },
+    runtime: validRuntime(),
+    hmacKey: "01234567890123456789012345678901",
+    guards: () => undefined,
+    repository: {
+      findAttemptByAssociation: async () => ({ runId }),
+      finishRun: async (input) => calls.push({ name: "finishRun", input }),
+      releaseLock: async (input) => calls.push({ name: "releaseLock", input })
+    },
+    cleanupObject: async (input) => calls.push({ name: "cleanupObject", input })
+  });
+
+  assert.equal(handled.status, "handled");
+  assert.equal(calls.find((call) => call.name === "cleanupObject").input.state, "failed");
+  assert.equal(calls.find((call) => call.name === "finishRun").input.state, "failed");
+  assert.equal(calls.find((call) => call.name === "finishRun").input.cleanupStatus, "deleted");
 });
 
 test("unknown preflight callback returns miss so normal path remains responsible", async () => {
