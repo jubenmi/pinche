@@ -22,6 +22,17 @@ function requiredString(value, maxLength = MAX_IDENTIFIER_LENGTH) {
   return normalized;
 }
 
+function requiredExactString(value, maxBytes = MAX_IDENTIFIER_LENGTH) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > maxBytes
+  ) {
+    throw invalidCallback();
+  }
+  return value;
+}
+
 function safeEqual(left, right) {
   const leftBuffer = Buffer.isBuffer(left) ? left : Buffer.from(String(left), "utf8");
   const rightBuffer = Buffer.isBuffer(right) ? right : Buffer.from(String(right), "utf8");
@@ -168,35 +179,29 @@ export function verifyWechatCallbackSignature({ token, timestamp, nonce, encrypt
   return safeEqual(providedSignature, expectedSignature);
 }
 
-export function verifyWechatSecureCallbackHandshake({
-  echostr,
+export function verifyWechatCallbackUrl({
   token,
-  aesKey,
-  appId,
-  msgSignature,
+  signature,
   timestamp,
-  nonce
+  nonce,
+  echostr
 } = {}) {
-  const encrypt = requiredString(echostr, MAX_CALLBACK_BYTES);
-  let authenticated;
-  try {
-    authenticated = verifyWechatCallbackSignature({
-      token,
-      timestamp,
-      nonce,
-      encrypt,
-      msgSignature
-    });
-  } catch {
-    throw invalidCallback();
-  }
-  if (!authenticated) {
+  const expectedToken = requiredExactString(token);
+  const expectedTimestamp = requiredExactString(timestamp);
+  const expectedNonce = requiredExactString(nonce);
+  const echo = requiredExactString(echostr, MAX_CALLBACK_BYTES);
+  const providedSignature = requiredExactString(signature, 40).toLowerCase();
+  if (!/^[a-f0-9]{40}$/.test(providedSignature)) throw invalidCallback();
+  const expectedSignature = crypto.createHash("sha1")
+    .update([expectedToken, expectedTimestamp, expectedNonce].sort().join(""), "utf8")
+    .digest("hex");
+  if (!safeEqual(providedSignature, expectedSignature)) {
     throw callbackError(
       "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED",
       "WeChat content moderation callback is unauthorized"
     );
   }
-  return decryptWechatMessage({ encrypt, aesKey, appId });
+  return echo;
 }
 
 export function parseWechatSecureImageEvent({

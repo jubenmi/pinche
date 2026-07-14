@@ -198,7 +198,7 @@ import {
 import {
   dispatchWechatImageModerationEvent,
   parseWechatSecureImageEvent,
-  verifyWechatSecureCallbackHandshake
+  verifyWechatCallbackUrl
 } from "./modules/content-moderation/wechat-callback.js";
 import {
   claimInitialModerationLease,
@@ -3861,14 +3861,12 @@ async function route(request, response) {
   ) {
     let echo;
     try {
-      echo = verifyWechatSecureCallbackHandshake({
-        echostr: url.searchParams.get("echostr") || "",
+      echo = verifyWechatCallbackUrl({
         token: config.contentModeration.wechatEventToken,
-        aesKey: config.contentModeration.wechatEventAesKey,
-        appId: config.contentModeration.wechatAppId,
-        msgSignature: url.searchParams.get("msg_signature") || "",
-        timestamp: url.searchParams.get("timestamp") || "",
-        nonce: url.searchParams.get("nonce") || ""
+        signature: url.searchParams.get("signature"),
+        timestamp: url.searchParams.get("timestamp"),
+        nonce: url.searchParams.get("nonce"),
+        echostr: url.searchParams.get("echostr")
       });
     } catch (error) {
       const unauthorized = error?.code === "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED";
