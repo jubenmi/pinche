@@ -45,15 +45,15 @@
 2. 生产 Redis 可用，且所有 API/Worker 实例使用同一 Redis。共享 access token 模块负责缓存、提前刷新和分布式单飞；禁止自行新增第二套 token 缓存。
 3. 文本审核使用生产者的已验证 `openid` 和正确的 scene；缺少 `openid` 必须返回 `CONTENT_MODERATION_OPENID_REQUIRED`，不得跳过审核。
 4. 图片审核只提交单个私有对象的短时 GET URL；该 URL 仅供微信抓取，不写入数据库、日志或用户响应。
-5. 微信回调配置为安全模式，回调地址为：
+5. 微信上线配置前，先部署包含安全模式 GET URL 验证的 API 镜像；微信保存时会立即向同一路由发起验证。回调配置选择**安全模式**与 **JSON 数据格式**，回调地址为：
 
    ```text
    https://api.pinche.jubenmi.com/api/internal/content-moderation/wechat-image/callback
    ```
 
-   配置 `WECHAT_CONTENT_SECURITY_EVENT_TOKEN` 和 43 位 `WECHAT_CONTENT_SECURITY_EVENT_AES_KEY`。路由会校验签名、时间戳、nonce、AES 解密、AppID 和事件结构。
+   Token 必须是 3–32 位英文或数字；EncodingAESKey 使用后台“随机生成”的 43 位值。二者均只保存到批准的密钥管理处，先写入 `WECHAT_CONTENT_SECURITY_EVENT_TOKEN` 和 `WECHAT_CONTENT_SECURITY_EVENT_AES_KEY`，再在微信后台填写同一组值。GET 验证只会验签、AES 解密、AppID 校验并回显明文 `echostr`；POST 事件继续校验签名、时间戳、nonce、AES 解密、AppID 和 JSON 事件结构。
 
-6. 真实控制台若要求额外 GET URL 验证握手，必须先在非生产环境按该正式协议验证并补齐回归；未完成前不得开启生产图片审核。
+6. 保存失败时不得切换为明文或 XML 规避问题；先核对 API 镜像版本、Token/AESKey 是否完全一致、443 HTTPS 可达、以及 GET 验证的脱敏日志。未完成前不得开启生产图片审核。
 
 建议配置基线：
 
