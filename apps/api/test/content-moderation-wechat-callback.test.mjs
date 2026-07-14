@@ -165,6 +165,20 @@ test("secure WeChat image event verifies signature, decrypts JSON, and retains o
   assert.equal(JSON.stringify(parsed).includes("Encrypt"), false);
 });
 
+test("secure WeChat image event accepts a valid non-canonical 43-character AES key", () => {
+  const eventAesKey = `${"A".repeat(42)}B`;
+  const encrypted = encryptWechatSecureEvent(secureImageEvent(), { eventAesKey });
+  const parsed = parseWechatSecureImageEvent({
+    ...encrypted,
+    token,
+    aesKey: eventAesKey,
+    appId
+  });
+
+  assert.equal(parsed.traceId, "wechat-image-trace-71");
+  assert.equal(parsed.result.decision, "pass");
+});
+
 test("secure WeChat image event rejects forged signatures, invalid ciphertext, and a foreign AppID", () => {
   const valid = encryptWechatSecureEvent(secureImageEvent());
   assert.throws(() => parse({ ...valid, msgSignature: "0".repeat(40) }), {
