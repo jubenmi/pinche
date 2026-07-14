@@ -12,6 +12,13 @@ import * as wechatCallback from "../src/modules/content-moderation/wechat-callba
 const token = "wechat-content-security-event-token";
 const appId = "wx-d45-content-security";
 const aesKey = crypto.randomBytes(32).toString("base64").replace(/=$/, "");
+const officialUrlVerification = Object.freeze({
+  token: "AAAAA",
+  signature: "f464b24fc39322e44b38aa78f5edd27bd1441696",
+  timestamp: "1714036504",
+  nonce: "1514711492",
+  echostr: "4375120948345356249"
+});
 
 function pkcs7Pad(source, blockSize = 32) {
   const input = Buffer.from(source);
@@ -86,25 +93,61 @@ function parse(raw) {
   });
 }
 
-function verifyUrlHandshake(raw) {
-  const verifier = wechatCallback.verifyWechatSecureCallbackHandshake;
-  if (typeof verifier !== "function") return undefined;
-  return verifier({
-    echostr: raw.Encrypt,
-    msgSignature: raw.msgSignature,
-    timestamp: raw.timestamp,
-    nonce: raw.nonce,
-    token,
-    aesKey,
-    appId
+function verifyUrlHandshake(input) {
+  return wechatCallback.verifyWechatCallbackUrl(input);
+}
+
+test("official WeChat URL verification sample returns the supplied echostr", () => {
+  const verification = verifyUrlHandshake(officialUrlVerification);
+
+  assert.equal(verification, officialUrlVerification.echostr);
+});
+
+test("WeChat URL verification preserves echostr whitespace exactly", () => {
+  const echostr = ` ${officialUrlVerification.echostr} `;
+  const verification = verifyUrlHandshake({
+    ...officialUrlVerification,
+    echostr
+  });
+
+  assert.equal(verification, echostr);
+});
+
+test("WeChat URL verification rejects a well-formed but incorrect signature", () => {
+  assert.throws(
+    () => verifyUrlHandshake({
+      ...officialUrlVerification,
+      signature: "0".repeat(40)
+    }),
+    { code: "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED" }
+  );
+});
+
+for (const field of ["signature", "timestamp", "nonce", "echostr"]) {
+  test(`WeChat URL verification rejects missing ${field}`, () => {
+    const input = { ...officialUrlVerification };
+    delete input[field];
+
+    assert.throws(
+      () => verifyUrlHandshake(input),
+      { code: "CONTENT_MODERATION_INVALID_CALLBACK" }
+    );
   });
 }
 
-test("secure WeChat URL verification returns only the authenticated decrypted echostr", () => {
-  const expectedEcho = "wechat-url-verification-echo";
-  const verification = verifyUrlHandshake(encryptWechatSecurePayload(expectedEcho));
+test("WeChat URL verification rejects the legacy encrypted GET handshake", () => {
+  const encrypted = encryptWechatSecurePayload("wechat-url-verification-echo");
 
-  assert.equal(verification, expectedEcho);
+  assert.throws(
+    () => verifyUrlHandshake({
+      token,
+      msgSignature: encrypted.msgSignature,
+      timestamp: encrypted.timestamp,
+      nonce: encrypted.nonce,
+      echostr: encrypted.Encrypt
+    }),
+    { code: "CONTENT_MODERATION_INVALID_CALLBACK" }
+  );
 });
 
 test("secure WeChat image event verifies signature, decrypts JSON, and retains only safe result fields", () => {
@@ -237,34 +280,55 @@ test("unknown trace IDs are idempotent successes and cannot call the media state
   assert.equal(applied, false);
 });
 
-test("server handles the secure WeChat URL handshake before POST event parsing and never uses callback URLs or object keys", async () => {
+test("server isolates official GET URL verification from secure POST event parsing and sensitive fields", async () => {
   const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
-  const route = server.indexOf('"/api/internal/content-moderation/wechat-image/callback"');
-  const routeStart = server.lastIndexOf("  if (", route);
+  const callbackPath = '"/api/internal/content-moderation/wechat-image/callback"';
+  const getRoute = server.indexOf(callbackPath);
+  const postRoute = server.indexOf(callbackPath, getRoute + callbackPath.length);
+  const getRouteStart = server.lastIndexOf("  if (", getRoute);
+  const postRouteStart = server.lastIndexOf("  if (", postRoute);
   const genericBody = server.indexOf("const body = await bodyFor(request)");
-  assert.ok(routeStart > 0 && routeStart < genericBody);
-  const routeBody = server.slice(routeStart, genericBody);
-  assert.match(server, /verifyWechatSecureCallbackHandshake/);
-  assert.match(routeBody, /request\.method === "GET"/);
-  assert.match(routeBody, /url\.searchParams\.get\("echostr"\)/);
-  assert.match(routeBody, /"content-type": "text\/plain; charset=utf-8"/);
-  assert.match(routeBody, /readRawBody\(request, 256 \* 1024\)/);
-  assert.match(routeBody, /parseWechatSecureImageEvent/);
-  assert.match(routeBody, /tryHandleProductionPreflightWechatImageCallback/);
-  assert.match(routeBody, /if \(\s*config\.contentModeration\.productionPreflight\?\.referenceHmacKey\s*\)/);
-  assert.doesNotMatch(routeBody, /productionPreflight\?\.enabled\s*&&/);
-  assert.match(routeBody, /onCleanupFailure/);
-  assert.match(routeBody, /CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED/);
+  assert.ok(
+    getRouteStart > 0 &&
+      getRouteStart < postRouteStart &&
+      postRouteStart < genericBody
+  );
+  const getRouteBody = server.slice(getRouteStart, postRouteStart);
+  const postRouteBody = server.slice(postRouteStart, genericBody);
+
+  assert.match(getRouteBody, /request\.method === "GET"/);
+  assert.match(getRouteBody, /verifyWechatCallbackUrl/);
+  assert.match(getRouteBody, /signature:\s*url\.searchParams\.get\("signature"\)/);
+  assert.match(getRouteBody, /url\.searchParams\.get\("echostr"\)/);
+  assert.match(getRouteBody, /"content-type": "text\/plain; charset=utf-8"/);
+  assert.match(getRouteBody, /response\.end\(echo\)/);
+  assert.doesNotMatch(getRouteBody, /msg_signature|msgSignature/);
+  assert.doesNotMatch(getRouteBody, /wechatEventAesKey/);
+  assert.doesNotMatch(getRouteBody, /wechatAppId/);
+  assert.doesNotMatch(getRouteBody, /readRawBody/);
+  assert.doesNotMatch(getRouteBody, /parseWechatSecureImageEvent/);
+
+  assert.match(postRouteBody, /request\.method === "POST"/);
+  assert.match(postRouteBody, /url\.searchParams\.get\("msg_signature"\)/);
+  assert.match(postRouteBody, /wechatEventAesKey/);
+  assert.match(postRouteBody, /wechatAppId/);
+  assert.match(postRouteBody, /readRawBody\(request, 256 \* 1024\)/);
+  assert.match(postRouteBody, /parseWechatSecureImageEvent/);
+  assert.match(postRouteBody, /tryHandleProductionPreflightWechatImageCallback/);
+  assert.match(postRouteBody, /if \(\s*config\.contentModeration\.productionPreflight\?\.referenceHmacKey\s*\)/);
+  assert.doesNotMatch(postRouteBody, /productionPreflight\?\.enabled\s*&&/);
+  assert.match(postRouteBody, /onCleanupFailure/);
+  assert.match(postRouteBody, /CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CLEANUP_FAILED/);
   assert.match(server, /hasActiveProductionPreflightWechatImageRun/);
   assert.doesNotMatch(server, /hasAwaitingWechatImageTrace:\s*async \(\) => false/);
   assert.ok(
-    routeBody.indexOf("tryHandleProductionPreflightWechatImageCallback") <
-      routeBody.indexOf("dispatchWechatImageModerationEvent")
+    postRouteBody.indexOf("tryHandleProductionPreflightWechatImageCallback") <
+      postRouteBody.indexOf("dispatchWechatImageModerationEvent")
   );
-  assert.match(routeBody, /dispatchWechatImageModerationEvent/);
-  assert.match(routeBody, /emitContentModerationEvent\("moderation_callback_failure"/);
-  assert.match(routeBody, /outcome: unauthorized \? "unauthorized" : "invalid"/);
-  assert.doesNotMatch(routeBody, /objectKey|object_key|media_url|signedUrl|console\.log/);
+  assert.match(postRouteBody, /dispatchWechatImageModerationEvent/);
+  assert.match(postRouteBody, /emitContentModerationEvent\("moderation_callback_failure"/);
+  assert.match(postRouteBody, /outcome: unauthorized \? "unauthorized" : "invalid"/);
+  assert.doesNotMatch(postRouteBody, /objectKey|object_key|media_url|signedUrl|console\.log/);
   assert.match(server, /CONTENT_MODERATION_CALLBACK_UNAUTHORIZED: \[401,/);
   assert.match(server, /CONTENT_MODERATION_INVALID_CALLBACK: \[400,/);
 });

@@ -45,15 +45,15 @@
 2. 生产 Redis 可用，且所有 API/Worker 实例使用同一 Redis。共享 access token 模块负责缓存、提前刷新和分布式单飞；禁止自行新增第二套 token 缓存。
 3. 文本审核使用生产者的已验证 `openid` 和正确的 scene；缺少 `openid` 必须返回 `CONTENT_MODERATION_OPENID_REQUIRED`，不得跳过审核。
 4. 图片审核只提交单个私有对象的短时 GET URL；该 URL 仅供微信抓取，不写入数据库、日志或用户响应。
-5. 微信上线配置前，先部署包含安全模式 GET URL 验证的 API 镜像；微信保存时会立即向同一路由发起验证。回调配置选择**安全模式**与 **JSON 数据格式**，回调地址为：
+5. 微信上线配置前，先部署包含[微信官方 GET URL 验证](https://developers.weixin.qq.com/miniprogram/dev/framework/server-ability/message-push.html)的 API 镜像；微信保存时会立即向同一路由发起验证。**安全模式**与 **JSON 数据格式**约束保存后的 POST 事件，GET 保存验证始终使用微信规定的明文 `echostr` 协议。回调地址为：
 
    ```text
    https://api.pinche.jubenmi.com/api/internal/content-moderation/wechat-image/callback
    ```
 
-   Token 必须是 3–32 位英文或数字；EncodingAESKey 使用后台“随机生成”的 43 位值。二者均只保存到批准的密钥管理处，先写入 `WECHAT_CONTENT_SECURITY_EVENT_TOKEN` 和 `WECHAT_CONTENT_SECURITY_EVENT_AES_KEY`，再在微信后台填写同一组值。GET 验证只会验签、AES 解密、AppID 校验并回显明文 `echostr`；POST 事件继续校验签名、时间戳、nonce、AES 解密、AppID 和 JSON 事件结构。
+   Token 必须是 3–32 位英文或数字；EncodingAESKey 使用后台“随机生成”的 43 位值。二者均只保存到批准的密钥管理处，先写入 `WECHAT_CONTENT_SECURITY_EVENT_TOKEN` 和 `WECHAT_CONTENT_SECURITY_EVENT_AES_KEY`，再在微信后台填写同一组值。GET 验证只读取 `signature`、timestamp、nonce 和明文 `echostr`，以 Token、timestamp、nonce 的三参数 SHA-1 结果校验 `signature`，通过后原样回显 `echostr`；GET 不使用 EncodingAESKey、AppID、`msg_signature` 或 body。安全模式 POST 事件才校验 `msg_signature`、时间戳、nonce、加密 body、AES 解密、AppID 和 JSON 事件结构。
 
-6. 保存失败时不得切换为明文或 XML 规避问题；先核对 API 镜像版本、Token/AESKey 是否完全一致、443 HTTPS 可达、以及 GET 验证的脱敏日志。未完成前不得开启生产图片审核。
+6. 保存失败时不得切换为明文或 XML 规避问题；先核对 API 镜像版本、443 HTTPS 与路由是否可达、Token 是否完全一致，以及反向代理是否保留 GET 的 `signature`、timestamp、nonce 和 `echostr`。AESKey 与 AppID 只排查保存后的安全模式 POST，不应作为 GET 保存验证条件。只查看不含 Token、签名、`echostr` 或密钥的脱敏日志；未完成前不得开启生产图片审核。
 
 建议配置基线：
 
@@ -83,7 +83,8 @@ WECHAT_CONTENT_SECURITY_EVENT_AES_KEY=...  # 精确 43 位
 
 - `WECHAT_CONTENT_SECURITY_TOKEN_*`：检查 Redis、AppID/AppSecret、时钟和微信后台权限；共享模块只会强制刷新并重试一次。
 - `WECHAT_CONTENT_SECURITY_PERMISSION_DENIED` 或 `WECHAT_CONTENT_SECURITY_QUOTA_EXHAUSTED`：立即把对应的文本或图片接收模式改为 `closed`，保留读取门禁与已有任务；保持 provider、Worker 和回调可用，核对后台权限/额度后再恢复为 `moderated`。
-- 回调鉴权或结构失败：检查安全模式 token、AES key、AppID、反向代理是否改写 query/body；不要在日志中打印密文、签名或原始 body。
+- GET 保存验证失败：检查 Token、API 版本、HTTPS/路由，以及反向代理是否改写 `signature`、timestamp、nonce 或 `echostr`；GET 不应读取 `msg_signature`、AESKey、AppID 或 body。
+- 安全模式 POST 回调鉴权或结构失败：检查 Token、AESKey、AppID、反向代理是否改写 query/body；不要在日志中打印密文、签名、`echostr` 或原始 body。
 - 文本 `review`/`error` 和图片 `review`/`error` 均必须保持隐藏，交给管理员队列或重试 Worker，不能人工改数据库为 `approved` 绕过流程。
 
 ## 3. 腾讯云 CI 视频审核
