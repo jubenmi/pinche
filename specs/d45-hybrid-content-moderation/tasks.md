@@ -175,6 +175,9 @@
   - 2026-07-13：用户确认释放此前仅为 D45 非生产联调创建的逻辑库 `pinche_d45_staging` 及同名专用账号；已先核验账号仅有该库的授权，随后依次删除账号与逻辑库，并在腾讯云控制台复核两者均已不存在。生产库 `pinche`、TDSQL-C 集群、现有 Redis 和未绑定安全组未改动；此前的逻辑库隔离前置已撤销，D45.18 与三类生产接收门禁状态不变。
   - 2026-07-13：撤库后的本地/离线复核完成：`npm run d45:unit` 366/366、`npm run d45:check` 通过、`npm run d45:smoke` 71/71；在空环境中运行源码锁定的 `.invalid` 契约只得到 `dry_run_deferred`。未读取实际密钥、未联网、未发送真实审核请求，也未改变生产接收门禁。历史实现计划已标注 D45.18 延期并以本任务清单为准；真实联调继续未完成。
   - [ ] D45.18A 实现并验证生产受控预演（有限验证）。
+    - 2026-07-14：API、retry、orphan scan 与 preflight timeout 已按用户确认原地重建为同一不可变镜像 `sha256:428e1501f2412e38474d50715d7e7317994ab46b38049eec5e2e2e447590971b`；API `/health`、`/health/db`、数据库 schema 与 `pinche_internal`/`proxy` 网络正常，三个 intake 仍为 `closed`。用户已当次确认执行微信文本与图片无害预检；当前按 `wechat-text-v1` → `wechat-image-v1` 顺序进行，尚未获得真实结果，故本项保持未勾选。
+    - 2026-07-14：首次 `wechat-text-v1` 一次性 Job 在任何微信出站请求前关闭式失败，脱敏错误为 `valid WECHAT_CONTENT_SECURITY_EVENT_AES_KEY`；核验确认运行时密钥为微信后台允许的 43 位字符并可解码为 32 字节，根因是应用额外要求 Base64 规范重编码完全一致。已先新增回归用例复现，再将校验收敛为“合法 43 位字符且解码为 32 字节”；`npm run d45:unit` 446/446、`npm run d45:check` 通过。修复尚待 CI 发布并重新执行文本、图片预检，三个 intake 仍为 `closed`，故本项保持未勾选。
+    - 2026-07-14：执行前只读审计发现手册中的一次性 Job 命令未显式把 `D45_PREFLIGHT_CONFIRMATION` 传给容器，且未将 `PINCHE_API_IMAGE` 固定为已核验 digest，直接执行会关闭式失败或存在拉取 `latest` 的版本偏差。已先以回归锁定并修正手册为 `--pull never`、不可变镜像引用和仅该 `--rm` 容器的 `-e` 传入；未运行 Job、未读取密钥、未改变 API/Worker/门禁。下一步仅做运行时脱敏前置核验。
     - 2026-07-14：微信后台真实保存返回“服务器地址验证失败”。只读核对线上路由与微信官方文档后确认，首版 GET 错用了安全模式 POST 的 `msg_signature`、AES 解密和 AppID 校验；官方 GET 实际只以 `signature=SHA1(sort(Token,timestamp,nonce))` 验签并原样返回明文 `echostr`。用户确认采用最小方案 A：仅纠正 GET 及其 spec/测试/手册，安全模式 JSON POST、状态机、门禁和预演保持不变；修复、部署和真实保存通过前，本项与三个 intake 继续保持未完成/`closed`。
     - 2026-07-14（首版 GET 实现前的历史记录）：已根据微信后台实际“消息推送配置”页面确认，保存安全模式回调前必须完成 GET URL 验证，且生产配置必须选择 JSON。当时服务只实现 POST 加密 JSON 事件；经用户确认，按 Requirement 5/13 先补同一路由的最小 GET 验证与自动化回归，三个 intake 继续 `closed`，不提交控制台配置。
     - 2026-07-13：已按实施计划进入开发；仍不读取密钥、不发真实请求、不改变三类 intake。

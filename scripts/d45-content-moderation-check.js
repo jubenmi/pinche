@@ -155,6 +155,13 @@ for (const statement of [
 }
 assert.doesNotMatch(runbook, /CONTENT_MODERATION_ENABLED=false/);
 assert.doesNotMatch(runbook, /非生产真实联调记录/);
+assert.match(
+  runbook,
+  /PINCHE_API_IMAGE="<当前 API 已验证的不可变镜像引用（repo@sha256:\.\.\.）>"/
+);
+assert.match(runbook, /--pull never/);
+assert.match(runbook, /-e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true/);
+assert.match(runbook, /-e D45_PREFLIGHT_CONFIRMATION/);
 
 for (const command of ["d45:unit", "d45:check", "d45:smoke"]) {
   assert.equal(typeof rootPackage.scripts[command], "string", `missing root command: ${command}`);
