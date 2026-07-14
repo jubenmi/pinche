@@ -422,8 +422,8 @@ Expected: main CI success；失败立即停止，不推 publish。
 
 在 Portainer 只读检查 Watchtower 的命令、label 过滤范围，以及 `pinche-api-1`、admin-web 和三个内容审核 Worker 的更新策略。由于 publish workflow 同时推送 API 与 admin-web 的 `latest`：
 
-- 只有能够证明 publish 不会自动重启任何容器时，才按普通 CI 提升继续，生产确认留到 Task 6。
-- 若 Watchtower 只会自动更新 `pinche-api-1`，publish push 本身即为生产动作，必须先执行 Task 6 Step 1 的快照并取得 Task 6 Step 2 的当次确认。
+- 若能够证明 publish 不会自动更新任何容器，按普通 CI 提升继续；publish 成功并取得不可变 API digest 后，进入 Task 6 的手工 API-only 分支。
+- 若 Watchtower 只会自动更新 `pinche-api-1`，publish push 本身即为生产动作。推送 publish 前必须先完成 Task 6 Step 1 等价的容器快照，并单独请求当次确认，明确说明：“publish 会生成新 digest 并可能由 Watchtower 自动替换 `pinche-api-1`；只允许 API 变化。”没有该次确认不得 push publish。此时 digest 尚未生成，不得复用依赖已知 digest 的手工部署确认文案。
 - 若 Watchtower 可能更新 API 之外的任一容器，立即停止在 main，不推 publish，也不停止或修改 Watchtower。
 
 Expected: 得到可审计的只读结论；不停止、不重启、不编辑任何容器或 Stack。
@@ -441,7 +441,7 @@ test -n "$PUBLISH_RUN_ID"
 gh run watch "$PUBLISH_RUN_ID" --repo jubenmi/pinche --exit-status
 ```
 
-Expected: publish CI success，并生成 `hkccr.ccs.tencentyun.com/murder/pinche:latest` 的新不可变 digest。
+Expected: 只在 Step 5 允许的分支中执行；若 Watchtower 只自动更新 API，已取得 publish 作为生产动作的当次确认。publish CI success，并生成 `hkccr.ccs.tencentyun.com/murder/pinche:latest` 的新不可变 digest。
 
 - [ ] **Step 7: 记录发布证据并清理临时工作树**
 
@@ -456,29 +456,40 @@ git worktree remove --force /private/tmp/pinche-d45-get-main-20260714
 git worktree remove --force /private/tmp/pinche-d45-get-publish-20260714
 ```
 
-Expected: 记录三分支实际 SHA、三个 run id/结论和 API 镜像 digest；勾选 tasks.md 的 CI 子项。此时 GET 父项仍不得勾选。
+publish 完成并取得 API digest 后，按 Step 5 的 Watchtower 结论继续：
 
-### Task 6: 仅部署 API 并完成微信真实保存验证
+- “不自动更新任何容器”分支直接进入 Task 6 的手工 API-only 分支。
+- “只自动更新 `pinche-api-1`”分支立即只读对比 publish 前快照。若 Watchtower 已自动替换 API，进入 Task 6 的自动替换分支，复用 publish 前快照，跳过手工替换；若尚未替换 API，进入 Task 6 的手工 API-only 分支。若 API 之外的任何容器 ID 发生变化，立即停止，不继续微信保存。
+
+Expected: 记录三分支实际 SHA、三个 run id/结论和 API 镜像 digest；勾选 tasks.md 的 CI 子项。路由到 Task 6 的明确分支；此时 GET 父项仍不得勾选。
+
+### Task 6: 确认 API-only 落地并完成微信真实保存验证
 
 **Files:**
 - No source changes expected during deployment.
 - Modify after evidence: `specs/d45-hybrid-content-moderation/tasks.md`
 
-- [ ] **Step 1: 生产动作前做只读快照**
+- [ ] **Step 1: 准备 API-only 前后对照快照**
 
 记录 `pinche-api-1` 的容器 ID、当前镜像 digest、Entrypoint/Cmd、restart policy、环境变量名称、mount、`pinche_internal` 与 `proxy` 网络；记录所有运行中容器的名称和 ID 作为前后对照。只核对三个 intake 的值为 `closed`，不得输出其他环境变量值或任何 Token/AESKey/AppSecret。
 
+- Watchtower 只自动更新 API 的分支必须在 publish 前完成本步骤的等价快照；publish 后不得用新快照覆盖该“变更前”基线。
+- 不自动更新任何容器，或 publish 后确认 Watchtower 尚未替换 API 的分支，在手工部署动作前执行本步骤并形成手工分支基线。
+
 Expected: 快照不改变任何容器；三个 intake 精确为 `closed`；若不满足则停止。
 
-- [ ] **Step 2: 请求当次 API-only 部署确认**
+- [ ] **Step 2: 按 publish 后事实选择 API-only 分支**
 
-向用户明确展示：将使用 Task 5 记录的不可变 API digest，只替换 `pinche-api-1`；不操作 Traefik、Watchtower、admin-web、Redis、MySQL 或任何 Worker。没有当次确认不得执行下一步。
+- 若 Watchtower 已自动替换 API：复用 publish 前快照，确认只有 `pinche-api-1` 的容器 ID 变化，其他所有容器 ID 不变，并确认 API 实际镜像 digest 精确等于 Task 5 的 publish 输出。该分支已在 publish 前取得生产动作确认，不再请求手工部署确认，跳过 Step 3，继续 Step 4；任一对比不符都立即停止，不继续微信保存。
+- 若 Watchtower 未自动替换 API：进入手工 API-only 分支。此时 Task 5 的不可变 API digest 已知，向用户明确展示该 digest，并确认只替换 `pinche-api-1`，不操作 Traefik、Watchtower、admin-web、Redis、MySQL 或任何 Worker。没有这次手工部署确认不得执行 Step 3。
 
-- [ ] **Step 3: 仅替换 pinche-api-1**
+Expected: 自动替换分支只有 API 容器 ID 变化且 digest 精确匹配，或手工分支已基于已知 digest 取得单独确认；两条分支均不授权修改其他容器。
+
+- [ ] **Step 3: 仅在手工分支替换 pinche-api-1**
 
 使用服务器现有 Compose 项目或 Portainer 中等价的单服务重建方式，指定 Task 5 的不可变 API digest，保留 Step 1 核对过的环境、mount、restart policy 和两个网络；必须使用 `--no-deps` 等价语义。不得使用 Stack 全量 redeploy、不得重启 Traefik、不得编辑其他服务。
 
-Expected: 只有 `pinche-api-1` 容器 ID 变化；其他容器 ID 与 Step 1 完全一致。若任何其他容器发生变化，立即停止并报告，不继续微信保存。
+Expected: 仅手工分支执行本步骤；只有 `pinche-api-1` 容器 ID 变化，实际 digest 等于 Task 5 的 publish 输出，其他容器 ID 与 Step 1 完全一致。自动替换分支跳过本步骤。若任何其他容器发生变化，立即停止并报告，不继续微信保存。
 
 - [ ] **Step 4: 验证 API 健康与门禁**
 
@@ -490,7 +501,7 @@ curl -fsS https://api.pinche.jubenmi.com/health/db
 curl -sS -o /dev/null -w '%{http_code}\n' https://api.pinche.jubenmi.com/api/internal/content-moderation/wechat-image/callback
 ```
 
-Expected: `/health` 与 `/health/db` 为 HTTP 200 且数据库/schema 正常；不带参数的 callback 为 HTTP 400；三个 intake 再次核对仍为 `closed`。勾选 API-only 部署子项，GET 父项仍 `[ ]`。
+Expected: 自动替换与手工分支都满足：API 实际 digest 等于 Task 5 的 publish 输出，所有非 API 容器 ID 与各自变更前基线一致；`/health` 与 `/health/db` 为 HTTP 200 且数据库/schema 正常；不带参数的 callback 为 HTTP 400；三个 intake 再次核对仍为 `closed`。勾选 API-only 部署子项，GET 父项仍 `[ ]`。
 
 - [ ] **Step 5: 在动作时确认后保存微信配置**
 
