@@ -193,7 +193,18 @@ test("enabled WeChat moderation fails closed in production without Redis, creden
   }
 });
 
-test("enabled WeChat moderation requires a canonical 43-character event AES key", () => {
+test("enabled WeChat moderation accepts a valid non-canonical 43-character event AES key", () => {
+  const config = buildContentModerationConfig(validEnv({
+    CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+    CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "true",
+    WECHAT_CONTENT_SECURITY_EVENT_AES_KEY: `${"A".repeat(42)}B`,
+    COS_REGION: "ap-nanjing"
+  }));
+
+  assert.doesNotThrow(() => assertContentModerationConfig(config, { nodeEnv: "production" }));
+});
+
+test("enabled WeChat moderation requires a valid 43-character event AES key", () => {
   for (const aesKey of ["short", `${"A".repeat(42)}=`, "!".repeat(43)]) {
     const config = buildContentModerationConfig(validEnv({
       CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",

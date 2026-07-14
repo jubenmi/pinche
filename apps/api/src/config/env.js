@@ -222,7 +222,7 @@ function validWechatEventAesKey(raw) {
   const encoded = String(raw || "").trim();
   if (!/^[A-Za-z0-9+/]{43}$/.test(encoded)) return false;
   const decoded = Buffer.from(`${encoded}=`, "base64");
-  return decoded.length === 32 && decoded.toString("base64").replace(/=$/, "") === encoded;
+  return decoded.length === 32;
 }
 
 const CONTENT_MODERATION_INTAKE_MODES = new Set(["legacy", "closed", "moderated"]);
