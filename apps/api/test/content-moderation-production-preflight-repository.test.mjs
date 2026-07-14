@@ -97,9 +97,9 @@ function createFakePreflightConnection() {
         return [run && run.provider === provider ? [run] : []];
       }
       if (sql.includes("SELECT id, provider, case_id") && sql.includes("updated_at <=")) {
-        const [cutoff] = params;
+        const [offsetMicroseconds] = params;
         const limit = Number(sql.match(/LIMIT (\d+)/)?.[1]);
-        const cutoffAt = new Date(`${cutoff.replace(" ", "T")}Z`).getTime();
+        const cutoffAt = new Date(state.databaseNow).getTime() + (offsetMicroseconds / 1000);
         const rows = [...state.runs.values()]
           .filter((run) =>
             ["submitting", "awaiting_callback", ...(sql.includes("'started'") ? ["started"] : [])].includes(run.state) &&
@@ -404,8 +404,32 @@ test("runner finish cannot overwrite a terminal preflight result", async () => {
   assert.equal(connection.state.runs.get("run-1").state, "passed");
 });
 
+test("timeout selection derives its cutoff from the database clock", async () => {
+  let executed = null;
+  const connection = {
+    async execute(sql, params) {
+      executed = { sql: sql.replace(/\s+/g, " ").trim(), params };
+      return [[]];
+    }
+  };
+
+  await listTimedOutProductionPreflightRuns({
+    connection,
+    now: new Date("2026-07-13T00:15:00.000Z"),
+    cutoff: new Date("2026-07-13T00:10:00.000Z"),
+    limit: 10
+  });
+
+  assert.match(
+    executed.sql,
+    /updated_at <= TIMESTAMPADD\(MICROSECOND, \?, CURRENT_TIMESTAMP\(3\)\)/
+  );
+  assert.deepEqual(executed.params, [-5 * 60 * 1000 * 1000]);
+});
+
 test("repository lists only expired asynchronous preflight runs", async () => {
   const connection = createFakePreflightConnection();
+  connection.state.databaseNow = new Date("2026-07-13T00:15:00.000Z");
   connection.state.runs.set("old", {
     id: "old",
     provider: "wechat_image",
@@ -433,6 +457,7 @@ test("repository lists only expired asynchronous preflight runs", async () => {
 
   const runs = await listTimedOutProductionPreflightRuns({
     connection,
+    now: connection.state.databaseNow,
     cutoff: new Date("2026-07-13T00:10:00.000Z"),
     limit: 10
   });
@@ -447,11 +472,12 @@ test("repository lists only expired asynchronous preflight runs", async () => {
   assert.match(listQuery, /LIMIT 10$/);
   assert.doesNotMatch(listQuery, /LIMIT \?/);
   const listQueryIndex = connection.state.sql.indexOf(listQuery);
-  assert.deepEqual(connection.state.params[listQueryIndex], ["2026-07-13 00:10:00.000"]);
+  assert.deepEqual(connection.state.params[listQueryIndex], [-5 * 60 * 1000 * 1000]);
 });
 
 test("repository also lists an expired started preflight for recovery", async () => {
   const connection = createFakePreflightConnection();
+  connection.state.databaseNow = new Date("2026-07-13T00:15:00.000Z");
   connection.state.runs.set("started", {
     id: "started",
     provider: "tencent_video",
@@ -463,6 +489,7 @@ test("repository also lists an expired started preflight for recovery", async ()
 
   const runs = await listTimedOutProductionPreflightRuns({
     connection,
+    now: connection.state.databaseNow,
     cutoff: new Date("2026-07-13T00:10:00.000Z"),
     limit: 10
   });

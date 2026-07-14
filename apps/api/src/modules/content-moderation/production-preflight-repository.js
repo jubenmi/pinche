@@ -156,10 +156,18 @@ export async function hasActiveProductionPreflightWechatImageRun({ connection })
   return rows.length > 0;
 }
 
-export async function listTimedOutProductionPreflightRuns({ connection, cutoff, limit }) {
+export async function listTimedOutProductionPreflightRuns({ connection, cutoff, now, limit }) {
   const cutoffAt = new Date(cutoff);
+  const nowAt = new Date(now);
   const batchSize = Number(limit);
-  if (!Number.isFinite(cutoffAt.getTime())) {
+  const timeoutMs = nowAt.getTime() - cutoffAt.getTime();
+  if (
+    !Number.isFinite(cutoffAt.getTime()) ||
+    !Number.isFinite(nowAt.getTime()) ||
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 60_000 ||
+    timeoutMs > 60 * 60 * 1000
+  ) {
     throw new TypeError("production preflight timeout cutoff is invalid");
   }
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100) {
@@ -169,10 +177,10 @@ export async function listTimedOutProductionPreflightRuns({ connection, cutoff, 
     `SELECT id, provider, case_id, config_fingerprint
      FROM content_moderation_production_preflight_runs
      WHERE state IN ('started', 'submitting', 'awaiting_callback')
-       AND updated_at <= ?
+       AND updated_at <= TIMESTAMPADD(MICROSECOND, ?, CURRENT_TIMESTAMP(3))
      ORDER BY updated_at ASC
      LIMIT ${batchSize}`,
-    [toSqlDateTime(cutoffAt)]
+    [-timeoutMs * 1000]
   );
   return rows.map((row) => ({
     id: row.id,
