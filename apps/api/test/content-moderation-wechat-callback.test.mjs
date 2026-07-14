@@ -7,6 +7,7 @@ import {
   dispatchWechatImageModerationEvent,
   parseWechatSecureImageEvent
 } from "../src/modules/content-moderation/wechat-callback.js";
+import * as wechatCallback from "../src/modules/content-moderation/wechat-callback.js";
 
 const token = "wechat-content-security-event-token";
 const appId = "wx-d45-content-security";
@@ -18,7 +19,7 @@ function pkcs7Pad(source, blockSize = 32) {
   return Buffer.concat([input, Buffer.alloc(padding || blockSize, padding || blockSize)]);
 }
 
-function encryptWechatSecureEvent(event, {
+function encryptWechatSecurePayload(message, {
   eventToken = token,
   eventAesKey = aesKey,
   eventAppId = appId,
@@ -26,13 +27,13 @@ function encryptWechatSecureEvent(event, {
   nonce = "nonce-d45-image"
 } = {}) {
   const aes = Buffer.from(`${eventAesKey}=`, "base64");
-  const message = Buffer.from(JSON.stringify(event), "utf8");
+  const plaintextMessage = Buffer.from(String(message), "utf8");
   const messageLength = Buffer.alloc(4);
-  messageLength.writeUInt32BE(message.length);
+  messageLength.writeUInt32BE(plaintextMessage.length);
   const plaintext = Buffer.concat([
     crypto.randomBytes(16),
     messageLength,
-    message,
+    plaintextMessage,
     Buffer.from(eventAppId, "utf8")
   ]);
   const cipher = crypto.createCipheriv("aes-256-cbc", aes, aes.subarray(0, 16));
@@ -40,11 +41,18 @@ function encryptWechatSecureEvent(event, {
   const Encrypt = Buffer.concat([cipher.update(pkcs7Pad(plaintext)), cipher.final()]).toString("base64");
   const msgSignature = wechatSignature({ eventToken, timestamp, nonce, Encrypt });
   return {
-    rawBody: Buffer.from(JSON.stringify({ Encrypt }), "utf8"),
     msgSignature,
     timestamp,
     nonce,
     Encrypt
+  };
+}
+
+function encryptWechatSecureEvent(event, options) {
+  const encrypted = encryptWechatSecurePayload(JSON.stringify(event), options);
+  return {
+    ...encrypted,
+    rawBody: Buffer.from(JSON.stringify({ Encrypt: encrypted.Encrypt }), "utf8")
   };
 }
 
@@ -77,6 +85,27 @@ function parse(raw) {
     appId
   });
 }
+
+function verifyUrlHandshake(raw) {
+  const verifier = wechatCallback.verifyWechatSecureCallbackHandshake;
+  if (typeof verifier !== "function") return undefined;
+  return verifier({
+    echostr: raw.Encrypt,
+    msgSignature: raw.msgSignature,
+    timestamp: raw.timestamp,
+    nonce: raw.nonce,
+    token,
+    aesKey,
+    appId
+  });
+}
+
+test("secure WeChat URL verification returns only the authenticated decrypted echostr", () => {
+  const expectedEcho = "wechat-url-verification-echo";
+  const verification = verifyUrlHandshake(encryptWechatSecurePayload(expectedEcho));
+
+  assert.equal(verification, expectedEcho);
+});
 
 test("secure WeChat image event verifies signature, decrypts JSON, and retains only safe result fields", () => {
   const parsed = parse(encryptWechatSecureEvent(secureImageEvent()));
@@ -208,12 +237,17 @@ test("unknown trace IDs are idempotent successes and cannot call the media state
   assert.equal(applied, false);
 });
 
-test("server places the WeChat image callback before generic parsing and never uses callback URLs or object keys", async () => {
+test("server handles the secure WeChat URL handshake before POST event parsing and never uses callback URLs or object keys", async () => {
   const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
   const route = server.indexOf('"/api/internal/content-moderation/wechat-image/callback"');
+  const routeStart = server.lastIndexOf("  if (", route);
   const genericBody = server.indexOf("const body = await bodyFor(request)");
-  assert.ok(route > 0 && route < genericBody);
-  const routeBody = server.slice(route, genericBody);
+  assert.ok(routeStart > 0 && routeStart < genericBody);
+  const routeBody = server.slice(routeStart, genericBody);
+  assert.match(server, /verifyWechatSecureCallbackHandshake/);
+  assert.match(routeBody, /request\.method === "GET"/);
+  assert.match(routeBody, /url\.searchParams\.get\("echostr"\)/);
+  assert.match(routeBody, /"content-type": "text\/plain; charset=utf-8"/);
   assert.match(routeBody, /readRawBody\(request, 256 \* 1024\)/);
   assert.match(routeBody, /parseWechatSecureImageEvent/);
   assert.match(routeBody, /tryHandleProductionPreflightWechatImageCallback/);

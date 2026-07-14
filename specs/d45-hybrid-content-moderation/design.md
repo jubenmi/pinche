@@ -1,8 +1,8 @@
 # D45 Design：微信文本/图片与腾讯云视频混合内容审核
 
-更新日期：2026-07-12
+更新日期：2026-07-14
 
-版本：v1.1
+版本：v1.2
 
 ## 1. 决策
 
@@ -141,7 +141,9 @@ scene 使用固定映射，业务代码不得自行选择：
 
 图片 finalize 在同一事务创建媒体和审核任务。图片继续使用现有 JPEG/PNG、4 MB 上限。事务提交后生成只供微信抓取的短时 COS URL并调用 `mediaCheckAsync(media_type=2)`，把 `trace_id` 写入 provider attempt，状态进入 processing；短时 URL 不进入数据库摘要或日志。
 
-微信通过小程序消息/事件服务器推送结果。生产强制安全模式，回调路由在通用 JSON parser 前限制并读取原始 body，完成签名验证、AES 解密和结构校验。接收端以 `trace_id` 找到当前 provider attempt 和任务，再锁定媒体并比较任务保存的 subject ID/version 与当前 object key/ETag。回调不需要、也不假设携带对象 Key 或 ETag。任何无法明确识别的事件都进入 error，旧 attempt 结果记 stale。
+微信通过小程序消息/事件服务器推送结果。生产强制安全模式和 JSON 数据格式；POST 回调路由在通用 JSON parser 前限制并读取原始 body，完成签名验证、AES 解密和结构校验。接收端以 `trace_id` 找到当前 provider attempt 和任务，再锁定媒体并比较任务保存的 subject ID/version 与当前 object key/ETag。回调不需要、也不假设携带对象 Key 或 ETag。任何无法明确识别的事件都进入 error，旧 attempt 结果记 stale。
+
+微信后台保存消息推送配置时，同一路由的 GET 请求只处理安全模式 URL 验证：使用 Token、timestamp、nonce 和加密 `echostr` 校验 `msg_signature`，以 EncodingAESKey 解密、校验 AppID，并在 1 秒内仅返回明文 `echostr`（`text/plain; charset=utf-8`）。GET 验证不读取 body、不创建审核任务、不触发预演，也不调用图片结果状态机；无效参数或签名以关闭式错误结束，绝不回显密文、Token 或密钥。
 
 ## 6. 腾讯云视频设计
 

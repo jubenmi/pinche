@@ -197,7 +197,8 @@ import {
 } from "./modules/content-moderation/tencent-video-client.js";
 import {
   dispatchWechatImageModerationEvent,
-  parseWechatSecureImageEvent
+  parseWechatSecureImageEvent,
+  verifyWechatSecureCallbackHandshake
 } from "./modules/content-moderation/wechat-callback.js";
 import {
   claimInitialModerationLease,
@@ -3851,6 +3852,42 @@ async function route(request, response) {
       ok: true,
       data: callbackResult
     });
+    return;
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === "/api/internal/content-moderation/wechat-image/callback"
+  ) {
+    let echo;
+    try {
+      echo = verifyWechatSecureCallbackHandshake({
+        echostr: url.searchParams.get("echostr") || "",
+        token: config.contentModeration.wechatEventToken,
+        aesKey: config.contentModeration.wechatEventAesKey,
+        appId: config.contentModeration.wechatAppId,
+        msgSignature: url.searchParams.get("msg_signature") || "",
+        timestamp: url.searchParams.get("timestamp") || "",
+        nonce: url.searchParams.get("nonce") || ""
+      });
+    } catch (error) {
+      const unauthorized = error?.code === "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED";
+      emitContentModerationEvent("moderation_callback_failure", {
+        provider: "wechat_sec_check",
+        subjectType: "album_image",
+        outcome: unauthorized ? "unauthorized" : "invalid",
+        errorCode: unauthorized
+          ? "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED"
+          : "CONTENT_MODERATION_INVALID_CALLBACK"
+      });
+      throw error;
+    }
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "text/plain; charset=utf-8",
+      "content-length": Buffer.byteLength(echo)
+    });
+    response.end(echo);
     return;
   }
 
