@@ -189,7 +189,8 @@
     - [ ] 微信/腾讯回调先解析预演关联，只更新预演状态；重复/迟到事件幂等，未命中保持现有用户回调链；任何结果不得调用用户状态机或签发用户 URL。
     - [ ] 为同一路由补齐微信官方 GET URL 验证；以 `signature` 对 Token、timestamp、nonce 的三参数 SHA-1 结果验签并原样回显明文 `echostr`，GET 不读取或使用 `msg_signature`、AESKey、AppID、`encrypt_type` 或 body；无效验证无副作用且不泄漏请求参数或密钥。
       - [x] 复核 requirements v1.3、design v1.3、tasks v1.2 与生产手册中的 GET/POST 协议边界；2026-07-14 用户已确认该版 spec，可以进入 TDD 实施。
-      - [ ] 先补失败测试，再覆盖微信官方示例、伪造/缺失 `signature`、精确回显不裁剪，以及仅携带 `msg_signature` 与加密 `echostr` 的首版错误协议必须被拒绝；静态路由检查须区分 GET 的 `signature` 与 POST 的 `msg_signature`。
+      - [x] 先补失败测试，再覆盖微信官方示例、伪造/缺失 `signature`、精确回显不裁剪，以及仅携带 `msg_signature` 与加密 `echostr` 的首版错误协议必须被拒绝；静态路由检查须区分 GET 的 `signature` 与 POST 的 `msg_signature`。
+      - 2026-07-14：GET 协议纠偏实现由提交 `46fd0f0` 完成，live-contract 加固最终提交为 `1bb066c`；微信官方 GET 回调定向回归 17/17、live-contract 定向回归 11/11、`npm run d45:unit` talk 5/5 且主测试 445/445、`npm run d45:check` 与 `npm run d45:smoke` 71/71 均通过。尚未执行 CI 发布，未操作生产；三个 intake 仍为 `closed`，GET 父项、CI 发布、API 部署、微信后台真实保存与 D45.18A 继续保持 `[ ]`。
       - [ ] 按 develop → main → publish 顺序逐级完成 CI，记录三分支提交、Actions run 与发布镜像摘要；任一级失败立即停止。
       - [ ] 经当次确认仅替换 `pinche-api-1`，核对不可变镜像摘要、`/health`、`/health/db` 和三个 intake 仍为 `closed`；其他容器不得重启或改动。
       - [ ] 微信后台以安全模式与 JSON 数据格式真实保存成功，官方 GET 验证通过且配置持久化；脱敏确认未写入审核、媒体或预演状态。
