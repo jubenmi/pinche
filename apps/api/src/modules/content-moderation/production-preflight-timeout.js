@@ -29,7 +29,11 @@ export async function runProductionPreflightTimeoutBatch({
   }
   const endedAt = asDate(now());
   const cutoff = new Date(endedAt.getTime() - boundedTimeout(timeoutMs));
-  const runs = await repository.listTimedOutRuns({ cutoff, limit: boundedLimit(limit) });
+  const runs = await repository.listTimedOutRuns({
+    cutoff,
+    now: endedAt,
+    limit: boundedLimit(limit)
+  });
   const result = { scanned: runs.length, finalized: 0, cleanupFailed: 0 };
 
   for (const run of runs) {
