@@ -261,11 +261,24 @@ test("D45.18 and every listed live-integration subtask remain unchecked", () => 
   const sectionEnd = taskCard.indexOf("\n## ", sectionStart);
   const section = taskCard.slice(sectionStart, sectionEnd === -1 ? undefined : sectionEnd);
   const checklistLines = section.match(/^\s*- \[[ x]\] .+$/gm) ?? [];
+  const localProgressFragments = [
+    "复核 requirements v1.3",
+    "先补失败测试",
+    "按 develop → main → publish"
+  ];
+
+  for (const fragment of localProgressFragments) {
+    assert.ok(checklistLines.some((line) => line.includes(fragment)));
+  }
+
+  const liveChecklistLines = checklistLines.filter(
+    (line) => !localProgressFragments.some((fragment) => line.includes(fragment))
+  );
 
   assert.match(section, /- \[ \] D45\.18A 实现并验证生产受控预演（有限验证）。/);
   assert.match(section, /- \[ \] D45\.18B 完整结果与故障放行验证（不由生产预演替代）。/);
-  assert.ok(checklistLines.length >= 10);
-  for (const line of checklistLines) {
+  assert.ok(liveChecklistLines.length >= 10);
+  for (const line of liveChecklistLines) {
     assert.match(line, /\[ \]/);
   }
 });
