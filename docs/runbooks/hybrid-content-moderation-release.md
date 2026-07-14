@@ -219,18 +219,32 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 手动执行：
 
 ```bash
-D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
-  docker compose run --rm --no-deps api \
+PINCHE_API_IMAGE="<当前 API 已验证的不可变镜像引用（repo@sha256:...）>" \
+  D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
+  docker compose run --pull never --rm --no-deps \
+  -e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true \
+  -e D45_PREFLIGHT_CONFIRMATION \
+  api \
   npm run job:content-moderation-production-preflight -- --case=wechat-text-v1
 
-D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
-  docker compose run --rm --no-deps api \
+PINCHE_API_IMAGE="<当前 API 已验证的不可变镜像引用（repo@sha256:...）>" \
+  D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
+  docker compose run --pull never --rm --no-deps \
+  -e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true \
+  -e D45_PREFLIGHT_CONFIRMATION \
+  api \
   npm run job:content-moderation-production-preflight -- --case=wechat-image-v1
 
-D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
-  docker compose run --rm --no-deps api \
+PINCHE_API_IMAGE="<当前 API 已验证的不可变镜像引用（repo@sha256:...）>" \
+  D45_PREFLIGHT_CONFIRMATION="<当次人工确认值>" \
+  docker compose run --pull never --rm --no-deps \
+  -e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true \
+  -e D45_PREFLIGHT_CONFIRMATION \
+  api \
   npm run job:content-moderation-production-preflight -- --case=tencent-video-v1
 ```
+
+`PINCHE_API_IMAGE` 必须替换为当前 API 已核验的 **同一不可变 digest**，不得使用 `latest`。`--pull never` 使本机未缓存该 digest 时关闭式失败，而不是拉取新镜像。`-e D45_PREFLIGHT_CONFIRMATION` 显式把仅本次有效的宿主机变量传入一次性容器；不得将该值写入 `.env.production`、Compose 文件、日志或截图。预演显式 `-e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true` 只作用于该 `--rm` 容器，不改变常驻 API/Worker 或任何 intake 门禁。
 
 文本预演是同步结果，成功时应记录为 `passed`。图片与视频预演是异步结果：一次性 Job 提交成功后可能先返回 `awaiting_callback`，此时必须继续等待微信安全事件或腾讯云 CI Detail 回调命中预演 HMAC。只有对应 preflight run 最终变为 `passed`，且 `cleanup_status=deleted`，才算该 case 完成。若回调返回 `review`、`block`、`error`、超时或清理失败，均视为预演失败；保持三个入口 `closed`，查看脱敏 preflight run 状态，先处理清理失败、鉴权失败或回调失败，再重试。不要上传危险样本做真实生产验证。
 

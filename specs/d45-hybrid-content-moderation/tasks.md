@@ -175,6 +175,9 @@
   - 2026-07-13：用户确认释放此前仅为 D45 非生产联调创建的逻辑库 `pinche_d45_staging` 及同名专用账号；已先核验账号仅有该库的授权，随后依次删除账号与逻辑库，并在腾讯云控制台复核两者均已不存在。生产库 `pinche`、TDSQL-C 集群、现有 Redis 和未绑定安全组未改动；此前的逻辑库隔离前置已撤销，D45.18 与三类生产接收门禁状态不变。
   - 2026-07-13：撤库后的本地/离线复核完成：`npm run d45:unit` 366/366、`npm run d45:check` 通过、`npm run d45:smoke` 71/71；在空环境中运行源码锁定的 `.invalid` 契约只得到 `dry_run_deferred`。未读取实际密钥、未联网、未发送真实审核请求，也未改变生产接收门禁。历史实现计划已标注 D45.18 延期并以本任务清单为准；真实联调继续未完成。
   - [ ] D45.18A 实现并验证生产受控预演（有限验证）。
+    - 2026-07-14：API、retry、orphan scan 与 preflight timeout 已按用户确认原地重建为同一不可变镜像 `sha256:428e1501f2412e38474d50715d7e7317994ab46b38049eec5e2e2e447590971b`；API `/health`、`/health/db`、数据库 schema 与 `pinche_internal`/`proxy` 网络正常，三个 intake 仍为 `closed`。用户已当次确认执行微信文本与图片无害预检；当前按 `wechat-text-v1` → `wechat-image-v1` 顺序进行，尚未获得真实结果，故本项保持未勾选。
+    - 2026-07-14：首次 `wechat-text-v1` 一次性 Job 在任何微信出站请求前关闭式失败，脱敏错误为 `valid WECHAT_CONTENT_SECURITY_EVENT_AES_KEY`；核验确认运行时密钥为微信后台允许的 43 位字符并可解码为 32 字节，根因是应用额外要求 Base64 规范重编码完全一致。已先新增回归用例复现，再将校验收敛为“合法 43 位字符且解码为 32 字节”；`npm run d45:unit` 446/446、`npm run d45:check` 通过。修复尚待 CI 发布并重新执行文本、图片预检，三个 intake 仍为 `closed`，故本项保持未勾选。
+    - 2026-07-14：执行前只读审计发现手册中的一次性 Job 命令未显式把 `D45_PREFLIGHT_CONFIRMATION` 传给容器，且未将 `PINCHE_API_IMAGE` 固定为已核验 digest，直接执行会关闭式失败或存在拉取 `latest` 的版本偏差。已先以回归锁定并修正手册为 `--pull never`、不可变镜像引用和仅该 `--rm` 容器的 `-e` 传入；未运行 Job、未读取密钥、未改变 API/Worker/门禁。下一步仅做运行时脱敏前置核验。
     - 2026-07-14：微信后台真实保存返回“服务器地址验证失败”。只读核对线上路由与微信官方文档后确认，首版 GET 错用了安全模式 POST 的 `msg_signature`、AES 解密和 AppID 校验；官方 GET 实际只以 `signature=SHA1(sort(Token,timestamp,nonce))` 验签并原样返回明文 `echostr`。用户确认采用最小方案 A：仅纠正 GET 及其 spec/测试/手册，安全模式 JSON POST、状态机、门禁和预演保持不变；修复、部署和真实保存通过前，本项与三个 intake 继续保持未完成/`closed`。
     - 2026-07-14（首版 GET 实现前的历史记录）：已根据微信后台实际“消息推送配置”页面确认，保存安全模式回调前必须完成 GET URL 验证，且生产配置必须选择 JSON。当时服务只实现 POST 加密 JSON 事件；经用户确认，按 Requirement 5/13 先补同一路由的最小 GET 验证与自动化回归，三个 intake 继续 `closed`，不提交控制台配置。
     - 2026-07-13：已按实施计划进入开发；仍不读取密钥、不发真实请求、不改变三类 intake。
@@ -190,10 +193,13 @@
     - [ ] 为同一路由补齐微信官方 GET URL 验证；以 `signature` 对 Token、timestamp、nonce 的三参数 SHA-1 结果验签并原样回显明文 `echostr`，GET 不读取或使用 `msg_signature`、AESKey、AppID、`encrypt_type` 或 body；无效验证无副作用且不泄漏请求参数或密钥。
       - [x] 复核 requirements v1.3、design v1.3、tasks v1.2 与生产手册中的 GET/POST 协议边界；2026-07-14 用户已确认该版 spec，可以进入 TDD 实施。
       - [x] 先补失败测试，再覆盖微信官方示例、伪造/缺失 `signature`、精确回显不裁剪，以及仅携带 `msg_signature` 与加密 `echostr` 的首版错误协议必须被拒绝；静态路由检查须区分 GET 的 `signature` 与 POST 的 `msg_signature`。
-      - 2026-07-14：GET 协议纠偏实现由提交 `46fd0f0` 完成，live-contract 加固最终提交为 `1bb066c`；微信官方 GET 回调定向回归 17/17、live-contract 定向回归 11/11、`npm run d45:unit` talk 5/5 且主测试 445/445、`npm run d45:check` 与 `npm run d45:smoke` 71/71 均通过；完整 `npm run check` 通过。尚未执行 CI 发布，未操作生产；三个 intake 仍为 `closed`，GET 父项、CI 发布、API 部署、微信后台真实保存与 D45.18A 继续保持 `[ ]`。
-      - [ ] 按 develop → main → publish 顺序逐级完成 CI，记录三分支提交、Actions run 与发布镜像摘要；任一级失败立即停止。
+      - 2026-07-14：GET 协议纠偏实现由提交 `46fd0f0` 完成，live-contract 加固最终提交为 `1bb066c`；微信官方 GET 回调定向回归 17/17、live-contract 定向回归 11/11、`npm run d45:unit` talk 5/5 且主测试 445/445、`npm run d45:check` 与 `npm run d45:smoke` 71/71 均通过；完整 `npm run check` 通过。
+      - [x] 按 develop → main → publish 顺序逐级完成 CI，记录三分支提交、Actions run 与发布镜像摘要；任一级失败立即停止。
+        - 2026-07-14：develop `f2b702a`（Actions `29312085597`）、main `9dc3332`（Actions `29312212208`）和 publish `79f1bb9`（Actions `29312685672`）均成功；publish API 不可变摘要为 `sha256:428e1501f2412e38474d50715d7e7317994ab46b38049eec5e2e2e447590971b`。
       - [ ] 经当次确认仅替换 `pinche-api-1`，核对不可变镜像摘要、`/health`、`/health/db` 和三个 intake 仍为 `closed`；其他容器不得重启或改动。
-      - [ ] 微信后台以安全模式与 JSON 数据格式真实保存成功，官方 GET 验证通过且配置持久化；脱敏确认未写入审核、媒体或预演状态。
+        - 2026-07-14：此部署边界未满足，故保持未完成。publish 后 Watchtower 自动更新了 `pinche-api-1` 和 `pinche-admin-web-1`；未执行人工重建。API 已解析到上述不可变摘要，`/health` 与 `/health/db` 均为 200、裸回调为 400，admin 首页为 200；审核 Worker 未变。后续发布必须先处理 Watchtower 的 `latest` 监听范围，不能复用本次流程。
+      - [x] 微信后台以安全模式与 JSON 数据格式真实保存成功，官方 GET 验证通过且配置持久化；脱敏确认未写入审核、媒体或预演状态。
+        - 2026-07-14：用户在微信小程序后台完成保存，平台回显“服务器配置已完成”，并提示配置将在 5 分钟内生效；未记录 Token、AESKey、签名或回调请求参数。
       - 2026-07-14：历史首版曾以“加密 `echostr` + `msg_signature` + AES/AppID”实现并通过定向回归、`d45:unit`（438/438）、`d45:check`、`d45:smoke`（71/71）和完整 `npm run check`；该测试与错误实现互相印证，已被本次协议纠偏取代，不计作任务完成证据。真实微信后台保存失败，待按官方 GET 协议修复、重新验证、部署并完成真实保存后才能勾选；D45.18A 父项与三个 intake 继续未完成/`closed`。
     - [ ] 依次验证文本、图片、视频无害 `Pass`、鉴权、私有对象抓取、回调认证与清理；完成/失败/超时均核验预演对象删除，且所有门禁仍为 `closed`。
     - [ ] 新增预演单测、回调隔离/重复测试、门禁/配置/日志脱敏检查与生产手册；记录仅含 case、服务商、结果类别、耗时、配置/镜像指纹和清理结论。
