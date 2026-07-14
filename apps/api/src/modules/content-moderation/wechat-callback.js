@@ -78,7 +78,7 @@ function aesKeyBuffer(aesKey) {
   const encoded = requiredString(aesKey, 43);
   if (encoded.length !== 43 || !/^[A-Za-z0-9+/]{43}$/.test(encoded)) throw invalidCallback();
   const decoded = Buffer.from(`${encoded}=`, "base64");
-  if (decoded.length !== 32 || decoded.toString("base64").replace(/=$/, "") !== encoded) {
+  if (decoded.length !== 32) {
     throw invalidCallback();
   }
   return decoded;
