@@ -15,6 +15,9 @@ const VIDEO_SOURCE_OBJECT_KEY = /^uploads\/session-album\/videos\/source\/[A-Za-
 const TENCENT_OPERATIONAL_ERROR_PREFIXES = Object.freeze([
   ["AuthFailure", "AuthFailure"],
   ["UnauthorizedOperation", "UnauthorizedOperation"],
+  ["CIRoleNotExist", "CIRoleNotExist"],
+  ["AccessDenied", "AccessDenied"],
+  ["InvalidArgument", "InvalidArgument"],
   ["InvalidParameter.BizType", "InvalidParameter.BizType"],
   ["LimitExceeded", "LimitExceeded"],
   ["RequestLimitExceeded", "TENCENT_CI_VIDEO_RATE_LIMITED"],

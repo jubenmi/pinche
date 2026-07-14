@@ -583,6 +583,21 @@ test("Tencent video transport exposes safe retry taxonomy without response-body 
       name: "resource exhausted",
       fetchImpl: async () => new Response("<Error><Code>ResourceUnavailable.FrequencyLimit</Code></Error>", { status: 400 }),
       code: "ResourceUnavailable"
+    },
+    {
+      name: "CI service role",
+      fetchImpl: async () => new Response("<Error><Code>CIRoleNotExist</Code></Error>", { status: 403 }),
+      code: "CIRoleNotExist"
+    },
+    {
+      name: "pass-role access denial",
+      fetchImpl: async () => new Response("<Error><Code>AccessDenied</Code></Error>", { status: 403 }),
+      code: "AccessDenied"
+    },
+    {
+      name: "invalid CI request",
+      fetchImpl: async () => new Response("<Error><Code>InvalidArgument</Code></Error>", { status: 400 }),
+      code: "InvalidArgument"
     }
   ];
 
