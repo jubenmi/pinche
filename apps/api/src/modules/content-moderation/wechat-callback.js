@@ -85,7 +85,7 @@ function removePkcs7Padding(buffer) {
   return buffer.subarray(0, buffer.length - padding);
 }
 
-function decryptWechatEnvelope({ encrypt, aesKey, appId }) {
+function decryptWechatMessage({ encrypt, aesKey, appId }) {
   const encrypted = strictBase64(encrypt);
   if (encrypted.length % 16 !== 0) throw invalidCallback();
   const key = aesKeyBuffer(aesKey);
@@ -109,6 +109,11 @@ function decryptWechatEnvelope({ encrypt, aesKey, appId }) {
   if (!safeEqual(embeddedAppId, expectedAppId)) throw invalidCallback();
   const text = message.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(message)) throw invalidCallback();
+  return text;
+}
+
+function decryptWechatEnvelope({ encrypt, aesKey, appId }) {
+  const text = decryptWechatMessage({ encrypt, aesKey, appId });
   try {
     return JSON.parse(text);
   } catch {
@@ -161,6 +166,37 @@ export function verifyWechatCallbackSignature({ token, timestamp, nonce, encrypt
     .update([expectedToken, expectedTimestamp, expectedNonce, encrypted].sort().join(""), "utf8")
     .digest("hex");
   return safeEqual(providedSignature, expectedSignature);
+}
+
+export function verifyWechatSecureCallbackHandshake({
+  echostr,
+  token,
+  aesKey,
+  appId,
+  msgSignature,
+  timestamp,
+  nonce
+} = {}) {
+  const encrypt = requiredString(echostr, MAX_CALLBACK_BYTES);
+  let authenticated;
+  try {
+    authenticated = verifyWechatCallbackSignature({
+      token,
+      timestamp,
+      nonce,
+      encrypt,
+      msgSignature
+    });
+  } catch {
+    throw invalidCallback();
+  }
+  if (!authenticated) {
+    throw callbackError(
+      "CONTENT_MODERATION_CALLBACK_UNAUTHORIZED",
+      "WeChat content moderation callback is unauthorized"
+    );
+  }
+  return decryptWechatMessage({ encrypt, aesKey, appId });
 }
 
 export function parseWechatSecureImageEvent({
