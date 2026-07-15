@@ -144,10 +144,12 @@ for (const command of ["d46:unit", "d46:check", "d46:smoke"]) {
   );
 }
 assert.match(smoke, /NODE_ENV === "production"/);
-assert.match(smoke, /pinche_d46_smoke/);
-assert.match(smoke, /CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ACTIONS/);
+assert.doesNotMatch(smoke, /MYSQL_DATABASE|pinche_d46_smoke|D46_SMOKE_ISOLATED/);
+assert.match(smoke, /in-process security smoke/);
+assert.match(smoke, /content-moderation-author-text-action-matrix\.test\.mjs/);
 assert.match(smoke, /content-moderation-author-media-retention\.test\.mjs/);
 assert.match(smoke, /content-moderation-author-leak-gates\.test\.mjs/);
+assert.match(smoke, /content-moderation-video-integration\.test\.mjs/);
 
 for (const source of [envExample, productionEnvExample, compose, moderationEnv]) {
   for (const gate of [

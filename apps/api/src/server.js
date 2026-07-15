@@ -175,7 +175,6 @@ import {
 import {
   AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL,
   buildAuthorImageCapabilityUrls,
-  getAuthorMediaPreviewRecordForRow,
   validateAuthorImageCapabilityClaims
 } from "./modules/content-moderation/author-media-preview.js";
 import {
@@ -251,6 +250,10 @@ import {
 } from "./modules/content-moderation/text-baseline.js";
 import { createTextProposalApplicator } from "./modules/content-moderation/text-proposal-applicator.js";
 import {
+  createProductionTextProposalHandlers,
+  expectedTextCreationBase
+} from "./modules/content-moderation/text-proposal-handlers.js";
+import {
   buildTextModerationDescriptor,
   buildTextProposalPayload,
   parseTextDraftReplacement
@@ -262,7 +265,6 @@ import {
   mergeAuthorTextProjection
 } from "./modules/content-moderation/author-text-read.js";
 import {
-  profilePatchFromProposalBody,
   profileTextSnapshot
 } from "./modules/content-moderation/text-profile-patch.js";
 import {
@@ -338,10 +340,6 @@ const moderationClient = {
 const wechatImageModerationEnabled = Boolean(
   config.contentModeration.enabled && config.contentModeration.wechatImageEnabled
 );
-
-function textProposalStale(message) {
-  return new AppError(409, "CONTENT_MODERATION_PROPOSAL_STALE", message);
-}
 
 export function assertModeratedTextResult(result) {
   if (!projectSafeTextAppliedResult(result) && !isAuthorPrivateTextDto(result)) {
@@ -463,10 +461,6 @@ function textProposalTargetSubjectId({ action, actorUserId, subjectId, context =
     return textSessionNpcRoleTargetSubjectId(sessionId);
   }
   return textCreationTargetSubjectId({ action, actorUserId });
-}
-
-function expectedCreationBase(actorUserId) {
-  return createTextBaseline({ kind: "creation", actor_id: Number(actorUserId) });
 }
 
 function sessionTextSnapshot(row = {}) {
@@ -888,7 +882,7 @@ async function captureTextModerationBase({ action, user, subjectId, body, contex
       });
     case "create_private_store":
     case "create_private_script":
-      return expectedCreationBase(user?.user?.id);
+      return expectedTextCreationBase(user?.user?.id);
     case "create_session":
       return withDatabaseConnection((connection) =>
         currentSessionCreateTextBase(connection, user?.user?.id, body)
@@ -995,228 +989,28 @@ async function loadTextProposalActor(connection, actorUserId) {
   return { user: publicUser(users[0]), roles: roleRows.map((row) => row.role) };
 }
 
-function proposalSessionId(payload) {
-  const sessionId = Number(payload?.context?.sessionId);
-  if (!Number.isInteger(sessionId) || sessionId <= 0) {
-    throw textProposalStale("text moderation session target changed");
-  }
-  return sessionId;
-}
-
-function proposalContextSessionId(payload) {
-  const sessionId = Number(payload?.context?.sessionId);
-  if (!Number.isInteger(sessionId) || sessionId <= 0) {
-    throw textProposalStale("text moderation session target changed");
-  }
-  return sessionId;
-}
-
-function assertProposalBase(proposal, actual) {
-  if (!actual || String(proposal?.base_version) !== String(actual)) {
-    throw textProposalStale("text moderation proposal base version changed");
-  }
-}
-
-function assertProposalOperationTarget({ action, actor, job, proposal, payload, targetSubjectId }) {
-  const target = String(targetSubjectId || "").trim();
-  if (!target || String(payload?.targetSubjectId || "") !== target) {
-    throw textProposalStale("text moderation proposal target changed");
-  }
-  const expectedSubjectId = textOperationSubjectId({
-    action,
-    actorUserId: actor?.user?.id,
-    idempotencyKey: proposal?.idempotency_key
-  });
-  if (String(job?.subject_id || "") !== expectedSubjectId) {
-    throw textProposalStale("text moderation proposal operation changed");
-  }
-}
-
-async function applyNicknameProposal(connection, { actor, job, proposal, payload }) {
-  assertProposalOperationTarget({
-    action: "update_nickname",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(actor.user.id)
-  });
-  const currentActor = await currentActorTextSnapshot(connection, actor.user.id, { forUpdate: true });
-  assertProposalBase(proposal, currentActor
-    ? createTextBaseline({
-      kind: "user_profile",
-      profile: profileTextSnapshot(currentActor)
-    })
-    : "");
-  return updateUserProfileWithConnection(
-    connection,
-    actor.user.id,
-    profilePatchFromProposalBody(payload.body)
-  );
-}
-
-function assertCreationProposal({ action, actor, job, proposal, payload }) {
-  assertProposalOperationTarget({
-    action,
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: textCreationTargetSubjectId({ action, actorUserId: actor.user.id })
-  });
-  assertProposalBase(proposal, expectedCreationBase(actor.user.id));
-}
-
-async function applyPrivateStoreProposal(connection, { actor, job, proposal, payload }) {
-  assertCreationProposal({ action: "create_private_store", actor, job, proposal, payload });
-  return createPrivateStoreWithConnection(connection, actor, payload.body);
-}
-
-async function applyPrivateScriptProposal(connection, { actor, job, proposal, payload }) {
-  assertCreationProposal({ action: "create_private_script", actor, job, proposal, payload });
-  return createPrivateScriptWithConnection(connection, actor, payload.body);
-}
-
-async function applySessionCreateProposal(connection, { actor, job, proposal, payload }) {
-  assertProposalOperationTarget({
-    action: "create_session",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: textCreationTargetSubjectId({ action: "create_session", actorUserId: actor.user.id })
-  });
-  assertProposalBase(
-    proposal,
-    await currentSessionCreateTextBase(connection, actor.user.id, payload.body, { forUpdate: true })
-  );
-  return createSessionWithConnection(connection, actor, payload.body);
-}
-
-async function applySessionUpdateProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalSessionId(payload);
-  assertProposalOperationTarget({
-    action: "update_session",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentSessionTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  return updateSessionWithConnection(connection, actor, sessionId, payload.body);
-}
-
-async function applySessionNpcRoleCreateProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalContextSessionId(payload);
-  assertProposalOperationTarget({
-    action: "create_session_npc_role",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: textSessionNpcRoleTargetSubjectId(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentSessionTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  return createSessionNpcRoleWithConnection(connection, actor, sessionId, payload.body);
-}
-
-async function applySessionNpcRoleUpdateProposal(connection, { actor, job, proposal, payload }) {
-  const npcRoleId = Number(payload?.targetSubjectId);
-  if (!Number.isInteger(npcRoleId) || npcRoleId <= 0) {
-    throw textProposalStale("text moderation NPC role target changed");
-  }
-  assertProposalOperationTarget({
-    action: "update_session_npc_role",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(npcRoleId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentNpcRoleTextBase(connection, npcRoleId, actor.user.id, { forUpdate: true })
-  );
-  return updateSessionNpcRoleWithConnection(connection, actor, npcRoleId, payload.body);
-}
-
-async function applySessionReviewProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalSessionId(payload);
-  assertProposalOperationTarget({
-    action: "upsert_session_review",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentReviewTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  return upsertMySessionReviewWithConnection(connection, actor, sessionId, payload.body);
-}
-
-async function applySessionMessageProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalSessionId(payload);
-  assertProposalOperationTarget({
-    action: "create_session_message",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentMessageTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  return createSessionMessageWithConnection(connection, actor, sessionId, payload.body);
-}
-
-async function applySessionPinnedMessageProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalSessionId(payload);
-  assertProposalOperationTarget({
-    action: "update_session_pinned_message",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentPinnedTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  const result = await updateSessionPinnedMessageWithConnection(connection, actor, sessionId, payload.body);
-  return {
-    ...result,
-    id: result?.pinnedMessage?.id,
-    kind: "session_pinned_message"
-  };
-}
-
+const productionTextProposalHandlers = createProductionTextProposalHandlers({
+  currentActorTextSnapshot,
+  currentSessionCreateTextBase,
+  currentSessionTextBase,
+  currentNpcRoleTextBase,
+  currentReviewTextBase,
+  currentMessageTextBase,
+  currentPinnedTextBase,
+  updateUserProfileWithConnection,
+  createPrivateStoreWithConnection,
+  createPrivateScriptWithConnection,
+  createSessionWithConnection,
+  updateSessionWithConnection,
+  createSessionNpcRoleWithConnection,
+  updateSessionNpcRoleWithConnection,
+  upsertMySessionReviewWithConnection,
+  createSessionMessageWithConnection,
+  updateSessionPinnedMessageWithConnection
+});
 const textProposalApplicator = createTextProposalApplicator({
   loadActor: loadTextProposalActor,
-  handlers: {
-    update_nickname: applyNicknameProposal,
-    create_private_store: applyPrivateStoreProposal,
-    create_private_script: applyPrivateScriptProposal,
-    create_session: applySessionCreateProposal,
-    update_session: applySessionUpdateProposal,
-    create_session_npc_role: applySessionNpcRoleCreateProposal,
-    update_session_npc_role: applySessionNpcRoleUpdateProposal,
-    upsert_session_review: applySessionReviewProposal,
-    create_session_message: applySessionMessageProposal,
-    update_session_pinned_message: applySessionPinnedMessageProposal
-  }
+  handlers: productionTextProposalHandlers
 });
 const authorTextProjectionReader = createAuthorTextProjectionReader({
   config: config.contentModeration,
@@ -3736,18 +3530,22 @@ async function route(request, response) {
       "author media preview token"
     );
     const userId = tokenPositiveInteger(claims.userId, "userId");
-    const media = await getAuthorAlbumImagePreview(
+    await getAuthorAlbumImagePreview(
       { user: { id: userId }, roles: [] },
       authorAlbumImagePreviewId,
-      { enabled: config.contentModeration.authorPrivateImageEnabled === true }
+      {
+        enabled: config.contentModeration.authorPrivateImageEnabled === true,
+        consume: async (media) => {
+          const record = validateAuthorImageCapabilityClaims(media, claims, {
+            nowSeconds: Math.floor(Date.now() / 1000),
+            ttlSeconds: authorPreviewTtlSeconds(),
+            fingerprint: authorMediaPreviewFingerprint
+          });
+          if (!record) throw notFound("Album photo not found");
+          await serveUploadedSessionAlbumPhoto(media, response, { variant: claims.variant });
+        }
+      }
     );
-    const record = validateAuthorImageCapabilityClaims(media, claims, {
-      nowSeconds: Math.floor(Date.now() / 1000),
-      ttlSeconds: authorPreviewTtlSeconds(),
-      fingerprint: authorMediaPreviewFingerprint
-    });
-    if (!record) throw notFound("Album photo not found");
-    await serveUploadedSessionAlbumPhoto(media, response, { variant: claims.variant });
     return;
   }
 
@@ -3866,7 +3664,6 @@ async function route(request, response) {
   if (request.method === "GET" && sessionAlbumMediaVideoUrlId) {
     const user = await getAuthUser(request);
     let media;
-    let authorPrivate = false;
     try {
       media = await getVisibleSessionAlbumVideoForPlayback(
         user,
@@ -3874,22 +3671,11 @@ async function route(request, response) {
       );
     } catch (error) {
       if (error?.contentModerationDenied !== true) throw error;
-      media = await getAuthorAlbumVideoPreview(user, sessionAlbumMediaVideoUrlId, {
-        enabled: config.contentModeration.authorPrivateVideoEnabled === true
-      });
-      authorPrivate = true;
-    }
-    if (authorPrivate) {
       if (!isCosUploadStorageEnabled()) throw notFound("Album video not found");
-      const record = getAuthorMediaPreviewRecordForRow(media, {
-        viewerUserId: user.user.id,
-        videoEnabled: true
-      });
-      if (!record) throw notFound("Album video not found");
       const expiresInSeconds = authorPreviewTtlSeconds();
-      jsonResponse(response, 200, {
-        ok: true,
-        data: {
+      const data = await getAuthorAlbumVideoPreview(user, sessionAlbumMediaVideoUrlId, {
+        enabled: config.contentModeration.authorPrivateVideoEnabled === true,
+        consume: async (_media, record) => ({
           url: signedCosAlbumVideoUrl(
             { display_url: record.previewPath, source_url: record.previewPath },
             "GET",
@@ -3898,8 +3684,11 @@ async function route(request, response) {
           ),
           expiresInSeconds,
           publication_state: "author_only"
-        }
-      }, { "cache-control": AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL });
+        })
+      });
+      jsonResponse(response, 200, { ok: true, data }, {
+        "cache-control": AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL
+      });
       return;
     }
     jsonResponse(response, 200, {

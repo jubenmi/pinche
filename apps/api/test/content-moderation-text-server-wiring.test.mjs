@@ -51,10 +51,14 @@ test("public moderation outcomes preserve only stable codes and safe messages", 
 });
 
 test("server routes all D45.5 text mutations through the shared WeChat moderation boundary", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const [source, handlerSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
+  ]);
 
   assert.match(source, /createWechatContentSecurityClient/);
   assert.match(source, /createTextProposalApplicator/);
+  assert.match(source, /createProductionTextProposalHandlers/);
   assert.match(source, /function moderateCoveredText/);
   assert.match(source, /function applyApprovedTextProposal/);
   assert.match(source, /applyTextProposal: \(connection, input\) => textProposalApplicator\.apply\(connection, input\)/);
@@ -68,7 +72,7 @@ test("server routes all D45.5 text mutations through the shared WeChat moderatio
     "update_session_npc_role",
     "upsert_session_review"
   ]) {
-    assert.match(source, new RegExp(`action: "${action}"`));
+    assert.match(handlerSource, new RegExp(`(?:action:\\s*)?"${action}"`));
   }
 });
 
@@ -104,13 +108,16 @@ test("the text intake gate leaves profile-only updates outside the D45 text boun
 });
 
 test("NPC-role proposal application locks its role and parent session before revalidating ownership", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const [source, handlerSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
+  ]);
   const helperStart = source.indexOf("async function currentNpcRoleTextBase");
   const helperEnd = source.indexOf("async function currentReviewTextBase", helperStart);
   const helper = source.slice(helperStart, helperEnd);
-  const handlerStart = source.indexOf("async function applySessionNpcRoleUpdateProposal");
-  const handlerEnd = source.indexOf("async function applySessionReviewProposal", handlerStart);
-  const handler = source.slice(handlerStart, handlerEnd);
+  const handlerStart = handlerSource.indexOf("async update_session_npc_role");
+  const handlerEnd = handlerSource.indexOf("async upsert_session_review", handlerStart);
+  const handler = handlerSource.slice(handlerStart, handlerEnd);
 
   assert.match(helper, /JOIN sessions AS session/);
   assert.match(helper, /createTextBaseline/);
@@ -118,7 +125,7 @@ test("NPC-role proposal application locks its role and parent session before rev
   assert.match(helper, /FOR UPDATE/);
   assert.match(
     handler,
-    /currentNpcRoleTextBase\(connection, npcRoleId, actor\.user\.id, \{ forUpdate: true \}\)/
+    /currentNpcRoleTextBase\([\s\S]{0,180}\{ forUpdate: true \}/
   );
 });
 
@@ -149,14 +156,13 @@ test("a cancelled session message is rejected during capture instead of after We
 });
 
 test("profile proposals apply only the canonical nickname/avatar/gender patch", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
-  const profileSource = await readFile(
-    new URL("../src/modules/content-moderation/text-profile-patch.js", import.meta.url),
-    "utf8"
-  );
-  const start = source.indexOf("async function applyNicknameProposal");
-  const end = source.indexOf("function assertCreationProposal", start);
-  const handler = source.slice(start, end);
+  const [handlerSource, profileSource] = await Promise.all([
+    readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/modules/content-moderation/text-profile-patch.js", import.meta.url), "utf8")
+  ]);
+  const start = handlerSource.indexOf("async update_nickname");
+  const end = handlerSource.indexOf("async create_private_store", start);
+  const handler = handlerSource.slice(start, end);
 
   assert.match(profileSource, /\["nickname", "avatarUrl", "gender"\]/);
   assert.match(handler, /profilePatchFromProposalBody\(payload\.body\)/);
@@ -166,20 +172,20 @@ test("profile proposals apply only the canonical nickname/avatar/gender patch", 
 });
 
 test("each text moderation job uses an operation identity while retaining its real target in the proposal", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const [source, handlerSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
+  ]);
   const moderateStart = source.indexOf("async function moderateCoveredText");
   const moderateEnd = source.indexOf("async function loadTextProposalActor", moderateStart);
   const moderate = source.slice(moderateStart, moderateEnd);
-  const handlersStart = source.indexOf("function assertProposalOperationTarget");
-  const handlersEnd = source.indexOf("const textProposalApplicator", handlersStart);
-  const handlers = source.slice(handlersStart, handlersEnd);
 
   assert.match(moderate, /textProposalTargetSubjectId/);
   assert.match(moderate, /targetSubjectId: proposalTargetId/);
   assert.match(moderate, /textOperationSubjectId/);
-  assert.match(handlers, /String\(payload\?\.targetSubjectId \|\| ""\) !== target/);
-  assert.match(handlers, /idempotencyKey: proposal\?\.idempotency_key/);
-  assert.match(handlers, /currentNpcRoleTextBase\(connection, npcRoleId, actor\.user\.id, \{ forUpdate: true \}\)/);
+  assert.match(handlerSource, /String\(payload\?\.targetSubjectId \|\| ""\) !== target/);
+  assert.match(handlerSource, /idempotencyKey: proposal\?\.idempotency_key/);
+  assert.match(handlerSource, /currentNpcRoleTextBase\([\s\S]{0,180}\{ forUpdate: true \}/);
 });
 
 test("an enabled moderation route cannot fall through to a second business write", async () => {

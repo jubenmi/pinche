@@ -673,6 +673,38 @@ function mergeCiJobIds(currentValue, nextValue) {
   return merged.length <= 128 ? merged : currentParts.join(",") || next;
 }
 
+function ciJobIds(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => normalizeCiJobId(part))
+    .filter(Boolean);
+}
+
+function videoProcessingIdentityMatches(media, { mediaId, sourceUrl, ciJobId }) {
+  if (!media || albumMediaType(media) !== "video") return false;
+  if (mediaId && Number(media.id) !== Number(mediaId)) return false;
+  if (sourceUrl && String(media.source_url || "") !== String(sourceUrl)) return false;
+  if (ciJobId) {
+    const currentJobIds = ciJobIds(media.ci_job_id);
+    if (currentJobIds.length > 0 && !currentJobIds.includes(ciJobId)) return false;
+    if (currentJobIds.length === 0 && !sourceUrl) return false;
+  }
+  return true;
+}
+
+function albumVideoObjectIdentity(value) {
+  const filename = String(value || "").split("/").pop() || "";
+  return filename.replace(/\.(?:mp4|jpe?g)$/i, "");
+}
+
+function albumVideoOutputMatchesSource(sourceUrl, outputUrl) {
+  if (!outputUrl) return true;
+  const sourceIdentity = albumVideoObjectIdentity(sourceUrl);
+  return Boolean(
+    sourceIdentity && sourceIdentity === albumVideoObjectIdentity(outputUrl)
+  );
+}
+
 function albumVideoProcessingError(value) {
   const text = String(value || "").trim();
   return text ? text.slice(0, 255) : null;
@@ -687,10 +719,11 @@ async function findSessionAlbumVideoForProcessing(
     if (
       media &&
       ["active", "deleting"].includes(String(media.status)) &&
-      albumMediaType(media) === "video"
+      videoProcessingIdentityMatches(media, { mediaId, sourceUrl, ciJobId })
     ) {
       return media;
     }
+    return null;
   }
 
   if (sourceUrl) {
@@ -705,9 +738,10 @@ async function findSessionAlbumVideoForProcessing(
       `,
       [sourceUrl]
     );
-    if (rows[0]) {
+    if (videoProcessingIdentityMatches(rows[0], { sourceUrl, ciJobId })) {
       return rows[0];
     }
+    return null;
   }
 
   if (ciJobId) {
@@ -727,9 +761,10 @@ async function findSessionAlbumVideoForProcessing(
       `,
       [ciJobId, `${ciJobId},%`, `%,${ciJobId}`, `%,${ciJobId},%`]
     );
-    if (rows[0]) {
+    if (videoProcessingIdentityMatches(rows[0], { ciJobId })) {
       return rows[0];
     }
+    return null;
   }
 
   return null;
@@ -6307,8 +6342,8 @@ export async function updateSessionAlbumVideoProcessingResult(
     }
   }
 
-  if (!mediaId && !sourceUrl && !ciJobId) {
-    throw badRequest("video processing callback must include mediaId, sourceUrl, or ciJobId");
+  if (!sourceUrl && !ciJobId) {
+    throw badRequest("video processing callback must include sourceUrl or ciJobId");
   }
 
   return runWithTransaction(async (connection) => {
@@ -6320,6 +6355,12 @@ export async function updateSessionAlbumVideoProcessingResult(
     });
     if (!media) {
       throw notFound("Album video not found for processing callback");
+    }
+    if (
+      !albumVideoOutputMatchesSource(media.source_url, displayUrl) ||
+      !albumVideoOutputMatchesSource(media.source_url, coverUrl)
+    ) {
+      throw badRequest("video processing output does not match the source object");
     }
     const nextCiJobId = mergeCiJobIds(media.ci_job_id, ciJobId);
     const nextDisplayUrl = displayUrl || media.display_url || null;
@@ -6743,8 +6784,13 @@ export async function finalizeSessionAlbumPhotoDeletion(user, photoId, snapshot)
 
 async function getAuthorAlbumMediaPreview(user, mediaId, mediaType, options = {}) {
   const id = positiveId(mediaId, "mediaId");
-  return withDatabaseConnection(async (connection) => {
-    const media = await findById(connection, "session_album_photos", id);
+  if (typeof options.consume !== "function") {
+    throw new TypeError("author media preview consumer is required");
+  }
+  return withTransaction(async (connection) => {
+    const media = await findById(connection, "session_album_photos", id, {
+      forUpdate: true
+    });
     const record = getAuthorMediaPreviewRecordForRow(media, {
       viewerUserId: user?.user?.id,
       imageEnabled: mediaType === "image" && options.enabled === true,
@@ -6753,7 +6799,7 @@ async function getAuthorAlbumMediaPreview(user, mediaId, mediaType, options = {}
     if (!record || record.mediaType !== mediaType) {
       throw moderationUnpublishedNotFound(`album_${mediaType}`);
     }
-    return media;
+    return options.consume(media, record);
   });
 }
 

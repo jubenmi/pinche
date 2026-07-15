@@ -42,6 +42,19 @@ function cancellablePair(draft) {
   return null;
 }
 
+function replayableReplacementPair(draft) {
+  const proposalStatus = String(draft?.proposal_status || draft?.status || "");
+  const jobStatus = String(draft?.job_status || "");
+  if (
+    proposalStatus === "pending" &&
+    ["pending", "processing", "review", "error"].includes(jobStatus)
+  ) return true;
+  return (
+    (proposalStatus === "rejected" && jobStatus === "rejected") ||
+    (proposalStatus === "approved" && jobStatus === "approved")
+  );
+}
+
 export function createAuthorDraftService({ transaction, repository, emit = () => {} } = {}) {
   if (typeof transaction !== "function") throw new TypeError("author draft transaction is required");
   if (typeof emit !== "function") throw new TypeError("author draft telemetry emitter is required");
@@ -125,18 +138,22 @@ export function createAuthorDraftService({ transaction, repository, emit = () =>
     requireAuthorVisibilityDraft(replacement);
     const action = String(input.action || "");
     const targetSubjectId = String(input.targetSubjectId || "");
-    const replacementMatches = (
-      String(replacement.proposal_status || replacement.status || "") === "pending" &&
-      ["pending", "processing"].includes(String(replacement.job_status || "")) &&
+    const replacementIdentityMatches = (
       String(draft.action || "") === action &&
       String(replacement.action || "") === action &&
       String(draft.target_subject_id || "") === targetSubjectId &&
       String(replacement.target_subject_id || "") === targetSubjectId
     );
+    const replacementReady = (
+      replacementIdentityMatches &&
+      String(replacement.proposal_status || replacement.status || "") === "pending" &&
+      ["pending", "processing"].includes(String(replacement.job_status || ""))
+    );
     if (
       String(draft.proposal_status || draft.status || "") === "superseded" &&
       Number(draft.superseded_by_proposal_id) === newProposalId &&
-      replacementMatches
+      replacementIdentityMatches &&
+      replayableReplacementPair(replacement)
     ) {
       return {
         draft_id: draftId,
@@ -147,7 +164,7 @@ export function createAuthorDraftService({ transaction, repository, emit = () =>
     if (
       String(draft.proposal_status || draft.status || "") !== "rejected" ||
       String(draft.job_status || "") !== "rejected" ||
-      !replacementMatches
+      !replacementReady
     ) {
       throw conflict("Replacement draft does not match the rejected draft");
     }

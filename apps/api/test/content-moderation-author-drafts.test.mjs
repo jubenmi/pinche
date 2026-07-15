@@ -132,7 +132,7 @@ test("D46 repository cancellation and replacement use conditional author-owned u
   assert.deepEqual(supersede.params, [52, 51, 7, "update_nickname", "7"]);
 });
 
-function serviceHarness({ draftOverrides = {}, updateResults = {} } = {}) {
+function serviceHarness({ draftOverrides = {}, replacementOverrides = {}, updateResults = {} } = {}) {
   const state = {
     transactionCalls: 0,
     lookups: [],
@@ -157,7 +157,8 @@ function serviceHarness({ draftOverrides = {}, updateResults = {} } = {}) {
     id: 52,
     moderation_job_id: 5,
     proposal_status: "pending",
-    job_status: "pending"
+    job_status: "pending",
+    ...replacementOverrides
   };
   const repository = {
     findAuthorTextDraftById: async (_connection, input) => {
@@ -278,26 +279,62 @@ test("D46 rejected replacement validates author, action, target, and new proposa
 });
 
 test("D46 replacement replay is idempotent for the same new proposal", async () => {
-  const { service, state } = serviceHarness({
-    draftOverrides: {
-      proposal_status: "superseded",
-      job_status: "rejected",
-      superseded_by_proposal_id: 52
-    }
-  });
+  for (const [proposalStatus, jobStatus] of [
+    ["pending", "pending"],
+    ["pending", "processing"],
+    ["pending", "review"],
+    ["pending", "error"],
+    ["rejected", "rejected"],
+    ["approved", "approved"]
+  ]) {
+    const { service, state } = serviceHarness({
+      draftOverrides: {
+        proposal_status: "superseded",
+        job_status: "rejected",
+        superseded_by_proposal_id: 52
+      },
+      replacementOverrides: {
+        proposal_status: proposalStatus,
+        job_status: jobStatus
+      }
+    });
 
-  assert.deepEqual(await service.supersedeRejected({}, {
-    userId: 7,
-    draftId: 51,
-    newProposalId: 52,
-    action: "update_nickname",
-    targetSubjectId: "7"
-  }), {
-    draft_id: 51,
-    status: "superseded",
-    superseded_by_draft_id: 52
-  });
-  assert.deepEqual(state.supersedes, []);
+    assert.deepEqual(await service.supersedeRejected({}, {
+      userId: 7,
+      draftId: 51,
+      newProposalId: 52,
+      action: "update_nickname",
+      targetSubjectId: "7"
+    }), {
+      draft_id: 51,
+      status: "superseded",
+      superseded_by_draft_id: 52
+    });
+    assert.deepEqual(state.supersedes, []);
+  }
+});
+
+test("D46 replacement replay fails closed after cancellation or stale revalidation", async () => {
+  for (const replacementOverrides of [
+    { proposal_status: "cancelled", job_status: "cancelled" },
+    { proposal_status: "stale", job_status: "rejected" }
+  ]) {
+    const { service } = serviceHarness({
+      draftOverrides: {
+        proposal_status: "superseded",
+        job_status: "rejected",
+        superseded_by_proposal_id: 52
+      },
+      replacementOverrides
+    });
+    await assert.rejects(service.supersedeRejected({}, {
+      userId: 7,
+      draftId: 51,
+      newProposalId: 52,
+      action: "update_nickname",
+      targetSubjectId: "7"
+    }), (error) => error.statusCode === 409);
+  }
 });
 
 test("D46 draft lookup joins the exact author-owned proposal and job under one row lock", async () => {

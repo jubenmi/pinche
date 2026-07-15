@@ -229,6 +229,78 @@ test("a late callback retains validated outputs for an active D46 rejected video
   assert.equal(result.processing_status, "ready");
 });
 
+test("a callback media id cannot attach another video's source and outputs", async () => {
+  const media = {
+    id: 74,
+    session_id: 8,
+    status: "active",
+    media_type: "video",
+    author_visibility_version: 1,
+    moderation_status: "rejected",
+    processing_status: "processing",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: null,
+    cover_url: null,
+    ci_job_id: "job-a"
+  };
+  let writes = 0;
+  const connection = {
+    async query(sql) {
+      if (/SELECT \* FROM session_album_photos WHERE id = \? FOR UPDATE/.test(sql)) {
+        return [[media]];
+      }
+      if (/UPDATE session_album_photos/.test(sql)) writes += 1;
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  await assert.rejects(updateSessionAlbumVideoProcessingResult({
+    mediaId: 74,
+    ciJobId: "job-b",
+    status: "ready",
+    sourceUrl: "/uploads/session-album/videos/source/b.mp4",
+    displayUrl: "/uploads/session-album/videos/display/b.mp4",
+    coverUrl: "/uploads/session-album/videos/cover/b.jpg"
+  }, {
+    withTransaction: async (run) => run(connection)
+  }), { statusCode: 404 });
+  assert.equal(writes, 0);
+});
+
+test("a callback output path must retain the immutable source object identity", async () => {
+  const media = {
+    id: 74,
+    session_id: 8,
+    status: "active",
+    media_type: "video",
+    author_visibility_version: 1,
+    moderation_status: "rejected",
+    processing_status: "processing",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: null,
+    cover_url: null,
+    ci_job_id: "job-a"
+  };
+  const connection = {
+    async query(sql) {
+      if (/SELECT \* FROM session_album_photos WHERE id = \? FOR UPDATE/.test(sql)) {
+        return [[media]];
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  await assert.rejects(updateSessionAlbumVideoProcessingResult({
+    mediaId: 74,
+    ciJobId: "job-a",
+    status: "ready",
+    sourceUrl: "/uploads/session-album/videos/source/a.mp4",
+    displayUrl: "/uploads/session-album/videos/display/other.mp4"
+  }, {
+    withTransaction: async (run) => run(connection)
+  }), { code: "BAD_REQUEST" });
+});
+
 test("a late callback for a deleting D46 rejected video only extends cleanup", async () => {
   const media = {
     id: 75,

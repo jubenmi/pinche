@@ -156,7 +156,22 @@ test("D46 server keeps author preview routes separate from approved public media
   ]);
   assert.match(core, /getAuthorAlbumImagePreview/);
   assert.match(core, /getAuthorAlbumVideoPreview/);
+  assert.match(
+    core,
+    /getAuthorAlbumMediaPreview[\s\S]*withTransaction[\s\S]*findById\([\s\S]*forUpdate: true[\s\S]*options\.consume\(media, record\)/,
+    "author media authorization must keep the row lock through preview consumption"
+  );
   assert.match(server, /author-media\\\/images/);
+  assert.match(
+    server,
+    /getAuthorAlbumImagePreview\([\s\S]*consume: async \(media\)[\s\S]*serveUploadedSessionAlbumPhoto/,
+    "author image bytes must be consumed while the locked row is still valid"
+  );
+  assert.match(
+    server,
+    /getAuthorAlbumVideoPreview\([\s\S]*consume: async \(_media, record\)[\s\S]*signedCosAlbumVideoUrl/,
+    "author video URL must be signed while the locked row is still valid"
+  );
   assert.match(server, /buildAuthorImageCapabilityUrls/);
   assert.match(server, /CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS|authorPreviewTtlSeconds/);
   const publicGetter = core.slice(

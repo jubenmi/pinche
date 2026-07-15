@@ -1153,6 +1153,35 @@ test("terminal text requests do not send duplicate content to WeChat", async () 
   assert.equal(staleRequest.state.checked.length, 1);
 });
 
+test("D46 cancelled idempotent replay cannot restore its author-private text", async () => {
+  const { service, state } = textHarness({
+    jobStatus: "cancelled",
+    proposalStatus: "cancelled",
+    authorPrivateTextEnabled: true
+  });
+
+  await assert.rejects(service.moderateTextMutation(mutationInput()), {
+    code: "CONTENT_MODERATION_PROPOSAL_STALE"
+  });
+  assert.equal(state.checked.length, 0);
+  assert.equal(state.applied.length, 0);
+});
+
+test("D46 superseded idempotent replay cannot restore the replaced author-private text", async () => {
+  const { service, state } = textHarness({
+    jobStatus: "rejected",
+    proposalStatus: "superseded",
+    authorPrivateTextEnabled: true,
+    proposalOverrides: { superseded_by_proposal_id: 52 }
+  });
+
+  await assert.rejects(service.moderateTextMutation(mutationInput()), {
+    code: "CONTENT_MODERATION_PROPOSAL_STALE"
+  });
+  assert.equal(state.checked.length, 0);
+  assert.equal(state.applied.length, 0);
+});
+
 test("an approved profile proposal replays once without applying the patch again", async () => {
   let applications = 0;
   const { service } = textHarness({

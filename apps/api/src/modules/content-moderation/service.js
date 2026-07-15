@@ -238,15 +238,23 @@ function requireSafeAppliedResult(result) {
 }
 
 function preparedTerminalTextOutcome(job, proposal) {
-  if (!job || !proposal || proposal.status === "stale") return { kind: "stale" };
+  if (
+    !job ||
+    !proposal ||
+    !["pending", "rejected", "approved"].includes(String(proposal.status || ""))
+  ) return { kind: "stale" };
   if (job.status === "approved") {
     if (proposal.status !== "approved") return { kind: "stale" };
     const result = parseAppliedResult(proposal);
     return result ? { kind: "replay", result } : { kind: "stale" };
   }
-  if (["review", "rejected"].includes(job.status)) {
+  if (job.status === "review" && proposal.status === "pending") {
     return { kind: "error", status: job.status };
   }
+  if (job.status === "rejected" && proposal.status === "rejected") {
+    return { kind: "error", status: job.status };
+  }
+  if (["review", "rejected", "cancelled"].includes(job.status)) return { kind: "stale" };
   return null;
 }
 
@@ -290,7 +298,8 @@ export function createContentModerationService(dependencies) {
     if (
       !authorPrivateTextActionEnabled(deps.config, action) ||
       Number(proposal?.author_visibility_version) !== 1 ||
-      Number(proposal?.created_by_user_id) !== Number(prepared?.actorUserId)
+      Number(proposal?.created_by_user_id) !== Number(prepared?.actorUserId) ||
+      !["pending", "rejected"].includes(String(proposal?.status || ""))
     ) return null;
     const payload = parseProposalPayload(proposal);
     const targetSubjectId = String(proposal?.target_subject_id || "");
