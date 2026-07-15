@@ -37,6 +37,10 @@ import {
   mergeAuthorSessionView
 } from "../content-moderation/author-session-read.js";
 import { mergeAuthorReviewState } from "../content-moderation/author-social-read.js";
+import {
+  createAuthorPrivateMediaView,
+  getAuthorMediaPreviewRecordForRow
+} from "../content-moderation/author-media-preview.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -785,6 +789,16 @@ function albumMediaResponse(media, tags = [], options = {}) {
   };
 
   if (!published) {
+    const authorPrivate = createAuthorPrivateMediaView(media, {
+      viewerUserId: options.userId,
+      imageEnabled: options.authorPrivateImageEnabled === true,
+      videoEnabled: options.authorPrivateVideoEnabled === true
+    });
+    if (authorPrivate) {
+      authorPrivate.uploader_name =
+        media.uploader_nickname || media.uploader_open_id || "车友";
+      return authorPrivate;
+    }
     return {
       ...common,
       tags: [],
@@ -5667,13 +5681,18 @@ export async function assertSessionAlbumImageUploadAllowed(
   return session;
 }
 
-export async function insertFinalizedSessionAlbumImage(connection, { intent, metadata }) {
+export async function insertFinalizedSessionAlbumImage(
+  connection,
+  { intent, metadata, authorVisibilityVersion = 0 }
+) {
+  const policyVersion = Number(authorVisibilityVersion) === 1 ? 1 : 0;
   const [result] = await connection.query(
     `INSERT INTO session_album_photos
       (session_id, uploader_user_id, media_type, photo_url, object_key, object_etag,
        image_width, image_height, image_byte_size, image_content_type,
-       processing_status, moderation_status, moderation_object_version, status)
-     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'pending', ?, 'active')`,
+       processing_status, moderation_status, moderation_object_version,
+       author_visibility_version, status)
+     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'pending', ?, ?, 'active')`,
     [
       Number(intent.session_id),
       Number(intent.user_id),
@@ -5683,24 +5702,28 @@ export async function insertFinalizedSessionAlbumImage(connection, { intent, met
       metadata.width,
       metadata.height,
       metadata.byteSize,
-      metadata.etag
+      metadata.etag,
+      policyVersion
     ]
   );
   return findById(connection, "session_album_photos", result.insertId);
 }
 
-export async function getFinalizedSessionAlbumImage(connection, { mediaId, user }) {
+export async function getFinalizedSessionAlbumImage(
+  connection,
+  { mediaId, user }
+) {
   const photo = await findById(connection, "session_album_photos", mediaId);
   if (!photo || albumMediaType(photo) !== "image" || photo.status !== "active") {
     throw notFound("Album photo not found");
   }
   const session = await requireSessionAlbumOpen(connection, photo.session_id);
   await requireSessionAlbumMember(connection, session, user);
-  return albumMediaResponse(photo, [], { userId: user.user.id });
+  return photo;
 }
 
-export function serializeSessionAlbumImage(media, userId) {
-  return albumMediaResponse(media, [], { userId });
+export function serializeSessionAlbumImage(media, userId, options = {}) {
+  return albumMediaResponse(media, [], { userId, ...options });
 }
 
 export async function getMySessionAlbumPrivacy(user, sessionId) {
@@ -5794,7 +5817,7 @@ export async function getSessionAlbumShareSubject(user, sessionId) {
   });
 }
 
-export async function listSessionAlbum(user, sessionId) {
+export async function listSessionAlbum(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
     const session = await requireSessionAlbumOpen(connection, id);
@@ -5840,7 +5863,11 @@ export async function listSessionAlbum(user, sessionId) {
       const processingStatus = albumMediaProcessingStatus(photo);
       if (!isModerationPublished(photo.moderation_status)) {
         if (Number(photo.uploader_user_id) !== Number(user.user.id)) continue;
-        photos.push(albumMediaResponse(photo, [], { userId: user.user.id }));
+        photos.push(albumMediaResponse(photo, [], {
+          userId: user.user.id,
+          authorPrivateImageEnabled: options.authorPrivateImageEnabled,
+          authorPrivateVideoEnabled: options.authorPrivateVideoEnabled
+        }));
         continue;
       }
       if (
@@ -5953,7 +5980,7 @@ export async function listPublicSessionAlbumShare(claims) {
   });
 }
 
-export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
+export async function createSessionAlbumPhoto(user, sessionId, body = {}, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   const photoUrl = sessionAlbumPhotoUrl(id, user.user.id, body.photoUrl || body.photo_url);
   const imageWidth = requiredPositiveInteger(body.imageWidth ?? body.image_width, "imageWidth");
@@ -5986,9 +6013,10 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
             processing_status,
             moderation_status,
             moderation_object_version,
+            author_visibility_version,
             status
           )
-        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', 'pending', ?, 'active')
+        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', 'pending', ?, ?, 'active')
       `,
       [
         id,
@@ -5998,11 +6026,15 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
         imageHeight,
         imageByteSize,
         imageContentType,
-        `local:${photoUrl}:${imageByteSize}`
+        `local:${photoUrl}:${imageByteSize}`,
+        options.authorPrivateImageEnabled === true ? 1 : 0
       ]
     );
     const photo = await findById(connection, "session_album_photos", result.insertId);
-    return albumMediaResponse(photo, [], { userId: user.user.id });
+    return albumMediaResponse(photo, [], {
+      userId: user.user.id,
+      authorPrivateImageEnabled: options.authorPrivateImageEnabled
+    });
   });
 }
 
@@ -6046,7 +6078,13 @@ function inspectedAlbumVideoMetadata(value) {
   };
 }
 
-function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId) {
+function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId, options = {}) {
+  const authorPrivate = createAuthorPrivateMediaView(media, {
+    viewerUserId: userId,
+    imageEnabled: false,
+    videoEnabled: options.authorPrivateVideoEnabled === true
+  });
+  if (authorPrivate) return authorPrivate;
   const isMine = Number(media.uploader_user_id) === Number(userId);
   return {
     id: Number(media.id),
@@ -6156,9 +6194,10 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
               processing_status,
               moderation_status,
               moderation_object_version,
+              author_visibility_version,
               status
             )
-          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'active')
+          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 'active')
         `,
         [
           id,
@@ -6173,7 +6212,8 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
           videoContentType,
           ciJobId,
           processingStatus,
-          videoObjectVersion
+          videoObjectVersion,
+          options.authorPrivateVideoEnabled === true ? 1 : 0
         ]
       );
       const insertedMedia = await findById(connection, "session_album_photos", result.insertId);
@@ -6208,7 +6248,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
     }
   }
 
-  return sessionAlbumVideoCreateResponse(media, processingStatus, user.user.id);
+  return sessionAlbumVideoCreateResponse(media, processingStatus, user.user.id, options);
 }
 
 export async function updateSessionAlbumVideoProcessingResult(
@@ -6536,6 +6576,30 @@ export async function finalizeSessionAlbumPhotoDeletion(user, photoId, snapshot)
     await connection.query("DELETE FROM session_album_photos WHERE id = ?", [id]);
     return { id, deleted: true };
   });
+}
+
+async function getAuthorAlbumMediaPreview(user, mediaId, mediaType, options = {}) {
+  const id = positiveId(mediaId, "mediaId");
+  return withDatabaseConnection(async (connection) => {
+    const media = await findById(connection, "session_album_photos", id);
+    const record = getAuthorMediaPreviewRecordForRow(media, {
+      viewerUserId: user?.user?.id,
+      imageEnabled: mediaType === "image" && options.enabled === true,
+      videoEnabled: mediaType === "video" && options.enabled === true
+    });
+    if (!record || record.mediaType !== mediaType) {
+      throw moderationUnpublishedNotFound(`album_${mediaType}`);
+    }
+    return media;
+  });
+}
+
+export async function getAuthorAlbumImagePreview(user, mediaId, options = {}) {
+  return getAuthorAlbumMediaPreview(user, mediaId, "image", options);
+}
+
+export async function getAuthorAlbumVideoPreview(user, mediaId, options = {}) {
+  return getAuthorAlbumMediaPreview(user, mediaId, "video", options);
 }
 
 export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {

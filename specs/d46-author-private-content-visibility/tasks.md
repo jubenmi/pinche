@@ -75,13 +75,13 @@
   - [x] 修改 `apps/miniprogram/src/pages/session/review.vue` 和聊天 UI，支持状态角标、取消及 rejected 编辑重提。
   - [x] 运行 talk 包测试、D18/D23 相册成员回归和 D45 文本测试；预期全绿。
 
-- [ ] D46.10 实现图片/视频作者专属预览。
-  - [ ] 先新增失败测试 `apps/api/test/content-moderation-author-media-preview.test.mjs`，覆盖图片/视频 author、organizer、member、tagged、admin 普通接口、anonymous 和分享 token。
-  - [ ] 修改 `apps/api/src/modules/core/service.js` 的 `albumMediaResponse`/媒体查找：已批准走原分支，未批准只在 uploader + policy version 1 时产生 author-private DTO。
-  - [ ] 修改 `apps/api/src/server.js` 的图片 URL 附加和视频 URL 路由，新增作者签发器；合法 TTL `1..60`，默认/最大 60 秒，响应 `private, no-store`。
-  - [ ] 视频作者预览优先合法 display，回退合法 source；路径/ETag/record status 变化时关闭式失败。
-  - [ ] 未批准媒体不得返回 `download_url`、标签能力、分享能力或公共媒体 token。
-  - [ ] 运行：`node --test apps/api/test/content-moderation-author-media-preview.test.mjs apps/api/test/content-moderation-media-gates.test.mjs apps/api/test/album-media-cos-direct.test.mjs`；预期全绿。
+- [x] D46.10 实现图片/视频作者专属预览。
+  - [x] 先新增失败测试 `apps/api/test/content-moderation-author-media-preview.test.mjs`，覆盖图片/视频 author、organizer、member、tagged、admin 普通接口、anonymous 和分享 token。
+  - [x] 修改 `apps/api/src/modules/core/service.js` 的 `albumMediaResponse`/媒体查找：已批准走原分支，未批准只在 uploader + policy version 1 时产生 author-private DTO。
+  - [x] 修改 `apps/api/src/server.js` 的图片 URL 附加和视频 URL 路由，新增作者签发器；合法 TTL `1..60`，默认/最大 60 秒，响应 `private, no-store`。
+  - [x] 视频作者预览优先合法 display，回退合法 source；路径/ETag/record status 变化时关闭式失败。
+  - [x] 未批准媒体不得返回 `download_url`、标签能力、分享能力或公共媒体 token。
+  - [x] 运行：`node --test apps/api/test/content-moderation-author-media-preview.test.mjs apps/api/test/content-moderation-media-gates.test.mjs apps/api/test/album-image-response-urls.test.mjs`；预期全绿（仓库中无任务草案所写的 `album-media-cos-direct.test.mjs`，使用现有等价直传 URL 回归文件）。
 
 - [ ] D46.11 改造拒绝媒体保留、作者删除与管理员 purge。
   - [ ] 先扩展 `apps/api/test/content-moderation-service.test.mjs` 和管理员决定测试：policy version 1 的 provider/admin reject 不 enqueue cleanup；version 0 保持 D45 行为。
@@ -160,3 +160,5 @@
 - 2026-07-15 D46.8 GREEN：车局/NPC 作者读取与客户端草稿约束共 6 项定向测试通过，`build:mp-weixin` 成功；D38 城市发现、D39 城市只读预览、D40 游客日历、D21 我的日历与 `npm run d46:check` 全部通过。创建类车局/NPC 无正式 ID，不能分享、报名、进入相册或管理；取消只调用作者草稿 DELETE。
 - 2026-07-15 D46.9 RED：评价/聊天/置顶作者视图测试先因缺少 `author-social-read.js` 失败；客户端测试随后因缺少 202 投影适配、未读隔离和取消/替代 API 导出失败。talk 旧测试夹具也暴露未注入 D46 状态码辅助函数，按实际 server context 补齐。
 - 2026-07-15 D46.9 GREEN：评价只在 `getMySessionReview` 覆盖本人编辑态，公开评价查询不读草稿；聊天只给发送者追加无正式 ID 的临时气泡，未读计算先排除作者投影；置顶仅覆盖操作者读取。状态角标、取消和 rejected 编辑重提已接入评价与 talk 两套小程序组件。talk 全包、D18/D23、D45 共 496 项、`build:mp-weixin`、`npm run d46:check` 与 diff 检查全部通过。D45 常量旧断言同步纳入 D46 用户取消终态 `cancelled`。
+- 2026-07-15 D46.10 RED：作者媒体专项测试按预期因缺少 `author-media-preview.js` 失败；补齐纯策略后，路由静态断言继续因尚未接入专属图片能力路径失败，证明服务器接线检查有效。
+- 2026-07-15 D46.10 GREEN：图片仅 uploader + v1 获得最长 60 秒的独立 HMAC 能力 URL，能力载荷只含对象版本指纹；视频 URL API 仅本人可把合法 display/source 签为 60 秒 COS URL。响应不含对象 Key/ETag、下载、标签、封面或分享能力，公共 getter 保持原批准门禁。专项与图片/视频/COS/D45 媒体回归共 94 项及 URL 定向 12 项通过。

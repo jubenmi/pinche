@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { attachSessionAlbumMediaUrls } from "../src/server.js";
+import { createAuthorPrivateMediaView } from "../src/modules/content-moderation/author-media-preview.js";
 
 const cosConfig = {
   enabled: true, secretId: "id", secretKey: "secret",
@@ -118,4 +119,56 @@ test("pending video never receives playback or cover URLs even when processing i
   assert.equal("video_cover_source_url" in result.photos[0], false);
   assert.equal("source_url" in result.photos[0], false);
   assert.equal("display_url" in result.photos[0], false);
+});
+
+test("D46 author-only image receives short preview capabilities without a download URL", () => {
+  const photo = createAuthorPrivateMediaView({
+    id: 7,
+    session_id: 8,
+    uploader_user_id: 9,
+    media_type: "image",
+    moderation_status: "pending",
+    moderation_object_version: "etag-7",
+    author_visibility_version: 1,
+    status: "active",
+    photo_url: "/uploads/session-album/display/private-7.jpg",
+    object_key: "uploads/session-album/display/private-7.jpg",
+    object_etag: "etag-7"
+  }, { viewerUserId: 9, imageEnabled: true });
+  const result = attachSessionAlbumMediaUrls({ session_id: 8, photos: [photo] }, 9, {
+    nowSeconds: 1000,
+    authorPreviewTtlSeconds: 60,
+    buildAuthorUrls: (_value, options) => ({
+      preview_display_url: `/author-preview?ttl=${options.ttlSeconds}`,
+      thumbnail_display_url: "/author-thumbnail",
+      download_url: null,
+      media_url_expires_at: "1970-01-01T00:17:40.000Z"
+    }),
+    emit: () => {}
+  });
+  assert.equal(result.photos[0].publication_state, "author_only");
+  assert.equal(result.photos[0].preview_display_url, "/author-preview?ttl=60");
+  assert.equal(result.photos[0].download_url, null);
+  assert.equal("object_key" in result.photos[0], false);
+});
+
+test("D46 author-only video exposes only its authenticated URL endpoint", () => {
+  const video = createAuthorPrivateMediaView({
+    id: 8,
+    session_id: 8,
+    uploader_user_id: 9,
+    media_type: "video",
+    processing_status: "processing",
+    moderation_status: "review",
+    moderation_object_version: "etag-8",
+    author_visibility_version: 1,
+    status: "active",
+    source_url: "/uploads/session-album/videos/source/private-8.mp4"
+  }, { viewerUserId: 9, videoEnabled: true });
+  const result = attachSessionAlbumMediaUrls({ session_id: 8, photos: [video] }, 9, {
+    emit: () => {}
+  });
+  assert.equal(result.photos[0].video_url, "/api/session-album/media/8/video-url");
+  assert.equal(result.photos[0].cover_url, "");
+  assert.equal("source_url" in result.photos[0], false);
 });

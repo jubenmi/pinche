@@ -100,6 +100,8 @@ import {
   getSessionShareStats,
   getMySessionAlbumPrivacy,
   getMySessionReview,
+  getAuthorAlbumImagePreview,
+  getAuthorAlbumVideoPreview,
   getVisibleSessionAlbumPhotoForMedia,
   getVisibleSessionAlbumVideoForPlayback,
   getFinalizedSessionAlbumImage,
@@ -172,6 +174,12 @@ import {
   buildSignedCosImageUrl,
   buildWechatImageModerationUrl
 } from "./modules/album-image/signed-urls.js";
+import {
+  AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL,
+  buildAuthorImageCapabilityUrls,
+  getAuthorMediaPreviewRecordForRow,
+  validateAuthorImageCapabilityClaims
+} from "./modules/content-moderation/author-media-preview.js";
 import {
   TENCENT_VIDEO_CALLBACK_MAX_BYTES,
   authenticateTencentCallback,
@@ -360,6 +368,7 @@ export function containsAuthorPrivateText(value, depth = 0) {
     return value.some((entry) => containsAuthorPrivateText(entry, depth + 1));
   }
   if (typeof value !== "object") return false;
+  if (value.publication_state === "author_only") return true;
   return Object.values(value).some((entry) => containsAuthorPrivateText(entry, depth + 1));
 }
 
@@ -367,6 +376,27 @@ function authorPrivateResponseHeaders(value) {
   return containsAuthorPrivateText(value)
     ? { "cache-control": "private, no-store" }
     : {};
+}
+
+function authorPrivateMediaOptions() {
+  return {
+    authorPrivateImageEnabled:
+      config.contentModeration.authorPrivateImageEnabled === true,
+    authorPrivateVideoEnabled:
+      config.contentModeration.authorPrivateVideoEnabled === true
+  };
+}
+
+function authorPreviewTtlSeconds(value = config.contentModeration.authorPreviewTtlSeconds ?? 60) {
+  const ttl = Number(value);
+  if (!Number.isSafeInteger(ttl) || ttl < 1 || ttl > 60) {
+    throw new AppError(
+      500,
+      "CONTENT_MODERATION_CONFIGURATION_ERROR",
+      "CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS must be between 1 and 60"
+    );
+  }
+  return ttl;
 }
 
 function moderationBody(body) {
@@ -1366,9 +1396,19 @@ const albumImageUploads = createAlbumImageUploadService({
       imageInfo: ({ key, etag }) => getCosImageInfo({ key, etag, config: config.cos })
     }
   }),
-  insertFinalizedImage: insertFinalizedSessionAlbumImage,
+  insertFinalizedImage: (connection, input) => insertFinalizedSessionAlbumImage(
+    connection,
+    {
+      ...input,
+      authorVisibilityVersion:
+        config.contentModeration.authorPrivateImageEnabled === true ? 1 : 0
+    }
+  ),
   getFinalizedImage: getFinalizedSessionAlbumImage,
-  serializeImage: serializeSessionAlbumImage,
+  serializeImage: (media, userId) => serializeSessionAlbumImage(media, userId, {
+    authorPrivateImageEnabled:
+      config.contentModeration.authorPrivateImageEnabled === true
+  }),
   createWechatImageModerationJob: wechatImageModerationEnabled
     ? (connection, input) => contentModeration.createWechatImageModerationJob(connection, input)
     : undefined,
@@ -2429,6 +2469,16 @@ function attachAlbumImageUrls(photo, legacyUrls, options) {
   void ignoredObjectEtag;
   const moderationStatus = String(photo.moderation_status || "");
   if (!isModerationPublished(moderationStatus)) {
+    if (safePhoto.publication_state === "author_only") {
+      return {
+        ...safePhoto,
+        tags: [],
+        ...options.buildAuthorUrls(photo, {
+          nowSeconds: options.nowSeconds,
+          ttlSeconds: options.authorPreviewTtlSeconds
+        })
+      };
+    }
     return {
       ...safePhoto,
       moderation_status: moderationStatus,
@@ -2477,7 +2527,10 @@ function albumImageUrlOptions(options = {}) {
     directMediaUrls: options.directMediaUrls ?? config.albumMedia.directMediaUrls,
     nowSeconds: options.nowSeconds ?? Math.floor(Date.now() / 1000),
     cosConfig: options.cosConfig || config.cos,
-    buildUrls: options.buildUrls || buildAlbumImageUrls
+    buildUrls: options.buildUrls || buildAlbumImageUrls,
+    buildAuthorUrls: options.buildAuthorUrls || buildAuthorAlbumImageUrls,
+    authorPreviewTtlSeconds:
+      options.authorPreviewTtlSeconds ?? authorPreviewTtlSeconds()
   };
 }
 
@@ -2827,10 +2880,11 @@ export function attachSessionAlbumMediaUrls(album, userId, options = {}) {
       if (photo.media_type === "video") {
         const safePhoto = stripAlbumVideoInternalFields(photo);
         const approved = isModerationPublished(photo.moderation_status);
+        const authorOnly = photo.publication_state === "author_only";
         return {
           ...safePhoto,
           cover_url: approved && photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
-          video_url: approved && photo.processing_status === "ready"
+          video_url: (approved && photo.processing_status === "ready") || authorOnly
             ? sessionAlbumVideoUrlPath(photo.id)
             : ""
         };
@@ -2860,6 +2914,28 @@ export function attachSessionAlbumMediaUrls(album, userId, options = {}) {
     photos,
     media: photos
   };
+}
+
+function authorMediaPreviewFingerprint(record) {
+  return signedPayloadSignature(
+    "author-media-object-version",
+    JSON.stringify({
+      mediaId: Number(record.mediaId),
+      userId: Number(record.userId),
+      mediaType: String(record.mediaType),
+      previewPath: String(record.previewPath),
+      objectVersion: String(record.objectVersion)
+    })
+  );
+}
+
+function buildAuthorAlbumImageUrls(photo, options = {}) {
+  return buildAuthorImageCapabilityUrls(photo, {
+    nowSeconds: options.nowSeconds ?? Math.floor(Date.now() / 1000),
+    ttlSeconds: options.ttlSeconds ?? authorPreviewTtlSeconds(),
+    fingerprint: authorMediaPreviewFingerprint,
+    signToken: (claims) => signSignedPayload("author-media-preview", claims)
+  });
 }
 
 function signedPayloadSignature(purpose, payloadText) {
@@ -3588,6 +3664,32 @@ async function route(request, response) {
     return;
   }
 
+  const authorAlbumImagePreviewId = idMatch(
+    url.pathname,
+    /^\/api\/content-moderation\/author-media\/images\/(\d+)\/preview$/
+  );
+  if (request.method === "GET" && authorAlbumImagePreviewId) {
+    const claims = verifySignedPayload(
+      "author-media-preview",
+      url.searchParams.get("token") || "",
+      "author media preview token"
+    );
+    const userId = tokenPositiveInteger(claims.userId, "userId");
+    const media = await getAuthorAlbumImagePreview(
+      { user: { id: userId }, roles: [] },
+      authorAlbumImagePreviewId,
+      { enabled: config.contentModeration.authorPrivateImageEnabled === true }
+    );
+    const record = validateAuthorImageCapabilityClaims(media, claims, {
+      nowSeconds: Math.floor(Date.now() / 1000),
+      ttlSeconds: authorPreviewTtlSeconds(),
+      fingerprint: authorMediaPreviewFingerprint
+    });
+    if (!record) throw notFound("Album photo not found");
+    await serveUploadedSessionAlbumPhoto(media, response, { variant: claims.variant });
+    return;
+  }
+
   const publicSessionAlbumMediaPhotoId = idMatch(
     url.pathname,
     /^\/api\/session-album\/public-share\/photos\/(\d+)\/image$/
@@ -3702,10 +3804,43 @@ async function route(request, response) {
   );
   if (request.method === "GET" && sessionAlbumMediaVideoUrlId) {
     const user = await getAuthUser(request);
-    const media = await getVisibleSessionAlbumVideoForPlayback(
-      user,
-      sessionAlbumMediaVideoUrlId
-    );
+    let media;
+    let authorPrivate = false;
+    try {
+      media = await getVisibleSessionAlbumVideoForPlayback(
+        user,
+        sessionAlbumMediaVideoUrlId
+      );
+    } catch (error) {
+      if (error?.contentModerationDenied !== true) throw error;
+      media = await getAuthorAlbumVideoPreview(user, sessionAlbumMediaVideoUrlId, {
+        enabled: config.contentModeration.authorPrivateVideoEnabled === true
+      });
+      authorPrivate = true;
+    }
+    if (authorPrivate) {
+      if (!isCosUploadStorageEnabled()) throw notFound("Album video not found");
+      const record = getAuthorMediaPreviewRecordForRow(media, {
+        viewerUserId: user.user.id,
+        videoEnabled: true
+      });
+      if (!record) throw notFound("Album video not found");
+      const expiresInSeconds = authorPreviewTtlSeconds();
+      jsonResponse(response, 200, {
+        ok: true,
+        data: {
+          url: signedCosAlbumVideoUrl(
+            { display_url: record.previewPath, source_url: record.previewPath },
+            "GET",
+            expiresInSeconds,
+            [{ name: "response-cache-control", value: AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL }]
+          ),
+          expiresInSeconds,
+          publication_state: "author_only"
+        }
+      }, { "cache-control": AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL });
+      return;
+    }
     jsonResponse(response, 200, {
       ok: true,
       data: {
@@ -4904,21 +5039,23 @@ async function route(request, response) {
       user,
       uploadId: albumUploadFinalizeId
     });
+    const data = attachLegacyFinalizedAlbumImageUrls(finalized);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachLegacyFinalizedAlbumImageUrls(finalized)
-    });
+      data
+    }, authorPrivateResponseHeaders(data));
     return;
   }
 
   const sessionAlbumId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/album$/);
   if (request.method === "GET" && sessionAlbumId) {
     const user = await getAuthUser(request);
-    const album = await listSessionAlbum(user, sessionAlbumId);
+    const album = await listSessionAlbum(user, sessionAlbumId, authorPrivateMediaOptions());
+    const data = attachSessionAlbumMediaUrls(album, user.user.id);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album, user.user.id)
-    });
+      data
+    }, authorPrivateResponseHeaders(data));
     return;
   }
 
@@ -4929,11 +5066,16 @@ async function route(request, response) {
   if (request.method === "GET" && adminSessionAlbumId) {
     const user = await getAuthUser(request);
     await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumId);
-    const album = await listSessionAlbum(user, adminSessionAlbumId);
+    const album = await listSessionAlbum(
+      user,
+      adminSessionAlbumId,
+      authorPrivateMediaOptions()
+    );
+    const data = attachSessionAlbumMediaUrls(album, user.user.id, { routeKind: "admin" });
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album, user.user.id, { routeKind: "admin" })
-    });
+      data
+    }, authorPrivateResponseHeaders(data));
     return;
   }
 
@@ -5003,7 +5145,8 @@ async function route(request, response) {
           photoUrl
         })
       );
-      jsonResponse(response, 201, { ok: true, data: finalized.photo });
+      jsonResponse(response, 201, { ok: true, data: finalized.photo },
+        authorPrivateResponseHeaders(finalized.photo));
       return;
     }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
@@ -5011,11 +5154,11 @@ async function route(request, response) {
       ...body,
       photoUrl,
       ...metadata
-    });
+    }, authorPrivateMediaOptions());
     jsonResponse(response, 201, {
       ok: true,
       data: photo
-    });
+    }, authorPrivateResponseHeaders(photo));
     return;
   }
 
@@ -5037,7 +5180,8 @@ async function route(request, response) {
           photoUrl
         })
       );
-      jsonResponse(response, 201, { ok: true, data: finalized.photo });
+      jsonResponse(response, 201, { ok: true, data: finalized.photo },
+        authorPrivateResponseHeaders(finalized.photo));
       return;
     }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
@@ -5045,11 +5189,11 @@ async function route(request, response) {
       ...body,
       photoUrl,
       ...metadata
-    });
+    }, authorPrivateMediaOptions());
     jsonResponse(response, 201, {
       ok: true,
       data: photo
-    });
+    }, authorPrivateResponseHeaders(photo));
     return;
   }
 
@@ -5071,12 +5215,21 @@ async function route(request, response) {
       assertVideoIntake: () => assertContentModerationIntake(config.contentModeration, "video"),
       createVideoModerationJob: (connection, input) =>
         contentModeration.createVideoJob(connection, input),
-      submitVideoModeration: (job) => contentModeration.submitVideoJob(job)
+      submitVideoModeration: (job) => contentModeration.submitVideoJob(job),
+      authorPrivateVideoEnabled:
+        config.contentModeration.authorPrivateVideoEnabled === true
     });
+    const videoData = video.publication_state === "author_only"
+      ? attachSessionAlbumMediaUrls({
+          session_id: Number(video.session_id),
+          photos: [video],
+          media: [video]
+        }, user.user.id, { routeKind: "create" }).photos[0]
+      : video;
     jsonResponse(response, 201, {
       ok: true,
-      data: video
-    });
+      data: videoData
+    }, authorPrivateResponseHeaders(videoData));
     return;
   }
 
