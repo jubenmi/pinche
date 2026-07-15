@@ -48,7 +48,7 @@ function moderationRow(overrides = {}) {
 }
 
 function routeHarness({ authorized = true, row = moderationRow() } = {}) {
-  const calls = { authorize: 0, list: [], get: [], decide: [], preview: [] };
+  const calls = { authorize: 0, list: [], get: [], decide: [], purge: [], preview: [] };
   const api = createAdminModerationApi({
     authorize: async () => {
       calls.authorize += 1;
@@ -71,6 +71,10 @@ function routeHarness({ authorized = true, row = moderationRow() } = {}) {
     decide: async (input) => {
       calls.decide.push(input);
       return { id: input.jobId, status: input.action === "retry" ? "pending" : "approved" };
+    },
+    purge: async (input) => {
+      calls.purge.push(input);
+      return { id: 91, moderation_job_id: input.jobId, status: "deleting", purge_pending: true };
     },
     buildPreview: async (input) => {
       calls.preview.push(input);
@@ -334,7 +338,12 @@ test("administrator moderation routes authorize before listing, viewing, or deci
     { method: "GET", pathname: "/api/admin/content-moderation/9", searchParams: new URLSearchParams() },
     { method: "POST", pathname: "/api/admin/content-moderation/9/approve", body: {} },
     { method: "POST", pathname: "/api/admin/content-moderation/9/reject", body: { reason: "违规" } },
-    { method: "POST", pathname: "/api/admin/content-moderation/9/retry", body: {} }
+    { method: "POST", pathname: "/api/admin/content-moderation/9/retry", body: {} },
+    {
+      method: "POST",
+      pathname: "/api/admin/content-moderation/9/purge",
+      body: { reason: "紧急移除", confirmation: "PURGE" }
+    }
   ];
 
   for (const request of requests) {
@@ -344,6 +353,7 @@ test("administrator moderation routes authorize before listing, viewing, or deci
   assert.deepEqual(calls.list, []);
   assert.deepEqual(calls.get, []);
   assert.deepEqual(calls.decide, []);
+  assert.deepEqual(calls.purge, []);
   assert.deepEqual(calls.preview, []);
 });
 
@@ -420,5 +430,25 @@ test("administrator moderation route matching rejects malformed paths and body a
     pathname: "/api/admin/content-moderation/9/approve",
     body: { action: "reject" }
   }), { code: "BAD_REQUEST" });
+  assert.deepEqual(calls.decide, []);
+});
+
+test("administrator purge is a separate confirmed asynchronous action", async () => {
+  const { api, calls } = routeHarness();
+  const result = await api({
+    method: "POST",
+    pathname: "/api/admin/content-moderation/9/purge",
+    body: { reason: "  紧急合规移除  ", confirmation: "PURGE" }
+  });
+  assert.deepEqual(result, {
+    statusCode: 202,
+    data: { id: 91, moderation_job_id: 9, status: "deleting", purge_pending: true }
+  });
+  assert.deepEqual(calls.purge, [{
+    admin: { user: { id: 2 }, roles: ["system_admin"] },
+    jobId: 9,
+    reason: "紧急合规移除",
+    confirmation: "PURGE"
+  }]);
   assert.deepEqual(calls.decide, []);
 });

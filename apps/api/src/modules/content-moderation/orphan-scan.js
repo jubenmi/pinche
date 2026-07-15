@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { shouldRetainRejectedMedia } from "./media-retention.js";
 
 const SESSION_ALBUM_PREFIX = "uploads/session-album/";
 const SESSION_ALBUM_OBJECT_KEY = /^uploads\/session-album\/(?:display\/[A-Za-z0-9._-]+|videos\/(?:source|display|cover)\/[A-Za-z0-9._-]+)$/;
@@ -40,6 +41,13 @@ function expectedMediaModeration(media) {
     return { provider: "tencent_ci_video", subjectType: "album_video" };
   }
   return null;
+}
+
+export function isRetainedAuthorPrivateMediaRecord(media) {
+  return (
+    String(media?.moderation_status || "") === "rejected" &&
+    shouldRetainRejectedMedia(media)
+  );
 }
 
 function cosObjectKeysForMedia(media) {
@@ -297,6 +305,7 @@ export async function runContentModerationOrphanScanBatch({
         for (const media of rows) {
           const expected = expectedMediaModeration(media);
           if (!expected) continue;
+          const retainedAuthorPrivate = isRetainedAuthorPrivateMediaRecord(media);
           for (const key of cosObjectKeysForMedia(media)) {
             await renewLease();
             try {
@@ -306,7 +315,9 @@ export async function runContentModerationOrphanScanBatch({
               incrementAggregate(aggregates, {
                 provider: expected.provider,
                 subjectType: expected.subjectType,
-                outcome: "media_object_missing"
+                outcome: retainedAuthorPrivate
+                  ? "retained_media_object_missing"
+                  : "media_object_missing"
               });
             }
           }

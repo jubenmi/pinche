@@ -148,6 +148,29 @@ export function parseAdminModerationDecisionBody(action, body = {}) {
   return { reason };
 }
 
+export function parseAdminModerationPurgeBody(body = {}) {
+  if (!isPlainRecord(body)) throw badRequest("invalid moderation purge request");
+  const keys = Object.keys(body);
+  if (
+    keys.length !== 2 ||
+    !keys.includes("reason") ||
+    !keys.includes("confirmation") ||
+    typeof body.reason !== "string" ||
+    body.confirmation !== "PURGE"
+  ) {
+    throw badRequest("moderation purge requires a reason and literal PURGE confirmation");
+  }
+  const reason = body.reason.trim();
+  if (
+    !reason ||
+    [...reason].length > MAX_REJECTION_REASON_LENGTH ||
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/.test(reason)
+  ) {
+    throw badRequest("moderation purge reason is invalid");
+  }
+  return { reason, confirmation: "PURGE" };
+}
+
 export function parseAdminModerationListQuery(searchParams) {
   assertUniqueKnownQueryKeys(searchParams);
   const dateFrom = parseCalendarDay(optionalQueryValue(searchParams, "dateFrom"), "dateFrom");
@@ -313,10 +336,14 @@ function moderationRoute(method, pathname) {
   if (normalizedMethod === "GET" && detail) return { kind: "detail", rawJobId: detail[1] };
 
   const decision = path.match(
-    /^\/api\/admin\/content-moderation\/([^/]+)\/(approve|reject|retry)$/
+    /^\/api\/admin\/content-moderation\/([^/]+)\/(approve|reject|retry|purge)$/
   );
   if (normalizedMethod === "POST" && decision) {
-    return { kind: "decision", rawJobId: decision[1], action: decision[2] };
+    return {
+      kind: decision[2] === "purge" ? "purge" : "decision",
+      rawJobId: decision[1],
+      action: decision[2]
+    };
   }
   return null;
 }
@@ -335,6 +362,7 @@ export function createAdminModerationApi({
   listJobs,
   getJob,
   decide,
+  purge,
   buildPreview = async () => ({}),
   applyTextProposal
 } = {}) {
@@ -342,6 +370,7 @@ export function createAdminModerationApi({
   const list = requiredFunction(listJobs, "listJobs");
   const get = requiredFunction(getJob, "getJob");
   const decideAsAdmin = requiredFunction(decide, "decide");
+  const purgeAsAdmin = typeof purge === "function" ? purge : null;
   const previewFor = requiredFunction(buildPreview, "buildPreview");
   const applyProposal = requiredFunction(applyTextProposal, "applyTextProposal");
 
@@ -380,6 +409,13 @@ export function createAdminModerationApi({
         statusCode: 200,
         data: serializeAdminModerationDetail(row, preview || {})
       };
+    }
+
+    if (match.kind === "purge") {
+      const purgeMedia = requiredFunction(purgeAsAdmin, "purge");
+      const purgeInput = parseAdminModerationPurgeBody(body);
+      const result = await purgeMedia({ admin, jobId, ...purgeInput });
+      return { statusCode: 202, data: result };
     }
 
     const decision = parseAdminModerationDecisionBody(match.action, body);

@@ -601,6 +601,39 @@ export async function cancelModerationJobByUser(
   return Number(result.affectedRows || 0) === 1;
 }
 
+export async function cancelMediaModerationJobsForDeletion(connection, media) {
+  const mediaId = Number(media?.id);
+  const mediaType = String(media?.media_type || "");
+  const subjectVersion = String(media?.moderation_object_version || "");
+  if (!Number.isSafeInteger(mediaId) || mediaId <= 0) {
+    throw new TypeError("media id must be a positive safe integer");
+  }
+  if (!["image", "video"].includes(mediaType)) {
+    throw new TypeError("media type must be image or video");
+  }
+  if (!subjectVersion) return [];
+
+  const subjectType = mediaType === "video" ? "album_video" : "album_image";
+  const [jobs] = await connection.query(
+    `SELECT id, status FROM content_moderation_jobs
+     WHERE subject_type = ? AND subject_id = ? AND subject_version = ?
+       AND status IN ('pending', 'processing', 'review', 'error', 'rejected')
+     ORDER BY id FOR UPDATE`,
+    [subjectType, String(mediaId), subjectVersion]
+  );
+  const cancelled = [];
+  for (const job of jobs) {
+    const changed = await cancelModerationJobByUser(connection, {
+      jobId: job.id,
+      fromStatus: job.status
+    });
+    if (!changed) continue;
+    await retireCurrentModerationAttempt(connection, { jobId: job.id });
+    cancelled.push({ id: Number(job.id), previousStatus: String(job.status) });
+  }
+  return cancelled;
+}
+
 export async function supersedeRejectedTextProposal(
   connection,
   { proposalId, newProposalId, userId, action, targetSubjectId }
@@ -671,6 +704,21 @@ export async function createAuditLog(connection, input) {
     ]
   );
   return result.insertId;
+}
+
+export async function findModerationAuditLogByAction(
+  connection,
+  { jobId, action, forUpdate = false }
+) {
+  const [rows] = await connection.query(
+    `SELECT id, moderation_job_id, admin_user_id, action, previous_status,
+            next_status, reason, created_at
+     FROM content_moderation_audit_logs
+     WHERE moderation_job_id = ? AND action = ?
+     ORDER BY id LIMIT 1${lockClause(forUpdate)}`,
+    [Number(jobId), String(action)]
+  );
+  return rows[0] || null;
 }
 
 export async function findModerationMedia(connection, job, { forUpdate = false } = {}) {
@@ -828,7 +876,7 @@ async function enqueueRejectedVideoCleanup(
   connection,
   media,
   objectUrls,
-  { lateOutputEvent = false } = {}
+  { lateOutputEvent = false, deletionRequested = false } = {}
 ) {
   let cleanupJob = await findRejectedMediaCleanupJob(connection, media.id);
   if (!cleanupJob) {
@@ -851,7 +899,7 @@ async function enqueueRejectedVideoCleanup(
   const cleanupChanged =
     cleanupJob.storage_kind !== "multi" ||
     JSON.stringify(existingObjectUrls) !== JSON.stringify(mergedObjectUrls);
-  if (!cleanupChanged && !lateOutputEvent) return cleanupJob.id;
+  if (!cleanupChanged && !lateOutputEvent && !deletionRequested) return cleanupJob.id;
 
   // A validated late callback means CI observed an output event. Requeue even
   // when it reused the same deterministic key: a worker may have already
@@ -871,7 +919,7 @@ async function enqueueRejectedVideoCleanup(
 export async function enqueueRejectedMediaCleanup(
   connection,
   media,
-  { lateOutputEvent = false } = {}
+  { lateOutputEvent = false, deletionRequested = false } = {}
 ) {
   const mediaType = media.media_type === "video" ? "video" : "image";
   let storageKind = "cos";
@@ -896,7 +944,33 @@ export async function enqueueRejectedMediaCleanup(
       ? { storageKind: "local", localPath: String(value) }
       : { storageKind: "cos", objectKey: String(value).replace(/^\//, "") }
     );
-    return enqueueRejectedVideoCleanup(connection, media, objectUrls, { lateOutputEvent });
+    return enqueueRejectedVideoCleanup(connection, media, objectUrls, {
+      lateOutputEvent,
+      deletionRequested
+    });
+  }
+  if (deletionRequested) {
+    let cleanupJob = await findRejectedMediaCleanupJob(connection, media.id);
+    if (!cleanupJob) {
+      const result = await insertRejectedMediaCleanupJob(connection, {
+        media,
+        storageKind,
+        objectKey,
+        localPath,
+        objectUrls
+      });
+      cleanupJob = await findRejectedMediaCleanupJob(connection, media.id);
+      if (!cleanupJob) return Number(result.insertId);
+    }
+    await connection.query(
+      `UPDATE session_album_object_cleanup_jobs
+       SET storage_kind = ?, object_key = ?, local_path = ?, object_urls_json = NULL,
+           status = 'pending', next_retry_at = NULL, lease_token = NULL,
+           lease_expires_at = NULL, completed_at = NULL
+       WHERE id = ?`,
+      [storageKind, objectKey, localPath, Number(cleanupJob.id)]
+    );
+    return Number(cleanupJob.id);
   }
   const result = await insertRejectedMediaCleanupJob(connection, {
     media,
@@ -1182,6 +1256,7 @@ export async function listModerationMediaForReconciliation(
   const batchLimit = boundedPositiveInteger(limit, 1000, "media reconciliation limit");
   const [mediaRows] = await connection.query(
     `SELECT id, media_type, status, moderation_status, moderation_object_version,
+            author_visibility_version,
             object_key, source_url, display_url, cover_url
      FROM session_album_photos
      WHERE id > ? AND media_type IN ('image', 'video') AND status IN ('active', 'deleting')

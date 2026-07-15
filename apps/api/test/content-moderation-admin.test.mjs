@@ -11,6 +11,7 @@ function harness({
   mediaActive = true,
   mediaType = subjectType === "album_video" ? "video" : "image",
   mediaObjectVersion = "v1",
+  authorVisibilityVersion = 0,
   mediaTransitionResult,
   requeueResult = true,
   applyTextProposal
@@ -66,6 +67,7 @@ function harness({
       status: mediaActive ? "active" : "deleted",
       moderation_status: state.mediaStatus,
       moderation_object_version: mediaObjectVersion,
+      author_visibility_version: authorVisibilityVersion,
       media_type: mediaType,
       object_key: "uploads/session-album/display/a.jpg",
       session_id: 8
@@ -222,7 +224,7 @@ test("administrator rejection does not finalize its job or enqueue cleanup when 
 });
 
 test("administrator rejection requires a reason and schedules media cleanup", async () => {
-  const { service } = harness();
+  const { service, state } = harness();
   const admin = { user: { id: 2 }, roles: ["system_admin"] };
   await assert.rejects(service.decideAsAdmin({ admin, jobId: 7, action: "reject" }), {
     code: "BAD_REQUEST"
@@ -230,6 +232,20 @@ test("administrator rejection requires a reason and schedules media cleanup", as
   assert.equal((await service.decideAsAdmin({
     admin, jobId: 7, action: "reject", reason: "违规内容"
   })).status, "rejected");
+  assert.equal(state.cleanupCalls, 1);
+});
+
+test("D46 administrator rejection retains policy-version-one media", async () => {
+  const { service, state } = harness({ authorVisibilityVersion: 1 });
+  const result = await service.decideAsAdmin({
+    admin: { user: { id: 2 }, roles: ["system_admin"] },
+    jobId: 7,
+    action: "reject",
+    reason: "违规内容"
+  });
+  assert.equal(result.status, "rejected");
+  assert.equal(state.mediaStatus, "rejected");
+  assert.equal(state.cleanupCalls, 0);
 });
 
 test("text approval invokes the atomic proposal applicator and marks proposal approved", async () => {

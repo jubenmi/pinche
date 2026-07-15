@@ -12,6 +12,7 @@ import {
   createAuditLog,
   createModerationJob,
   claimInitialModerationLease,
+  cancelMediaModerationJobsForDeletion,
   createTextProposal,
   enqueueRejectedMediaCleanup,
   findCurrentModerationAttempt,
@@ -51,6 +52,72 @@ test("state machine allows spec transitions and rejects terminal reversal", () =
   assert.throws(() => assertModerationTransition("review", "approved", { source: "provider" }), {
     code: "CONTENT_MODERATION_INVALID_TRANSITION"
   });
+});
+
+test("media deletion cancels every live exact-version job and retires its provider attempt", async () => {
+  const calls = [];
+  const jobs = [
+    { id: 7, status: "processing" },
+    { id: 8, status: "rejected" }
+  ];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql: String(sql), params });
+      if (/SELECT id, status FROM content_moderation_jobs/.test(sql)) return [jobs];
+      if (/UPDATE content_moderation_jobs/.test(sql)) return [{ affectedRows: 1 }];
+      if (/UPDATE content_moderation_provider_attempts/.test(sql)) return [{ affectedRows: 1 }];
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  assert.deepEqual(await cancelMediaModerationJobsForDeletion(connection, {
+    id: 91,
+    media_type: "video",
+    moderation_object_version: "etag-91"
+  }), [
+    { id: 7, previousStatus: "processing" },
+    { id: 8, previousStatus: "rejected" }
+  ]);
+  assert.match(calls[0].sql, /subject_type = \? AND subject_id = \? AND subject_version = \?/);
+  assert.match(calls[0].sql, /FOR UPDATE/);
+  assert.deepEqual(calls[0].params, ["album_video", "91", "etag-91"]);
+  assert.equal(calls.filter((call) => /SET status = 'cancelled'/.test(call.sql)).length, 2);
+  assert.equal(calls.filter((call) => /SET is_current = 0/.test(call.sql)).length, 2);
+});
+
+test("explicit deletion requeues an old leased cleanup job without losing attempts", async () => {
+  const existing = {
+    id: 73,
+    media_id: 73,
+    storage_kind: "multi",
+    object_urls_json: JSON.stringify([
+      { storageKind: "cos", objectKey: "uploads/session-album/videos/source/a.mp4" }
+    ]),
+    status: "leased",
+    attempts: 4
+  };
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql: String(sql), params });
+      if (/SELECT \* FROM session_album_object_cleanup_jobs/.test(sql)) return [[existing]];
+      return [{ affectedRows: 1 }];
+    }
+  };
+  const id = await enqueueRejectedMediaCleanup(connection, {
+    id: 73,
+    session_id: 8,
+    media_type: "video",
+    moderation_object_version: "etag-73",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: null,
+    cover_url: null
+  }, { deletionRequested: true });
+  assert.equal(id, 73);
+  const update = calls.find((call) => /UPDATE session_album_object_cleanup_jobs/.test(call.sql));
+  assert.match(update.sql, /status = 'pending'/);
+  assert.match(update.sql, /lease_token = NULL/);
+  assert.doesNotMatch(update.sql, /attempts\s*=/);
 });
 
 test("administrator decision prevents later provider transition", () => {

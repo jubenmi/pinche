@@ -59,7 +59,6 @@ import {
   parseMultipartAlbumVideoStream,
   uploadTempAlbumVideoToCos
 } from "./modules/album-video/multipart-stream.js";
-import { cleanupAlbumVideoBeforeDelete } from "./modules/album-video/lifecycle.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
   assertSessionAlbumImageUploadAllowed,
@@ -88,9 +87,8 @@ import {
   createStore,
   createSubscriptionRequest,
   deleteAdminSession,
-  prepareSessionAlbumPhotoDeletion,
+  purgeSessionAlbumMedia,
   requestSessionAlbumImageDeletion,
-  finalizeSessionAlbumPhotoDeletion,
   deleteScript,
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
@@ -1363,6 +1361,7 @@ const adminModerationApi = createAdminModerationApi({
     getAdminModerationJob(connection, jobId)
   ),
   decide: (input) => contentModeration.decideAsAdmin(input),
+  purge: (input) => purgeSessionAlbumMedia(input),
   buildPreview: buildAdminModerationPreview,
   applyTextProposal: applyApprovedTextProposal
 });
@@ -3254,9 +3253,8 @@ export async function deleteUploadedObject({
         // originated from our signed storage client. Every other COS failure
         // remains retryable and must keep the video row as the cleanup anchor.
         if (isTrustedCosStorageError(error) && Number(error.statusCode) === 404) return;
-        // cleanupAlbumVideoBeforeDelete intentionally treats generic 404s as
-        // idempotent for injected/local adapters. Do not let an untrusted COS
-        // 404 reach that generic boundary and finalize the video row.
+        // Only a trusted signed-storage 404 proves idempotent deletion. Do not
+        // let an untrusted upstream 404 be mistaken for successful cleanup.
         if (hasObjectNotFoundStatus(error)) {
           throw new AppError(502, "COS_STORAGE_ERROR", "COS storage request failed");
         }
@@ -5239,20 +5237,6 @@ async function route(request, response) {
   );
   if (request.method === "DELETE" && sessionAlbumPhotoId) {
     const user = await getAuthUser(request);
-    const deletionSnapshot = await prepareSessionAlbumPhotoDeletion(user, sessionAlbumPhotoId);
-    if (deletionSnapshot.media_type === "video") {
-      const deletedVideo = await cleanupAlbumVideoBeforeDelete({
-        urls: deletionSnapshot.object_urls,
-        deleteObject: deleteUploadedSessionAlbumPhotoObject,
-        finalizeSnapshot: (snapshot) => finalizeSessionAlbumPhotoDeletion(
-          user,
-          sessionAlbumPhotoId,
-          { object_urls: snapshot }
-        )
-      });
-      jsonResponse(response, 200, { ok: true, data: { id: deletedVideo.id, deleted: true } });
-      return;
-    }
     const deletion = await requestSessionAlbumImageDeletion(user, sessionAlbumPhotoId);
     jsonResponse(response, 202, {
       ok: true,

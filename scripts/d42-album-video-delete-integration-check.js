@@ -35,16 +35,20 @@ function cosResponse(statusCode) {
 const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
 const service = await readFile(new URL("../apps/api/src/modules/core/service.js", import.meta.url), "utf8");
 
-assert.match(server, /prepareSessionAlbumPhotoDeletion\(user, sessionAlbumPhotoId\)/);
-assert.match(server, /media_type === "video"/);
-assert.match(server, /cleanupAlbumVideoBeforeDelete\(/);
-assert.match(server, /finalizeSessionAlbumPhotoDeletion\(/);
 assert.match(server, /requestSessionAlbumImageDeletion\(user, sessionAlbumPhotoId\)/);
 assert.match(server, /deletionPending: true/);
+const routeStart = server.indexOf("if (request.method === \"DELETE\" && sessionAlbumPhotoId)");
+const routeEnd = server.indexOf("const sessionAlbumPhotoTagsId", routeStart);
+const deletionRoute = server.slice(routeStart, routeEnd);
+assert.match(deletionRoute, /requestSessionAlbumImageDeletion/);
+assert.doesNotMatch(deletionRoute, /cleanupAlbumVideoBeforeDelete|prepareSessionAlbumPhotoDeletion/);
 assert.match(service, /SELECT \* FROM \$\{table\} WHERE id = \?\$\{options\.forUpdate/);
-assert.match(service, /DELETE FROM session_album_photo_tags/);
-assert.match(service, /DELETE FROM session_album_photos/);
-assert.match(service, /new Set\(\(urls \|\| \[\]\)\.filter\(Boolean\)\)/);
+const requestDeleteStart = service.indexOf("export async function requestAlbumImageDeletion");
+const requestDeleteEnd = service.indexOf("export async function requestSessionAlbumImageDeletion", requestDeleteStart);
+const durableDeletion = service.slice(requestDeleteStart, requestDeleteEnd);
+assert.match(durableDeletion, /cancelMediaModerationJobsForDeletion/);
+assert.match(durableDeletion, /status = 'deleting'/);
+assert.match(durableDeletion, /enqueueRejectedMediaCleanup/);
 const deleteObjectStart = server.indexOf("async function deleteUploadedSessionAlbumPhotoObject");
 const deleteObjectEnd = server.indexOf("async function cleanupUploadedSessionAlbumPhotoObject", deleteObjectStart);
 const albumObjectDelete = server.slice(deleteObjectStart, deleteObjectEnd);
@@ -187,4 +191,4 @@ await deleteUploadedObject({
 });
 assert.equal(imageLocalUnlinkCalls, 1, "existing image cleanup keeps its local fallback behavior");
 
-console.log("D42 album video delete integration checks passed: cleanup ordering, trusted 404 idempotency, retry preservation, snapshot conflict, image route preservation");
+console.log("D42 album video delete integration checks passed: durable route handoff plus legacy storage ordering, trusted 404 idempotency, and retry preservation");

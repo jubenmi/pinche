@@ -27,7 +27,14 @@ import {
   albumMediaCountSql,
   visibleSignupAlbumMediaCount
 } from "./session-album-media-count.js";
-import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
+import {
+  cancelMediaModerationJobsForDeletion,
+  createAuditLog,
+  enqueueRejectedMediaCleanup,
+  findModerationAuditLogByAction,
+  findModerationJobById
+} from "../content-moderation/repository.js";
+import { shouldRetainRejectedMedia } from "../content-moderation/media-retention.js";
 import { isModerationPublished } from "@pinche/shared";
 import { textCreationTargetSubjectId } from "../content-moderation/text-request-identity.js";
 import {
@@ -677,7 +684,11 @@ async function findSessionAlbumVideoForProcessing(
 ) {
   if (mediaId) {
     const media = await findById(connection, "session_album_photos", mediaId, { forUpdate });
-    if (media && media.status === "active" && albumMediaType(media) === "video") {
+    if (
+      media &&
+      ["active", "deleting"].includes(String(media.status)) &&
+      albumMediaType(media) === "video"
+    ) {
       return media;
     }
   }
@@ -688,7 +699,7 @@ async function findSessionAlbumVideoForProcessing(
         SELECT *
         FROM session_album_photos
         WHERE media_type = 'video'
-          AND status = 'active'
+          AND status IN ('active', 'deleting')
           AND source_url = ?
         LIMIT 1${forUpdate ? " FOR UPDATE" : ""}
       `,
@@ -705,7 +716,7 @@ async function findSessionAlbumVideoForProcessing(
         SELECT *
         FROM session_album_photos
         WHERE media_type = 'video'
-          AND status = 'active'
+          AND status IN ('active', 'deleting')
           AND (
             ci_job_id = ?
             OR ci_job_id LIKE ?
@@ -6310,23 +6321,6 @@ export async function updateSessionAlbumVideoProcessingResult(
     if (!media) {
       throw notFound("Album video not found for processing callback");
     }
-    if (media.moderation_status === "rejected") {
-      const lateOutputEvent = Boolean(displayUrl || coverUrl);
-      await enqueueRejectedCleanup(connection, {
-        ...media,
-        source_url: media.source_url,
-        display_url: displayUrl || media.display_url || null,
-        cover_url: coverUrl || media.cover_url || null
-      }, lateOutputEvent ? { lateOutputEvent: true } : undefined);
-      return {
-        id: Number(media.id),
-        session_id: Number(media.session_id),
-        media_type: "video",
-        processing_status: albumMediaProcessingStatus(media),
-        ignored: "moderation_rejected"
-      };
-    }
-
     const nextCiJobId = mergeCiJobIds(media.ci_job_id, ciJobId);
     const nextDisplayUrl = displayUrl || media.display_url || null;
     const nextCoverUrl = coverUrl || media.cover_url || null;
@@ -6347,6 +6341,44 @@ export async function updateSessionAlbumVideoProcessingResult(
               "Video processing failed"
           )
         : null;
+
+    if (media.moderation_status === "rejected") {
+      if (media.status === "deleting" || !shouldRetainRejectedMedia(media)) {
+        const lateOutputEvent = Boolean(displayUrl || coverUrl);
+        await enqueueRejectedCleanup(connection, {
+          ...media,
+          source_url: media.source_url,
+          display_url: nextDisplayUrl,
+          cover_url: nextCoverUrl
+        }, lateOutputEvent ? { lateOutputEvent: true } : undefined);
+        return {
+          id: Number(media.id),
+          session_id: Number(media.session_id),
+          media_type: "video",
+          processing_status: albumMediaProcessingStatus(media),
+          ignored: "moderation_rejected"
+        };
+      }
+
+      // The output remains behind the author-only v1 serializer. Persisting a
+      // validated late display/cover object keeps the retained author preview
+      // useful without restoring any public capability.
+      await connection.query(
+        `UPDATE session_album_photos
+         SET display_url = ?, cover_url = ?, ci_job_id = ?,
+             processing_status = ?, processing_error = ?
+         WHERE id = ? AND status = 'active' AND moderation_status = 'rejected'
+           AND author_visibility_version = 1`,
+        [nextDisplayUrl, nextCoverUrl, nextCiJobId, nextStatus, nextError, media.id]
+      );
+      return {
+        id: Number(media.id),
+        session_id: Number(media.session_id),
+        media_type: "video",
+        processing_status: nextStatus,
+        ignored: "moderation_rejected_retained"
+      };
+    }
 
     await connection.query(
       `
@@ -6483,15 +6515,26 @@ export async function deleteSessionAlbumPhoto(user, photoId) {
 
 export async function requestAlbumImageDeletion(connection, { user, mediaId }) {
   const id = positiveId(mediaId, "mediaId");
+  const snapshot = await findById(connection, "session_album_photos", id);
+  if (!snapshot || !["active", "deleting"].includes(snapshot.status)) {
+    throw notFound("Album photo not found");
+  }
+  if (Number(snapshot.uploader_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the photo uploader can delete this photo");
+  }
+  await cancelMediaModerationJobsForDeletion(connection, snapshot);
+
   const photo = await findById(connection, "session_album_photos", id, { forUpdate: true });
   if (!photo || !["active", "deleting"].includes(photo.status)) {
     throw notFound("Album photo not found");
   }
-  if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
-    throw forbidden("Only the photo uploader can delete this photo");
-  }
-  if (albumMediaType(photo) !== "image") {
-    throw badRequest("Video deletion must use the video cleanup path");
+  if (
+    Number(photo.uploader_user_id) !== Number(user.user.id) ||
+    albumMediaType(photo) !== albumMediaType(snapshot) ||
+    String(photo.moderation_object_version || "") !==
+      String(snapshot.moderation_object_version || "")
+  ) {
+    throw conflict("Album media changed while deletion was requested");
   }
   if (photo.status === "deleting") {
     const [jobs] = await connection.query(
@@ -6499,43 +6542,163 @@ export async function requestAlbumImageDeletion(connection, { user, mediaId }) {
        WHERE media_id = ? LIMIT 1 FOR UPDATE`,
       [id]
     );
-    if (!jobs[0]) throw conflict("Album image deletion job is missing");
+    if (!jobs[0]) throw conflict("Album media deletion job is missing");
     return { id, status: "deleting", job: jobs[0] };
   }
 
-  let storageKind;
-  let objectKey = null;
-  let localPath = null;
-  if (photo.object_key) {
-    storageKind = "cos";
-    objectKey = String(photo.object_key);
-  } else {
-    const path = String(photo.photo_url || "");
-    if (!/^\/uploads\/session-album\/display\/[A-Za-z0-9._-]+$/.test(path)) {
-      throw badRequest("Album image local path is invalid");
-    }
-    storageKind = "local";
-    localPath = path;
-  }
-  await connection.query(
+  const [changed] = await connection.query(
     "UPDATE session_album_photos SET status = 'deleting' WHERE id = ? AND status = 'active'",
     [id]
   );
-  const [inserted] = await connection.query(
-    `INSERT INTO session_album_object_cleanup_jobs
-      (media_id, session_id, storage_kind, object_key, local_path, status)
-     VALUES (?, ?, ?, ?, ?, 'pending')`,
-    [id, Number(photo.session_id), storageKind, objectKey, localPath]
-  );
+  if (Number(changed.affectedRows || 0) !== 1) {
+    throw conflict("Album media changed while deletion was requested");
+  }
+  const cleanupJobId = await enqueueRejectedMediaCleanup(connection, photo, {
+    deletionRequested: true
+  });
   return {
     id,
     status: "deleting",
-    job: { id: Number(inserted.insertId), media_id: id, status: "pending" }
+    job: { id: Number(cleanupJobId), media_id: id, status: "pending" }
   };
 }
 
 export async function requestSessionAlbumImageDeletion(user, mediaId) {
   return withTransaction((connection) => requestAlbumImageDeletion(connection, { user, mediaId }));
+}
+
+export async function purgeSessionAlbumMedia(
+  { admin, jobId, reason, confirmation } = {},
+  { transaction = withTransaction } = {}
+) {
+  if (!admin || !Array.isArray(admin.roles) || !isAdmin(admin)) {
+    throw forbidden("system_admin role required");
+  }
+  const id = positiveId(jobId, "jobId");
+  const purgeReason = String(reason || "").trim();
+  if (
+    confirmation !== "PURGE" ||
+    !purgeReason ||
+    [...purgeReason].length > 500 ||
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/.test(purgeReason)
+  ) {
+    throw badRequest("purge requires a valid reason and literal PURGE confirmation");
+  }
+
+  return transaction(async (connection) => {
+    const job = await findModerationJobById(connection, id, { forUpdate: true });
+    if (
+      !job ||
+      !["album_image", "album_video"].includes(String(job.subject_type)) ||
+      !["rejected", "cancelled"].includes(String(job.status))
+    ) {
+      throw conflict("Only retained rejected media can be purged");
+    }
+    const mediaId = positiveId(job.subject_id, "mediaId");
+    const snapshot = await findById(connection, "session_album_photos", mediaId);
+    const existingPurgeAudit = await findModerationAuditLogByAction(connection, {
+      jobId: id,
+      action: "purge",
+      forUpdate: true
+    });
+    const expectedMediaType = job.subject_type === "album_video" ? "video" : "image";
+    if (!snapshot && job.status === "cancelled") {
+      if (!existingPurgeAudit) {
+        await createAuditLog(connection, {
+          jobId: id,
+          adminUserId: admin.user.id,
+          action: "purge",
+          previousStatus: "cancelled",
+          nextStatus: "cancelled",
+          reason: purgeReason
+        });
+      }
+      return {
+        id: mediaId,
+        moderation_job_id: id,
+        status: "deleted",
+        purge_pending: false
+      };
+    }
+    if (
+      !snapshot ||
+      !["active", "deleting"].includes(String(snapshot.status)) ||
+      String(snapshot.media_type) !== expectedMediaType ||
+      Number(snapshot.author_visibility_version) !== 1 ||
+      String(snapshot.moderation_status) !== "rejected" ||
+      String(snapshot.moderation_object_version || "") !== String(job.subject_version || "")
+    ) {
+      throw conflict("Retained media is no longer purgeable");
+    }
+
+    if (snapshot.status === "deleting") {
+      const [jobs] = await connection.query(
+        `SELECT * FROM session_album_object_cleanup_jobs
+         WHERE media_id = ? LIMIT 1 FOR UPDATE`,
+        [mediaId]
+      );
+      if (!jobs[0]) throw conflict("Album media deletion job is missing");
+      if (!existingPurgeAudit) {
+        await createAuditLog(connection, {
+          jobId: id,
+          adminUserId: admin.user.id,
+          action: "purge",
+          previousStatus: String(job.status),
+          nextStatus: "cancelled",
+          reason: purgeReason
+        });
+      }
+      return {
+        id: mediaId,
+        moderation_job_id: id,
+        status: "deleting",
+        purge_pending: true
+      };
+    }
+
+    const cancelled = await cancelMediaModerationJobsForDeletion(connection, snapshot);
+    const target = cancelled.find((entry) => Number(entry.id) === id);
+    if (!target && job.status !== "cancelled") {
+      throw conflict("Moderation job changed while purge was requested");
+    }
+
+    const media = await findById(connection, "session_album_photos", mediaId, {
+      forUpdate: true
+    });
+    if (
+      !media ||
+      media.status !== "active" ||
+      Number(media.author_visibility_version) !== 1 ||
+      String(media.moderation_status) !== "rejected" ||
+      String(media.moderation_object_version || "") !== String(job.subject_version || "")
+    ) {
+      throw conflict("Retained media changed while purge was requested");
+    }
+    const [changed] = await connection.query(
+      "UPDATE session_album_photos SET status = 'deleting' WHERE id = ? AND status = 'active'",
+      [mediaId]
+    );
+    if (Number(changed.affectedRows || 0) !== 1) {
+      throw conflict("Retained media changed while purge was requested");
+    }
+    await enqueueRejectedMediaCleanup(connection, media, { deletionRequested: true });
+    if (!existingPurgeAudit) {
+      await createAuditLog(connection, {
+        jobId: id,
+        adminUserId: admin.user.id,
+        action: "purge",
+        previousStatus: target?.previousStatus || "cancelled",
+        nextStatus: "cancelled",
+        reason: purgeReason
+      });
+    }
+    return {
+      id: mediaId,
+      moderation_job_id: id,
+      status: "deleting",
+      purge_pending: true
+    };
+  });
 }
 
 export async function prepareSessionAlbumPhotoDeletion(user, photoId) {

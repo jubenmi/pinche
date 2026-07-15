@@ -20,6 +20,9 @@ import {
 import { MODERATION_ERROR_CODES, MODERATION_RETRY_LEASE_MIN_MS } from "./constants.js";
 import { moderationStatusForDecision } from "./state-machine.js";
 import { emitModerationSubmissionFailure } from "./telemetry.js";
+import { shouldRetainRejectedMedia } from "./media-retention.js";
+
+export { shouldRetainRejectedMedia } from "./media-retention.js";
 
 const TEXT_SCENE_BY_SUBJECT = Object.freeze({
   user_nickname: 1,
@@ -732,7 +735,7 @@ export function createContentModerationService(dependencies) {
         toStatus: nextStatus
       });
       if (!mediaChanged) throw staleCallback("moderation media changed concurrently");
-      if (nextStatus === "rejected") {
+      if (nextStatus === "rejected" && !shouldRetainRejectedMedia(media)) {
         await deps.repository.enqueueRejectedMediaCleanup(connection, media);
       }
       emitModerationDecision(deps.emit, {
@@ -1307,7 +1310,7 @@ export function createContentModerationService(dependencies) {
         if (!mediaChanged) {
           throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "media changed concurrently");
         }
-        if (nextStatus === "rejected") {
+        if (nextStatus === "rejected" && !shouldRetainRejectedMedia(media)) {
           await deps.repository.enqueueRejectedMediaCleanup(connection, media);
         }
       } else {

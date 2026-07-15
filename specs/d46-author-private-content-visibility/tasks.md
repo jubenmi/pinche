@@ -83,13 +83,13 @@
   - [x] 未批准媒体不得返回 `download_url`、标签能力、分享能力或公共媒体 token。
   - [x] 运行：`node --test apps/api/test/content-moderation-author-media-preview.test.mjs apps/api/test/content-moderation-media-gates.test.mjs apps/api/test/album-image-response-urls.test.mjs`；预期全绿（仓库中无任务草案所写的 `album-media-cos-direct.test.mjs`，使用现有等价直传 URL 回归文件）。
 
-- [ ] D46.11 改造拒绝媒体保留、作者删除与管理员 purge。
-  - [ ] 先扩展 `apps/api/test/content-moderation-service.test.mjs` 和管理员决定测试：policy version 1 的 provider/admin reject 不 enqueue cleanup；version 0 保持 D45 行为。
-  - [ ] 修改 `apps/api/src/modules/content-moderation/service.js`，按媒体持久化 policy version 决定普通 reject 是否清理，不能只读当前配置。
-  - [ ] 修改 `apps/api/src/modules/core/service.js` 的图片/视频删除事务：同时把活动审核 job 置 cancelled、退休 attempt，再复用现有 cleanup 队列删除所有对象。
-  - [ ] 修改 `apps/api/src/modules/content-moderation/orphan-scan.js`，有 active/rejected D46 媒体记录的对象不是孤儿；缺失业务记录仍按 D45 安全窗口处理。
-  - [ ] 在 `apps/api/src/modules/content-moderation/admin-api.js` 和 `apps/api/src/server.js` 增加独立 purge 动作：system_admin、必填原因、二次确认、审计、幂等清理；普通 reject 不 purge。
-  - [ ] 验证作者删除、purge、迟到转码输出、旧 lease、对象 404 和部分清理失败均安全重试且不恢复媒体。
+- [x] D46.11 改造拒绝媒体保留、作者删除与管理员 purge。
+  - [x] 先扩展 `apps/api/test/content-moderation-service.test.mjs` 和管理员决定测试：policy version 1 的 provider/admin reject 不 enqueue cleanup；version 0 保持 D45 行为。
+  - [x] 修改 `apps/api/src/modules/content-moderation/service.js`，按媒体持久化 policy version 决定普通 reject 是否清理，不能只读当前配置。
+  - [x] 修改 `apps/api/src/modules/core/service.js` 的图片/视频删除事务：同时把活动审核 job 置 cancelled、退休 attempt，再复用现有 cleanup 队列删除所有对象。
+  - [x] 修改 `apps/api/src/modules/content-moderation/orphan-scan.js`，有 active/rejected D46 媒体记录的对象不是孤儿；缺失业务记录仍按 D45 安全窗口处理。
+  - [x] 在 `apps/api/src/modules/content-moderation/admin-api.js` 和 `apps/api/src/server.js` 增加独立 purge 动作：system_admin、必填原因、二次确认、审计、幂等清理；普通 reject 不 purge。
+  - [x] 验证作者删除、purge、迟到转码输出、旧 lease、对象 404 和部分清理失败均安全重试且不恢复媒体。
 
 - [ ] D46.12 实现小程序统一作者私有媒体体验。
   - [ ] 先新增 `apps/miniprogram/test/authorPrivateContent.test.mjs`，锁定三类文案、原位置显示、真实预览、禁用下载/标签/分享、删除与账号切换清理。
@@ -162,3 +162,5 @@
 - 2026-07-15 D46.9 GREEN：评价只在 `getMySessionReview` 覆盖本人编辑态，公开评价查询不读草稿；聊天只给发送者追加无正式 ID 的临时气泡，未读计算先排除作者投影；置顶仅覆盖操作者读取。状态角标、取消和 rejected 编辑重提已接入评价与 talk 两套小程序组件。talk 全包、D18/D23、D45 共 496 项、`build:mp-weixin`、`npm run d46:check` 与 diff 检查全部通过。D45 常量旧断言同步纳入 D46 用户取消终态 `cancelled`。
 - 2026-07-15 D46.10 RED：作者媒体专项测试按预期因缺少 `author-media-preview.js` 失败；补齐纯策略后，路由静态断言继续因尚未接入专属图片能力路径失败，证明服务器接线检查有效。
 - 2026-07-15 D46.10 GREEN：图片仅 uploader + v1 获得最长 60 秒的独立 HMAC 能力 URL，能力载荷只含对象版本指纹；视频 URL API 仅本人可把合法 display/source 签为 60 秒 COS URL。响应不含对象 Key/ETag、下载、标签、封面或分享能力，公共 getter 保持原批准门禁。专项与图片/视频/COS/D45 媒体回归共 94 项及 URL 定向 12 项通过。
+- 2026-07-15 D46.11 RED：新增拒绝保留/删除/purge 契约测试后，按预期因缺少 `parseAdminModerationPurgeBody` 与持久化媒体保留判断导出失败；不是测试语法错误。补齐初版后，迟到删除中视频用例继续发现 processing lookup 只允许 active，证明 deleting 回调合并分支尚未真正可达。
+- 2026-07-15 D46.11 GREEN：普通 provider/admin reject 仅对持久化 `author_visibility_version=1` 的 active 图片/视频保留对象，版本 0 继续 D45 清理。作者图片/视频 DELETE 统一取消精确版本审核、退休 attempt、标记 deleting 并复用耐久 cleanup；旧 lease 重排不丢 attempts。独立管理员 purge 要求 system_admin、原因和字面量 `PURGE`，重复/已完成请求只审计一次。active D46 拒绝视频可吸收合法迟到 display/cover，deleting 只扩充清理；orphan scan 将 active/rejected D46 记录视为受保护引用。D45 单元回归 514 项、D45/D46 静态检查、D42 删除兼容检查及 diff 检查全部通过。
