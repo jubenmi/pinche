@@ -174,7 +174,7 @@
   - 2026-07-13：用户确认停止新 Redis 采购；未提交订单、未读取密码，已建安全组保留但不绑定实例。当前只保留本地假客户端与离线 `dry_run_deferred` 调试，不使用旧 `cache`、生产数据库/COS/回调或真实服务商请求；三类生产接收门禁继续 `closed`。这不替代隔离非生产环境，D45.18 继续未完成。
   - 2026-07-13：用户确认释放此前仅为 D45 非生产联调创建的逻辑库 `pinche_d45_staging` 及同名专用账号；已先核验账号仅有该库的授权，随后依次删除账号与逻辑库，并在腾讯云控制台复核两者均已不存在。生产库 `pinche`、TDSQL-C 集群、现有 Redis 和未绑定安全组未改动；此前的逻辑库隔离前置已撤销，D45.18 与三类生产接收门禁状态不变。
   - 2026-07-13：撤库后的本地/离线复核完成：`npm run d45:unit` 366/366、`npm run d45:check` 通过、`npm run d45:smoke` 71/71；在空环境中运行源码锁定的 `.invalid` 契约只得到 `dry_run_deferred`。未读取实际密钥、未联网、未发送真实审核请求，也未改变生产接收门禁。历史实现计划已标注 D45.18 延期并以本任务清单为准；真实联调继续未完成。
-  - [ ] D45.18A 实现并验证生产受控预演（有限验证）。
+  - [x] D45.18A 实现并验证生产受控预演（有限验证）。
     - 2026-07-14：API、retry、orphan scan 与 preflight timeout 已按用户确认原地重建为同一不可变镜像 `sha256:428e1501f2412e38474d50715d7e7317994ab46b38049eec5e2e2e447590971b`；API `/health`、`/health/db`、数据库 schema 与 `pinche_internal`/`proxy` 网络正常，三个 intake 仍为 `closed`。用户已当次确认执行微信文本与图片无害预检；当前按 `wechat-text-v1` → `wechat-image-v1` 顺序进行，尚未获得真实结果，故本项保持未勾选。
     - 2026-07-14：首次 `wechat-text-v1` 一次性 Job 在任何微信出站请求前关闭式失败，脱敏错误为 `valid WECHAT_CONTENT_SECURITY_EVENT_AES_KEY`；核验确认运行时密钥为微信后台允许的 43 位字符并可解码为 32 字节，根因是应用额外要求 Base64 规范重编码完全一致。已先新增回归用例复现，再将校验收敛为“合法 43 位字符且解码为 32 字节”；`npm run d45:unit` 446/446、`npm run d45:check` 通过。修复尚待 CI 发布并重新执行文本、图片预检，三个 intake 仍为 `closed`，故本项保持未勾选。
     - 2026-07-14：上述启动校验修复经 develop/main/publish CI 成功发布，API 与三个 D45 Worker 已更新到不可变镜像 `sha256:7227dcc1217d91bd57bf1f455ea8fccb9a4d0e2c48d5736a92e6484d97ce6e34`；四容器均 running，API 健康检查、数据库 schema、双网络与三个 `closed` 门禁正常。真实 `wechat-text-v1` 已返回 `passed`；`wechat-image-v1` 已提交并进入 `awaiting_callback`，但首次真实回调被内部重复的 AES 规范重编码校验关闭式拒绝为 `CONTENT_MODERATION_INVALID_CALLBACK`，未发布内容。已以失败测试复现并将回调解密校验收敛为同一微信 43 位/32 字节规则，`npm run d45:unit` 447/447、`npm run d45:check` 通过；待再次 CI 发布并由微信重试该回调或在受控超时后重新预检，故本项保持未勾选。
@@ -185,6 +185,8 @@
     - 2026-07-14：可观测性修复发布后，第三次隔离 `tencent-video-v1` 预检实际以正确的一次性 Job 命令运行，未发布端口、只接入 `pinche_internal`，随后安全终结为 `failed/error`、`failure_code=AccessDenied`、`cleanup_status=deleted`。只读核对确认：运行 COS 凭证归属已关联最小 CI 策略的子账号；策略同时精确允许 `ci:CreateAuditingJobs` 和向 `CI_QCSRole` 传递角色；该角色具备 CI/COS 权限且受信任主体为 CI；目标 COS 桶已绑定数据万象，运行时桶、地域和视频 BizType 均与控制台默认视频策略一致。操作审计在近一天 CI 范围内仍未出现对应事件。故当前问题收敛为腾讯云侧内容审核服务授权或账号状态，未扩大 CAM 权限、未改变 API/Worker/门禁；待获取腾讯云支持的账号侧诊断后再复测，D45.18A 保持未勾选。
     - 2026-07-15：腾讯云工单 `202607144002` 已确认账号、欠费/封禁、桶 ACL、Bucket Policy 与防盗链无异常，并要求补充失败请求的 RequestId；控制台重新核对 `CI_QCSRole` 已关联 `QcloudCOSDataFullControl`、`QcloudAccessForCIRole`、`QcloudPartAccessForCIRole` 且未设置权限边界。经用户确认，以不可变镜像创建一次严格隔离的诊断预检容器：无发布端口、无卷挂载、无生产标签、仅连接 `pinche_internal`、重启策略为 `Never`，且未替换或重启任何现有容器。`tencent-video-v1` 于 2026-07-15 09:46（UTC+8）获得腾讯真实响应 HTTP `401`、provider Code `AccessDenied` 与有效 RequestId；运行 `fd2f0f17-0932-4d8b-9ebb-b32a7582b530` 已终结为 `failed/error`、`cleanup_status=deleted`，`tencent_video` 活动锁为空。RequestId 仅回填腾讯云工单，未写入应用数据或仓库；工单已于 09:52 补充并恢复“处理中”。诊断容器随后已删除，未删除卷、未扩大 CAM 权限、未改变三个 `closed` intake。由于视频审核仍未通过且运行表中的失败码仍归一化为 `CONTENT_MODERATION_UPSTREAM_RESPONSE_INVALID`，当前继续等待腾讯云定位实际拒绝点，D45.18A 保持未勾选。
     - 2026-07-15：腾讯云工程师已基于上述 RequestId 定位错误码 `11009`，结论为请求未通过签名校验，腾讯服务端计算签名与客户端签名不一致；首要核对项为签名时与实际发送时的 `Content-Type` 一致性，并建议按官方 COS 签名规范或 SDK 对照。官方视频审核实际案例在仍发送 `Host`、`Content-Length` 和 `Content-Type: application/xml` 的同时使用空 `q-header-list`；新增回归先以旧实现的 `content-length;content-type;date;host` 签名头失败（28/29），再将腾讯视频 transport 的参与签名头收窄为空并保持实际请求头不变后转绿（29/29）。本地 `d45:unit` 449/449、`d45:check`、`d45:smoke` 71/71、API 语法、完整 `npm run check` 与差异检查均通过；未改 CAM、COS、回调、状态机或三个 `closed` intake。修复尚未发布且真实视频预检仍未重跑，D45.18A 保持未勾选。
+    - 2026-07-15：签名修复提交 `fec0563` 已按 develop（Actions `29386266113`）→ main `3860241`（Actions `29386365146`）→ publish `95fc86e`（Actions `29386450669`）逐级成功发布，生产 API 不可变摘要为 `sha256:65577299838f2d196f62ecf40f62d71fb3f62fa51d5fc4e1c247e900ea01b1a5`。经用户确认仅原地替换 API、retry、orphan scan 与 preflight timeout 四个 D45 目标容器，四者均为该摘要并保持 running；替换后容器内回环与 `proxy` 地址均返回 200、同一 Traefik 的其他 HTTPS 路由正常，但 `api.pinche.jubenmi.com` 真实源站超时，该现象判断与动态路由仍使用替换前后端端点一致。因此仅重启 `pinche-api-1` 触发 Docker 路由事件，未重启 Traefik或其他服务；随后真实源站 `/health` 与 `/health/db` 均恢复 200、数据库 schema 完整。
+    - 2026-07-15：以同一不可变摘要运行唯一一次 `tencent-video-v1` 隔离容器：禁止拉取、无发布端口、无卷、无标签、仅连接 `pinche_internal`、重启策略 `Never` 且退出自动删除；启动前 provider 无活动锁且距上次运行已超过 15 分钟，三个 intake 均为 `closed`。腾讯真实审核与 Detail 回调将运行 `7abfa600-e08a-4fbb-b9da-8161725b99b6` 于 2026-07-15 16:30:20（UTC+8）终结为 `passed/pass`、`cleanup_status=deleted`、失败码为空，`tencent_video` 活动锁已释放；从该运行开始至完成，普通审核任务、普通 provider attempt、文本提案、审核日志和相册媒体新增数均为 0。一次性容器已自动删除，三个 D45 Worker 继续 running，三个 intake 仍为 `closed`。结合既有 `wechat-text-v1` 与 `wechat-image-v1` 的真实 `passed/pass` 和清理证据，D45.18A 完成；脱敏结果已实际补充至腾讯云工单 `202607144002`。D45.18B 仍未完成，不据此开启任何 intake。
     - 2026-07-14：执行前只读审计发现手册中的一次性 Job 命令未显式把 `D45_PREFLIGHT_CONFIRMATION` 传给容器，且未将 `PINCHE_API_IMAGE` 固定为已核验 digest，直接执行会关闭式失败或存在拉取 `latest` 的版本偏差。已先以回归锁定并修正手册为 `--pull never`、不可变镜像引用和仅该 `--rm` 容器的 `-e` 传入；未运行 Job、未读取密钥、未改变 API/Worker/门禁。下一步仅做运行时脱敏前置核验。
     - 2026-07-14：微信后台真实保存返回“服务器地址验证失败”。只读核对线上路由与微信官方文档后确认，首版 GET 错用了安全模式 POST 的 `msg_signature`、AES 解密和 AppID 校验；官方 GET 实际只以 `signature=SHA1(sort(Token,timestamp,nonce))` 验签并原样返回明文 `echostr`。用户确认采用最小方案 A：仅纠正 GET 及其 spec/测试/手册，安全模式 JSON POST、状态机、门禁和预演保持不变；修复、部署和真实保存通过前，本项与三个 intake 继续保持未完成/`closed`。
     - 2026-07-14（首版 GET 实现前的历史记录）：已根据微信后台实际“消息推送配置”页面确认，保存安全模式回调前必须完成 GET URL 验证，且生产配置必须选择 JSON。当时服务只实现 POST 加密 JSON 事件；经用户确认，按 Requirement 5/13 先补同一路由的最小 GET 验证与自动化回归，三个 intake 继续 `closed`，不提交控制台配置。
@@ -194,23 +196,22 @@
     - 2026-07-13：上线前实证发现真实微信文本客户端返回 `suggestion` 而非 `resultCategory`，预演会将无害 `pass` 误判为失败；同时异步回调完成、清理失败和超时缺少可证明的终态/解锁保障。当前按 Requirement 13 先补回归与最小状态机修正；生产 Stack、密钥和三个 intake 均未改动。
     - 2026-07-13：第二轮上线审查发现三个必须先修正的验收缺口：预演视频误走普通源对象白名单、`started`/终态运行可能遗留 provider 锁、以及图片预演的未知 trace 可能抢占普通用户回调。当前仅补这些 Requirement 13 所需的回归与最小修正；发布、密钥和三个 intake 继续不动。
     - 2026-07-13：上线前最终修正完成并经独立复核：真实微信文本按 `suggestion` 映射；图片/视频预演走独立严格 transport；`started`、同步、回调和超时终态均原子解锁；服务商外发在身份、URL 或关联准备完成后紧邻刷新 guard；关闭预演后保留关联 HMAC 以收口既有回调，未知普通图片回调不被抢占；同步、回调和超时的 COS 清理失败均发安全高优告警。完整 `npm run check` 通过，尚未部署、读取生产密钥、发送真实请求或改变任一 intake；D45.18A 继续未勾选。
-    - [ ] 新增默认关闭的一次性 API 容器 Job；仅在生产、精确确认、指定有效 `system_admin`、完整 provider 配置和三个 intake 均为 `closed` 时运行；不新增 HTTP 路由或后台入口。
-    - [ ] 新增隔离预演运行/尝试存储、单活动运行与 15 分钟人工限频；只保存不可逆 provider 关联摘要和最小审计，不复用用户审核、文本提案、媒体、普通重试或通知。
-    - [ ] 使用代码白名单无害 case：文本以专用测试管理员 openid 调用微信；图片/视频使用专用私有 COS 前缀和严格白名单；调用方不能提供正文、openid、对象 Key、URL、回调地址或 provider 参数。
-    - [ ] 微信/腾讯回调先解析预演关联，只更新预演状态；重复/迟到事件幂等，未命中保持现有用户回调链；任何结果不得调用用户状态机或签发用户 URL。
-    - [ ] 为同一路由补齐微信官方 GET URL 验证；以 `signature` 对 Token、timestamp、nonce 的三参数 SHA-1 结果验签并原样回显明文 `echostr`，GET 不读取或使用 `msg_signature`、AESKey、AppID、`encrypt_type` 或 body；无效验证无副作用且不泄漏请求参数或密钥。
+    - [x] 新增默认关闭的一次性 API 容器 Job；仅在生产、精确确认、指定有效 `system_admin`、完整 provider 配置和三个 intake 均为 `closed` 时运行；不新增 HTTP 路由或后台入口。
+    - [x] 新增隔离预演运行/尝试存储、单活动运行与 15 分钟人工限频；只保存不可逆 provider 关联摘要和最小审计，不复用用户审核、文本提案、媒体、普通重试或通知。
+    - [x] 使用代码白名单无害 case：文本以专用测试管理员 openid 调用微信；图片/视频使用专用私有 COS 前缀和严格白名单；调用方不能提供正文、openid、对象 Key、URL、回调地址或 provider 参数。
+    - [x] 微信/腾讯回调先解析预演关联，只更新预演状态；重复/迟到事件幂等，未命中保持现有用户回调链；任何结果不得调用用户状态机或签发用户 URL。
+    - [x] 为同一路由补齐微信官方 GET URL 验证；以 `signature` 对 Token、timestamp、nonce 的三参数 SHA-1 结果验签并原样回显明文 `echostr`，GET 不读取或使用 `msg_signature`、AESKey、AppID、`encrypt_type` 或 body；无效验证无副作用且不泄漏请求参数或密钥。
       - [x] 复核 requirements v1.3、design v1.3、tasks v1.2 与生产手册中的 GET/POST 协议边界；2026-07-14 用户已确认该版 spec，可以进入 TDD 实施。
       - [x] 先补失败测试，再覆盖微信官方示例、伪造/缺失 `signature`、精确回显不裁剪，以及仅携带 `msg_signature` 与加密 `echostr` 的首版错误协议必须被拒绝；静态路由检查须区分 GET 的 `signature` 与 POST 的 `msg_signature`。
       - 2026-07-14：GET 协议纠偏实现由提交 `46fd0f0` 完成，live-contract 加固最终提交为 `1bb066c`；微信官方 GET 回调定向回归 17/17、live-contract 定向回归 11/11、`npm run d45:unit` talk 5/5 且主测试 445/445、`npm run d45:check` 与 `npm run d45:smoke` 71/71 均通过；完整 `npm run check` 通过。
       - [x] 按 develop → main → publish 顺序逐级完成 CI，记录三分支提交、Actions run 与发布镜像摘要；任一级失败立即停止。
         - 2026-07-14：develop `f2b702a`（Actions `29312085597`）、main `9dc3332`（Actions `29312212208`）和 publish `79f1bb9`（Actions `29312685672`）均成功；publish API 不可变摘要为 `sha256:428e1501f2412e38474d50715d7e7317994ab46b38049eec5e2e2e447590971b`。
-      - [ ] 经当次确认仅替换 `pinche-api-1`，核对不可变镜像摘要、`/health`、`/health/db` 和三个 intake 仍为 `closed`；其他容器不得重启或改动。
-        - 2026-07-14：此部署边界未满足，故保持未完成。publish 后 Watchtower 自动更新了 `pinche-api-1` 和 `pinche-admin-web-1`；未执行人工重建。API 已解析到上述不可变摘要，`/health` 与 `/health/db` 均为 200、裸回调为 400，admin 首页为 200；审核 Worker 未变。后续发布必须先处理 Watchtower 的 `latest` 监听范围，不能复用本次流程。
+      - 2026-07-14（历史部署边界，未满足；已由 2026-07-15 经用户确认的四个 D45 容器边界替代）：原计划仅替换 `pinche-api-1`，核对不可变镜像摘要、`/health`、`/health/db` 和三个 intake 仍为 `closed`，且不重启或改动其他容器。该次 publish 后 Watchtower 自动更新了 `pinche-api-1` 和 `pinche-admin-web-1`，未执行人工重建；API 已解析到当时不可变摘要，`/health` 与 `/health/db` 均为 200、裸回调为 400，admin 首页为 200，审核 Worker 未变。该失败记录不作为完成项；本轮最终部署证据以上方 2026-07-15 审计记录为准。
       - [x] 微信后台以安全模式与 JSON 数据格式真实保存成功，官方 GET 验证通过且配置持久化；脱敏确认未写入审核、媒体或预演状态。
         - 2026-07-14：用户在微信小程序后台完成保存，平台回显“服务器配置已完成”，并提示配置将在 5 分钟内生效；未记录 Token、AESKey、签名或回调请求参数。
       - 2026-07-14：历史首版曾以“加密 `echostr` + `msg_signature` + AES/AppID”实现并通过定向回归、`d45:unit`（438/438）、`d45:check`、`d45:smoke`（71/71）和完整 `npm run check`；该测试与错误实现互相印证，已被本次协议纠偏取代，不计作任务完成证据。真实微信后台保存失败，待按官方 GET 协议修复、重新验证、部署并完成真实保存后才能勾选；D45.18A 父项与三个 intake 继续未完成/`closed`。
-    - [ ] 依次验证文本、图片、视频无害 `Pass`、鉴权、私有对象抓取、回调认证与清理；完成/失败/超时均核验预演对象删除，且所有门禁仍为 `closed`。
-    - [ ] 新增预演单测、回调隔离/重复测试、门禁/配置/日志脱敏检查与生产手册；记录仅含 case、服务商、结果类别、耗时、配置/镜像指纹和清理结论。
+    - [x] 依次验证文本、图片、视频无害 `Pass`、鉴权、私有对象抓取、回调认证与清理；完成/失败/超时均核验预演对象删除，且所有门禁仍为 `closed`。
+    - [x] 新增预演单测、回调隔离/重复测试、门禁/配置/日志脱敏检查与生产手册；记录仅含 case、服务商、结果类别、耗时、配置/镜像指纹和清理结论。
   - [ ] D45.18B 完整结果与故障放行验证（不由生产预演替代）。
     - [ ] 以假客户端、签名回放或服务商正式支持的隔离能力验证微信/腾讯 `Review`/`Block`/`Error`、超时、权限、额度、重复/过期回调和拒绝后清理；不得在生产发送违规样本或故意破坏生产凭证。
     - [ ] 只有 D45.18A 与本项均完成、独立放行审批通过且观察指标满足条件后，才可另行讨论将任一 intake 切为 `moderated`；本任务不执行该切换。
