@@ -260,7 +260,7 @@ function createTencentVideoModerationTransportWithObjectValidator({
     const authorization = buildCosAuthorization({
       method: "POST",
       key: endpoint,
-      headers,
+      headers: {},
       config: { secretId: config.secretId, secretKey: config.secretKey }
     });
     const deadline = createRequestDeadline(timeoutMs);
