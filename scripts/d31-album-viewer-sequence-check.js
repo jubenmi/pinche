@@ -719,6 +719,9 @@ function runAlbumPageMediaWindowCheck(component) {
     isPublishedAlbumMedia(photo) {
       return photo?.moderation_status === "approved";
     },
+    isPreviewableAlbumMedia(photo) {
+      return this.isPublishedAlbumMedia(photo);
+    },
     isCurrentPublishedAlbumMedia(photo) {
       return (
         this.isPublishedAlbumMedia(photo) &&
@@ -727,6 +730,9 @@ function runAlbumPageMediaWindowCheck(component) {
             String(row.id) === String(photo?.id) && this.isPublishedAlbumMedia(row)
         )
       );
+    },
+    isCurrentPreviewableAlbumMedia(photo) {
+      return this.isCurrentPublishedAlbumMedia(photo);
     },
     albumMediaProgressKey(photoId, variant = "preview") {
       return String(photoId) + ":" + variant;

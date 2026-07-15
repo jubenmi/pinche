@@ -480,7 +480,7 @@
       :visible="previewOverlayVisible"
       :photos="previewPhotos"
       :initial-index="previewInitialIndex"
-      :allow-download="!timelineMode"
+      :allow-download="previewAllowsDownload"
       :media-progress="previewMediaProgress"
       @close="closePhotoPreview"
       @change="handlePreviewChange"
@@ -569,6 +569,7 @@ import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import AlbumImageViewer from "../../components/AlbumImageViewer.vue";
 import {
+  AUTH_CHANGE_EVENT,
   apiUrl,
   dataOf,
   ensureLoggedIn,
@@ -593,9 +594,12 @@ import {
   createAlbumMediaRefreshController,
   createAlbumWaterfallRenderAuthority,
   findCurrentAlbumMediaRow,
+  isAuthorPrivateAlbumMedia as isAuthorPrivateAlbumMediaRow,
+  isCurrentPreviewableAlbumMedia as isCurrentPreviewableAlbumMediaRow,
   isCurrentPublishedAlbumMedia as isCurrentPublishedAlbumMediaRow,
+  normalizeAuthorPrivateAlbumImageUrls,
   normalizeAlbumImageUrls,
-  pruneUnpublishedAlbumMediaCache
+  pruneAlbumMediaPreviewCache
 } from "../../utils/albumMediaUrls";
 import {
   canOpenAlbumMediaPreview,
@@ -607,7 +611,10 @@ import {
 } from "../../utils/albumVideo";
 import { classifyAlbumMediaSelection } from "../../utils/albumMediaSelection";
 import { runExclusiveAlbumMediaTask } from "../../utils/albumMediaOperation";
-import { contentModerationStatusText } from "../../utils/contentModeration";
+import {
+  authorPrivateContentModerationStatusText,
+  contentModerationStatusText
+} from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
@@ -712,6 +719,9 @@ export default {
     },
     previewCurrentPhoto() {
       return this.previewPhotos[this.previewCurrentIndex] || null;
+    },
+    previewAllowsDownload() {
+      return !this.timelineMode && this.isDownloadableAlbumImage(this.previewCurrentPhoto);
     },
     previewMediaProgress() {
       const result = {};
@@ -972,6 +982,7 @@ export default {
       await this.loadPublicAlbum();
       return;
     }
+    this.observeAlbumAuthChanges();
     const auth = await ensureLoggedIn({
       content: "登录后可以查看车局相册。"
     });
@@ -985,24 +996,32 @@ export default {
     await this.ensureAlbumShareToken();
   },
   async onShow() {
-    if (this.consumePreviewReturnRefreshSkip()) {
-      return;
-    }
     if (this.timelineMode) {
+      if (this.consumePreviewReturnRefreshSkip()) {
+        return;
+      }
       if (this.sessionId && this.albumShareToken) {
         await this.albumMediaRefresh?.refresh();
       }
       return;
     }
     const auth = getCurrentUser();
-    this.currentUserId = auth.user?.id || this.currentUserId;
-    this.currentRoles = auth.roles || this.currentRoles;
+    const accountChanged = this.handleAlbumAuthChange(auth);
+    const skipRefresh = this.consumePreviewReturnRefreshSkip();
+    if (skipRefresh && !accountChanged) {
+      return;
+    }
     if (this.sessionId && this.currentUserId) {
       await this.albumMediaRefresh?.refresh();
       await this.ensureAlbumShareToken();
     }
   },
+  onHide() {
+    this.clearAuthorPrivateAlbumState();
+  },
   onUnload() {
+    this.clearAuthorPrivateAlbumState();
+    this.unobserveAlbumAuthChanges();
     this.albumMediaRefresh?.dispose();
     this.disconnectPhotoObservers();
   },
@@ -1103,6 +1122,26 @@ export default {
       }
       this.skipNextAlbumRefreshOnShow = false;
       return true;
+    },
+    observeAlbumAuthChanges() {
+      if (typeof uni !== "undefined" && typeof uni.$on === "function") {
+        uni.$on(AUTH_CHANGE_EVENT, this.handleAlbumAuthChange);
+      }
+    },
+    unobserveAlbumAuthChanges() {
+      if (typeof uni !== "undefined" && typeof uni.$off === "function") {
+        uni.$off(AUTH_CHANGE_EVENT, this.handleAlbumAuthChange);
+      }
+    },
+    handleAlbumAuthChange(auth = {}) {
+      const nextUserId = auth?.user?.id || "";
+      const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
+      if (accountChanged) {
+        this.clearAuthorPrivateAlbumState();
+      }
+      this.currentUserId = nextUserId;
+      this.currentRoles = Array.isArray(auth?.roles) ? auth.roles : [];
+      return accountChanged;
     },
     updateTopActionsFloating() {
       const canShowActions = this.canUpload || this.photos.length || this.taggablePhotos.length;
@@ -1537,6 +1576,10 @@ export default {
       const mediaType = photo.media_type === "video" ? "video" : "image";
       const moderationStatus = photo.moderation_status || "";
       const published = isModerationPublished(moderationStatus);
+      const authorPrivate =
+        !this.timelineMode &&
+        isAuthorPrivateAlbumMediaRow(photo, this.currentUserId);
+      const previewable = published || authorPrivate;
       if (mediaType === "video") {
         return {
           ...photo,
@@ -1555,25 +1598,27 @@ export default {
       }
       const selectedUrls = published
         ? normalizeAlbumImageUrls(photo)
-        : { thumbnailUrl: "", previewUrl: "", downloadUrl: "", expiresAt: "" };
-      const rawImageUrl = published
+        : authorPrivate
+          ? normalizeAuthorPrivateAlbumImageUrls(photo, this.currentUserId)
+          : { thumbnailUrl: "", previewUrl: "", downloadUrl: "", expiresAt: "" };
+      const rawImageUrl = previewable
         ? photo.image_url || photo.preview_url || selectedUrls.previewUrl || ""
         : "";
-      const rawPreviewUrl = published ? photo.preview_url || rawImageUrl : "";
-      const rawThumbnailUrl = published ? photo.thumbnail_url || rawPreviewUrl || rawImageUrl : "";
+      const rawPreviewUrl = previewable ? photo.preview_url || rawImageUrl : "";
+      const rawThumbnailUrl = previewable ? photo.thumbnail_url || rawPreviewUrl || rawImageUrl : "";
       const imageUrl = this.normalizeAlbumMediaUrl(rawImageUrl);
       const previewUrl = this.normalizeAlbumMediaUrl(rawPreviewUrl);
       const thumbnailUrl = this.normalizeAlbumMediaUrl(rawThumbnailUrl);
-      const previewLoadUrl = published
+      const previewLoadUrl = previewable
         ? this.normalizeAlbumMediaUrl(photo.preview_load_url || "")
         : "";
-      const thumbnailLoadUrl = published
+      const thumbnailLoadUrl = previewable
         ? this.normalizeAlbumMediaUrl(photo.thumbnail_load_url || "")
         : "";
-      const thumbnailDisplayUrl = published
+      const thumbnailDisplayUrl = previewable
         ? this.normalizeAlbumMediaUrl(selectedUrls.thumbnailUrl)
         : "";
-      const previewDisplayUrl = published
+      const previewDisplayUrl = previewable
         ? this.normalizeAlbumMediaUrl(selectedUrls.previewUrl)
         : "";
       const downloadUrl = published
@@ -1599,7 +1644,9 @@ export default {
       };
     },
     mediaUrlForPhoto(photo, variant = "preview") {
-      if (!isModerationPublished(photo?.moderation_status)) {
+      const published = isModerationPublished(photo?.moderation_status);
+      const authorPrivate = this.isAuthorPrivateAlbumMedia(photo);
+      if (!published && !authorPrivate) {
         return "";
       }
       if (photo?.media_type === "video") {
@@ -1617,6 +1664,7 @@ export default {
         );
       }
       if (variant === "download") {
+        if (!published) return "";
         return photo.download_url || photo.preview_display_url || photo.preview_load_url ||
           photo.preview_url || photo.image_url || "";
       }
@@ -1667,7 +1715,7 @@ export default {
     },
     setAlbumMediaProgress(photoId, variant, values) {
       const currentPhoto = this.photos.find((photo) => Number(photo.id) === Number(photoId));
-      if (!this.isPublishedAlbumMedia(currentPhoto)) {
+      if (!this.isPreviewableAlbumMedia(currentPhoto)) {
         return;
       }
       const key = this.albumMediaProgressKey(photoId, variant);
@@ -1721,8 +1769,11 @@ export default {
     },
     async downloadAlbumImage(photo, variant = "preview", options = {}) {
       let targetPhoto = this.latestPreviewPhoto(photo);
-      if (!this.isCurrentPublishedAlbumMedia(targetPhoto)) {
+      if (!this.isCurrentPreviewableAlbumMedia(targetPhoto)) {
         throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+      }
+      if (this.isAuthorPrivateAlbumMedia(targetPhoto) && variant === "download") {
+        throw albumMediaError("MEDIA_DOWNLOAD_FORBIDDEN", "仅自己可见内容不能下载");
       }
       if (!options.skipRefresh && this.shouldRefreshAlbumMediaBeforeDownload(targetPhoto, variant)) {
         const refreshed = await this.refreshAlbumMediaUrlsForPreview();
@@ -1730,8 +1781,15 @@ export default {
           targetPhoto = this.latestPreviewPhoto(targetPhoto);
         }
       }
-      if (!this.isCurrentPublishedAlbumMedia(targetPhoto)) {
+      if (!this.isCurrentPreviewableAlbumMedia(targetPhoto)) {
         throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+      }
+      if (this.isAuthorPrivateAlbumMedia(targetPhoto)) {
+        const previewUrl = this.mediaUrlForPhoto(targetPhoto, variant);
+        if (!previewUrl) {
+          throw albumMediaError("MEDIA_URL_EXPIRED", "图片地址刷新失败");
+        }
+        return previewUrl;
       }
       try {
         return await this.downloadAlbumImageOnce(targetPhoto, variant);
@@ -1757,8 +1815,13 @@ export default {
         throw albumMediaError("MEDIA_URL_EXPIRED", "图片地址刷新失败");
       }
       const current = this.latestPreviewPhoto(photo);
-      if (!this.isCurrentPublishedAlbumMedia(current)) {
+      if (!this.isCurrentPreviewableAlbumMedia(current)) {
         throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+      }
+      if (this.isAuthorPrivateAlbumMedia(current)) {
+        const previewUrl = this.mediaUrlForPhoto(current, variant);
+        if (!previewUrl) throw albumMediaError("MEDIA_URL_EXPIRED", "图片地址刷新后仍不可用");
+        return previewUrl;
       }
       try {
         return await this.downloadAlbumImageOnce(current, variant);
@@ -1775,6 +1838,9 @@ export default {
       });
     },
     albumMediaDownloadContext(photo, variant = "preview") {
+      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+        return null;
+      }
       const token = getToken();
       const filePath = albumMediaCachePath(photo.id, variant);
       const imageUrl = apiUrl(this.mediaUrlForPhoto(photo, variant));
@@ -2021,12 +2087,12 @@ export default {
       const photos = this.photos || [];
       const hydrated = await Promise.all(
         photos.map(async (photo) => {
-          if (!this.isCurrentPublishedAlbumMedia(photo)) {
+          if (!this.isCurrentPreviewableAlbumMedia(photo)) {
             return { ...photo, display_url: "" };
           }
           try {
             const displayUrl = await this.downloadAlbumImage(photo);
-            if (!this.isCurrentPublishedAlbumMedia(photo)) {
+            if (!this.isCurrentPreviewableAlbumMedia(photo)) {
               return { ...photo, display_url: "" };
             }
             return {
@@ -2048,7 +2114,7 @@ export default {
     },
     updatePhotoDisplayUrl(photoId, displayUrl) {
       const currentPhoto = this.photos.find((photo) => Number(photo.id) === Number(photoId));
-      if (!this.isPublishedAlbumMedia(currentPhoto)) {
+      if (!this.isPreviewableAlbumMedia(currentPhoto)) {
         return;
       }
       this.photos = this.photos.map((photo) =>
@@ -2061,14 +2127,17 @@ export default {
       );
     },
     pruneUnpublishedAlbumMediaState(photos = this.photos) {
-      const publishedIds = new Set(
+      const previewableIds = new Set(
         (photos || [])
-          .filter((photo) => this.isPublishedAlbumMedia(photo))
+          .filter((photo) => this.isPreviewableAlbumMedia(photo))
           .map((photo) => String(photo.id))
       );
-      const keepPhotoId = (photoId) => publishedIds.has(String(photoId));
+      const keepPhotoId = (photoId) => previewableIds.has(String(photoId));
       const keepMediaKey = (key) => keepPhotoId(String(key).split(":")[0]);
-      this.visiblePhotoMedia = pruneUnpublishedAlbumMediaCache(this.visiblePhotoMedia, photos);
+      this.visiblePhotoMedia = pruneAlbumMediaPreviewCache(this.visiblePhotoMedia, photos, {
+        viewerUserId: this.currentUserId,
+        timelineMode: this.timelineMode
+      });
       this.visiblePhotoMediaRequests = Object.fromEntries(
         Object.entries(this.visiblePhotoMediaRequests || {}).filter(([key]) => keepMediaKey(key))
       );
@@ -2094,12 +2163,12 @@ export default {
       const photosById = new Map((photos || []).map((photo) => [String(photo.id), photo]));
       const nextPreviewPhotos = this.previewPhotos
         .map((preview) => photosById.get(String(preview.id)))
-        .filter((photo) => this.isPublishedAlbumMedia(photo));
-      const activeStillPublished =
+        .filter((photo) => this.isPreviewableAlbumMedia(photo));
+      const activeStillPreviewable =
         activePreviewId === null ||
         nextPreviewPhotos.some((photo) => String(photo.id) === String(activePreviewId));
       this.previewPhotos = nextPreviewPhotos;
-      if (this.previewOverlayVisible && !activeStillPublished) {
+      if (this.previewOverlayVisible && !activeStillPreviewable) {
         this.closePhotoPreview();
         return;
       }
@@ -2111,9 +2180,28 @@ export default {
         this.previewInitialIndex = this.previewCurrentIndex;
       }
     },
+    clearAuthorPrivateAlbumState() {
+      this.albumListRequestAuthority.begin();
+      this.mediaLoadSerial += 1;
+      this.skipNextAlbumRefreshOnShow = false;
+      this.photos = (this.photos || []).filter(
+        (photo) => !isAuthorPrivateAlbumMediaRow(photo, this.currentUserId)
+      );
+      this.previewPhotos = (this.previewPhotos || []).filter(
+        (photo) => !isAuthorPrivateAlbumMediaRow(photo, this.currentUserId)
+      );
+      this.visiblePhotoMediaRequests = {};
+      this.previewVideoUrlRequests = {};
+      this.mediaRefreshAttempts = {};
+      this.pruneUnpublishedAlbumMediaState(this.photos);
+      if (this.previewOverlayVisible && this.previewPhotos.length === 0) {
+        this.closePhotoPreview();
+      }
+      this.refreshWaterfall();
+    },
     setVisiblePhotoMedia(photoId, values) {
       const currentPhoto = this.photos.find((photo) => Number(photo.id) === Number(photoId));
-      if (!this.isPublishedAlbumMedia(currentPhoto)) {
+      if (!this.isPreviewableAlbumMedia(currentPhoto)) {
         return;
       }
       const key = String(photoId);
@@ -2131,7 +2219,7 @@ export default {
         return;
       }
       const currentPhoto = this.photos.find((photo) => String(photo.id) === key);
-      if (!this.isPublishedAlbumMedia(currentPhoto)) {
+      if (!this.isPreviewableAlbumMedia(currentPhoto)) {
         return;
       }
       const photoIndex = this.previewPhotos.findIndex((photo) => String(photo.id) === key);
@@ -2156,7 +2244,7 @@ export default {
     },
     setListThumbnailState(photo, values) {
       const key = this.listThumbnailStateKey(photo);
-      if (!key || !this.isCurrentPublishedAlbumMedia(photo)) {
+      if (!key || !this.isCurrentPreviewableAlbumMedia(photo)) {
         return;
       }
       if (Object.prototype.hasOwnProperty.call(values, "loaded")) {
@@ -2179,14 +2267,16 @@ export default {
       this.setListThumbnailState(photo, { loaded: false, failed: true });
     },
     canOpenPhotoPreview(photo) {
-      if (!isModerationPublished(photo?.moderation_status) || !this.isCurrentPublishedAlbumMedia(photo)) {
+      if (!this.isCurrentPreviewableAlbumMedia(photo)) {
         return false;
       }
       if (
         !canOpenAlbumMediaPreview({
           timelineMode: this.timelineMode,
           mediaType: photo?.media_type,
-          processingStatus: photo?.processing_status
+          processingStatus: this.isAuthorPrivateAlbumMedia(photo)
+            ? "ready"
+            : photo?.processing_status
         })
       ) {
         return false;
@@ -2198,7 +2288,7 @@ export default {
       return Boolean(key && this.visiblePhotoMedia[key]?.thumbnail && this.listThumbnailLoaded(photo));
     },
     async loadVisiblePhotoMedia(photo, variant = "thumbnail") {
-      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+      if (!this.isCurrentPreviewableAlbumMedia(photo)) {
         return "";
       }
       const key = String(photo.id);
@@ -2223,7 +2313,7 @@ export default {
       });
       const loadRequest = this.downloadAlbumImage(photo, variant)
         .then((displayUrl) => {
-          if (!this.isCurrentPublishedAlbumMedia(photo)) {
+          if (!this.isCurrentPreviewableAlbumMedia(photo)) {
             return "";
           }
           this.setVisiblePhotoMedia(photo.id, {
@@ -2245,7 +2335,7 @@ export default {
           return displayUrl;
         })
         .catch((error) => {
-          if (!this.isCurrentPublishedAlbumMedia(photo)) {
+          if (!this.isCurrentPreviewableAlbumMedia(photo)) {
             return "";
           }
           this.setVisiblePhotoMedia(photo.id, {
@@ -2281,7 +2371,7 @@ export default {
       }
     },
     onPhotoVisible(photo) {
-      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+      if (!this.isCurrentPreviewableAlbumMedia(photo)) {
         return;
       }
       if (photo?.media_type === "video" && !photo.cover_url) {
@@ -2490,6 +2580,9 @@ export default {
       if (this.timelineMode || !photo?.is_mine) {
         return "";
       }
+      if (this.isAuthorPrivateAlbumMedia(photo)) {
+        return authorPrivateContentModerationStatusText(photo.moderation_status);
+      }
       return contentModerationStatusText(photo.moderation_status);
     },
     isVideoMedia(photo) {
@@ -2501,8 +2594,23 @@ export default {
     isPublishedAlbumMedia(photo) {
       return isModerationPublished(photo?.moderation_status);
     },
+    isAuthorPrivateAlbumMedia(photo) {
+      return (
+        !this.timelineMode &&
+        isAuthorPrivateAlbumMediaRow(photo, this.currentUserId)
+      );
+    },
+    isPreviewableAlbumMedia(photo) {
+      return this.isPublishedAlbumMedia(photo) || this.isAuthorPrivateAlbumMedia(photo);
+    },
     isCurrentPublishedAlbumMedia(photo) {
       return isCurrentPublishedAlbumMediaRow(this.photos, photo);
+    },
+    isCurrentPreviewableAlbumMedia(photo) {
+      return isCurrentPreviewableAlbumMediaRow(this.photos, photo, {
+        viewerUserId: this.currentUserId,
+        timelineMode: this.timelineMode
+      });
     },
     isDownloadableAlbumImage(photo) {
       return (
@@ -2513,8 +2621,11 @@ export default {
     videoReady(photo) {
       return (
         this.isVideoMedia(photo) &&
-        this.isPublishedAlbumMedia(photo) &&
-        photo.processing_status === "ready"
+        this.isPreviewableAlbumMedia(photo) &&
+        (
+          this.isAuthorPrivateAlbumMedia(photo) ||
+          photo.processing_status === "ready"
+        )
       );
     },
     videoProcessing(photo) {
@@ -3157,7 +3268,7 @@ export default {
       return true;
     },
     viewerPhotoWithCachedMedia(photo) {
-      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+      if (!this.isCurrentPreviewableAlbumMedia(photo)) {
         return {
           ...photo,
           thumbnail_display_url: "",
@@ -3195,7 +3306,7 @@ export default {
       const start = Math.max(0, center - 2);
       const end = Math.min(this.previewPhotos.length, center + 3);
       this.previewPhotos.slice(start, end).forEach((photo) => {
-        if (!photo || photo.id === undefined || photo.id === null || !this.isCurrentPublishedAlbumMedia(photo)) {
+        if (!photo || photo.id === undefined || photo.id === null || !this.isCurrentPreviewableAlbumMedia(photo)) {
           return;
         }
         const visibleMedia = this.visiblePhotoMedia[String(photo.id)] || {};
@@ -3214,12 +3325,12 @@ export default {
       });
     },
     openPhotoPreview(photo) {
-      if (!this.isCurrentPublishedAlbumMedia(photo)) {
+      if (!this.isCurrentPreviewableAlbumMedia(photo)) {
         return;
       }
       this.resetPreviewVideoViewerState();
       const previewPhotos = this.filteredPhotos
-        .filter((item) => this.isCurrentPublishedAlbumMedia(item))
+        .filter((item) => this.isCurrentPreviewableAlbumMedia(item))
         .map((item) => this.viewerPhotoWithCachedMedia(item))
         .filter(
         (item) =>
@@ -3245,7 +3356,7 @@ export default {
       this.skipNextAlbumRefreshOnShow = false;
     },
     resetPreviewVideoViewerState() {
-      this.visiblePhotoMedia = pruneUnpublishedAlbumMediaCache(Object.fromEntries(
+      this.visiblePhotoMedia = pruneAlbumMediaPreviewCache(Object.fromEntries(
         Object.entries(this.visiblePhotoMedia || {}).map(([key, media]) => [
           key,
           {
@@ -3254,7 +3365,10 @@ export default {
             videoAutoRefreshUsed: false
           }
         ])
-      ), this.photos);
+      ), this.photos, {
+        viewerUserId: this.currentUserId,
+        timelineMode: this.timelineMode
+      });
     },
     handlePreviewChange(event) {
       const payload = event?.detail || event || {};
@@ -3264,7 +3378,7 @@ export default {
     },
     handlePreviewVideoRequest(event) {
       const payload = event?.detail || event || {};
-      if (!payload.photo || this.timelineMode || !this.isCurrentPublishedAlbumMedia(payload.photo)) {
+      if (!payload.photo || this.timelineMode || !this.isCurrentPreviewableAlbumMedia(payload.photo)) {
         return;
       }
       if (payload.retry) {
@@ -3289,7 +3403,7 @@ export default {
     handlePreviewVideoError(event) {
       const payload = event?.detail || event || {};
       const photo = payload.photo;
-      if (!photo || this.timelineMode || !this.isCurrentPublishedAlbumMedia(photo)) {
+      if (!photo || this.timelineMode || !this.isCurrentPreviewableAlbumMedia(photo)) {
         return;
       }
       const key = String(photo.id);
@@ -3326,7 +3440,7 @@ export default {
         !photo ||
         photo.id === undefined ||
         photo.id === null ||
-        !this.isCurrentPublishedAlbumMedia(photo) ||
+        !this.isCurrentPreviewableAlbumMedia(photo) ||
         !this.videoReady(photo)
       ) {
         return Promise.resolve("");
@@ -3358,7 +3472,7 @@ export default {
       const videoUrlEndpoint = `/api/session-album/media/${photo.id}/video-url`;
       const loadRequest = request({ url: videoUrlEndpoint })
         .then((response) => {
-          if (!this.isCurrentPublishedAlbumMedia(photo)) {
+          if (!this.isCurrentPreviewableAlbumMedia(photo)) {
             return "";
           }
           const data = dataOf(response) || {};

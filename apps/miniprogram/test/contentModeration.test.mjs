@@ -115,12 +115,12 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
   assertSuccessfulUpdateFollowsRequest(setup, "const sessionResponse = await request({", "uni.redirectTo({ url:");
   assertSuccessfulUpdateFollowsRequest(
     chat,
-    "const message = await this.api.sendMessage(",
-    "this.messages = [...this.messages, message];"
+    "const result = await this.api.sendMessage(",
+    "this.messages = ["
   );
   assertSuccessfulUpdateFollowsRequest(
     pinned,
     "const result = await this.api.updatePinnedMessage(",
-    "this.pinnedMessage = result.pinnedMessage || null;"
+    "this.pinnedMessage = isAuthorPrivateProjection(result)"
   );
 });

@@ -5,6 +5,10 @@ import {
   normalizeTextFields
 } from "./normalize.js";
 import { buildTextProposalPayload } from "./text-boundaries.js";
+import { createAuthorPrivateTextDto } from "./author-dto.js";
+import { resolveAuthorVisibility } from "./author-visibility.js";
+import { projectAuthorTextProposal } from "./text-author-projection.js";
+import { authorPrivateTextActionEnabled } from "./author-text-read.js";
 import { projectSafeTextAppliedResult } from "./text-applied-result.js";
 import { proposalStaleForRevalidationError } from "./text-proposal-applicator.js";
 import { textProposalPayloadDigest } from "./text-proposal-digest.js";
@@ -16,6 +20,9 @@ import {
 import { MODERATION_ERROR_CODES, MODERATION_RETRY_LEASE_MIN_MS } from "./constants.js";
 import { moderationStatusForDecision } from "./state-machine.js";
 import { emitModerationSubmissionFailure } from "./telemetry.js";
+import { shouldRetainRejectedMedia } from "./media-retention.js";
+
+export { shouldRetainRejectedMedia } from "./media-retention.js";
 
 const TEXT_SCENE_BY_SUBJECT = Object.freeze({
   user_nickname: 1,
@@ -231,15 +238,23 @@ function requireSafeAppliedResult(result) {
 }
 
 function preparedTerminalTextOutcome(job, proposal) {
-  if (!job || !proposal || proposal.status === "stale") return { kind: "stale" };
+  if (
+    !job ||
+    !proposal ||
+    !["pending", "rejected", "approved"].includes(String(proposal.status || ""))
+  ) return { kind: "stale" };
   if (job.status === "approved") {
     if (proposal.status !== "approved") return { kind: "stale" };
     const result = parseAppliedResult(proposal);
     return result ? { kind: "replay", result } : { kind: "stale" };
   }
-  if (["review", "rejected"].includes(job.status)) {
+  if (job.status === "review" && proposal.status === "pending") {
     return { kind: "error", status: job.status };
   }
+  if (job.status === "rejected" && proposal.status === "rejected") {
+    return { kind: "error", status: job.status };
+  }
+  if (["review", "rejected", "cancelled"].includes(job.status)) return { kind: "stale" };
   return null;
 }
 
@@ -256,6 +271,18 @@ function returnPreparedTerminalTextOutcome(outcome) {
   throw replayErrorForStatus(outcome.status);
 }
 
+function parseProposalPayload(proposal) {
+  try {
+    const payload = typeof proposal?.normalized_payload_json === "string"
+      ? JSON.parse(proposal.normalized_payload_json)
+      : proposal?.normalized_payload_json;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 export function createContentModerationService(dependencies) {
   const deps = {
     randomUUID: () => crypto.randomUUID(),
@@ -264,6 +291,57 @@ export function createContentModerationService(dependencies) {
     emit: () => {},
     ...dependencies
   };
+
+  function authorPrivateTextResult(prepared, moderationStatus) {
+    const proposal = prepared?.proposal;
+    const action = String(proposal?.action || prepared?.action || "");
+    if (
+      !authorPrivateTextActionEnabled(deps.config, action) ||
+      Number(proposal?.author_visibility_version) !== 1 ||
+      Number(proposal?.created_by_user_id) !== Number(prepared?.actorUserId) ||
+      !["pending", "rejected"].includes(String(proposal?.status || ""))
+    ) return null;
+    const payload = parseProposalPayload(proposal);
+    const targetSubjectId = String(proposal?.target_subject_id || "");
+    if (
+      !payload ||
+      !payload.body ||
+      typeof payload.body !== "object" ||
+      Array.isArray(payload.body) ||
+      String(payload?.context?.targetSubjectId || "") !== targetSubjectId
+    ) return null;
+    const visibility = resolveAuthorVisibility({
+      viewerUserId: prepared.actorUserId,
+      authorUserId: proposal.created_by_user_id,
+      moderationStatus,
+      authorVisibilityVersion: Number(proposal.author_visibility_version),
+      recordStatus: "active",
+      contentKind: "text"
+    });
+    if (visibility.scope !== "author_only") return null;
+    const projection = projectAuthorTextProposal({
+      action,
+      targetSubjectId,
+      body: payload.body
+    });
+    return createAuthorPrivateTextDto({
+      draftId: proposal.id,
+      action,
+      moderationStatus,
+      publishedId: projection.publishedId,
+      content: projection.content,
+      visibility
+    });
+  }
+
+  function returnTextOutcome(prepared, outcome) {
+    if (!outcome) return null;
+    if (outcome.kind === "error") {
+      const privateResult = authorPrivateTextResult(prepared, outcome.status);
+      if (privateResult) return privateResult;
+    }
+    return returnPreparedTerminalTextOutcome(outcome);
+  }
 
   async function claimInitialSubmissionLease(connection, job) {
     const leaseToken = deps.randomUUID();
@@ -573,7 +651,8 @@ export function createContentModerationService(dependencies) {
   }
 
   async function applyMediaResult(input) {
-    return deps.transaction(async (connection) => {
+    let authorPrivateDecision = null;
+    const applied = await deps.transaction(async (connection) => {
       const job = await deps.repository.findModerationJobById(
         connection,
         input.jobId,
@@ -666,8 +745,19 @@ export function createContentModerationService(dependencies) {
         toStatus: nextStatus
       });
       if (!mediaChanged) throw staleCallback("moderation media changed concurrently");
-      if (nextStatus === "rejected") {
+      if (nextStatus === "rejected" && !shouldRetainRejectedMedia(media)) {
         await deps.repository.enqueueRejectedMediaCleanup(connection, media);
+      }
+      if (
+        Number(media.author_visibility_version) === 1 &&
+        ["approved", "rejected"].includes(nextStatus)
+      ) {
+        authorPrivateDecision = {
+          event: nextStatus === "approved"
+            ? "author_private_approved"
+            : "author_private_rejected",
+          fields: { subjectType: job.subject_type, outcome: nextStatus }
+        };
       }
       emitModerationDecision(deps.emit, {
         decision: input.result.decision,
@@ -688,6 +778,10 @@ export function createContentModerationService(dependencies) {
       }
       return { status: nextStatus, duplicate: false };
     });
+    if (authorPrivateDecision) {
+      deps.emit(authorPrivateDecision.event, authorPrivateDecision.fields);
+    }
+    return applied;
   }
 
   function publicModerationError(statusCode, code, message) {
@@ -740,6 +834,20 @@ export function createContentModerationService(dependencies) {
       ...buildTextProposalPayload(action, payload),
       actor_user_id: actorUserId
     };
+    const authorPrivateEnabled = authorPrivateTextActionEnabled(deps.config, action);
+    const targetSubjectId = String(normalizedPayload?.context?.targetSubjectId || "");
+    const replacesDraftId = input?.replacesDraftId === null || input?.replacesDraftId === undefined
+      ? null
+      : Number(input.replacesDraftId);
+    if (authorPrivateEnabled && !targetSubjectId) {
+      throw textModerationError(400, "BAD_REQUEST", "text moderation target is required");
+    }
+    if (
+      replacesDraftId !== null &&
+      (!authorPrivateEnabled || !Number.isSafeInteger(replacesDraftId) || replacesDraftId <= 0)
+    ) {
+      throw textModerationError(400, "BAD_REQUEST", "replacement draft is invalid");
+    }
     const payloadDigest = textProposalPayloadDigest({
       action,
       baseVersion,
@@ -756,10 +864,12 @@ export function createContentModerationService(dependencies) {
         dataId: deps.randomUUID(),
         policyId: null
       });
-      await deps.repository.createTextProposal(connection, {
+      const proposalId = await deps.repository.createTextProposal(connection, {
         jobId: job.id,
         subjectType,
         subjectId: operationSubjectId,
+        targetSubjectId: authorPrivateEnabled ? targetSubjectId : null,
+        authorVisibilityVersion: authorPrivateEnabled ? 1 : 0,
         baseVersion,
         action,
         normalizedPayload,
@@ -768,6 +878,22 @@ export function createContentModerationService(dependencies) {
         allowStaleIdempotencyReplay: input?.idempotencyExplicit === true,
         userId: actorUserId
       });
+      if (replacesDraftId !== null) {
+        if (typeof deps.supersedeRejectedDraft !== "function") {
+          throw textModerationError(
+            500,
+            MODERATION_ERROR_CODES.configuration,
+            "author draft replacement service is missing"
+          );
+        }
+        await deps.supersedeRejectedDraft(connection, {
+          userId: actorUserId,
+          draftId: replacesDraftId,
+          newProposalId: Number(proposalId),
+          action,
+          targetSubjectId
+        });
+      }
       const proposal = await deps.repository.findTextProposalByJobId(
         connection,
         job.id,
@@ -789,6 +915,7 @@ export function createContentModerationService(dependencies) {
       subjectType,
       subjectId: operationSubjectId,
       action,
+      actorUserId,
       scene,
       openid,
       normalizedText
@@ -799,6 +926,18 @@ export function createContentModerationService(dependencies) {
         subjectType,
         outcome: "pending"
       });
+    }
+    if (authorPrivateEnabled) {
+      deps.emit("author_private_created", {
+        subjectType,
+        outcome: "pending"
+      });
+      if (replacesDraftId !== null) {
+        deps.emit("author_private_superseded", {
+          subjectType,
+          outcome: "unpublished"
+        });
+      }
     }
     return result;
   }
@@ -970,19 +1109,31 @@ export function createContentModerationService(dependencies) {
         "text moderation proposal is stale"
       );
     }
+    const privateResult = authorPrivateTextResult(prepared, final.status);
+    if (privateResult) return privateResult;
     throw replayErrorForStatus(final.status);
   }
 
   async function moderateTextMutation(input) {
     const prepared = await prepareTextProposal(input);
-    const terminalResult = returnPreparedTerminalTextOutcome(
+    const terminalResult = returnTextOutcome(
+      prepared,
       preparedTerminalTextOutcome(prepared.job, prepared.proposal)
     );
     if (terminalResult) return terminalResult;
     const leaseToken = prepared.job.initialLeaseAcquired === true
       ? prepared.job.initialLeaseToken
       : null;
-    if (!leaseToken) throw replayErrorForStatus("error");
+    if (!leaseToken) {
+      const privateResult = authorPrivateTextResult(
+        prepared,
+        ["pending", "processing", "review", "rejected", "error"].includes(prepared.job.status)
+          ? prepared.job.status
+          : "error"
+      );
+      if (privateResult) return privateResult;
+      throw replayErrorForStatus("error");
+    }
     let providerResult;
     try {
       await renewSubmissionLease({
@@ -1004,13 +1155,19 @@ export function createContentModerationService(dependencies) {
         subjectType: prepared.subjectType
       });
     } catch (error) {
-      if (isSubmissionStale(error)) throw replayErrorForStatus("error");
+      if (isSubmissionStale(error)) {
+        const privateResult = authorPrivateTextResult(prepared, "error");
+        if (privateResult) return privateResult;
+        throw replayErrorForStatus("error");
+      }
       await recordLeasedSubmissionFailure({
         job: prepared.job,
         leaseToken,
         subjectType: prepared.subjectType,
         error
       });
+      const privateResult = authorPrivateTextResult(prepared, "error");
+      if (privateResult) return privateResult;
       throw replayErrorForStatus("error");
     }
     const outcome = normalizeWechatTextResult(providerResult);
@@ -1026,6 +1183,8 @@ export function createContentModerationService(dependencies) {
         subjectType: prepared.subjectType,
         error
       });
+      const privateResult = authorPrivateTextResult(prepared, "error");
+      if (privateResult) return privateResult;
       throw replayErrorForStatus("error");
     }
     const resolved = await resolveTextResult(prepared, providerResult, { leaseToken });
@@ -1036,6 +1195,19 @@ export function createContentModerationService(dependencies) {
       outcome: moderationStatusForDecision(outcome.decision),
       latencyMs: moderationLatencyMs(prepared.job, deps.now)
     });
+    if (Number(prepared.proposal?.author_visibility_version) === 1) {
+      if (outcome.decision === "pass") {
+        deps.emit("author_private_approved", {
+          subjectType: prepared.subjectType,
+          outcome: "approved"
+        });
+      } else if (outcome.decision === "block") {
+        deps.emit("author_private_rejected", {
+          subjectType: prepared.subjectType,
+          outcome: "rejected"
+        });
+      }
+    }
     return resolved;
   }
 
@@ -1111,6 +1283,19 @@ export function createContentModerationService(dependencies) {
         outcome: moderationStatusForDecision(outcome.decision),
         latencyMs: moderationLatencyMs(job, deps.now)
       });
+      if (Number(proposal.author_visibility_version) === 1) {
+        if (outcome.decision === "pass") {
+          deps.emit("author_private_approved", {
+            subjectType: job.subject_type,
+            outcome: "approved"
+          });
+        } else if (outcome.decision === "block") {
+          deps.emit("author_private_rejected", {
+            subjectType: job.subject_type,
+            outcome: "rejected"
+          });
+        }
+      }
     }
     return final;
   }
@@ -1128,6 +1313,7 @@ export function createContentModerationService(dependencies) {
       throw publicModerationError(400, "BAD_REQUEST", "rejection reason is required");
     }
     let decisionMetric = null;
+    let authorPrivateDecision = null;
     const result = await deps.transaction(async (connection) => {
       const job = await deps.repository.findModerationJobById(
         connection,
@@ -1188,8 +1374,16 @@ export function createContentModerationService(dependencies) {
         if (!mediaChanged) {
           throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "media changed concurrently");
         }
-        if (nextStatus === "rejected") {
+        if (nextStatus === "rejected" && !shouldRetainRejectedMedia(media)) {
           await deps.repository.enqueueRejectedMediaCleanup(connection, media);
+        }
+        if (Number(media.author_visibility_version) === 1) {
+          authorPrivateDecision = {
+            event: nextStatus === "approved"
+              ? "author_private_approved"
+              : "author_private_rejected",
+            fields: { subjectType: job.subject_type, outcome: nextStatus }
+          };
         }
       } else {
         const proposal = await deps.repository.findTextProposalByJobId(
@@ -1198,6 +1392,14 @@ export function createContentModerationService(dependencies) {
           { forUpdate: true }
         );
         if (!proposal) throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "proposal is stale");
+        if (Number(proposal.author_visibility_version) === 1) {
+          authorPrivateDecision = {
+            event: nextStatus === "approved"
+              ? "author_private_approved"
+              : "author_private_rejected",
+            fields: { subjectType: job.subject_type, outcome: nextStatus }
+          };
+        }
         let appliedResult = null;
         let safeAppliedResult = null;
         if (nextStatus === "approved") {
@@ -1241,6 +1443,12 @@ export function createContentModerationService(dependencies) {
               outcome: "rejected",
               latencyMs: moderationLatencyMs(job, deps.now)
             };
+            if (Number(proposal.author_visibility_version) === 1) {
+              authorPrivateDecision = {
+                event: "author_private_rejected",
+                fields: { subjectType: job.subject_type, outcome: "rejected" }
+              };
+            }
             return { id: Number(job.id), status: "rejected", stale: true };
           }
         }
@@ -1281,6 +1489,9 @@ export function createContentModerationService(dependencies) {
     });
     if (decisionMetric) {
       emitModerationDecision(deps.emit, decisionMetric);
+    }
+    if (authorPrivateDecision) {
+      deps.emit(authorPrivateDecision.event, authorPrivateDecision.fields);
     }
     return result;
   }

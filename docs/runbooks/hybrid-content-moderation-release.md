@@ -1,5 +1,32 @@
 # D45 混合内容审核生产发布与回滚手册
 
+## D46 作者私有可见性
+
+D46 gate 与 D45 intake 完全独立。D46 只决定待审内容能否对创建者本人形成私有投影或短时媒体预览，不改变 `CONTENT_MODERATION_*_INTAKE_MODE`、provider、回调、Worker 或公共发布门禁。部署 D46 代码时必须保持以下配置：
+
+```dotenv
+CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ENABLED=false
+CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ACTIONS=
+CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED=false
+CONTENT_MODERATION_AUTHOR_PRIVATE_VIDEO_ENABLED=false
+CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS=60
+```
+
+文本 action 仅允许批准 spec 中的十个固定 action 的显式子集；空集保持关闭。作者预览 TTL 只允许 `1..60` 秒。未知、重复 action 或非法 TTL 必须让 API/Worker 启动失败，错误中不得打印原配置值。
+
+### D46 观察与容量边界
+
+重试 Worker 只统计 `author_visibility_version=1`、`active`、`rejected` 的图片/视频对象数量、图片/视频字节数和超过 30 天的长期保留数量。达到阈值只发高优先级告警，不触发删除。系统不得根据容量告警自动删除用户内容。
+
+普通 reject 只阻止公开，不删除 D46 媒体。紧急 purge 是独立合规操作，只允许 `system_admin`，必须填写原因并输入字面量 `PURGE` 二次确认；它复用作者删除的耐久 cleanup，并保留审计。purge 不得作为普通审核默认动作。
+
+### D46 回滚顺序
+
+1. 先关闭 `CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ENABLED`、`CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED`、`CONTENT_MODERATION_AUTHOR_PRIVATE_VIDEO_ENABLED`，并清空文本 action 子集，停止新的 D46 写入和作者 URL 签发。
+2. 保持 D45 intake 原状态，继续运行 provider、审核回调、重试 Worker、公共发布门禁和 cleanup Worker。
+3. 已保留的拒绝媒体继续保持私有；不得批量批准、恢复公开、改成孤儿或自动清理。
+4. 如确认单个对象必须紧急移除，只走上述管理员 purge，不放宽公共门禁。
+
 本手册适用于 D45 的新用户文本、相册图片和相册视频。发布原则是“先审后发”：数据库审核状态是唯一发布依据，只有 `approved` 和 `approved_legacy` 能生成普通用户媒体 URL。任何服务商、回调、网络或配置异常都必须让新内容继续隐藏，不能默认通过。
 
 审核分工固定如下：

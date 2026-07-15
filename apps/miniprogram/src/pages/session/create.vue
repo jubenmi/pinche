@@ -28,7 +28,7 @@
       />
       <view
         v-for="store in stores"
-        :key="store.id"
+        :key="store.id || `draft-${store.draft_id}`"
         class="list-row"
         :class="{ selected: isSelectedStore(store) }"
         @tap="selectStore(store)"
@@ -103,7 +103,7 @@
       />
       <view class="form-actions">
         <t-button class="button" :disabled="creatingStore" @tap="submitPrivateStore">
-          {{ creatingStore ? "提交中..." : "提交并使用" }}
+          {{ creatingStore ? "提交中..." : "提交审核" }}
         </t-button>
         <t-button class="button secondary" :disabled="creatingStore" @tap="resetStoreForm">
           清空
@@ -121,6 +121,11 @@
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, queryString, request } from "../../utils/api";
+import {
+  authorPrivateCatalogItem,
+  isAuthorPrivateText,
+  isFormalBusinessEntity
+} from "../../utils/authorPrivateText";
 import { writeCreateFlow } from "../../utils/createFlow";
 import { showToast } from "../../utils/tdesignFeedback";
 
@@ -177,7 +182,9 @@ export default {
           url: "/api/stores" + queryString({ keyword: this.keyword, limit: 20 })
         });
         const stores = dataOf(response) || [];
-        this.stores = stores;
+        this.stores = stores.map((store) =>
+          isAuthorPrivateText(store) ? authorPrivateCatalogItem(store, "store") : store
+        ).filter(Boolean);
         this.statusText = "";
       } catch (error) {
         this.stores = FALLBACK_STORES;
@@ -185,6 +192,10 @@ export default {
       }
     },
     async selectStore(store) {
+      if (!isFormalBusinessEntity(store)) {
+        showToast({ title: store.moderation_message || "仅自己可见 · 审核中，暂不能选择", icon: "none" });
+        return;
+      }
       if (this.isSelectedStore(store)) {
         await this.goNext();
         return;
@@ -204,6 +215,9 @@ export default {
       return [district, area, store.distance].filter(Boolean).join(" · ");
     },
     storeBadge(store) {
+      if (store.author_private) {
+        return store.moderation_message;
+      }
       if (store.visibility !== "private") {
         return "";
       }
@@ -267,6 +281,15 @@ export default {
         if (!createdStore) {
           throw new Error("missing store");
         }
+        if (isAuthorPrivateText(createdStore)) {
+          const draftStore = authorPrivateCatalogItem(createdStore, "store");
+          this.stores = [draftStore, ...this.stores.filter((item) => item.draft_id !== draftStore.draft_id)];
+          this.resetStoreForm();
+          this.showStoreForm = false;
+          this.statusText = createdStore.moderation_message;
+          showToast({ title: createdStore.moderation_message, icon: "none" });
+          return;
+        }
         const store = {
           ...createdStore,
           address: createdStore.address ?? this.storeForm.address,
@@ -287,7 +310,7 @@ export default {
       }
     },
     async goNext() {
-      if (!this.selectedStore) {
+      if (!this.selectedStore || !isFormalBusinessEntity(this.selectedStore)) {
         showToast({ title: "先选择一家店", icon: "none" });
         return;
       }

@@ -175,3 +175,165 @@ test("a late rejected callback merges validated video outputs into cleanup witho
     ignored: "moderation_rejected"
   });
 });
+
+test("a late callback retains validated outputs for an active D46 rejected video", async () => {
+  const media = {
+    id: 74,
+    session_id: 8,
+    status: "active",
+    media_type: "video",
+    author_visibility_version: 1,
+    moderation_status: "rejected",
+    processing_status: "processing",
+    source_url: "/uploads/session-album/videos/source/b.mp4",
+    display_url: null,
+    cover_url: null,
+    ci_job_id: null
+  };
+  const updates = [];
+  let cleanupCalls = 0;
+  const connection = {
+    async query(sql, params) {
+      if (/SELECT \* FROM session_album_photos WHERE id = \? FOR UPDATE/.test(sql)) {
+        return [[media]];
+      }
+      if (/UPDATE session_album_photos/.test(sql)) {
+        updates.push({ sql, params });
+        return [{ affectedRows: 1 }];
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  const result = await updateSessionAlbumVideoProcessingResult({
+    mediaId: 74,
+    status: "ready",
+    sourceUrl: "/uploads/session-album/videos/source/b.mp4",
+    displayUrl: "/uploads/session-album/videos/display/b.mp4",
+    coverUrl: "/uploads/session-album/videos/cover/b.jpg"
+  }, {
+    withTransaction: async (run) => run(connection),
+    enqueueRejectedMediaCleanup: async () => {
+      cleanupCalls += 1;
+    }
+  });
+
+  assert.equal(cleanupCalls, 0);
+  assert.equal(updates.length, 1);
+  assert.match(updates[0].sql, /author_visibility_version = 1/);
+  assert.deepEqual(updates[0].params.slice(0, 2), [
+    "/uploads/session-album/videos/display/b.mp4",
+    "/uploads/session-album/videos/cover/b.jpg"
+  ]);
+  assert.equal(result.ignored, "moderation_rejected_retained");
+  assert.equal(result.processing_status, "ready");
+});
+
+test("a callback media id cannot attach another video's source and outputs", async () => {
+  const media = {
+    id: 74,
+    session_id: 8,
+    status: "active",
+    media_type: "video",
+    author_visibility_version: 1,
+    moderation_status: "rejected",
+    processing_status: "processing",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: null,
+    cover_url: null,
+    ci_job_id: "job-a"
+  };
+  let writes = 0;
+  const connection = {
+    async query(sql) {
+      if (/SELECT \* FROM session_album_photos WHERE id = \? FOR UPDATE/.test(sql)) {
+        return [[media]];
+      }
+      if (/UPDATE session_album_photos/.test(sql)) writes += 1;
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  await assert.rejects(updateSessionAlbumVideoProcessingResult({
+    mediaId: 74,
+    ciJobId: "job-b",
+    status: "ready",
+    sourceUrl: "/uploads/session-album/videos/source/b.mp4",
+    displayUrl: "/uploads/session-album/videos/display/b.mp4",
+    coverUrl: "/uploads/session-album/videos/cover/b.jpg"
+  }, {
+    withTransaction: async (run) => run(connection)
+  }), { statusCode: 404 });
+  assert.equal(writes, 0);
+});
+
+test("a callback output path must retain the immutable source object identity", async () => {
+  const media = {
+    id: 74,
+    session_id: 8,
+    status: "active",
+    media_type: "video",
+    author_visibility_version: 1,
+    moderation_status: "rejected",
+    processing_status: "processing",
+    source_url: "/uploads/session-album/videos/source/a.mp4",
+    display_url: null,
+    cover_url: null,
+    ci_job_id: "job-a"
+  };
+  const connection = {
+    async query(sql) {
+      if (/SELECT \* FROM session_album_photos WHERE id = \? FOR UPDATE/.test(sql)) {
+        return [[media]];
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+
+  await assert.rejects(updateSessionAlbumVideoProcessingResult({
+    mediaId: 74,
+    ciJobId: "job-a",
+    status: "ready",
+    sourceUrl: "/uploads/session-album/videos/source/a.mp4",
+    displayUrl: "/uploads/session-album/videos/display/other.mp4"
+  }, {
+    withTransaction: async (run) => run(connection)
+  }), { code: "BAD_REQUEST" });
+});
+
+test("a late callback for a deleting D46 rejected video only extends cleanup", async () => {
+  const media = {
+    id: 75,
+    session_id: 8,
+    status: "deleting",
+    media_type: "video",
+    author_visibility_version: 1,
+    moderation_status: "rejected",
+    processing_status: "processing",
+    source_url: "/uploads/session-album/videos/source/c.mp4",
+    display_url: null,
+    cover_url: null
+  };
+  let cleanupOptions = null;
+  const connection = {
+    async query(sql) {
+      if (/SELECT \* FROM session_album_photos WHERE id = \? FOR UPDATE/.test(sql)) {
+        return [[media]];
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+  const result = await updateSessionAlbumVideoProcessingResult({
+    mediaId: 75,
+    status: "ready",
+    sourceUrl: "/uploads/session-album/videos/source/c.mp4",
+    displayUrl: "/uploads/session-album/videos/display/c.mp4"
+  }, {
+    withTransaction: async (run) => run(connection),
+    enqueueRejectedMediaCleanup: async (_connection, _received, options) => {
+      cleanupOptions = options;
+    }
+  });
+  assert.deepEqual(cleanupOptions, { lateOutputEvent: true });
+  assert.equal(result.ignored, "moderation_rejected");
+});

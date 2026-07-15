@@ -76,8 +76,11 @@ assert(
 assert(calendar.includes("mergeCalendarItems"), "Mine calendar must merge created and joined calendar rows");
 assert(
   calendar.includes("const itemsBySession = new Map()") &&
+    calendar.includes("itemsBySession.set(sessionKey, createCalendarItem({ session: normalizedSession }))") &&
     calendar.includes("existing.signup = signup") &&
-    calendar.includes("item.key = `calendar-${item.sessionId}`"),
+    calendar.includes("itemsBySession.set(sessionId, createCalendarItem({ signup }))") &&
+    calendar.includes("item.key = item.isAuthorPrivate") &&
+    calendar.includes(": `calendar-${item.sessionId}`"),
   "Mine calendar must dedupe created and joined rows by session id"
 );
 assert(
