@@ -4,17 +4,17 @@
 
 版本：v1.0
 
-状态：待用户复核，未开始实施
+状态：用户已确认，实施中
 
 > 本清单以 D45 已完成的审核状态机、文本提案、私有 COS、媒体门禁和管理员审核为前置。所有任务遵循 TDD：先写失败测试并确认 RED，再做最小实现、运行定向测试、运行 D45/D46 回归并提交。D46 不在任务中开启生产 intake。
 
 ## D46 执行任务
 
-- [ ] D46.1 锁定 Spec 与防偏航契约。
-  - [ ] 新增 `scripts/d46-author-private-content-check.js`，静态检查 `isModerationPublished` 仍只允许 `approved/approved_legacy`，禁止公共路径出现作者绕过条件。
-  - [ ] 新增 `apps/api/test/content-moderation-author-visibility-contract.test.mjs`，锁定三个文档版本、十个文本 action、作者身份、202 DTO、60 秒 TTL、拒绝媒体保留与独立生产门禁。
-  - [ ] 在 `package.json` 增加 `d46:check` 并接入根 `precheck`；先运行并记录因实现缺失而 RED。
-  - [ ] 定向命令：`node --test apps/api/test/content-moderation-author-visibility-contract.test.mjs`；预期在实现前因缺少 D46 模块/迁移失败，而不是因测试语法失败。
+- [x] D46.1 锁定 Spec 与防偏航契约。
+  - [x] 新增 `scripts/d46-author-private-content-check.js`，静态检查 `isModerationPublished` 仍只允许 `approved/approved_legacy`，禁止公共路径出现作者绕过条件。
+  - [x] 新增 `apps/api/test/content-moderation-author-visibility-contract.test.mjs`，锁定三个文档版本、十个文本 action、作者身份、202 DTO、60 秒 TTL、拒绝媒体保留与独立生产门禁。
+  - [x] 在 `package.json` 增加 `d46:check` 并接入根 `precheck`；先运行并记录因实现缺失而 RED。
+  - [x] 定向命令：`node --test apps/api/test/content-moderation-author-visibility-contract.test.mjs`；预期在实现前因缺少 D46 模块/迁移失败，而不是因测试语法失败。
 
 - [ ] D46.2 增加兼容迁移与状态机。
   - [ ] 新增迁移 `apps/api/migrations/0030_author_private_content_visibility.sql`：为文本提案增加 `target_subject_id`、`author_visibility_version`、`cancelled_at`、`superseded_by_proposal_id` 与作者目标索引；为 `session_album_photos` 增加 `author_visibility_version`。
@@ -142,3 +142,5 @@
 ## 验证记录
 
 - 2026-07-15：完成需求梳理与行业公开行为核对；用户确认采用方案 A、原位置显示、旧公开版本保持、仅创建者可见，以及拒绝后由创建者删除/文本修改重提。本文件仅为待复核计划，尚未修改业务代码、数据库或生产环境。
+- 2026-07-15 D46.1 RED-1：`node --test apps/api/test/content-moderation-author-visibility-contract.test.mjs` 按预期失败，原因是 `scripts/d46-author-private-content-check.js` 尚不存在，证明新契约测试已生效。
+- 2026-07-15 D46.1 RED-2：补齐静态检查器和根命令后再次运行同一测试，按预期因缺少 `0030_author_private_content_visibility.sql` 失败；不是测试语法错误。D46.2/D46.3 补齐迁移和策略模块后再转 GREEN。
