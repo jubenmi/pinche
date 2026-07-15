@@ -19,7 +19,16 @@ function exportedFunction(source, name) {
   return source.slice(start, next === -1 ? undefined : next);
 }
 
-const [requirements, design, tasks, sharedAlbumMedia, coreService, authorVisibility, migration] =
+const [
+  requirements,
+  design,
+  tasks,
+  sharedAlbumMedia,
+  coreService,
+  authorVisibility,
+  migration,
+  migrationReconciler
+] =
   await Promise.all([
     text("specs/d46-author-private-content-visibility/requirements.md"),
     text("specs/d46-author-private-content-visibility/design.md"),
@@ -27,7 +36,8 @@ const [requirements, design, tasks, sharedAlbumMedia, coreService, authorVisibil
     text("packages/shared/src/albumMedia.js"),
     text("apps/api/src/modules/core/service.js"),
     text("apps/api/src/modules/content-moderation/author-visibility.js"),
-    text("apps/api/migrations/0030_author_private_content_visibility.sql")
+    text("apps/api/migrations/0030_author_private_content_visibility.sql"),
+    text("apps/api/src/modules/album-video/migration.js")
   ]);
 
 for (const document of [requirements, design, tasks]) {
@@ -83,8 +93,13 @@ for (const token of [
   "superseded_by_proposal_id",
   "session_album_photos"
 ]) {
-  assert.equal(migration.includes(token), true, `0030 migration missing ${token}`);
+  assert.equal(
+    `${migration}\n${migrationReconciler}`.includes(token),
+    true,
+    `0030 migration reconciliation missing ${token}`
+  );
 }
+assert.match(migration, /reconciled by prepareMigration/i);
 
 for (const gate of [
   "CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ENABLED",

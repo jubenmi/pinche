@@ -23,12 +23,12 @@
   - [x] 新增 `apps/api/test/content-moderation-author-visibility-migration.test.mjs` 与状态机用例，覆盖空库、升级库、重复迁移、历史版本 0、非法迁移和迟到结果。
   - [x] 运行：`node --test apps/api/test/content-moderation-author-visibility-migration.test.mjs apps/api/test/content-moderation-state-machine.test.mjs`；预期全绿。
 
-- [ ] D46.3 实现纯作者可见性策略与安全 DTO。
-  - [ ] 先新增失败测试 `apps/api/test/content-moderation-author-visibility.test.mjs`，覆盖 author/organizer/member/tagged/admin/anonymous、全部审核状态、policy version 和 record status 矩阵。
-  - [ ] 新增 `apps/api/src/modules/content-moderation/author-visibility.js`，实现 `resolveAuthorVisibility`；不得修改 `packages/shared/src/albumMedia.js` 中 `isModerationPublished` 的公开语义。
-  - [ ] 新增 `apps/api/src/modules/content-moderation/author-dto.js`，只序列化 Spec 允许的字段和三类安全文案，拒绝未知 action/status/字段。
-  - [ ] 验证普通 system_admin 请求不获得 author scope，管理员审核预览继续走 `admin-api.js`。
-  - [ ] 运行：`node --test apps/api/test/content-moderation-author-visibility.test.mjs apps/api/test/content-moderation-media-gates.test.mjs`；预期全绿。
+- [x] D46.3 实现纯作者可见性策略与安全 DTO。
+  - [x] 先新增失败测试 `apps/api/test/content-moderation-author-visibility.test.mjs`，覆盖 author/organizer/member/tagged/admin/anonymous、全部审核状态、policy version 和 record status 矩阵。
+  - [x] 新增 `apps/api/src/modules/content-moderation/author-visibility.js`，实现 `resolveAuthorVisibility`；不得修改 `packages/shared/src/albumMedia.js` 中 `isModerationPublished` 的公开语义。
+  - [x] 新增 `apps/api/src/modules/content-moderation/author-dto.js`，只序列化 Spec 允许的字段和三类安全文案，拒绝未知 action/status/字段。
+  - [x] 验证普通 system_admin 请求不获得 author scope，管理员审核预览继续走 `admin-api.js`。
+  - [x] 运行：`node --test apps/api/test/content-moderation-author-visibility.test.mjs apps/api/test/content-moderation-media-gates.test.mjs`；预期全绿。
 
 - [ ] D46.4 实现作者文本提案仓储、取消与替代。
   - [ ] 先新增失败测试 `apps/api/test/content-moderation-author-drafts.test.mjs`，覆盖按作者/action/target 查询唯一最新投影、并发锁、取消、替代、重复请求和非作者拒绝。
@@ -146,3 +146,5 @@
 - 2026-07-15 D46.1 RED-2：补齐静态检查器和根命令后再次运行同一测试，按预期因缺少 `0030_author_private_content_visibility.sql` 失败；不是测试语法错误。D46.2/D46.3 补齐迁移和策略模块后再转 GREEN。
 - 2026-07-15 D46.2 RED：迁移/状态机定向测试按预期因缺少 `AUTHOR_PRIVATE_CONTENT_VISIBILITY_MIGRATION` 导出、job `cancelled` 与 proposal `cancelled/superseded` 迁移失败。
 - 2026-07-15 D46.2 GREEN：迁移、状态机及 D45 回归共 88 项通过；覆盖首次升级、历史默认版本 0、幂等重跑、DDL 后迁移记录失败重跑、错误结构关闭式失败和迟到结果不可复活。
+- 2026-07-15 D46.3 RED：作者策略定向测试按预期因 `author-visibility.js` 尚不存在失败；随后独立 worktree 依赖解析回退到主目录旧版 shared，使用本机已有 submodule Git 对象和离线 workspace 安装修复测试环境，未访问生产。
+- 2026-07-15 D46.3 GREEN：作者身份/状态/策略版本、安全 DTO、D45 媒体公共门禁、管理员审核回归及 D46 契约共 33 项通过；`npm run d46:check` 通过，D46.1 的预期 RED 已转 GREEN。
