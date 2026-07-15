@@ -240,9 +240,11 @@ import {
 import { createTextProposalApplicator } from "./modules/content-moderation/text-proposal-applicator.js";
 import {
   buildTextModerationDescriptor,
-  buildTextProposalPayload
+  buildTextProposalPayload,
+  parseTextDraftReplacement
 } from "./modules/content-moderation/text-boundaries.js";
 import { projectSafeTextAppliedResult } from "./modules/content-moderation/text-applied-result.js";
+import { isAuthorPrivateTextDto } from "./modules/content-moderation/author-dto.js";
 import {
   profilePatchFromProposalBody,
   profileTextSnapshot
@@ -326,7 +328,7 @@ function textProposalStale(message) {
 }
 
 export function assertModeratedTextResult(result) {
-  if (!projectSafeTextAppliedResult(result)) {
+  if (!projectSafeTextAppliedResult(result) && !isAuthorPrivateTextDto(result)) {
     throw new AppError(
       500,
       "CONTENT_MODERATION_CONFIGURATION_ERROR",
@@ -336,9 +338,25 @@ export function assertModeratedTextResult(result) {
   return result;
 }
 
+export function moderatedTextHttpStatus(result, publicStatusCode) {
+  return isAuthorPrivateTextDto(result) ? 202 : publicStatusCode;
+}
+
+export function moderatedTextHeaders(result) {
+  return isAuthorPrivateTextDto(result)
+    ? { "cache-control": "private, no-store" }
+    : {};
+}
+
 function moderationBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return {};
-  const { idempotencyKey: _idempotencyKey, idempotency_key: _idempotencyKeySnake, ...rest } = body;
+  const {
+    idempotencyKey: _idempotencyKey,
+    idempotency_key: _idempotencyKeySnake,
+    replacesDraftId: _replacesDraftId,
+    replaces_draft_id: _replacesDraftIdSnake,
+    ...rest
+  } = body;
   return rest;
 }
 
@@ -814,6 +832,7 @@ async function captureTextModerationBase({ action, user, subjectId, body, contex
 
 async function moderateCoveredText({ request, user, action, subjectId, body, context = {} }) {
   if (config.contentModeration.textIntakeMode === "legacy") return null;
+  const replacesDraftId = parseTextDraftReplacement(body);
   const cleanBody = moderationBody(body);
   const preflightDescriptor = buildTextModerationDescriptor({
     action,
@@ -863,6 +882,7 @@ async function moderateCoveredText({ request, user, action, subjectId, body, con
     baseVersion,
     idempotencyKey: identity.idempotencyKey,
     idempotencyExplicit: identity.explicit,
+    replacesDraftId,
     body: canonicalPayload.body,
     context: canonicalPayload.context
   });
@@ -1106,6 +1126,16 @@ const textProposalApplicator = createTextProposalApplicator({
     update_session_pinned_message: applySessionPinnedMessageProposal
   }
 });
+const authorDrafts = createAuthorDraftService({
+  transaction: withTransaction,
+  repository: {
+    findAuthorTextDraftById,
+    cancelTextProposalByAuthor,
+    cancelModerationJobByUser,
+    retireCurrentModerationAttempt,
+    supersedeRejectedTextProposal
+  }
+});
 // The retry worker imports this controlled runtime. server.js only calls
 // listen() behind its direct-main guard, so that import reuses the identical
 // client/COS/openid/applicator wiring without opening an HTTP listener.
@@ -1158,6 +1188,7 @@ export const contentModeration = createContentModerationService({
     });
   },
   applyTextProposal: (connection, input) => textProposalApplicator.apply(connection, input),
+  supersedeRejectedDraft: (connection, input) => authorDrafts.supersedeRejected(connection, input),
   emit: emitContentModerationEvent
 });
 
@@ -1262,17 +1293,6 @@ const buildAdminModerationPreview = createAdminModerationPreviewBuilder({
     expiresInSeconds,
     queryEntries
   )
-});
-
-const authorDrafts = createAuthorDraftService({
-  transaction: withTransaction,
-  repository: {
-    findAuthorTextDraftById,
-    cancelTextProposalByAuthor,
-    cancelModerationJobByUser,
-    retireCurrentModerationAttempt,
-    supersedeRejectedTextProposal
-  }
 });
 
 const adminModerationApi = createAdminModerationApi({
@@ -4185,20 +4205,21 @@ async function route(request, response) {
 
   if (request.method === "PATCH" && url.pathname === "/api/users/me") {
     const user = await getAuthUser(request);
-    const updatedUser = await moderateCoveredText({
+    const moderated = await moderateCoveredText({
       request,
       user,
       action: "update_nickname",
       subjectId: String(user.user.id),
       body
-    }) ?? await updateUserProfile(user.user.id, body);
-    jsonResponse(response, 200, {
+    });
+    const updatedUser = moderated ?? await updateUserProfile(user.user.id, body);
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 200), {
       ok: true,
-      data: {
+      data: isAuthorPrivateTextDto(moderated) ? moderated : {
         user: updatedUser,
         roles: user.roles
       }
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -4219,10 +4240,10 @@ async function route(request, response) {
       action: "create_private_store",
       body
     });
-    jsonResponse(response, 201, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 201), {
       ok: true,
       data: moderated ?? await createPrivateStore(user, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -4243,10 +4264,10 @@ async function route(request, response) {
       action: "create_private_script",
       body
     });
-    jsonResponse(response, 201, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 201), {
       ok: true,
       data: moderated ?? await createPrivateScript(user, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -4608,7 +4629,12 @@ async function route(request, response) {
       action: "create_session",
       body
     });
-    jsonResponse(response, 201, { ok: true, data: moderated ?? await createSession(user, body) });
+    jsonResponse(
+      response,
+      moderatedTextHttpStatus(moderated, 201),
+      { ok: true, data: moderated ?? await createSession(user, body) },
+      moderatedTextHeaders(moderated)
+    );
     return;
   }
 
@@ -4636,10 +4662,10 @@ async function route(request, response) {
       body,
       context: { sessionId: Number(sessionId) }
     });
-    jsonResponse(response, 200, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 200), {
       ok: true,
       data: moderated ?? await updateSession(user, sessionId, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -4661,10 +4687,10 @@ async function route(request, response) {
       body,
       context: { sessionId: Number(sessionNpcRolesId) }
     });
-    jsonResponse(response, 201, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 201), {
       ok: true,
       data: moderated ?? await createSessionNpcRole(user, sessionNpcRolesId, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -4678,10 +4704,10 @@ async function route(request, response) {
       subjectId: String(sessionNpcRoleId),
       body
     });
-    jsonResponse(response, 200, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 200), {
       ok: true,
       data: moderated ?? await updateSessionNpcRole(user, sessionNpcRoleId, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -5076,10 +5102,10 @@ async function route(request, response) {
       body,
       context: { sessionId: Number(mySessionReviewId) }
     });
-    jsonResponse(response, 200, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 200), {
       ok: true,
       data: moderated ?? await upsertMySessionReview(user, mySessionReviewId, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 

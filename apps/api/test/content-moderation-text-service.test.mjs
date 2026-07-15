@@ -24,6 +24,9 @@ function textHarness({
   proposalOverrides = {},
   afterCheck = null,
   retryLimit = 8,
+  authorPrivateTextEnabled = false,
+  authorPrivateTextActions = ["update_session"],
+  supersedeRejectedDraft = null,
   now = () => 1_000,
   random = () => 0
 } = {}) {
@@ -39,6 +42,7 @@ function textHarness({
     initialClaims: [],
     renewals: [],
     failures: [],
+    supersedes: [],
     events: []
   };
   const job = {
@@ -63,7 +67,13 @@ function textHarness({
     idempotency_key: "session-update-12-request-1",
     payload_digest: "payload-51",
     created_by_user_id: 7,
-    normalized_payload_json: JSON.stringify({ body: { note: "周末拼车" } }),
+    target_subject_id: "12",
+    author_visibility_version: authorPrivateTextEnabled ? 1 : 0,
+    normalized_payload_json: JSON.stringify({
+      body: { note: "周末拼车" },
+      context: { targetSubjectId: "12" },
+      actor_user_id: 7
+    }),
     applied_result_json: appliedResultJson,
     ...proposalOverrides
   };
@@ -89,6 +99,10 @@ function textHarness({
       proposal.normalized_payload_json = JSON.stringify(input.normalizedPayload);
       proposal.action = input.action;
       proposal.base_version = input.baseVersion;
+      proposal.target_subject_id = input.targetSubjectId ?? null;
+      if (!Object.prototype.hasOwnProperty.call(proposalOverrides, "author_visibility_version")) {
+        proposal.author_visibility_version = input.authorVisibilityVersion ?? 0;
+      }
       return proposal.id;
     },
     findModerationJobById: async (_connection, _id, options = {}) => {
@@ -140,7 +154,13 @@ function textHarness({
     }
   };
   const service = createContentModerationService({
-    config: { enabled: true, wechatTextEnabled: true, retryLimit },
+    config: {
+      enabled: true,
+      wechatTextEnabled: true,
+      retryLimit,
+      authorPrivateTextEnabled,
+      authorPrivateTextActions
+    },
     client: {
       checkText: async (input) => {
         state.checked.push(input);
@@ -161,6 +181,17 @@ function textHarness({
       state.applied.push(input);
       return { id: 99, note: "周末拼车" };
     },
+    supersedeRejectedDraft: async (connection, input) => {
+      state.supersedes.push(input);
+      if (typeof supersedeRejectedDraft === "function") {
+        return supersedeRejectedDraft(connection, input, state);
+      }
+      return {
+        draft_id: input.draftId,
+        status: "superseded",
+        superseded_by_draft_id: input.newProposalId
+      };
+    },
     emit: (event, fields) => state.events.push({ event, fields })
   });
   return { service, state };
@@ -176,7 +207,10 @@ function mutationInput(overrides = {}) {
     baseVersion: "session-v1",
     idempotencyKey: "session-update-12-request-1",
     fields: { note: "  周末拼车  ", dm_name: "阿青" },
-    payload: { body: { note: "周末拼车" }, sessionId: 12 },
+    payload: {
+      body: { note: "周末拼车" },
+      context: { sessionId: 12, targetSubjectId: "12" }
+    },
     ...overrides
   };
 }
@@ -515,6 +549,118 @@ test("an unavailable or unknown WeChat result remains hidden for retry", async (
   assert.equal(state.applied.length, 0);
   assert.equal(state.failures.at(-1).exhausted, true);
   assert.equal(state.proposalTransitions.length, 0);
+});
+
+test("D46 author-private gate returns a safe 202 DTO for review without applying business data", async () => {
+  const { service, state } = textHarness({
+    suggestion: "review",
+    authorPrivateTextEnabled: true
+  });
+
+  assert.deepEqual(await service.moderateTextMutation(mutationInput()), {
+    draft_id: 51,
+    content_ref: "text-proposal:51",
+    publication_state: "author_only",
+    moderation_status: "review",
+    moderation_message: "仅自己可见 · 进一步审核",
+    published_id: 12,
+    content: { note: "周末拼车" },
+    can_edit: false,
+    can_delete: true,
+    can_resubmit: false
+  });
+  assert.equal(state.applied.length, 0);
+  assert.equal(state.proposals[0].targetSubjectId, "12");
+  assert.equal(state.proposals[0].authorVisibilityVersion, 1);
+});
+
+test("D46 author-private block is editable and provider failure remains author-visible for retry", async () => {
+  const rejected = textHarness({
+    suggestion: "risky",
+    authorPrivateTextEnabled: true
+  });
+  assert.deepEqual(await rejected.service.moderateTextMutation(mutationInput()), {
+    draft_id: 51,
+    content_ref: "text-proposal:51",
+    publication_state: "author_only",
+    moderation_status: "rejected",
+    moderation_message: "仅自己可见 · 未通过",
+    published_id: 12,
+    content: { note: "周末拼车" },
+    can_edit: true,
+    can_delete: true,
+    can_resubmit: true
+  });
+
+  const unavailable = textHarness({
+    clientError: Object.assign(new Error("provider down"), { code: "PROVIDER_DOWN" }),
+    authorPrivateTextEnabled: true
+  });
+  assert.deepEqual(await unavailable.service.moderateTextMutation(mutationInput()), {
+    draft_id: 51,
+    content_ref: "text-proposal:51",
+    publication_state: "author_only",
+    moderation_status: "error",
+    moderation_message: "仅自己可见 · 审核中",
+    published_id: 12,
+    content: { note: "周末拼车" },
+    can_edit: false,
+    can_delete: true,
+    can_resubmit: false
+  });
+});
+
+test("D46 pass still returns the applied public entity and action/version gates preserve D45 errors", async () => {
+  const approved = textHarness({
+    suggestion: "pass",
+    authorPrivateTextEnabled: true
+  });
+  assert.deepEqual(await approved.service.moderateTextMutation(mutationInput()), {
+    id: 99,
+    note: "周末拼车"
+  });
+
+  const disabled = textHarness({ suggestion: "review" });
+  await assert.rejects(disabled.service.moderateTextMutation(mutationInput()), {
+    code: "CONTENT_MODERATION_REVIEW_PENDING"
+  });
+
+  const actionExcluded = textHarness({
+    suggestion: "review",
+    authorPrivateTextEnabled: true,
+    authorPrivateTextActions: ["update_nickname"]
+  });
+  await assert.rejects(actionExcluded.service.moderateTextMutation(mutationInput()), {
+    code: "CONTENT_MODERATION_REVIEW_PENDING"
+  });
+
+  const persistedLegacy = textHarness({
+    suggestion: "review",
+    authorPrivateTextEnabled: true,
+    proposalOverrides: { author_visibility_version: 0 }
+  });
+  persistedLegacy.state.proposal.author_visibility_version = 0;
+  persistedLegacy.state.job.status = "review";
+  await assert.rejects(persistedLegacy.service.moderateTextMutation(mutationInput()), {
+    code: "CONTENT_MODERATION_REVIEW_PENDING"
+  });
+});
+
+test("D46 rejected replacement creates the new proposal before superseding the exact old draft", async () => {
+  const { service, state } = textHarness({
+    suggestion: "review",
+    authorPrivateTextEnabled: true
+  });
+
+  await service.moderateTextMutation(mutationInput({ replacesDraftId: 44 }));
+  assert.deepEqual(state.supersedes, [{
+    userId: 7,
+    draftId: 44,
+    newProposalId: 51,
+    action: "update_session",
+    targetSubjectId: "12"
+  }]);
+  assert.equal(state.proposals.length, 1);
 });
 
 test("initial text provider failure preserves its safe code for delayed retry without exposing it to callers", async () => {

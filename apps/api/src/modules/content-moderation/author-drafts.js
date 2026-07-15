@@ -113,15 +113,29 @@ export function createAuthorDraftService({ transaction, repository } = {}) {
     requireAuthorVisibilityDraft(replacement);
     const action = String(input.action || "");
     const targetSubjectId = String(input.targetSubjectId || "");
+    const replacementMatches = (
+      String(replacement.proposal_status || replacement.status || "") === "pending" &&
+      ["pending", "processing"].includes(String(replacement.job_status || "")) &&
+      String(draft.action || "") === action &&
+      String(replacement.action || "") === action &&
+      String(draft.target_subject_id || "") === targetSubjectId &&
+      String(replacement.target_subject_id || "") === targetSubjectId
+    );
+    if (
+      String(draft.proposal_status || draft.status || "") === "superseded" &&
+      Number(draft.superseded_by_proposal_id) === newProposalId &&
+      replacementMatches
+    ) {
+      return {
+        draft_id: draftId,
+        status: "superseded",
+        superseded_by_draft_id: newProposalId
+      };
+    }
     if (
       String(draft.proposal_status || draft.status || "") !== "rejected" ||
       String(draft.job_status || "") !== "rejected" ||
-      String(replacement.proposal_status || replacement.status || "") !== "pending" ||
-      !["pending", "processing"].includes(String(replacement.job_status || "")) ||
-      String(draft.action || "") !== action ||
-      String(replacement.action || "") !== action ||
-      String(draft.target_subject_id || "") !== targetSubjectId ||
-      String(replacement.target_subject_id || "") !== targetSubjectId
+      !replacementMatches
     ) {
       throw conflict("Replacement draft does not match the rejected draft");
     }

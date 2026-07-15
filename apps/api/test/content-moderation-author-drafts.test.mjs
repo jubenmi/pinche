@@ -277,6 +277,29 @@ test("D46 rejected replacement validates author, action, target, and new proposa
   }
 });
 
+test("D46 replacement replay is idempotent for the same new proposal", async () => {
+  const { service, state } = serviceHarness({
+    draftOverrides: {
+      proposal_status: "superseded",
+      job_status: "rejected",
+      superseded_by_proposal_id: 52
+    }
+  });
+
+  assert.deepEqual(await service.supersedeRejected({}, {
+    userId: 7,
+    draftId: 51,
+    newProposalId: 52,
+    action: "update_nickname",
+    targetSubjectId: "7"
+  }), {
+    draft_id: 51,
+    status: "superseded",
+    superseded_by_draft_id: 52
+  });
+  assert.deepEqual(state.supersedes, []);
+});
+
 test("D46 draft lookup joins the exact author-owned proposal and job under one row lock", async () => {
   const connection = queryRecorder([[{ id: 51 }]]);
   assert.deepEqual(await findAuthorTextDraftById(connection, {

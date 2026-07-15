@@ -2,7 +2,25 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { assertModeratedTextResult, normalizeError } from "../src/server.js";
+import {
+  assertModeratedTextResult,
+  moderatedTextHeaders,
+  moderatedTextHttpStatus,
+  normalizeError
+} from "../src/server.js";
+
+const authorPrivateDto = Object.freeze({
+  draft_id: 51,
+  content_ref: "text-proposal:51",
+  publication_state: "author_only",
+  moderation_status: "review",
+  moderation_message: "仅自己可见 · 进一步审核",
+  published_id: 12,
+  content: { note: "新的说明" },
+  can_edit: false,
+  can_delete: true,
+  can_resubmit: false
+});
 
 test("public moderation outcomes preserve only stable codes and safe messages", () => {
   const openidRequired = Object.assign(new Error("private producer text"), {
@@ -175,6 +193,17 @@ test("an enabled moderation route cannot fall through to a second business write
     code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
   });
   assert.equal(businessWrites, 0);
+  assert.deepEqual(routeResult(authorPrivateDto), authorPrivateDto);
+  assert.equal(moderatedTextHttpStatus(authorPrivateDto, 201), 202);
+  assert.deepEqual(moderatedTextHeaders(authorPrivateDto), {
+    "cache-control": "private, no-store"
+  });
+  assert.equal(moderatedTextHttpStatus({ id: 88, kind: "create_private_store" }, 201), 201);
+  assert.deepEqual(moderatedTextHeaders({ id: 88, kind: "create_private_store" }), {});
+  assert.throws(() => assertModeratedTextResult({
+    ...authorPrivateDto,
+    provider_result: { label: "100" }
+  }), { code: "CONTENT_MODERATION_CONFIGURATION_ERROR" });
   assert.deepEqual(routeResult({ id: 88, kind: "create_private_store" }), {
     id: 88,
     kind: "create_private_store"
@@ -189,6 +218,19 @@ test("an enabled moderation route cannot fall through to a second business write
     /assertModeratedTextResult\(await contentModeration\.moderateTextMutation\(descriptor\)\)/
   );
   assert.doesNotMatch(source, /moderated \|\|/);
+});
+
+test("D46 server separates replacement control data and adapts only author-private outcomes to 202", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function moderateCoveredText");
+  const end = source.indexOf("async function loadTextProposalActor", start);
+  const moderate = source.slice(start, end);
+
+  assert.match(moderate, /parseTextDraftReplacement\(body\)/);
+  assert.match(moderate, /replacesDraftId/);
+  assert.match(source, /moderatedTextHttpStatus\(moderated,/);
+  assert.match(source, /moderatedTextHeaders\(moderated\)/);
+  assert.doesNotMatch(moderate, /replaces[_A-Za-z]*Draft[^\n]*canonicalPayload/);
 });
 
 test("pseudo-chat routes use the same moderation boundary for messages and pins", async () => {

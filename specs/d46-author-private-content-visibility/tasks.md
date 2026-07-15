@@ -38,13 +38,13 @@
   - [x] 确保取消 pending/review/error/rejected 后 Worker、管理员普通决定和迟到 provider 结果均不能应用。
   - [x] 运行：`node --test apps/api/test/content-moderation-author-drafts.test.mjs apps/api/test/content-moderation-retry.test.mjs apps/api/test/content-moderation-callback.test.mjs`；预期全绿。
 
-- [ ] D46.5 调整文本审核提交结果与重新提交协议。
-  - [ ] 先扩展 `apps/api/test/content-moderation-text-service.test.mjs`：D46 gate 开启时 Pass 返回公开实体，Review/Block/Error 返回作者 DTO；gate 关闭时保持 D45 行为。
-  - [ ] 修改 `apps/api/src/modules/content-moderation/service.js`，只有提案已持久化且 policy version=1 时把非 Pass 归一为 author-private outcome；不得把验证/身份/intake 错误变为 202。
-  - [ ] 修改 `apps/api/src/modules/content-moderation/text-boundaries.js`，从 action/context 生成并校验 `target_subject_id`，读取受限 `replaces_draft_id` 但不把它纳入审核正文。
-  - [ ] 修改 `apps/api/src/server.js` 的 `moderateCoveredText` 响应适配：公开实体保留原状态码，作者私有结果使用 202；业务路由不得 fall through 二次写入。
-  - [ ] 实现 rejected 重新提交：先成功创建新 job/proposal，再在同一事务 supersede 同作者/动作/目标旧提案；失败时旧投影保持可见。
-  - [ ] 运行：`node --test apps/api/test/content-moderation-text-service.test.mjs apps/api/test/content-moderation-text-server-wiring.test.mjs apps/api/test/content-moderation-text-boundaries.test.mjs`；预期全绿。
+- [x] D46.5 调整文本审核提交结果与重新提交协议。
+  - [x] 先扩展 `apps/api/test/content-moderation-text-service.test.mjs`：D46 gate 开启时 Pass 返回公开实体，Review/Block/Error 返回作者 DTO；gate 关闭时保持 D45 行为。
+  - [x] 修改 `apps/api/src/modules/content-moderation/service.js`，只有提案已持久化且 policy version=1 时把非 Pass 归一为 author-private outcome；不得把验证/身份/intake 错误变为 202。
+  - [x] 修改 `apps/api/src/modules/content-moderation/text-boundaries.js`，从 action/context 生成并校验 `target_subject_id`，读取受限 `replaces_draft_id` 但不把它纳入审核正文。
+  - [x] 修改 `apps/api/src/server.js` 的 `moderateCoveredText` 响应适配：公开实体保留原状态码，作者私有结果使用 202；业务路由不得 fall through 二次写入。
+  - [x] 实现 rejected 重新提交：先成功创建新 job/proposal，再在同一事务 supersede 同作者/动作/目标旧提案；失败时旧投影保持可见。
+  - [x] 运行：`node --test apps/api/test/content-moderation-text-service.test.mjs apps/api/test/content-moderation-text-server-wiring.test.mjs apps/api/test/content-moderation-text-boundaries.test.mjs`；预期全绿。
 
 - [ ] D46.6 实现十个动作的作者文本投影器。
   - [ ] 先新增失败测试 `apps/api/test/content-moderation-author-text-projection.test.mjs`，逐个锁定十个 action 的允许字段、正式 ID/草稿 ID、禁用动作和敏感字段剔除。
@@ -150,3 +150,5 @@
 - 2026-07-15 D46.3 GREEN：作者身份/状态/策略版本、安全 DTO、D45 媒体公共门禁、管理员审核回归及 D46 契约共 33 项通过；`npm run d46:check` 通过，D46.1 的预期 RED 已转 GREEN。
 - 2026-07-15 D46.4 RED：作者草稿定向测试按预期因 `author-drafts.js` 尚不存在失败；补实现后又由路由源码定位断言发现测试匹配串过严，修正为匹配实际正则路由，不改变实现。
 - 2026-07-15 D46.4 GREEN：作者草稿、仓储、重试、回调、管理员与 D45 仓储回归共 91 项通过；取消在单事务内条件更新 proposal/job、清 lease、退休 attempt，替代按固定锁顺序验证新旧提案，HTTP 只暴露精确 DELETE。
+- 2026-07-15 D46.5 RED：文本服务、边界、HTTP 适配和替代幂等测试按预期因缺少 `parseTextDraftReplacement`、202 响应适配、author-private outcome 与替代重放失败；原 D45 用例继续通过。
+- 2026-07-15 D46.5 GREEN：D46.5 定向用例 61 项通过；随后作者可见性、草稿、文本、仓储、重试、回调、管理员回归共 150 项通过，`npm run d46:check` 通过。非 Pass 仅在当前 gate/action 与持久化 version 1、作者、目标全部一致时返回安全 DTO；验证/身份/intake 仍走原错误，替换控制字段不进入审核正文。

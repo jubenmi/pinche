@@ -5,6 +5,8 @@ import {
   normalizeTextFields
 } from "./normalize.js";
 import { buildTextProposalPayload } from "./text-boundaries.js";
+import { createAuthorPrivateTextDto } from "./author-dto.js";
+import { resolveAuthorVisibility } from "./author-visibility.js";
 import { projectSafeTextAppliedResult } from "./text-applied-result.js";
 import { proposalStaleForRevalidationError } from "./text-proposal-applicator.js";
 import { textProposalPayloadDigest } from "./text-proposal-digest.js";
@@ -256,6 +258,41 @@ function returnPreparedTerminalTextOutcome(outcome) {
   throw replayErrorForStatus(outcome.status);
 }
 
+const AUTHOR_PRIVATE_PUBLISHED_TARGET_ACTIONS = new Set([
+  "update_nickname",
+  "update_session",
+  "update_session_npc_role"
+]);
+
+function authorPrivateTextActionEnabled(config, action) {
+  if (config?.authorPrivateTextEnabled !== true) return false;
+  const configured = config?.authorPrivateTextActions;
+  const actions = configured instanceof Set
+    ? configured
+    : Array.isArray(configured)
+      ? new Set(configured)
+      : new Set();
+  return actions.has(action);
+}
+
+function parseProposalPayload(proposal) {
+  try {
+    const payload = typeof proposal?.normalized_payload_json === "string"
+      ? JSON.parse(proposal.normalized_payload_json)
+      : proposal?.normalized_payload_json;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function authorPrivatePublishedId(action, targetSubjectId) {
+  if (!AUTHOR_PRIVATE_PUBLISHED_TARGET_ACTIONS.has(action)) return null;
+  const parsed = Number(targetSubjectId);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function createContentModerationService(dependencies) {
   const deps = {
     randomUUID: () => crypto.randomUUID(),
@@ -264,6 +301,51 @@ export function createContentModerationService(dependencies) {
     emit: () => {},
     ...dependencies
   };
+
+  function authorPrivateTextResult(prepared, moderationStatus) {
+    const proposal = prepared?.proposal;
+    const action = String(proposal?.action || prepared?.action || "");
+    if (
+      !authorPrivateTextActionEnabled(deps.config, action) ||
+      Number(proposal?.author_visibility_version) !== 1 ||
+      Number(proposal?.created_by_user_id) !== Number(prepared?.actorUserId)
+    ) return null;
+    const payload = parseProposalPayload(proposal);
+    const targetSubjectId = String(proposal?.target_subject_id || "");
+    if (
+      !payload ||
+      !payload.body ||
+      typeof payload.body !== "object" ||
+      Array.isArray(payload.body) ||
+      String(payload?.context?.targetSubjectId || "") !== targetSubjectId
+    ) return null;
+    const visibility = resolveAuthorVisibility({
+      viewerUserId: prepared.actorUserId,
+      authorUserId: proposal.created_by_user_id,
+      moderationStatus,
+      authorVisibilityVersion: Number(proposal.author_visibility_version),
+      recordStatus: "active",
+      contentKind: "text"
+    });
+    if (visibility.scope !== "author_only") return null;
+    return createAuthorPrivateTextDto({
+      draftId: proposal.id,
+      action,
+      moderationStatus,
+      publishedId: authorPrivatePublishedId(action, targetSubjectId),
+      content: payload.body,
+      visibility
+    });
+  }
+
+  function returnTextOutcome(prepared, outcome) {
+    if (!outcome) return null;
+    if (outcome.kind === "error") {
+      const privateResult = authorPrivateTextResult(prepared, outcome.status);
+      if (privateResult) return privateResult;
+    }
+    return returnPreparedTerminalTextOutcome(outcome);
+  }
 
   async function claimInitialSubmissionLease(connection, job) {
     const leaseToken = deps.randomUUID();
@@ -740,6 +822,20 @@ export function createContentModerationService(dependencies) {
       ...buildTextProposalPayload(action, payload),
       actor_user_id: actorUserId
     };
+    const authorPrivateEnabled = authorPrivateTextActionEnabled(deps.config, action);
+    const targetSubjectId = String(normalizedPayload?.context?.targetSubjectId || "");
+    const replacesDraftId = input?.replacesDraftId === null || input?.replacesDraftId === undefined
+      ? null
+      : Number(input.replacesDraftId);
+    if (authorPrivateEnabled && !targetSubjectId) {
+      throw textModerationError(400, "BAD_REQUEST", "text moderation target is required");
+    }
+    if (
+      replacesDraftId !== null &&
+      (!authorPrivateEnabled || !Number.isSafeInteger(replacesDraftId) || replacesDraftId <= 0)
+    ) {
+      throw textModerationError(400, "BAD_REQUEST", "replacement draft is invalid");
+    }
     const payloadDigest = textProposalPayloadDigest({
       action,
       baseVersion,
@@ -756,10 +852,12 @@ export function createContentModerationService(dependencies) {
         dataId: deps.randomUUID(),
         policyId: null
       });
-      await deps.repository.createTextProposal(connection, {
+      const proposalId = await deps.repository.createTextProposal(connection, {
         jobId: job.id,
         subjectType,
         subjectId: operationSubjectId,
+        targetSubjectId: authorPrivateEnabled ? targetSubjectId : null,
+        authorVisibilityVersion: authorPrivateEnabled ? 1 : 0,
         baseVersion,
         action,
         normalizedPayload,
@@ -768,6 +866,22 @@ export function createContentModerationService(dependencies) {
         allowStaleIdempotencyReplay: input?.idempotencyExplicit === true,
         userId: actorUserId
       });
+      if (replacesDraftId !== null) {
+        if (typeof deps.supersedeRejectedDraft !== "function") {
+          throw textModerationError(
+            500,
+            MODERATION_ERROR_CODES.configuration,
+            "author draft replacement service is missing"
+          );
+        }
+        await deps.supersedeRejectedDraft(connection, {
+          userId: actorUserId,
+          draftId: replacesDraftId,
+          newProposalId: Number(proposalId),
+          action,
+          targetSubjectId
+        });
+      }
       const proposal = await deps.repository.findTextProposalByJobId(
         connection,
         job.id,
@@ -789,6 +903,7 @@ export function createContentModerationService(dependencies) {
       subjectType,
       subjectId: operationSubjectId,
       action,
+      actorUserId,
       scene,
       openid,
       normalizedText
@@ -970,19 +1085,31 @@ export function createContentModerationService(dependencies) {
         "text moderation proposal is stale"
       );
     }
+    const privateResult = authorPrivateTextResult(prepared, final.status);
+    if (privateResult) return privateResult;
     throw replayErrorForStatus(final.status);
   }
 
   async function moderateTextMutation(input) {
     const prepared = await prepareTextProposal(input);
-    const terminalResult = returnPreparedTerminalTextOutcome(
+    const terminalResult = returnTextOutcome(
+      prepared,
       preparedTerminalTextOutcome(prepared.job, prepared.proposal)
     );
     if (terminalResult) return terminalResult;
     const leaseToken = prepared.job.initialLeaseAcquired === true
       ? prepared.job.initialLeaseToken
       : null;
-    if (!leaseToken) throw replayErrorForStatus("error");
+    if (!leaseToken) {
+      const privateResult = authorPrivateTextResult(
+        prepared,
+        ["pending", "processing", "review", "rejected", "error"].includes(prepared.job.status)
+          ? prepared.job.status
+          : "error"
+      );
+      if (privateResult) return privateResult;
+      throw replayErrorForStatus("error");
+    }
     let providerResult;
     try {
       await renewSubmissionLease({
@@ -1004,13 +1131,19 @@ export function createContentModerationService(dependencies) {
         subjectType: prepared.subjectType
       });
     } catch (error) {
-      if (isSubmissionStale(error)) throw replayErrorForStatus("error");
+      if (isSubmissionStale(error)) {
+        const privateResult = authorPrivateTextResult(prepared, "error");
+        if (privateResult) return privateResult;
+        throw replayErrorForStatus("error");
+      }
       await recordLeasedSubmissionFailure({
         job: prepared.job,
         leaseToken,
         subjectType: prepared.subjectType,
         error
       });
+      const privateResult = authorPrivateTextResult(prepared, "error");
+      if (privateResult) return privateResult;
       throw replayErrorForStatus("error");
     }
     const outcome = normalizeWechatTextResult(providerResult);
@@ -1026,6 +1159,8 @@ export function createContentModerationService(dependencies) {
         subjectType: prepared.subjectType,
         error
       });
+      const privateResult = authorPrivateTextResult(prepared, "error");
+      if (privateResult) return privateResult;
       throw replayErrorForStatus("error");
     }
     const resolved = await resolveTextResult(prepared, providerResult, { leaseToken });

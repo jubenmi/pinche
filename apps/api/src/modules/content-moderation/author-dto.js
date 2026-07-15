@@ -22,6 +22,18 @@ const INPUT_FIELDS = new Set([
   "content",
   "visibility"
 ]);
+const OUTPUT_FIELDS = Object.freeze([
+  "draft_id",
+  "content_ref",
+  "publication_state",
+  "moderation_status",
+  "moderation_message",
+  "published_id",
+  "content",
+  "can_edit",
+  "can_delete",
+  "can_resubmit"
+]);
 const MODERATION_MESSAGES = Object.freeze({
   pending: "仅自己可见 · 审核中",
   processing: "仅自己可见 · 审核中",
@@ -154,4 +166,45 @@ export function createAuthorPrivateTextDto(input = {}) {
     can_delete: input.visibility.canDelete,
     can_resubmit: input.visibility.canResubmit
   };
+}
+
+export function isAuthorPrivateTextDto(value) {
+  try {
+    if (!isPlainRecord(value)) return false;
+    const keys = Object.keys(value);
+    if (
+      keys.length !== OUTPUT_FIELDS.length ||
+      keys.some((key) => !OUTPUT_FIELDS.includes(key))
+    ) return false;
+    const status = String(value.moderation_status || "");
+    const visibility = {
+      scope: value.publication_state,
+      canPreview: true,
+      canEdit: value.can_edit,
+      canDelete: value.can_delete,
+      canResubmit: value.can_resubmit
+    };
+    const projected = createAuthorPrivateTextDto({
+      draftId: value.draft_id,
+      action: AUTHOR_PRIVATE_TEXT_ACTIONS[0],
+      moderationStatus: status,
+      publishedId: value.published_id,
+      content: value.content,
+      visibility
+    });
+    return (
+      value.draft_id === projected.draft_id &&
+      value.content_ref === projected.content_ref &&
+      value.publication_state === projected.publication_state &&
+      value.moderation_status === projected.moderation_status &&
+      value.moderation_message === projected.moderation_message &&
+      value.published_id === projected.published_id &&
+      value.can_edit === projected.can_edit &&
+      value.can_delete === projected.can_delete &&
+      value.can_resubmit === projected.can_resubmit &&
+      JSON.stringify(value.content) === JSON.stringify(projected.content)
+    );
+  } catch {
+    return false;
+  }
 }
