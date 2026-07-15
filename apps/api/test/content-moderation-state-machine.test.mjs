@@ -5,8 +5,10 @@ import {
   assertModerationTransition,
   assertTextProposalTransition
 } from "../src/modules/content-moderation/state-machine.js";
+import { MODERATION_JOB_STATUSES } from "../src/modules/content-moderation/constants.js";
 
 test("D46 user cancellation reaches a terminal job state from every cancellable state", () => {
+  assert.equal(MODERATION_JOB_STATUSES.includes("cancelled"), true);
   for (const status of ["pending", "processing", "review", "error", "rejected"]) {
     assert.doesNotThrow(() => assertModerationTransition(status, "cancelled", { source: "user" }));
   }
