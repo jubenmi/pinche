@@ -67,13 +67,13 @@
   - [x] 验证车局组织者不是对应文本创建者时不能读取其他人的私有版本；普通成员继续看旧公开值。
   - [x] 运行 D38/D39/D40 城市与游客读取回归，证明公共日历无草稿泄漏。
 
-- [ ] D46.9 集成评价、聊天消息和置顶消息作者视图。
-  - [ ] 先新增测试：`getMySessionReview` 返回本人新投影，公共评价/平均分继续使用旧批准值；新建评价草稿不计数。
-  - [ ] 修改 `apps/api/src/modules/core/service.js` 的本人评价读取和公开评价聚合，显式分离 `upsert_session_review` 投影。
-  - [ ] 修改 `packages/talk/api/service.js`、`packages/talk/api/routes.js`、`packages/talk/miniprogram/ChatEntry.vue`、`packages/talk/miniprogram/ManagePinnedMessage.vue` 及 `apps/miniprogram/src/extensions/session-pseudo-chat/` 适配，只向发送者连接追加 `create_session_message` 临时气泡；不落正式消息、不增加未读、不广播。
-  - [ ] 置顶消息只给操作者返回 `update_session_pinned_message` 覆盖，其他连接继续看到旧置顶文本。
-  - [ ] 修改 `apps/miniprogram/src/pages/session/review.vue` 和聊天 UI，支持状态角标、取消及 rejected 编辑重提。
-  - [ ] 运行 talk 包测试、D18/D23 相册成员回归和 D45 文本测试；预期全绿。
+- [x] D46.9 集成评价、聊天消息和置顶消息作者视图。
+  - [x] 先新增测试：`getMySessionReview` 返回本人新投影，公共评价/平均分继续使用旧批准值；新建评价草稿不计数。
+  - [x] 修改 `apps/api/src/modules/core/service.js` 的本人评价读取和公开评价聚合，显式分离 `upsert_session_review` 投影。
+  - [x] 修改 `packages/talk/api/service.js`、`packages/talk/api/routes.js`、`packages/talk/miniprogram/ChatEntry.vue`、`packages/talk/miniprogram/ManagePinnedMessage.vue` 及 `apps/miniprogram/src/extensions/session-pseudo-chat/` 适配，只向发送者连接追加 `create_session_message` 临时气泡；不落正式消息、不增加未读、不广播。
+  - [x] 置顶消息只给操作者返回 `update_session_pinned_message` 覆盖，其他连接继续看到旧置顶文本。
+  - [x] 修改 `apps/miniprogram/src/pages/session/review.vue` 和聊天 UI，支持状态角标、取消及 rejected 编辑重提。
+  - [x] 运行 talk 包测试、D18/D23 相册成员回归和 D45 文本测试；预期全绿。
 
 - [ ] D46.10 实现图片/视频作者专属预览。
   - [ ] 先新增失败测试 `apps/api/test/content-moderation-author-media-preview.test.mjs`，覆盖图片/视频 author、organizer、member、tagged、admin 普通接口、anonymous 和分享 token。
@@ -158,3 +158,5 @@
 - 2026-07-15 D46.7 GREEN：作者读取器、资料覆盖、门店/剧本草稿追加、安全客户端适配共 37 项定向测试通过；`build:mp-weixin`、D33 私有目录检查、通用小程序检查和 `npm run d46:check` 通过。草稿 ID 未提升为正式 ID，创建流程中的待审门店/剧本不可选择。
 - 2026-07-15 D46.8 RED：车局/NPC 作者读取测试按预期因 `author-session-read.js` 不存在失败；小程序扩展测试随后因缺少车局/NPC 草稿适配导出失败。
 - 2026-07-15 D46.8 GREEN：车局/NPC 作者读取与客户端草稿约束共 6 项定向测试通过，`build:mp-weixin` 成功；D38 城市发现、D39 城市只读预览、D40 游客日历、D21 我的日历与 `npm run d46:check` 全部通过。创建类车局/NPC 无正式 ID，不能分享、报名、进入相册或管理；取消只调用作者草稿 DELETE。
+- 2026-07-15 D46.9 RED：评价/聊天/置顶作者视图测试先因缺少 `author-social-read.js` 失败；客户端测试随后因缺少 202 投影适配、未读隔离和取消/替代 API 导出失败。talk 旧测试夹具也暴露未注入 D46 状态码辅助函数，按实际 server context 补齐。
+- 2026-07-15 D46.9 GREEN：评价只在 `getMySessionReview` 覆盖本人编辑态，公开评价查询不读草稿；聊天只给发送者追加无正式 ID 的临时气泡，未读计算先排除作者投影；置顶仅覆盖操作者读取。状态角标、取消和 rejected 编辑重提已接入评价与 talk 两套小程序组件。talk 全包、D18/D23、D45 共 496 项、`build:mp-weixin`、`npm run d46:check` 与 diff 检查全部通过。D45 常量旧断言同步纳入 D46 用户取消终态 `cancelled`。

@@ -5141,10 +5141,13 @@ async function route(request, response) {
   const mySessionReviewId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/review$/);
   if (request.method === "GET" && mySessionReviewId) {
     const user = await getAuthUser(request);
+    const review = await getMySessionReview(user, mySessionReviewId, {
+      authorTextReader: authorTextProjectionReader
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await getMySessionReview(user, mySessionReviewId)
-    });
+      data: review
+    }, authorPrivateResponseHeaders(review));
     return;
   }
   if (request.method === "PUT" && mySessionReviewId) {
@@ -5181,11 +5184,15 @@ async function route(request, response) {
 
   if (
     await routeExtensions({
+      authorPrivateResponseHeaders,
+      authorTextReader: authorTextProjectionReader,
       body,
       getAuthUser,
       idMatch,
       jsonResponse,
       moderateCoveredText,
+      moderatedTextHeaders,
+      moderatedTextHttpStatus,
       request,
       response,
       url

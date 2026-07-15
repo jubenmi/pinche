@@ -36,6 +36,7 @@ import {
   mergeAuthorSessionUpdate,
   mergeAuthorSessionView
 } from "../content-moderation/author-session-read.js";
+import { mergeAuthorReviewState } from "../content-moderation/author-social-read.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -6736,7 +6737,7 @@ export async function listSessionReviews(sessionId) {
   });
 }
 
-export async function getMySessionReview(user, sessionId) {
+export async function getMySessionReview(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
     const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
@@ -6755,7 +6756,7 @@ export async function getMySessionReview(user, sessionId) {
     const photosByReview = review
       ? await reviewPhotos(connection, [Number(review.id)])
       : new Map();
-    return {
+    const state = {
       can_review: Boolean(eligibleSignup),
       review: review
         ? {
@@ -6764,6 +6765,15 @@ export async function getMySessionReview(user, sessionId) {
           }
         : null
     };
+    const authorTextReader = options.authorTextReader;
+    const projection = typeof authorTextReader?.find === "function"
+      ? await authorTextReader.find(connection, {
+          userId: user.user.id,
+          action: "upsert_session_review",
+          targetSubjectId: String(id)
+        })
+      : null;
+    return mergeAuthorReviewState(state, projection);
   });
 }
 
