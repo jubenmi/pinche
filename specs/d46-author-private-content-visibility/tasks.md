@@ -53,12 +53,12 @@
   - [x] 验证手机号、openid、context、base version、幂等键、provider 标签/分数和审核正文不进入 DTO。
   - [x] 运行：`node --test apps/api/test/content-moderation-author-text-projection.test.mjs apps/api/test/content-moderation-text-proposal-applicator.test.mjs`；预期全绿。
 
-- [ ] D46.7 集成昵称、私有门店和私有剧本作者视图。
-  - [ ] 先新增 API 契约测试：`GET /api/users/me` 只给本人覆盖 `update_nickname` 待审昵称，其他用户资料仍为旧值；门店/剧本本人列表追加 `create_private_store`/`create_private_script` 草稿，公共目录不追加。
-  - [ ] 修改 `apps/api/src/modules/core/service.js` 的本人资料、`listActiveStores`、`listActiveScripts` 读取，在完成原权限后显式合并对应 action 投影。
-  - [ ] 修改 `apps/api/src/server.js` 只对包含作者投影的认证响应设置 `private, no-store`；公共目录响应保持无 draft 字段。
-  - [ ] 修改 `apps/miniprogram/src/pages/mine/index.vue`、`apps/miniprogram/src/pages/session/script.vue` 和相关 API 适配，原位置显示草稿状态并禁用正式选择/分享动作。
-  - [ ] 验证安全审核通过后的门店/剧本仍进入 D33 目录审核，不因 D46 自动公开。
+- [x] D46.7 集成昵称、私有门店和私有剧本作者视图。
+  - [x] 先新增 API 契约测试：`GET /api/users/me` 只给本人覆盖 `update_nickname` 待审昵称，其他用户资料仍为旧值；门店/剧本本人列表追加 `create_private_store`/`create_private_script` 草稿，公共目录不追加。
+  - [x] 修改 `apps/api/src/modules/core/service.js` 的本人资料、`listActiveStores`、`listActiveScripts` 读取，在完成原权限后显式合并对应 action 投影。
+  - [x] 修改 `apps/api/src/server.js` 只对包含作者投影的认证响应设置 `private, no-store`；公共目录响应保持无 draft 字段。
+  - [x] 修改 `apps/miniprogram/src/pages/mine/index.vue`、`apps/miniprogram/src/pages/session/script.vue` 和相关 API 适配，原位置显示草稿状态并禁用正式选择/分享动作。
+  - [x] 验证安全审核通过后的门店/剧本仍进入 D33 目录审核，不因 D46 自动公开。
 
 - [ ] D46.8 集成车局创建/修改与 NPC 作者视图。
   - [ ] 先新增后端测试：本人日历/车局列表追加 `create_session` 草稿卡；公共近期、城市发现、游客日历和分享详情完全不返回草稿。
@@ -154,3 +154,5 @@
 - 2026-07-15 D46.5 GREEN：D46.5 定向用例 61 项通过；随后作者可见性、草稿、文本、仓储、重试、回调、管理员回归共 150 项通过，`npm run d46:check` 通过。非 Pass 仅在当前 gate/action 与持久化 version 1、作者、目标全部一致时返回安全 DTO；验证/身份/intake 仍走原错误，替换控制字段不进入审核正文。
 - 2026-07-15 D46.6 RED：十动作投影定向测试按预期因 `text-author-projection.js` 不存在失败；不是测试语法错误。
 - 2026-07-15 D46.6 GREEN：十个 action 显式投影、嵌套克隆、创建/修改身份和敏感字段剔除测试通过；联合 applicator、作者策略、草稿、文本、仓储、回调、重试与管理员回归共 156 项通过，`npm run d46:check` 与 `git diff --check` 通过。
+- 2026-07-15 D46.7 RED：作者读取和小程序适配测试分别按预期因缺少 `author-text-read.js` 与 `authorPrivateText.js` 失败。D33 首次回归发现其源码断言写死两参数调用；确认认证用户参数未变后，仅扩展断言允许第三个受控读取器参数。
+- 2026-07-15 D46.7 GREEN：作者读取器、资料覆盖、门店/剧本草稿追加、安全客户端适配共 37 项定向测试通过；`build:mp-weixin`、D33 私有目录检查、通用小程序检查和 `npm run d46:check` 通过。草稿 ID 未提升为正式 ID，创建流程中的待审门店/剧本不可选择。

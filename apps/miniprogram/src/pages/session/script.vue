@@ -19,7 +19,7 @@
       />
       <view
         v-for="script in scripts"
-        :key="script.id"
+        :key="script.id || `draft-${script.draft_id}`"
         class="script-row"
         :class="{ selected: isSelectedScript(script) }"
         @tap="selectScript(script)"
@@ -82,7 +82,7 @@
       />
       <view class="form-actions">
         <t-button class="button" :disabled="creatingScript" @tap="submitPrivateScript">
-          {{ creatingScript ? "提交中..." : "提交并使用" }}
+          {{ creatingScript ? "提交中..." : "提交审核" }}
         </t-button>
         <t-button class="button secondary" :disabled="creatingScript" @tap="resetScriptForm">
           清空
@@ -100,6 +100,11 @@
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, queryString, request } from "../../utils/api";
+import {
+  authorPrivateCatalogItem,
+  isAuthorPrivateText,
+  isFormalBusinessEntity
+} from "../../utils/authorPrivateText";
 import { displayTags, firstTag, readCreateFlow, writeCreateFlow } from "../../utils/createFlow";
 import { showToast } from "../../utils/tdesignFeedback";
 
@@ -211,6 +216,9 @@ export default {
       return firstTag(script.type_tags);
     },
     scriptBadge(script) {
+      if (script.author_private) {
+        return script.moderation_message;
+      }
       if (script.visibility !== "private") {
         return "";
       }
@@ -229,7 +237,9 @@ export default {
         const response = await request({
           url: "/api/scripts" + queryString({ keyword: this.keyword, storeId: this.store?.id, limit: 30 })
         });
-        const scripts = dataOf(response) || [];
+        const scripts = (dataOf(response) || []).map((script) =>
+          isAuthorPrivateText(script) ? authorPrivateCatalogItem(script, "script") : script
+        ).filter(Boolean);
         if (scripts.length > 0) {
           this.scripts = scripts;
           this.statusText = "";
@@ -245,6 +255,10 @@ export default {
       }
     },
     async selectScript(script) {
+      if (!isFormalBusinessEntity(script)) {
+        showToast({ title: script.moderation_message || "仅自己可见 · 审核中，暂不能选择", icon: "none" });
+        return;
+      }
       if (this.isSelectedScript(script)) {
         await this.goNext();
         return;
@@ -284,6 +298,15 @@ export default {
         if (!script) {
           throw new Error("missing script");
         }
+        if (isAuthorPrivateText(script)) {
+          const draftScript = authorPrivateCatalogItem(script, "script");
+          this.scripts = [draftScript, ...this.scripts.filter((item) => item.draft_id !== draftScript.draft_id)];
+          this.resetScriptForm();
+          this.showScriptForm = false;
+          this.statusText = script.moderation_message;
+          showToast({ title: script.moderation_message, icon: "none" });
+          return;
+        }
         this.scripts = [script, ...this.scripts.filter((item) => String(item.id) !== String(script.id))];
         this.selectedScript = script;
         writeCreateFlow({ script, role: null });
@@ -304,7 +327,7 @@ export default {
       );
     },
     async goNext() {
-      if (!this.selectedScript) {
+      if (!this.selectedScript || !isFormalBusinessEntity(this.selectedScript)) {
         showToast({ title: "先选择一个剧本", icon: "none" });
         return;
       }

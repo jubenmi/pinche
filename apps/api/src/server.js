@@ -209,6 +209,7 @@ import {
   enqueueRejectedMediaCleanup,
   failModerationJob,
   findAuthorTextDraftById,
+  findLatestAuthorTextProposal,
   findTextProposalByJobId,
   findCurrentModerationAttempt,
   findModerationAttemptByProviderJobId,
@@ -245,6 +246,10 @@ import {
 } from "./modules/content-moderation/text-boundaries.js";
 import { projectSafeTextAppliedResult } from "./modules/content-moderation/text-applied-result.js";
 import { isAuthorPrivateTextDto } from "./modules/content-moderation/author-dto.js";
+import {
+  createAuthorTextProjectionReader,
+  mergeAuthorTextProjection
+} from "./modules/content-moderation/author-text-read.js";
 import {
   profilePatchFromProposalBody,
   profileTextSnapshot
@@ -1125,6 +1130,10 @@ const textProposalApplicator = createTextProposalApplicator({
     create_session_message: applySessionMessageProposal,
     update_session_pinned_message: applySessionPinnedMessageProposal
   }
+});
+const authorTextProjectionReader = createAuthorTextProjectionReader({
+  config: config.contentModeration,
+  repository: { findLatestAuthorTextProposal }
 });
 const authorDrafts = createAuthorDraftService({
   transaction: withTransaction,
@@ -4199,7 +4208,19 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname === "/api/users/me") {
     const user = await getAuthUser(request);
-    jsonResponse(response, 200, { ok: true, data: user });
+    const projection = await withDatabaseConnection((connection) =>
+      authorTextProjectionReader.find(connection, {
+        userId: user.user.id,
+        action: "update_nickname",
+        targetSubjectId: String(user.user.id)
+      })
+    );
+    jsonResponse(response, 200, {
+      ok: true,
+      data: projection
+        ? { ...user, user: mergeAuthorTextProjection(user.user, projection) }
+        : user
+    }, projection ? { "cache-control": "private, no-store" } : {});
     return;
   }
 
@@ -4225,10 +4246,15 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname === "/api/stores") {
     const user = await optionalAuthUser(request);
+    const stores = await listActiveStores(
+      Object.fromEntries(url.searchParams),
+      user,
+      { authorTextReader: authorTextProjectionReader }
+    );
     jsonResponse(response, 200, {
       ok: true,
-      data: await listActiveStores(Object.fromEntries(url.searchParams), user)
-    });
+      data: stores
+    }, stores.some(isAuthorPrivateTextDto) ? { "cache-control": "private, no-store" } : {});
     return;
   }
 
@@ -4249,10 +4275,15 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname === "/api/scripts") {
     const user = await optionalAuthUser(request);
+    const scripts = await listActiveScripts(
+      Object.fromEntries(url.searchParams),
+      user,
+      { authorTextReader: authorTextProjectionReader }
+    );
     jsonResponse(response, 200, {
       ok: true,
-      data: await listActiveScripts(Object.fromEntries(url.searchParams), user)
-    });
+      data: scripts
+    }, scripts.some(isAuthorPrivateTextDto) ? { "cache-control": "private, no-store" } : {});
     return;
   }
 

@@ -8,6 +8,7 @@ import { buildTextProposalPayload } from "./text-boundaries.js";
 import { createAuthorPrivateTextDto } from "./author-dto.js";
 import { resolveAuthorVisibility } from "./author-visibility.js";
 import { projectAuthorTextProposal } from "./text-author-projection.js";
+import { authorPrivateTextActionEnabled } from "./author-text-read.js";
 import { projectSafeTextAppliedResult } from "./text-applied-result.js";
 import { proposalStaleForRevalidationError } from "./text-proposal-applicator.js";
 import { textProposalPayloadDigest } from "./text-proposal-digest.js";
@@ -257,17 +258,6 @@ function returnPreparedTerminalTextOutcome(outcome) {
     );
   }
   throw replayErrorForStatus(outcome.status);
-}
-
-function authorPrivateTextActionEnabled(config, action) {
-  if (config?.authorPrivateTextEnabled !== true) return false;
-  const configured = config?.authorPrivateTextActions;
-  const actions = configured instanceof Set
-    ? configured
-    : Array.isArray(configured)
-      ? new Set(configured)
-      : new Set();
-  return actions.has(action);
 }
 
 function parseProposalPayload(proposal) {

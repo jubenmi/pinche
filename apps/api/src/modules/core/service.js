@@ -29,6 +29,7 @@ import {
 } from "./session-album-media-count.js";
 import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
 import { isModerationPublished } from "@pinche/shared";
+import { textCreationTargetSubjectId } from "../content-moderation/text-request-identity.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -2136,7 +2137,7 @@ async function clearPreStartReviewEligibilityForSession(connection, sessionId) {
   );
 }
 
-export async function listActiveStores(filters = {}, user = null) {
+export async function listActiveStores(filters = {}, user = null, options = {}) {
   return withDatabaseConnection(async (connection) => {
     const where = [
       `
@@ -2171,15 +2172,26 @@ export async function listActiveStores(filters = {}, user = null) {
       `SELECT * FROM stores WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return rows
+    const result = rows
       .filter(
         (row) => isPublicCatalogUsable(row) || isPrivateCatalogUsableByUser(row, user)
       )
       .map(catalogResponse);
+    const authorTextReader = options.authorTextReader;
+    if (!user?.user?.id || typeof authorTextReader?.find !== "function") return result;
+    const projection = await authorTextReader.find(connection, {
+      userId: user.user.id,
+      action: "create_private_store",
+      targetSubjectId: textCreationTargetSubjectId({
+        action: "create_private_store",
+        actorUserId: user.user.id
+      })
+    });
+    return projection ? [...result, projection] : result;
   });
 }
 
-export async function listActiveScripts(filters = {}, user = null) {
+export async function listActiveScripts(filters = {}, user = null, options = {}) {
   return withDatabaseConnection(async (connection) => {
     const where = [];
     const values = [];
@@ -2270,7 +2282,7 @@ export async function listActiveScripts(filters = {}, user = null) {
       `SELECT ${select} FROM ${from} WHERE ${where.join(" AND ")} ORDER BY scripts.id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return attachScriptNpcRoles(
+    const result = await attachScriptNpcRoles(
       connection,
       rows
         .filter(
@@ -2278,6 +2290,17 @@ export async function listActiveScripts(filters = {}, user = null) {
         )
         .map((row) => catalogResponse(publicScriptRow(row)))
     );
+    const authorTextReader = options.authorTextReader;
+    if (!user?.user?.id || typeof authorTextReader?.find !== "function") return result;
+    const projection = await authorTextReader.find(connection, {
+      userId: user.user.id,
+      action: "create_private_script",
+      targetSubjectId: textCreationTargetSubjectId({
+        action: "create_private_script",
+        actorUserId: user.user.id
+      })
+    });
+    return projection ? [...result, projection] : result;
   });
 }
 
