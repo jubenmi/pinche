@@ -353,6 +353,22 @@ export function moderatedTextHeaders(result) {
     : {};
 }
 
+export function containsAuthorPrivateText(value, depth = 0) {
+  if (depth > 6 || value === null || value === undefined) return false;
+  if (isAuthorPrivateTextDto(value)) return true;
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsAuthorPrivateText(entry, depth + 1));
+  }
+  if (typeof value !== "object") return false;
+  return Object.values(value).some((entry) => containsAuthorPrivateText(entry, depth + 1));
+}
+
+function authorPrivateResponseHeaders(value) {
+  return containsAuthorPrivateText(value)
+    ? { "cache-control": "private, no-store" }
+    : {};
+}
+
 function moderationBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return {};
   const {
@@ -4677,10 +4693,15 @@ async function route(request, response) {
     if (inviteClaims && Number(inviteClaims.sessionId) !== Number(sessionId)) {
       throw forbidden("session join invite token is invalid");
     }
+    const session = await getSessionForViewer(sessionId, {
+      viewer,
+      inviteClaims,
+      authorTextReader: authorTextProjectionReader
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await getSessionForViewer(sessionId, { viewer, inviteClaims })
-    });
+      data: session
+    }, authorPrivateResponseHeaders(session));
     return;
   }
   if (request.method === "PATCH" && sessionId) {
@@ -4703,10 +4724,13 @@ async function route(request, response) {
   const sessionNpcRolesId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/npc-roles$/);
   if (request.method === "GET" && sessionNpcRolesId) {
     const user = await getAuthUser(request);
+    const npcRoles = await listSessionNpcRoles(user, sessionNpcRolesId, {
+      authorTextReader: authorTextProjectionReader
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await listSessionNpcRoles(user, sessionNpcRolesId)
-    });
+      data: npcRoles
+    }, authorPrivateResponseHeaders(npcRoles));
     return;
   }
   if (request.method === "POST" && sessionNpcRolesId) {
@@ -5273,10 +5297,15 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname === "/api/users/me/sessions") {
     const user = await getAuthUser(request);
+    const sessions = await listMySessions(
+      user,
+      Object.fromEntries(url.searchParams),
+      { authorTextReader: authorTextProjectionReader }
+    );
     jsonResponse(response, 200, {
       ok: true,
-      data: await listMySessions(user, Object.fromEntries(url.searchParams))
-    });
+      data: sessions
+    }, authorPrivateResponseHeaders(sessions));
     return;
   }
 

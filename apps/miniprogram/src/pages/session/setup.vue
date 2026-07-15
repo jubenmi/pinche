@@ -155,6 +155,7 @@
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
+import { isAuthorPrivateText } from "../../utils/authorPrivateText";
 import {
   readCreateFlow,
   roleOptionsFromFlow,
@@ -355,6 +356,10 @@ export default {
           }
         });
         const session = dataOf(sessionResponse);
+        if (isAuthorPrivateText(session)) {
+          this.statusText = session.moderation_message;
+          return;
+        }
         const roles = this.roleOptions.length > 0 ? this.roleOptions : this.selectedRoles;
         const createdSeats = [];
         for (const role of roles) {

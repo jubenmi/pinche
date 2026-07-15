@@ -82,5 +82,61 @@ export function authorPrivateCatalogItem(projection, type) {
 }
 
 export function isFormalBusinessEntity(value) {
-  return positiveId(value?.id) !== null && !isAuthorPrivateText(value?.author_private);
+  return positiveId(value?.id) !== null && value?.author_private?.content?.is_draft !== true;
+}
+
+function definedEntries(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+}
+
+export function authorPrivateSessionItem(projection) {
+  if (!isAuthorPrivateText(projection) || projection.content?.is_draft !== true) return null;
+  const content = projection.content;
+  return definedEntries({
+    id: null,
+    draft_id: projection.draft_id,
+    start_at: content.startAt,
+    note: content.note,
+    pinned_message_text: content.pinnedMessageText,
+    script_name_snapshot: "待审车局",
+    store_name_snapshot: "仅自己可见",
+    status: "author_private",
+    moderation_message: projection.moderation_message,
+    publication_state: "author_only",
+    is_draft: true,
+    author_private: projection
+  });
+}
+
+function authorPrivateNpcRole(projection) {
+  if (!isAuthorPrivateText(projection) || projection.content?.is_draft !== true) return null;
+  const content = projection.content;
+  return definedEntries({
+    id: null,
+    draft_id: projection.draft_id,
+    name: content.name,
+    description: content.description,
+    role_gender: content.roleGender,
+    source: content.source,
+    bound_user_id: content.boundUserId,
+    sort_order: content.sortOrder,
+    status: "author_private",
+    moderation_message: projection.moderation_message,
+    publication_state: "author_only",
+    is_draft: true,
+    author_private: projection
+  });
+}
+
+export function normalizeAuthorPrivateSession(session) {
+  if (isAuthorPrivateText(session)) return authorPrivateSessionItem(session);
+  if (!plainRecord(session)) return session;
+  return {
+    ...session,
+    session_npc_roles: Array.isArray(session.session_npc_roles)
+      ? session.session_npc_roles.map((role) =>
+          isAuthorPrivateText(role) ? authorPrivateNpcRole(role) : role
+        ).filter(Boolean)
+      : session.session_npc_roles
+  };
 }

@@ -249,6 +249,10 @@ import {
 } from "../utils/cityDiscovery";
 import { sessionCalendarStripeTone } from "../utils/sessionCalendarStripe";
 import { showModal, showToast } from "../utils/tdesignFeedback";
+import {
+  authorPrivateSessionItem,
+  isAuthorPrivateText
+} from "../utils/authorPrivateText";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -692,6 +696,10 @@ function handleCalendarCardTap(item) {
 }
 
 function handleCalendarAction(item) {
+  if (item.isAuthorPrivate) {
+    showToast({ title: item.raw?.moderation_message || "仅自己可见 · 审核中", icon: "none" });
+    return;
+  }
   if (item.type === "guest") {
     goGuestDetail(item.sessionId);
     return;
@@ -707,7 +715,20 @@ function handleCalendarAction(item) {
   goShare(item.sessionId);
 }
 
-function hideCalendarItem(item) {
+async function hideCalendarItem(item) {
+  if (item.isAuthorPrivate) {
+    try {
+      await request({
+        url: `/api/content-moderation/author-drafts/${item.raw.draft_id}`,
+        method: "DELETE"
+      });
+      showToast({ title: "已取消待审车局", icon: "none" });
+      emit("refresh");
+    } catch (error) {
+      showToast({ title: error?.userMessage || "取消失败，请稍后重试", icon: "none" });
+    }
+    return;
+  }
   if (item.isOrganized) {
     if (hasOtherOnboardMembers(item.session)) {
       leaveOrganizedSession(item.session);
@@ -926,11 +947,18 @@ function mergeCalendarItems(createdSessions = [], joinedSignups = []) {
   const itemsBySession = new Map();
 
   (createdSessions || []).forEach((session) => {
-    const sessionId = String(session?.id || "");
-    if (!sessionId) {
+    const normalizedSession = isAuthorPrivateText(session)
+      ? authorPrivateSessionItem(session)
+      : session;
+    const sessionKey = normalizedSession?.id
+      ? String(normalizedSession.id)
+      : normalizedSession?.draft_id
+        ? `draft:${normalizedSession.draft_id}`
+        : "";
+    if (!sessionKey) {
       return;
     }
-    itemsBySession.set(sessionId, createCalendarItem({ session }));
+    itemsBySession.set(sessionKey, createCalendarItem({ session: normalizedSession }));
   });
 
   (joinedSignups || []).forEach((signup) => {
@@ -965,10 +993,13 @@ function createCalendarItem({ session = null, signup = null }) {
 function refreshCalendarItem(item) {
   const source = item.session || item.signup || {};
   const startDate = parseStartAt(source.start_at);
+  item.isAuthorPrivate = isAuthorPrivateText(item.session?.author_private);
   item.sessionId = item.session?.id || item.signup?.session_id || "";
-  item.key = `calendar-${item.sessionId}`;
+  item.key = item.isAuthorPrivate
+    ? `calendar-draft-${item.session?.draft_id}`
+    : `calendar-${item.sessionId}`;
   item.isOrganized = Boolean(item.session);
-  item.canManage = item.isOrganized;
+  item.canManage = item.isOrganized && !item.isAuthorPrivate;
   item.canRemove = true;
   item.isJoined = Boolean(item.signup);
   item.type = item.isOrganized ? "organized" : "joined";
@@ -1019,6 +1050,10 @@ function calendarItemFailed(item) {
 
 function calendarIdentityTags(item) {
   const tags = [];
+  if (item.isAuthorPrivate) {
+    tags.push({ key: "author-private", label: "仅自己可见", tone: "pending" });
+    return tags;
+  }
   if (item.isOrganized) {
     tags.push({ key: "organized", label: "发起", tone: "organized" });
   }
@@ -1027,6 +1062,7 @@ function calendarIdentityTags(item) {
 
 function calendarItemIsPending(item) {
   return (
+    item.isAuthorPrivate ||
     Number(item.session?.pending_signup_count || 0) > 0 ||
     item.sessionStatus === "draft" ||
     item.signupStatus === "pending"
@@ -1046,6 +1082,9 @@ function calendarMetaText(item) {
 }
 
 function calendarItemStatusText(item) {
+  if (item.isAuthorPrivate) {
+    return item.raw?.moderation_message || "仅自己可见 · 审核中";
+  }
   if (isCalendarItemPostStart(item)) {
     return calendarPostStartText(item.raw);
   }

@@ -30,6 +30,12 @@ import {
 import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
 import { isModerationPublished } from "@pinche/shared";
 import { textCreationTargetSubjectId } from "../content-moderation/text-request-identity.js";
+import {
+  appendAuthorSessionCreationForUser,
+  mergeAuthorNpcRoleView,
+  mergeAuthorSessionUpdate,
+  mergeAuthorSessionView
+} from "../content-moderation/author-session-read.js";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -3509,10 +3515,15 @@ export async function getSessionForViewer(id, options = {}) {
         (isAdmin(viewer) || (await isSessionAlbumMember(connection, session, viewer.user.id)))
     );
     if (memberAllowed) {
-      return {
+      const detail = {
         ...(await memberSessionDetail(connection, session)),
         access_scope: "member"
       };
+      return mergeAuthorSessionView(connection, {
+        reader: options.authorTextReader,
+        userId: viewer.user.id,
+        session: detail
+      });
     }
     if (publicSessionAvailable(session)) {
       return publicSessionPreview(connection, session);
@@ -3623,7 +3634,7 @@ export async function getSessionShareStats(sessionId) {
   });
 }
 
-export async function listMySessions(user, filters = {}) {
+export async function listMySessions(user, filters = {}, options = {}) {
   if (filters.scope === "album") {
     return listMyAlbumSessions(user, filters);
   }
@@ -3668,10 +3679,24 @@ export async function listMySessions(user, filters = {}) {
       `,
       values
     );
-    return rows.map((row) => ({
+    const sessions = rows.map((row) => ({
       ...row,
       album_media_count: Number(row.album_media_count || 0)
     }));
+    const authorTextReader = options.authorTextReader;
+    const merged = [];
+    for (const session of sessions) {
+      merged.push(await mergeAuthorSessionUpdate(connection, {
+        reader: authorTextReader,
+        userId: user.user.id,
+        session
+      }));
+    }
+    return appendAuthorSessionCreationForUser(connection, {
+      reader: authorTextReader,
+      userId: user.user.id,
+      sessions: merged
+    });
   });
 }
 
@@ -4282,13 +4307,19 @@ function normalizeNpcRoleStatus(value) {
   return status;
 }
 
-export async function listSessionNpcRoles(user, sessionId) {
+export async function listSessionNpcRoles(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
     await requireSessionOwner(connection, id, user);
+    const npcRoles = await mergeAuthorNpcRoleView(connection, {
+      reader: options.authorTextReader,
+      userId: user.user.id,
+      sessionId: id,
+      roles: await sessionNpcRolesForSession(connection, id)
+    });
     return {
       session_id: id,
-      npc_roles: await sessionNpcRolesForSession(connection, id)
+      npc_roles: npcRoles
     };
   });
 }

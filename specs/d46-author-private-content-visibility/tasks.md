@@ -60,12 +60,12 @@
   - [x] 修改 `apps/miniprogram/src/pages/mine/index.vue`、`apps/miniprogram/src/pages/session/script.vue` 和相关 API 适配，原位置显示草稿状态并禁用正式选择/分享动作。
   - [x] 验证安全审核通过后的门店/剧本仍进入 D33 目录审核，不因 D46 自动公开。
 
-- [ ] D46.8 集成车局创建/修改与 NPC 作者视图。
-  - [ ] 先新增后端测试：本人日历/车局列表追加 `create_session` 草稿卡；公共近期、城市发现、游客日历和分享详情完全不返回草稿。
-  - [ ] 修改 `apps/api/src/modules/core/service.js` 的本人车局读取、`getSessionForViewer` 和 NPC 列表，仅对创建者合并 `create_session`、`update_session`、`create_session_npc_role`、`update_session_npc_role` 投影。
-  - [ ] 修改 `apps/miniprogram/src/components/SessionCalendar.vue`、`pages/session/create.vue`、`detail.vue`、`manage.vue`、`setup.vue`，显示原位置私有值并禁用草稿车局的分享、报名、相册与管理动作。
-  - [ ] 验证车局组织者不是对应文本创建者时不能读取其他人的私有版本；普通成员继续看旧公开值。
-  - [ ] 运行 D38/D39/D40 城市与游客读取回归，证明公共日历无草稿泄漏。
+- [x] D46.8 集成车局创建/修改与 NPC 作者视图。
+  - [x] 先新增后端测试：本人日历/车局列表追加 `create_session` 草稿卡；公共近期、城市发现、游客日历和分享详情完全不返回草稿。
+  - [x] 修改 `apps/api/src/modules/core/service.js` 的本人车局读取、`getSessionForViewer` 和 NPC 列表，仅对创建者合并 `create_session`、`update_session`、`create_session_npc_role`、`update_session_npc_role` 投影。
+  - [x] 修改 `apps/miniprogram/src/components/SessionCalendar.vue`、`pages/session/create.vue`、`detail.vue`、`manage.vue`、`setup.vue`，显示原位置私有值并禁用草稿车局的分享、报名、相册与管理动作。
+  - [x] 验证车局组织者不是对应文本创建者时不能读取其他人的私有版本；普通成员继续看旧公开值。
+  - [x] 运行 D38/D39/D40 城市与游客读取回归，证明公共日历无草稿泄漏。
 
 - [ ] D46.9 集成评价、聊天消息和置顶消息作者视图。
   - [ ] 先新增测试：`getMySessionReview` 返回本人新投影，公共评价/平均分继续使用旧批准值；新建评价草稿不计数。
@@ -156,3 +156,5 @@
 - 2026-07-15 D46.6 GREEN：十个 action 显式投影、嵌套克隆、创建/修改身份和敏感字段剔除测试通过；联合 applicator、作者策略、草稿、文本、仓储、回调、重试与管理员回归共 156 项通过，`npm run d46:check` 与 `git diff --check` 通过。
 - 2026-07-15 D46.7 RED：作者读取和小程序适配测试分别按预期因缺少 `author-text-read.js` 与 `authorPrivateText.js` 失败。D33 首次回归发现其源码断言写死两参数调用；确认认证用户参数未变后，仅扩展断言允许第三个受控读取器参数。
 - 2026-07-15 D46.7 GREEN：作者读取器、资料覆盖、门店/剧本草稿追加、安全客户端适配共 37 项定向测试通过；`build:mp-weixin`、D33 私有目录检查、通用小程序检查和 `npm run d46:check` 通过。草稿 ID 未提升为正式 ID，创建流程中的待审门店/剧本不可选择。
+- 2026-07-15 D46.8 RED：车局/NPC 作者读取测试按预期因 `author-session-read.js` 不存在失败；小程序扩展测试随后因缺少车局/NPC 草稿适配导出失败。
+- 2026-07-15 D46.8 GREEN：车局/NPC 作者读取与客户端草稿约束共 6 项定向测试通过，`build:mp-weixin` 成功；D38 城市发现、D39 城市只读预览、D40 游客日历、D21 我的日历与 `npm run d46:check` 全部通过。创建类车局/NPC 无正式 ID，不能分享、报名、进入相册或管理；取消只调用作者草稿 DELETE。
