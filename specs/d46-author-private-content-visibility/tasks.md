@@ -16,12 +16,12 @@
   - [x] 在 `package.json` 增加 `d46:check` 并接入根 `precheck`；先运行并记录因实现缺失而 RED。
   - [x] 定向命令：`node --test apps/api/test/content-moderation-author-visibility-contract.test.mjs`；预期在实现前因缺少 D46 模块/迁移失败，而不是因测试语法失败。
 
-- [ ] D46.2 增加兼容迁移与状态机。
-  - [ ] 新增迁移 `apps/api/migrations/0030_author_private_content_visibility.sql`：为文本提案增加 `target_subject_id`、`author_visibility_version`、`cancelled_at`、`superseded_by_proposal_id` 与作者目标索引；为 `session_album_photos` 增加 `author_visibility_version`。
-  - [ ] 修改 `apps/api/src/modules/album-video/migration.js`，以 MySQL/TDSQL-C 兼容方式补齐、校验并幂等重跑上述列、索引和外键。
-  - [ ] 修改 `apps/api/src/modules/content-moderation/state-machine.js`：增加 job `cancelled` 用户终态，以及 proposal `cancelled`/`superseded` 终态；provider/admin 不得从这些状态迁移。
-  - [ ] 新增 `apps/api/test/content-moderation-author-visibility-migration.test.mjs` 与状态机用例，覆盖空库、升级库、重复迁移、历史版本 0、非法迁移和迟到结果。
-  - [ ] 运行：`node --test apps/api/test/content-moderation-author-visibility-migration.test.mjs apps/api/test/content-moderation-state-machine.test.mjs`；预期全绿。
+- [x] D46.2 增加兼容迁移与状态机。
+  - [x] 新增迁移 `apps/api/migrations/0030_author_private_content_visibility.sql`：为文本提案增加 `target_subject_id`、`author_visibility_version`、`cancelled_at`、`superseded_by_proposal_id` 与作者目标索引；为 `session_album_photos` 增加 `author_visibility_version`。
+  - [x] 修改 `apps/api/src/modules/album-video/migration.js`，以 MySQL/TDSQL-C 兼容方式补齐、校验并幂等重跑上述列、索引和外键。
+  - [x] 修改 `apps/api/src/modules/content-moderation/state-machine.js`：增加 job `cancelled` 用户终态，以及 proposal `cancelled`/`superseded` 终态；provider/admin 不得从这些状态迁移。
+  - [x] 新增 `apps/api/test/content-moderation-author-visibility-migration.test.mjs` 与状态机用例，覆盖空库、升级库、重复迁移、历史版本 0、非法迁移和迟到结果。
+  - [x] 运行：`node --test apps/api/test/content-moderation-author-visibility-migration.test.mjs apps/api/test/content-moderation-state-machine.test.mjs`；预期全绿。
 
 - [ ] D46.3 实现纯作者可见性策略与安全 DTO。
   - [ ] 先新增失败测试 `apps/api/test/content-moderation-author-visibility.test.mjs`，覆盖 author/organizer/member/tagged/admin/anonymous、全部审核状态、policy version 和 record status 矩阵。
@@ -144,3 +144,5 @@
 - 2026-07-15：完成需求梳理与行业公开行为核对；用户确认采用方案 A、原位置显示、旧公开版本保持、仅创建者可见，以及拒绝后由创建者删除/文本修改重提。本文件仅为待复核计划，尚未修改业务代码、数据库或生产环境。
 - 2026-07-15 D46.1 RED-1：`node --test apps/api/test/content-moderation-author-visibility-contract.test.mjs` 按预期失败，原因是 `scripts/d46-author-private-content-check.js` 尚不存在，证明新契约测试已生效。
 - 2026-07-15 D46.1 RED-2：补齐静态检查器和根命令后再次运行同一测试，按预期因缺少 `0030_author_private_content_visibility.sql` 失败；不是测试语法错误。D46.2/D46.3 补齐迁移和策略模块后再转 GREEN。
+- 2026-07-15 D46.2 RED：迁移/状态机定向测试按预期因缺少 `AUTHOR_PRIVATE_CONTENT_VISIBILITY_MIGRATION` 导出、job `cancelled` 与 proposal `cancelled/superseded` 迁移失败。
+- 2026-07-15 D46.2 GREEN：迁移、状态机及 D45 回归共 88 项通过；覆盖首次升级、历史默认版本 0、幂等重跑、DDL 后迁移记录失败重跑、错误结构关闭式失败和迟到结果不可复活。
