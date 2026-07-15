@@ -106,12 +106,12 @@
   - [x] 增加日志/指标 canary 测试，证明正文、对象 Key、签名 URL 和服务商敏感字段不进入输出。
   - [x] 运行 D31/D32/D38/D39/D40/D45 的静态与单测回归，任何公共行为变化即停止。
 
-- [ ] D46.14 补齐配置、指标与容量告警。
-  - [ ] 修改 `apps/api/src/config.js`、`.env.example` 和生产 compose 示例，增加三个默认关闭的 D46 gate、固定十个 action 的显式子集配置与严格 TTL 校验；空 action 集保持关闭，未知/重复 action 或非法 TTL 启动失败且不输出配置值。
-  - [ ] 修改 `apps/api/src/modules/content-moderation/telemetry.js`，增加低基数 author-private create/read/cancel/supersede/reject/purge 和访问拒绝指标。
-  - [ ] 增加保留拒绝媒体对象数量/字节和长期未删除数量告警；不自动删除用户内容。
-  - [ ] 管理后台详情显示 `author_private_retained`，但不显示作者 URL、对象 Key 或服务商敏感结果。
-  - [ ] 更新生产手册，明确 D46 gate 与 D45 intake 独立、回滚顺序和紧急 purge 操作边界。
+- [x] D46.14 补齐配置、指标与容量告警。
+  - [x] 修改实际配置入口 `apps/api/src/config/env.js`、`.env.example` 和生产 compose 示例，增加三个默认关闭的 D46 gate、固定十个 action 的显式子集配置与严格 TTL 校验；空 action 集保持关闭，未知/重复 action 或非法 TTL 启动失败且不输出配置值。
+  - [x] 修改 `apps/api/src/modules/content-moderation/telemetry.js`，增加低基数 author-private create/read/cancel/supersede/reject/purge 和访问拒绝指标。
+  - [x] 增加保留拒绝媒体对象数量/字节和长期未删除数量告警；不自动删除用户内容。
+  - [x] 管理后台详情显示 `author_private_retained`，但不显示作者 URL、对象 Key 或服务商敏感结果。
+  - [x] 更新生产手册，明确 D46 gate 与 D45 intake 独立、回滚顺序和紧急 purge 操作边界。
 
 - [ ] D46.15 建立专项自动化与完整回归。
   - [ ] 新增 `scripts/d46-author-private-content-smoke.js`，使用假 provider 与隔离数据验证文本新建/修改、图片、视频、取消、替代、拒绝保留、作者删除和非作者不可发现。
@@ -168,3 +168,5 @@
 - 2026-07-15 D46.12 GREEN：相册仅对当前 uploader 的 `author_only + can_preview` 行在原位置展示短时图片或视频，三类安全文案生效；下载、标签、分享与时间线仍只认批准状态。作者图片只保存在当前页面内存，不进入文件缓存；隐藏、退出、统一登录态事件、账号切换和服务端移除都会清理私有行、URL、异步请求与预览。D46.12 定向 27 项、小程序全量 51 项、D45 回归 514 项、`build:mp-weixin`、`npm run d46:check` 与 diff 检查全部通过。
 - 2026-07-15 D46.13 RED：公共泄漏专项先因缺少 `response-privacy.js` 失败；补齐首版后，防御性测试证明公开相册序列化器仍会信任上游并保留注入的 `author_only` 行。D31 回归随后暴露其动态页面夹具缺少新预览方法，不是产品行为变化。
 - 2026-07-15 D46.13 GREEN：新增有界、循环安全的作者私有响应识别与低基数泄漏 canary，告警只含 route/reason/priority，观测失败也不能阻止关闭式拒绝；所有作者响应统一 `private, no-store`。公开相册序列化器再次按批准状态过滤并重算可见数，即使上游误传私有行也不输出。计数 SQL 无需调整，继续只认批准状态；D31/D32/D38/D39/D40、D45 静态检查和含新增用例的 D45 520 项回归全部通过。
+- 2026-07-15 D46.14 RED：新增作者私有运维专项测试后，按预期因缺少 `emitAuthorPrivateRetentionSnapshot` 导出失败；补齐初版后继续识别 TTL 错误会回显非法值片段、管理端测试路径写错两个独立问题，分别修正为不含配置值的稳定错误和正确仓库路径。
+- 2026-07-15 D46.14 GREEN：五项 D46 配置进入实际运行时，三个 gate 默认关闭，文本 action 仅接受十项显式无重复子集，TTL 严格限制 `1..60`；生产媒体 gate 额外要求私有 COS。新增作者私有生命周期、访问拒绝和公共泄漏低基数指标；重试 Worker 统计 active/rejected/version 1 媒体数量、图片/视频字节与 30 天长期保留量，只告警不删除。后台列表纳入 Rejected，详情仅增加 `author_private_retained`；生产手册明确与 D45 intake 独立、回滚和 purge 边界。D46.14 专项 8 项、配置/仓储/服务/草稿/Worker/管理端定向回归 149 项、`npm run d46:check`、`npm run d45:check` 与 diff 检查全部通过。

@@ -6,6 +6,7 @@ import { MODERATION_RETRY_LEASE_MIN_MS } from "../modules/content-moderation/con
 import { MODERATION_RETRY_ROUTES, runContentModerationRetryBatch } from "../modules/content-moderation/retry.js";
 import { createContentModerationRetryProcessor } from "../modules/content-moderation/retry-dispatch.js";
 import {
+  emitAuthorPrivateRetentionSnapshot,
   emitContentModerationEvent,
   emitModerationQueueSnapshots
 } from "../modules/content-moderation/telemetry.js";
@@ -112,6 +113,20 @@ export function createContentModerationRetryWorker({
           emit("moderation_operational_alert", {
             outcome: "error",
             errorCode: "CONTENT_MODERATION_QUEUE_SNAPSHOT_FAILED",
+            priority: "high"
+          });
+        }
+      }
+      if (typeof repositoryModule.getAuthorPrivateRetentionStats === "function") {
+        try {
+          const stats = await withTransactionFn((connection) => (
+            repositoryModule.getAuthorPrivateRetentionStats(connection, { longLivedDays: 30 })
+          ));
+          emitAuthorPrivateRetentionSnapshot({ telemetry: { emit }, stats });
+        } catch {
+          emit("moderation_operational_alert", {
+            outcome: "error",
+            errorCode: "CONTENT_MODERATION_AUTHOR_PRIVATE_RETENTION_SNAPSHOT_FAILED",
             priority: "high"
           });
         }

@@ -140,7 +140,7 @@ test("proposal stale has a stable moderation error code without expanding job st
   assert.equal(MODERATION_ERROR_CODES.proposalStale, "CONTENT_MODERATION_PROPOSAL_STALE");
 });
 
-test("administrator moderation queue filters only review/error rows by exact provider/type/label and inclusive days", async () => {
+test("administrator moderation queue filters review/error/rejected rows by exact provider/type/label and inclusive days", async () => {
   const calls = [];
   const connection = {
     async query(sql, params) {
@@ -160,13 +160,14 @@ test("administrator moderation queue filters only review/error rows by exact pro
   });
 
   assert.deepEqual(rows, [{ id: 41 }]);
-  assert.match(calls[0].sql, /job\.status IN \('review', 'error'\)/);
+  assert.match(calls[0].sql, /job\.status IN \('review', 'error', 'rejected'\)/);
   assert.match(calls[0].sql, /job\.provider = \?/);
   assert.match(calls[0].sql, /job\.subject_type = \?/);
   assert.match(calls[0].sql, /job\.label = \?/);
   assert.match(calls[0].sql, /job\.created_at >= \?/);
   assert.match(calls[0].sql, /job\.created_at < DATE_ADD\(\?, INTERVAL 1 DAY\)/);
   assert.match(calls[0].sql, /proposal\.created_by_user_id/);
+  assert.match(calls[0].sql, /media\.author_visibility_version/);
   assert.doesNotMatch(calls[0].sql, /proposal\.normalized_payload_json/);
   assert.deepEqual(calls[0].params, [
     "wechat_sec_check",
@@ -191,11 +192,12 @@ test("administrator moderation detail retains only controlled internal fields fo
   const row = await getAdminModerationJob(connection, 41);
 
   assert.deepEqual(row, { id: 41 });
-  assert.match(calls[0].sql, /job\.status IN \('review', 'error'\)/);
+  assert.match(calls[0].sql, /job\.status IN \('review', 'error', 'rejected'\)/);
   assert.match(calls[0].sql, /proposal\.action AS proposal_action/);
   assert.match(calls[0].sql, /proposal\.created_by_user_id/);
   assert.match(calls[0].sql, /media\.id AS media_id/);
   assert.match(calls[0].sql, /media\.moderation_object_version/);
+  assert.match(calls[0].sql, /media\.author_visibility_version/);
   assert.match(calls[0].sql, /media\.object_key/);
   assert.deepEqual(calls[0].params, [41]);
 });

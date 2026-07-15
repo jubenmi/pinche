@@ -6,7 +6,7 @@ const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 200;
 const MAX_LABEL_LENGTH = 64;
 const MAX_REJECTION_REASON_LENGTH = 500;
-const ADMIN_QUEUE_STATUSES = new Set(["review", "error"]);
+const ADMIN_QUEUE_STATUSES = new Set(["review", "error", "rejected"]);
 const ADMIN_LIST_QUERY_KEYS = new Set([
   "provider",
   "type",
@@ -277,6 +277,15 @@ function commonModerationDto(row) {
   };
 }
 
+function isAuthorPrivateRetained(row) {
+  return Boolean(
+    isMediaSubject(nullableString(row.subject_type)) &&
+    Number(row.author_visibility_version) === 1 &&
+    nullableString(row.media_record_status) === "active" &&
+    nullableString(row.moderation_status) === "rejected"
+  );
+}
+
 function normalizedPayload(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) return value;
   if (typeof value !== "string" || !value.trim()) return null;
@@ -321,6 +330,7 @@ export function serializeAdminModerationDetail(row = {}, preview = {}) {
   const detail = commonModerationDto(row);
   return {
     ...detail,
+    author_private_retained: isAuthorPrivateRetained(row),
     media: mediaMetadata(row, preview),
     text: textDescriptor(row)
   };

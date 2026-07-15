@@ -642,7 +642,8 @@ export function createContentModerationService(dependencies) {
   }
 
   async function applyMediaResult(input) {
-    return deps.transaction(async (connection) => {
+    let authorPrivateDecision = null;
+    const applied = await deps.transaction(async (connection) => {
       const job = await deps.repository.findModerationJobById(
         connection,
         input.jobId,
@@ -738,6 +739,17 @@ export function createContentModerationService(dependencies) {
       if (nextStatus === "rejected" && !shouldRetainRejectedMedia(media)) {
         await deps.repository.enqueueRejectedMediaCleanup(connection, media);
       }
+      if (
+        Number(media.author_visibility_version) === 1 &&
+        ["approved", "rejected"].includes(nextStatus)
+      ) {
+        authorPrivateDecision = {
+          event: nextStatus === "approved"
+            ? "author_private_approved"
+            : "author_private_rejected",
+          fields: { subjectType: job.subject_type, outcome: nextStatus }
+        };
+      }
       emitModerationDecision(deps.emit, {
         decision: input.result.decision,
         provider: job.provider,
@@ -757,6 +769,10 @@ export function createContentModerationService(dependencies) {
       }
       return { status: nextStatus, duplicate: false };
     });
+    if (authorPrivateDecision) {
+      deps.emit(authorPrivateDecision.event, authorPrivateDecision.fields);
+    }
+    return applied;
   }
 
   function publicModerationError(statusCode, code, message) {
@@ -901,6 +917,18 @@ export function createContentModerationService(dependencies) {
         subjectType,
         outcome: "pending"
       });
+    }
+    if (authorPrivateEnabled) {
+      deps.emit("author_private_created", {
+        subjectType,
+        outcome: "pending"
+      });
+      if (replacesDraftId !== null) {
+        deps.emit("author_private_superseded", {
+          subjectType,
+          outcome: "unpublished"
+        });
+      }
     }
     return result;
   }
@@ -1158,6 +1186,19 @@ export function createContentModerationService(dependencies) {
       outcome: moderationStatusForDecision(outcome.decision),
       latencyMs: moderationLatencyMs(prepared.job, deps.now)
     });
+    if (Number(prepared.proposal?.author_visibility_version) === 1) {
+      if (outcome.decision === "pass") {
+        deps.emit("author_private_approved", {
+          subjectType: prepared.subjectType,
+          outcome: "approved"
+        });
+      } else if (outcome.decision === "block") {
+        deps.emit("author_private_rejected", {
+          subjectType: prepared.subjectType,
+          outcome: "rejected"
+        });
+      }
+    }
     return resolved;
   }
 
@@ -1233,6 +1274,19 @@ export function createContentModerationService(dependencies) {
         outcome: moderationStatusForDecision(outcome.decision),
         latencyMs: moderationLatencyMs(job, deps.now)
       });
+      if (Number(proposal.author_visibility_version) === 1) {
+        if (outcome.decision === "pass") {
+          deps.emit("author_private_approved", {
+            subjectType: job.subject_type,
+            outcome: "approved"
+          });
+        } else if (outcome.decision === "block") {
+          deps.emit("author_private_rejected", {
+            subjectType: job.subject_type,
+            outcome: "rejected"
+          });
+        }
+      }
     }
     return final;
   }
@@ -1250,6 +1304,7 @@ export function createContentModerationService(dependencies) {
       throw publicModerationError(400, "BAD_REQUEST", "rejection reason is required");
     }
     let decisionMetric = null;
+    let authorPrivateDecision = null;
     const result = await deps.transaction(async (connection) => {
       const job = await deps.repository.findModerationJobById(
         connection,
@@ -1313,6 +1368,14 @@ export function createContentModerationService(dependencies) {
         if (nextStatus === "rejected" && !shouldRetainRejectedMedia(media)) {
           await deps.repository.enqueueRejectedMediaCleanup(connection, media);
         }
+        if (Number(media.author_visibility_version) === 1) {
+          authorPrivateDecision = {
+            event: nextStatus === "approved"
+              ? "author_private_approved"
+              : "author_private_rejected",
+            fields: { subjectType: job.subject_type, outcome: nextStatus }
+          };
+        }
       } else {
         const proposal = await deps.repository.findTextProposalByJobId(
           connection,
@@ -1320,6 +1383,14 @@ export function createContentModerationService(dependencies) {
           { forUpdate: true }
         );
         if (!proposal) throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "proposal is stale");
+        if (Number(proposal.author_visibility_version) === 1) {
+          authorPrivateDecision = {
+            event: nextStatus === "approved"
+              ? "author_private_approved"
+              : "author_private_rejected",
+            fields: { subjectType: job.subject_type, outcome: nextStatus }
+          };
+        }
         let appliedResult = null;
         let safeAppliedResult = null;
         if (nextStatus === "approved") {
@@ -1363,6 +1434,12 @@ export function createContentModerationService(dependencies) {
               outcome: "rejected",
               latencyMs: moderationLatencyMs(job, deps.now)
             };
+            if (Number(proposal.author_visibility_version) === 1) {
+              authorPrivateDecision = {
+                event: "author_private_rejected",
+                fields: { subjectType: job.subject_type, outcome: "rejected" }
+              };
+            }
             return { id: Number(job.id), status: "rejected", stale: true };
           }
         }
@@ -1403,6 +1480,9 @@ export function createContentModerationService(dependencies) {
     });
     if (decisionMetric) {
       emitModerationDecision(deps.emit, decisionMetric);
+    }
+    if (authorPrivateDecision) {
+      deps.emit(authorPrivateDecision.event, authorPrivateDecision.fields);
     }
     return result;
   }

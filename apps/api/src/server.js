@@ -370,7 +370,53 @@ export function containsAuthorPrivateText(value, depth = 0) {
 }
 
 function authorPrivateResponseHeaders(value) {
-  return responsePrivacyHeaders(value);
+  const headers = responsePrivacyHeaders(value);
+  if (headers["cache-control"] === "private, no-store") {
+    try {
+      emitContentModerationEvent("author_private_read", {
+        subjectType: authorPrivateResponseSubjectType(value),
+        outcome: "unpublished"
+      });
+    } catch {
+      // Observability must not change a private response.
+    }
+  }
+  return headers;
+}
+
+function authorPrivateResponseSubjectType(value) {
+  const stack = [value];
+  const visited = new Set();
+  let scanned = 0;
+  while (stack.length > 0 && scanned < 1_000) {
+    const current = stack.pop();
+    scanned += 1;
+    if (!current || typeof current !== "object" || visited.has(current)) continue;
+    visited.add(current);
+    if (Array.isArray(current)) {
+      stack.push(...current);
+      continue;
+    }
+    if (current.publication_state === "author_only") {
+      if (current.media_type === "video") return "album_video";
+      if (current.media_type === "image") return "album_image";
+      if (typeof current.subject_type === "string") return current.subject_type;
+    }
+    stack.push(...Object.values(current));
+  }
+  return "unknown";
+}
+
+function emitAuthorPrivateCreated(value) {
+  if (!containsAuthorPrivateContent(value)) return;
+  try {
+    emitContentModerationEvent("author_private_created", {
+      subjectType: authorPrivateResponseSubjectType(value),
+      outcome: "pending"
+    });
+  } catch {
+    // Observability must not change a successful private submission.
+  }
 }
 
 function authorPrivateMediaOptions() {
@@ -1178,6 +1224,7 @@ const authorTextProjectionReader = createAuthorTextProjectionReader({
 });
 const authorDrafts = createAuthorDraftService({
   transaction: withTransaction,
+  emit: emitContentModerationEvent,
   repository: {
     findAuthorTextDraftById,
     cancelTextProposalByAuthor,
@@ -1358,7 +1405,19 @@ const adminModerationApi = createAdminModerationApi({
     getAdminModerationJob(connection, jobId)
   ),
   decide: (input) => contentModeration.decideAsAdmin(input),
-  purge: (input) => purgeSessionAlbumMedia(input),
+  purge: async (input) => {
+    const result = await purgeSessionAlbumMedia(input);
+    try {
+      emitContentModerationEvent("author_private_purged", {
+        subjectType: "unknown",
+        outcome: "unpublished",
+        routeKind: "admin_purge"
+      });
+    } catch {
+      // Observability must not change a completed purge request.
+    }
+    return result;
+  },
   buildPreview: buildAdminModerationPreview,
   applyTextProposal: applyApprovedTextProposal
 });
@@ -5147,6 +5206,7 @@ async function route(request, response) {
           photoUrl
         })
       );
+      emitAuthorPrivateCreated(finalized.photo);
       jsonResponse(response, 201, { ok: true, data: finalized.photo },
         authorPrivateResponseHeaders(finalized.photo));
       return;
@@ -5157,6 +5217,7 @@ async function route(request, response) {
       photoUrl,
       ...metadata
     }, authorPrivateMediaOptions());
+    emitAuthorPrivateCreated(photo);
     jsonResponse(response, 201, {
       ok: true,
       data: photo
@@ -5182,6 +5243,7 @@ async function route(request, response) {
           photoUrl
         })
       );
+      emitAuthorPrivateCreated(finalized.photo);
       jsonResponse(response, 201, { ok: true, data: finalized.photo },
         authorPrivateResponseHeaders(finalized.photo));
       return;
@@ -5192,6 +5254,7 @@ async function route(request, response) {
       photoUrl,
       ...metadata
     }, authorPrivateMediaOptions());
+    emitAuthorPrivateCreated(photo);
     jsonResponse(response, 201, {
       ok: true,
       data: photo
@@ -5228,6 +5291,7 @@ async function route(request, response) {
           media: [video]
         }, user.user.id, { routeKind: "create" }).photos[0]
       : video;
+    emitAuthorPrivateCreated(videoData);
     jsonResponse(response, 201, {
       ok: true,
       data: videoData
@@ -5538,6 +5602,12 @@ export function createApp() {
             provider: error.contentModerationProvider,
             subjectType: error.contentModerationSubjectType,
             outcome: "unpublished"
+          });
+          emitContentModerationEvent("author_private_access_denied", {
+            provider: error.contentModerationProvider,
+            subjectType: error.contentModerationSubjectType,
+            outcome: "unpublished",
+            reasonCode: "policy_denied"
           });
         } catch {
           // Telemetry must not change the external 404 gate response.

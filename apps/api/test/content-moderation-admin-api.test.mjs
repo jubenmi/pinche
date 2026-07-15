@@ -108,6 +108,10 @@ test("administrator moderation queue accepts one canonical value for every suppo
     dateTo: "2026-07-31",
     limit: 25
   });
+  assert.equal(
+    parseAdminModerationListQuery(new URLSearchParams({ status: "rejected" })).status,
+    "rejected"
+  );
 });
 
 test("administrator moderation queue rejects unknown and duplicate query keys", () => {

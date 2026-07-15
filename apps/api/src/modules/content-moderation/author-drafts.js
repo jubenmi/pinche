@@ -42,8 +42,9 @@ function cancellablePair(draft) {
   return null;
 }
 
-export function createAuthorDraftService({ transaction, repository } = {}) {
+export function createAuthorDraftService({ transaction, repository, emit = () => {} } = {}) {
   if (typeof transaction !== "function") throw new TypeError("author draft transaction is required");
+  if (typeof emit !== "function") throw new TypeError("author draft telemetry emitter is required");
   for (const method of [
     "findAuthorTextDraftById",
     "cancelTextProposalByAuthor",
@@ -59,7 +60,7 @@ export function createAuthorDraftService({ transaction, repository } = {}) {
   async function cancel({ user, draftId } = {}) {
     const userId = positiveId(user?.user?.id, "user id");
     const normalizedDraftId = positiveId(draftId, "draft id");
-    return transaction(async (connection) => {
+    const outcome = await transaction(async (connection) => {
       const draft = requireAuthorVisibilityDraft(
         await repository.findAuthorTextDraftById(connection, {
           draftId: normalizedDraftId,
@@ -70,7 +71,10 @@ export function createAuthorDraftService({ transaction, repository } = {}) {
       const proposalStatus = String(draft.proposal_status || draft.status || "");
       const jobStatus = String(draft.job_status || "");
       if (proposalStatus === "cancelled" && jobStatus === "cancelled") {
-        return { draft_id: normalizedDraftId, status: "cancelled" };
+        return {
+          result: { draft_id: normalizedDraftId, status: "cancelled" },
+          subjectType: String(draft.subject_type || "")
+        };
       }
 
       const pair = cancellablePair(draft);
@@ -89,8 +93,16 @@ export function createAuthorDraftService({ transaction, repository } = {}) {
       await repository.retireCurrentModerationAttempt(connection, {
         jobId: Number(draft.moderation_job_id)
       });
-      return { draft_id: normalizedDraftId, status: "cancelled" };
+      return {
+        result: { draft_id: normalizedDraftId, status: "cancelled" },
+        subjectType: String(draft.subject_type || "")
+      };
     });
+    emit("author_private_cancelled", {
+      subjectType: outcome.subjectType,
+      outcome: "unpublished"
+    });
+    return outcome.result;
   }
 
   async function supersedeRejected(connection, input = {}) {

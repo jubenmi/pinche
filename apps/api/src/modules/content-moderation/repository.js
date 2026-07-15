@@ -1104,6 +1104,45 @@ export async function getModerationQueueStats(connection, { now = new Date() } =
   return rows;
 }
 
+export async function getAuthorPrivateRetentionStats(
+  connection,
+  { longLivedDays = 30 } = {}
+) {
+  const days = Number(longLivedDays);
+  if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
+    throw new TypeError("author-private retention age must be from 1 to 3650 days");
+  }
+  const [rows] = await connection.query(
+    `SELECT COUNT(*) AS retained_object_count,
+            COALESCE(SUM(
+              CASE
+                WHEN media_type = 'image' THEN COALESCE(image_byte_size, 0)
+                WHEN media_type = 'video' THEN COALESCE(video_byte_size, 0)
+                ELSE 0
+              END
+            ), 0) AS retained_bytes,
+            COALESCE(SUM(
+              CASE WHEN created_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? DAY) THEN 1 ELSE 0 END
+            ), 0) AS long_lived_count
+     FROM session_album_photos
+     WHERE author_visibility_version = 1
+       AND status = 'active'
+       AND moderation_status = 'rejected'
+       AND media_type IN ('image', 'video')`,
+    [days]
+  );
+  const row = rows[0] || {};
+  const safeCount = (value) => {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+  };
+  return {
+    retained_object_count: safeCount(row.retained_object_count),
+    retained_bytes: safeCount(row.retained_bytes),
+    long_lived_count: safeCount(row.long_lived_count)
+  };
+}
+
 export async function claimOrphanScanState(
   connection,
   { scanName, leaseToken, now, leaseExpiresAt } = {}
@@ -1315,7 +1354,7 @@ export async function listAdminModerationJobs(
   connection,
   { provider, status, subjectType, label, dateFrom, dateTo, limit = 100 } = {}
 ) {
-  const where = ["job.status IN ('review', 'error')"];
+  const where = ["job.status IN ('review', 'error', 'rejected')"];
   const values = [];
   if (provider) { where.push("job.provider = ?"); values.push(String(provider)); }
   if (subjectType) { where.push("job.subject_type = ?"); values.push(String(subjectType)); }
@@ -1327,7 +1366,9 @@ export async function listAdminModerationJobs(
   const [rows] = await connection.query(
     `SELECT job.*, proposal.created_by_user_id,
             media.id AS media_id, media.session_id, media.uploader_user_id,
-            media.media_type, media.processing_status, media.moderation_status
+            media.media_type, media.status AS media_record_status,
+            media.processing_status, media.moderation_status,
+            media.author_visibility_version
      FROM content_moderation_jobs job
      LEFT JOIN content_moderation_text_proposals proposal
        ON proposal.moderation_job_id = job.id
@@ -1349,6 +1390,7 @@ export async function getAdminModerationJob(connection, jobId) {
             media.id AS media_id, media.session_id, media.uploader_user_id,
             media.media_type, media.status AS media_record_status,
             media.processing_status, media.moderation_status, media.moderation_object_version,
+            media.author_visibility_version,
             media.object_key, media.source_url, media.display_url, media.cover_url
      FROM content_moderation_jobs job
      LEFT JOIN content_moderation_text_proposals proposal
@@ -1356,7 +1398,7 @@ export async function getAdminModerationJob(connection, jobId) {
      LEFT JOIN session_album_photos media
        ON job.subject_type IN ('album_image', 'album_video')
       AND media.id = CAST(job.subject_id AS UNSIGNED)
-     WHERE job.id = ? AND job.status IN ('review', 'error') LIMIT 1`,
+     WHERE job.id = ? AND job.status IN ('review', 'error', 'rejected') LIMIT 1`,
     [Number(jobId)]
   );
   return rows[0] || null;
