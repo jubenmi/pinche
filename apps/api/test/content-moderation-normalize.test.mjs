@@ -13,10 +13,10 @@ import {
   normalizeTextFields
 } from "../src/modules/content-moderation/normalize.js";
 
-test("moderation constants expose only the spec states and providers", () => {
+test("moderation constants expose only the D45 provider states plus the D46 user-cancelled terminal state", () => {
   assert.deepEqual(MODERATION_DECISIONS, ["pass", "review", "block", "error"]);
   assert.deepEqual(MODERATION_JOB_STATUSES, [
-    "pending", "processing", "approved", "review", "rejected", "error"
+    "pending", "processing", "approved", "review", "rejected", "error", "cancelled"
   ]);
   assert.deepEqual(MODERATION_PROVIDERS, ["wechat_sec_check", "tencent_ci_video"]);
 });

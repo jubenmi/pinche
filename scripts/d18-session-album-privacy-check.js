@@ -134,8 +134,9 @@ assert(
   "album photos must not be exposed as public static uploads"
 );
 assert(
-  /prepareSessionAlbumPhotoDeletion\(user, sessionAlbumPhotoId\)/.test(server) &&
-    /requestSessionAlbumImageDeletion\(user, sessionAlbumPhotoId\)/.test(server) &&
+  /const deletion = await requestSessionAlbumImageDeletion\(user, sessionAlbumPhotoId\)/.test(server) &&
+    server.includes("id: deletion.id") &&
+    server.includes("deleted: false") &&
     server.includes("deletionPending: true"),
   "album image deletion must preserve its durable cleanup anchor and return a pending response"
 );

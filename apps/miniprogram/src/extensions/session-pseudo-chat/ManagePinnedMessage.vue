@@ -6,24 +6,38 @@
         <view class="pinned-note">只放最重要的一句话，比如集合时间、房间号或临时变更。</view>
       </view>
     </view>
+    <view v-if="authorPrivateDraft" class="draft-status">
+      {{ authorPrivateDraft.moderation_message }}
+    </view>
     <t-textarea
       :value="pinnedMessageText"
       class="textarea"
       maxlength="300"
       placeholder="输入要置顶给车内成员看的信息"
       placeholder-class="placeholder"
+      :disabled="isBusy || !canEditPinned"
       @change="pinnedMessageText = $event.detail.value"
     />
     <view class="actions">
-      <t-button class="button" :disabled="isBusy" @tap="savePinnedMessage">
-        保存置顶
+      <t-button
+        v-if="authorPrivateDraft"
+        class="button secondary"
+        :disabled="isBusy"
+        @tap="cancelPinnedDraft"
+      >取消这版</t-button>
+      <t-button class="button" :disabled="isBusy || !canEditPinned" @tap="savePinnedMessage">
+        {{ replacementDraftId ? "修改后重新提交" : "保存置顶" }}
       </t-button>
     </view>
   </view>
 </template>
 
 <script>
-import { chatApi } from "./api.js";
+import {
+  authorPrivatePinnedView,
+  chatApi,
+  isAuthorPrivateProjection
+} from "./api.js";
 
 export default {
   props: {
@@ -38,6 +52,7 @@ export default {
     return {
       pinnedMessage: null,
       pinnedMessageText: "",
+      replacementDraftId: null,
       localBusy: false
     };
   },
@@ -47,6 +62,14 @@ export default {
     },
     isBusy() {
       return this.busy || this.localBusy;
+    },
+    authorPrivateDraft() {
+      return isAuthorPrivateProjection(this.pinnedMessage?.author_private)
+        ? this.pinnedMessage.author_private
+        : null;
+    },
+    canEditPinned() {
+      return !this.authorPrivateDraft || this.authorPrivateDraft.can_edit === true;
     }
   },
   watch: {
@@ -66,8 +89,12 @@ export default {
         const chat = await this.api.loadChat(this.sessionId);
         this.pinnedMessage = chat.pinnedMessage || null;
         this.pinnedMessageText = this.pinnedMessage?.content || "";
+        this.replacementDraftId = this.authorPrivateDraft?.can_resubmit
+          ? this.authorPrivateDraft.draft_id
+          : null;
       } catch (error) {
         this.pinnedMessage = null;
+        this.replacementDraftId = null;
       }
     },
     async savePinnedMessage() {
@@ -78,12 +105,36 @@ export default {
       try {
         const result = await this.api.updatePinnedMessage(
           this.sessionId,
-          this.pinnedMessageText.trim()
+          this.pinnedMessageText.trim(),
+          this.replacementDraftId
         );
-        this.pinnedMessage = result.pinnedMessage || null;
+        this.pinnedMessage = isAuthorPrivateProjection(result)
+          ? authorPrivatePinnedView(this.pinnedMessage, result)
+          : result.pinnedMessage || null;
         this.pinnedMessageText = this.pinnedMessage?.content || this.pinnedMessageText;
+        this.replacementDraftId = this.authorPrivateDraft?.can_resubmit
+          ? this.authorPrivateDraft.draft_id
+          : null;
         this.$emit("updated");
-        this.$emit("status", "置顶信息已更新。");
+        this.$emit(
+          "status",
+          this.authorPrivateDraft?.moderation_message || "置顶信息已更新。"
+        );
+      } catch (error) {
+        this.$emit("status", this.actionErrorText(error));
+      } finally {
+        this.localBusy = false;
+      }
+    },
+    async cancelPinnedDraft() {
+      if (!this.authorPrivateDraft || this.isBusy) return;
+      this.localBusy = true;
+      try {
+        await this.api.cancelDraft(this.authorPrivateDraft.draft_id);
+        this.replacementDraftId = null;
+        await this.loadChat();
+        this.$emit("updated");
+        this.$emit("status", "已取消这版置顶信息。");
       } catch (error) {
         this.$emit("status", this.actionErrorText(error));
       } finally {
@@ -147,6 +198,12 @@ export default {
   color: #7a857d;
   font-size: 24rpx;
   line-height: 1.5;
+}
+
+.draft-status {
+  margin-top: 14rpx;
+  color: #9a6700;
+  font-size: 23rpx;
 }
 
 .textarea {

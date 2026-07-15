@@ -176,6 +176,46 @@ test("retry worker publishes queue depth and overdue-age snapshots after each ba
   ]);
 });
 
+test("retry worker publishes retained author-private capacity without deleting media", async () => {
+  const events = [];
+  const calls = [];
+  const worker = createContentModerationRetryWorker({
+    repositoryModule: {
+      claimModerationRetryJobs: async () => [],
+      rehydrateModerationRetryJob: async () => assert.fail("empty queue must not rehydrate"),
+      getAuthorPrivateRetentionStats: async (_connection, input) => {
+        calls.push(input);
+        return {
+          retained_object_count: 12,
+          retained_bytes: 4096,
+          long_lived_count: 2
+        };
+      }
+    },
+    withTransactionFn: async (run) => run({}),
+    contentModerationRuntime: {},
+    moderationConfig: {
+      retryLimit: 6,
+      retryBatchSize: 3,
+      retryLeaseMs: 90_000
+    },
+    now: () => 1_000,
+    randomUUID: () => "lease-retention",
+    emit: (event, fields) => events.push({ event, fields })
+  });
+
+  assert.deepEqual(await worker.runOnce(), { claimed: 0, failed: 0 });
+  assert.deepEqual(calls, [{ longLivedDays: 30 }]);
+  assert.deepEqual(events.map(({ event }) => event), [
+    "author_private_retained_object_count",
+    "author_private_retained_bytes",
+    "author_private_long_lived_count",
+    "author_private_retention_alert"
+  ]);
+  assert.equal(events.at(-1).fields.reasonCode, "long_lived_count");
+  assert.equal(JSON.stringify(events).includes("delete"), false);
+});
+
 test("current invalid rehydrated facts become a terminal hidden error and are not claimed again", async () => {
   const failures = [];
   const events = [];

@@ -8,6 +8,8 @@ export const CONTENT_MODERATION_TEXT_PROPOSAL_RESULT_MIGRATION =
   "0026_content_moderation_text_proposal_result.sql";
 export const CONTENT_MODERATION_RETRY_EXHAUSTION_MIGRATION =
   "0027_content_moderation_retry_exhaustion.sql";
+export const AUTHOR_PRIVATE_CONTENT_VISIBILITY_MIGRATION =
+  "0030_author_private_content_visibility.sql";
 
 const CONTENT_MODERATION_ATTEMPTS_TABLE = "content_moderation_provider_attempts";
 const CONTENT_MODERATION_JOBS_TABLE = "content_moderation_jobs";
@@ -74,6 +76,52 @@ const RETRY_EXHAUSTION_COLUMN = {
   },
   ddl: "ALTER TABLE content_moderation_jobs ADD COLUMN retry_exhausted_at DATETIME NULL AFTER next_retry_at"
 };
+const AUTHOR_PRIVATE_PROPOSAL_INDEX = "idx_moderation_text_author_target";
+const AUTHOR_PRIVATE_SUPERSEDED_FOREIGN_KEY = "fk_moderation_text_superseded_by";
+const AUTHOR_PRIVATE_PROPOSAL_COLUMNS = Object.freeze([
+  {
+    name: "target_subject_id",
+    expected: {
+      type: "varchar(128)", nullable: "YES", default: null, extra: "", generationExpression: ""
+    },
+    ddl: `ALTER TABLE content_moderation_text_proposals
+      ADD COLUMN target_subject_id VARCHAR(128) NULL AFTER action`
+  },
+  {
+    name: "author_visibility_version",
+    expected: {
+      type: "smallint unsigned", nullable: "NO", default: "0", extra: "", generationExpression: ""
+    },
+    ddl: `ALTER TABLE content_moderation_text_proposals
+      ADD COLUMN author_visibility_version SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER target_subject_id`
+  },
+  {
+    name: "cancelled_at",
+    expected: {
+      type: "datetime", nullable: "YES", default: null, extra: "", generationExpression: ""
+    },
+    ddl: `ALTER TABLE content_moderation_text_proposals
+      ADD COLUMN cancelled_at DATETIME NULL AFTER applied_result_json`
+  },
+  {
+    name: "superseded_by_proposal_id",
+    expected: {
+      type: "bigint unsigned", nullable: "YES", default: null, extra: "", generationExpression: ""
+    },
+    ddl: `ALTER TABLE content_moderation_text_proposals
+      ADD COLUMN superseded_by_proposal_id BIGINT UNSIGNED NULL AFTER cancelled_at`
+  }
+]);
+const AUTHOR_PRIVATE_ALBUM_COLUMNS = Object.freeze([
+  {
+    name: "author_visibility_version",
+    expected: {
+      type: "smallint unsigned", nullable: "NO", default: "0", extra: "", generationExpression: ""
+    },
+    ddl: `ALTER TABLE session_album_photos
+      ADD COLUMN author_visibility_version SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER moderation_object_version`
+  }
+]);
 
 export const DUPLICATE_SESSION_ALBUM_VIDEO_SOURCE_QUERY = `
   SELECT
@@ -341,6 +389,180 @@ async function reconcileContentModerationTextProposalResult(connection) {
 
 async function reconcileContentModerationRetryExhaustion(connection) {
   return reconcileModerationAdditiveColumn(connection, RETRY_EXHAUSTION_COLUMN);
+}
+
+function assertRequiredAuthorPrivateColumn(columns, tableName, columnName, expected) {
+  const column = columns.get(columnName);
+  if (!column) {
+    throw schemaMismatch(`${tableName}.${columnName}`, {
+      expected: { required: true, ...expected },
+      actual: null
+    });
+  }
+  const actual = normalizedModerationColumnShape(column);
+  if (actual.type !== expected.type || actual.nullable !== expected.nullable) {
+    throw schemaMismatch(`${tableName}.${columnName}`, {
+      expected,
+      actual: column
+    });
+  }
+}
+
+function inspectOptionalAuthorPrivateColumns(columns, tableName, definitions) {
+  const missing = [];
+  for (const definition of definitions) {
+    const column = columns.get(definition.name);
+    if (!column) {
+      missing.push(definition);
+      continue;
+    }
+    assertModerationColumnShape(
+      { tableName },
+      definition.name,
+      column,
+      definition.expected
+    );
+  }
+  return missing;
+}
+
+async function inspectAuthorPrivateSupersededForeignKey(connection) {
+  const [rows] = await connection.query(
+    `SELECT
+       kcu.CONSTRAINT_NAME AS constraint_name,
+       kcu.COLUMN_NAME AS column_name,
+       kcu.ORDINAL_POSITION AS ordinal_position,
+       kcu.REFERENCED_TABLE_SCHEMA = DATABASE() AS referenced_same_schema,
+       kcu.REFERENCED_TABLE_NAME AS referenced_table_name,
+       kcu.REFERENCED_COLUMN_NAME AS referenced_column_name,
+       rc.DELETE_RULE AS delete_rule,
+       rc.UPDATE_RULE AS update_rule
+     FROM information_schema.key_column_usage AS kcu
+     INNER JOIN information_schema.referential_constraints AS rc
+       ON rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+      AND rc.TABLE_NAME = kcu.TABLE_NAME
+      AND rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+     WHERE kcu.CONSTRAINT_SCHEMA = DATABASE()
+       AND kcu.TABLE_NAME = ?
+       AND kcu.CONSTRAINT_NAME = ?
+     ORDER BY kcu.ORDINAL_POSITION ASC`,
+    [CONTENT_MODERATION_TEXT_PROPOSALS_TABLE, AUTHOR_PRIVATE_SUPERSEDED_FOREIGN_KEY]
+  );
+  if (rows.length === 0) return { exists: false };
+  const exact = rows.length === 1 &&
+    String(rows[0].constraint_name) === AUTHOR_PRIVATE_SUPERSEDED_FOREIGN_KEY &&
+    String(rows[0].column_name) === "superseded_by_proposal_id" &&
+    Number(rows[0].ordinal_position) === 1 &&
+    Number(rows[0].referenced_same_schema) === 1 &&
+    String(rows[0].referenced_table_name) === CONTENT_MODERATION_TEXT_PROPOSALS_TABLE &&
+    String(rows[0].referenced_column_name) === "id" &&
+    String(rows[0].delete_rule).toUpperCase() === "SET NULL" &&
+    String(rows[0].update_rule).toUpperCase() === "NO ACTION";
+  if (!exact) {
+    throw schemaMismatch(
+      `${CONTENT_MODERATION_TEXT_PROPOSALS_TABLE}.${AUTHOR_PRIVATE_SUPERSEDED_FOREIGN_KEY}`,
+      {
+        expected: {
+          column: "superseded_by_proposal_id",
+          referencedTable: CONTENT_MODERATION_TEXT_PROPOSALS_TABLE,
+          referencedColumn: "id",
+          deleteRule: "SET NULL",
+          updateRule: "NO ACTION"
+        },
+        actual: rows
+      }
+    );
+  }
+  return { exists: true };
+}
+
+export async function reconcileAuthorPrivateContentVisibility(connection) {
+  const [proposalColumns, albumColumns, proposalIndex, supersededForeignKey] = await Promise.all([
+    inspectModerationTableColumns(connection, CONTENT_MODERATION_TEXT_PROPOSALS_TABLE),
+    inspectModerationTableColumns(connection, "session_album_photos"),
+    inspectExpectedIndex(
+      connection,
+      CONTENT_MODERATION_TEXT_PROPOSALS_TABLE,
+      AUTHOR_PRIVATE_PROPOSAL_INDEX,
+      {
+        unique: false,
+        columns: ["created_by_user_id", "action", "target_subject_id", "status", "updated_at"]
+      }
+    ),
+    inspectAuthorPrivateSupersededForeignKey(connection)
+  ]);
+
+  for (const [columnName, expected] of [
+    ["subject_id", { type: "varchar(128)", nullable: "NO" }],
+    ["action", { type: "varchar(64)", nullable: "NO" }],
+    ["status", { type: "varchar(32)", nullable: "NO" }],
+    ["created_by_user_id", { type: "bigint unsigned", nullable: "NO" }],
+    ["applied_result_json", { type: "json", nullable: "YES" }],
+    ["updated_at", { type: "datetime", nullable: "NO" }]
+  ]) {
+    assertRequiredAuthorPrivateColumn(
+      proposalColumns,
+      CONTENT_MODERATION_TEXT_PROPOSALS_TABLE,
+      columnName,
+      expected
+    );
+  }
+  assertRequiredAuthorPrivateColumn(
+    albumColumns,
+    "session_album_photos",
+    "moderation_object_version",
+    { type: "varchar(128)", nullable: "YES" }
+  );
+
+  const missingProposalColumns = inspectOptionalAuthorPrivateColumns(
+    proposalColumns,
+    CONTENT_MODERATION_TEXT_PROPOSALS_TABLE,
+    AUTHOR_PRIVATE_PROPOSAL_COLUMNS
+  );
+  const missingAlbumColumns = inspectOptionalAuthorPrivateColumns(
+    albumColumns,
+    "session_album_photos",
+    AUTHOR_PRIVATE_ALBUM_COLUMNS
+  );
+  if (proposalIndex.exists && missingProposalColumns.length > 0) {
+    throw schemaMismatch(
+      `${CONTENT_MODERATION_TEXT_PROPOSALS_TABLE}.${AUTHOR_PRIVATE_PROPOSAL_INDEX}`,
+      { expected: { requiresAllAuthorPrivateColumns: true }, actual: { missingProposalColumns } }
+    );
+  }
+  if (
+    supersededForeignKey.exists &&
+    missingProposalColumns.some(({ name }) => name === "superseded_by_proposal_id")
+  ) {
+    throw schemaMismatch(
+      `${CONTENT_MODERATION_TEXT_PROPOSALS_TABLE}.${AUTHOR_PRIVATE_SUPERSEDED_FOREIGN_KEY}`,
+      { expected: { requiresColumn: "superseded_by_proposal_id" }, actual: null }
+    );
+  }
+
+  for (const definition of missingProposalColumns) {
+    await connection.query(definition.ddl);
+  }
+  for (const definition of missingAlbumColumns) {
+    await connection.query(definition.ddl);
+  }
+  if (!proposalIndex.exists) {
+    await connection.query(
+      `ALTER TABLE content_moderation_text_proposals
+       ADD INDEX idx_moderation_text_author_target
+         (created_by_user_id, action, target_subject_id, status, updated_at)`
+    );
+  }
+  if (!supersededForeignKey.exists) {
+    await connection.query(
+      `ALTER TABLE content_moderation_text_proposals
+       ADD CONSTRAINT fk_moderation_text_superseded_by
+       FOREIGN KEY (superseded_by_proposal_id)
+       REFERENCES content_moderation_text_proposals(id)
+       ON DELETE SET NULL`
+    );
+  }
+  return { reconciledAuthorPrivateVisibility: true };
 }
 
 async function inspectTextProposalColumns(connection) {
@@ -765,6 +987,12 @@ export async function prepareMigration(connection, filename) {
   if (filename === CONTENT_MODERATION_RETRY_EXHAUSTION_MIGRATION) {
     await reconcileContentModerationRetryExhaustion(connection);
     return { skipStatements: true, reconciledContentModeration: true };
+  }
+  if (filename === AUTHOR_PRIVATE_CONTENT_VISIBILITY_MIGRATION) {
+    return {
+      skipStatements: true,
+      ...(await reconcileAuthorPrivateContentVisibility(connection))
+    };
   }
   if (filename !== SESSION_ALBUM_VIDEO_HARDENING_MIGRATION) {
     return { skipStatements: false };

@@ -500,6 +500,24 @@ export function redactPhoneNumbers(value) {
   return String(value ?? "").replace(PHONE_NUMBER, "[phone]");
 }
 
+export function parseTextDraftReplacement(body = {}) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const snake = own(body, "replaces_draft_id");
+  const camel = own(body, "replacesDraftId");
+  if (snake && camel) throw badRequest("Only one replacement draft id is allowed");
+  if (!snake && !camel) return null;
+  const value = snake ? body.replaces_draft_id : body.replacesDraftId;
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^[1-9]\d*$/.test(value)
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw badRequest("replaces_draft_id must be a positive integer");
+  }
+  return parsed;
+}
+
 export function buildTextProposalPayload(action, input = {}) {
   const rawBody = input?.body && typeof input.body === "object" && !Array.isArray(input.body)
     ? input.body

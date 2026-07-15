@@ -6,11 +6,12 @@ async function text(path) {
   return readFile(new URL(`../../../${path}`, import.meta.url), "utf8");
 }
 
-test("D45 automation commands keep unit, static checks, and fake-provider smoke local", async () => {
-  const [rootPackageRaw, checkScript, smokeScript] = await Promise.all([
+test("D45 automation commands keep unit, release matrix, static checks, and fake-provider smoke local", async () => {
+  const [rootPackageRaw, checkScript, smokeScript, releaseMatrixScript] = await Promise.all([
     text("package.json"),
     text("scripts/d45-content-moderation-check.js"),
-    text("scripts/d45-content-moderation-smoke.js")
+    text("scripts/d45-content-moderation-smoke.js"),
+    text("scripts/d45-content-moderation-release-matrix.js")
   ]);
   const rootPackage = JSON.parse(rootPackageRaw);
 
@@ -20,7 +21,11 @@ test("D45 automation commands keep unit, static checks, and fake-provider smoke 
   );
   assert.equal(rootPackage.scripts["d45:check"], "node scripts/d45-content-moderation-check.js");
   assert.equal(rootPackage.scripts["d45:smoke"], "node scripts/d45-content-moderation-smoke.js");
-  for (const command of ["d45:unit", "d45:check", "d45:smoke"]) {
+  assert.equal(
+    rootPackage.scripts["d45:release-matrix"],
+    "node scripts/d45-content-moderation-release-matrix.js"
+  );
+  for (const command of ["d45:unit", "d45:release-matrix", "d45:check", "d45:smoke"]) {
     assert.match(rootPackage.scripts.precheck, new RegExp(`npm run ${command.replace(/:/g, "\\:")}`));
   }
 
@@ -53,4 +58,19 @@ test("D45 automation commands keep unit, static checks, and fake-provider smoke 
     assert.equal(smokeScript.includes(testFile), true, testFile);
   }
   assert.doesNotMatch(smokeScript, /https?:\/\//);
+
+  assert.match(releaseMatrixScript, /NODE_ENV === "production"/);
+  for (const testFile of [
+    "content-moderation-text-service.test.mjs",
+    "content-moderation-wechat-image.test.mjs",
+    "content-moderation-wechat-callback.test.mjs",
+    "content-moderation-service.test.mjs",
+    "content-moderation-callback.test.mjs",
+    "content-moderation-retry.test.mjs",
+    "content-moderation-video-integration.test.mjs",
+    "album-image-cleanup.test.mjs"
+  ]) {
+    assert.equal(releaseMatrixScript.includes(testFile), true, testFile);
+  }
+  assert.doesNotMatch(releaseMatrixScript, /https?:\/\//);
 });

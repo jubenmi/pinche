@@ -162,6 +162,7 @@ test("bounded reconciliation reads media and active media jobs without scanning 
   assert.equal(media.length, 1);
   assert.equal(media[0].moderation_jobs[0].id, 91);
   assert.match(mediaCalls[0].sql, /ORDER BY id LIMIT \?/);
+  assert.match(mediaCalls[0].sql, /author_visibility_version/);
   assert.match(mediaCalls[1].sql, /CAST\(subject_id AS UNSIGNED\) IN/);
   assert.doesNotMatch(mediaCalls[0].sql, /photo_url|normalized_payload_json|response_summary_json/);
 

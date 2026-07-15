@@ -254,7 +254,7 @@ test("CLI dry-run never emits unrelated credential canaries", () => {
   });
 });
 
-test("D45.18 only allows specifically evidenced non-preflight milestones", () => {
+test("D45.18 only checks specifically evidenced completed milestones", () => {
   const taskCard = readFileSync(d45TasksPath, "utf8");
   const sectionStart = taskCard.search(
     /^- \[[ x]\] D45\.18 执行生产受控预演与完整放行验证。$/m
@@ -269,27 +269,7 @@ test("D45.18 only allows specifically evidenced non-preflight milestones", () =>
     const [, mark, text] = parsed;
     return { mark, text };
   });
-  const recordedMilestoneTexts = [
-    "复核 requirements v1.3、design v1.3、tasks v1.2 与生产手册中的 GET/POST 协议边界；2026-07-14 用户已确认该版 spec，可以进入 TDD 实施。",
-    "先补失败测试，再覆盖微信官方示例、伪造/缺失 `signature`、精确回显不裁剪，以及仅携带 `msg_signature` 与加密 `echostr` 的首版错误协议必须被拒绝；静态路由检查须区分 GET 的 `signature` 与 POST 的 `msg_signature`。",
-    "按 develop → main → publish 顺序逐级完成 CI，记录三分支提交、Actions run 与发布镜像摘要；任一级失败立即停止。",
-    "微信后台以安全模式与 JSON 数据格式真实保存成功，官方 GET 验证通过且配置持久化；脱敏确认未写入审核、媒体或预演状态。"
-  ];
-
-  for (const recordedMilestoneText of recordedMilestoneTexts) {
-    const matchingItems = checklistItems.filter(({ text }) => text === recordedMilestoneText);
-    assert.equal(
-      matchingItems.length,
-      1,
-      `expected exactly one D45.18 recorded milestone: ${recordedMilestoneText}`
-    );
-  }
-
-  const recordedMilestoneTextSet = new Set(recordedMilestoneTexts);
-  const liveChecklistItems = checklistItems.filter(
-    ({ text }) => !recordedMilestoneTextSet.has(text)
-  );
-  const expectedLiveChecklistTexts = [
+  const completedMilestoneTexts = [
     "D45.18 执行生产受控预演与完整放行验证。",
     "D45.18A 实现并验证生产受控预演（有限验证）。",
     "新增默认关闭的一次性 API 容器 Job；仅在生产、精确确认、指定有效 `system_admin`、完整 provider 配置和三个 intake 均为 `closed` 时运行；不新增 HTTP 路由或后台入口。",
@@ -297,22 +277,40 @@ test("D45.18 only allows specifically evidenced non-preflight milestones", () =>
     "使用代码白名单无害 case：文本以专用测试管理员 openid 调用微信；图片/视频使用专用私有 COS 前缀和严格白名单；调用方不能提供正文、openid、对象 Key、URL、回调地址或 provider 参数。",
     "微信/腾讯回调先解析预演关联，只更新预演状态；重复/迟到事件幂等，未命中保持现有用户回调链；任何结果不得调用用户状态机或签发用户 URL。",
     "为同一路由补齐微信官方 GET URL 验证；以 `signature` 对 Token、timestamp、nonce 的三参数 SHA-1 结果验签并原样回显明文 `echostr`，GET 不读取或使用 `msg_signature`、AESKey、AppID、`encrypt_type` 或 body；无效验证无副作用且不泄漏请求参数或密钥。",
-    "经当次确认仅替换 `pinche-api-1`，核对不可变镜像摘要、`/health`、`/health/db` 和三个 intake 仍为 `closed`；其他容器不得重启或改动。",
     "依次验证文本、图片、视频无害 `Pass`、鉴权、私有对象抓取、回调认证与清理；完成/失败/超时均核验预演对象删除，且所有门禁仍为 `closed`。",
     "新增预演单测、回调隔离/重复测试、门禁/配置/日志脱敏检查与生产手册；记录仅含 case、服务商、结果类别、耗时、配置/镜像指纹和清理结论。",
+    "复核 requirements v1.3、design v1.3、tasks v1.2 与生产手册中的 GET/POST 协议边界；2026-07-14 用户已确认该版 spec，可以进入 TDD 实施。",
+    "先补失败测试，再覆盖微信官方示例、伪造/缺失 `signature`、精确回显不裁剪，以及仅携带 `msg_signature` 与加密 `echostr` 的首版错误协议必须被拒绝；静态路由检查须区分 GET 的 `signature` 与 POST 的 `msg_signature`。",
+    "按 develop → main → publish 顺序逐级完成 CI，记录三分支提交、Actions run 与发布镜像摘要；任一级失败立即停止。",
+    "微信后台以安全模式与 JSON 数据格式真实保存成功，官方 GET 验证通过且配置持久化；脱敏确认未写入审核、媒体或预演状态。",
     "D45.18B 完整结果与故障放行验证（不由生产预演替代）。",
     "以假客户端、签名回放或服务商正式支持的隔离能力验证微信/腾讯 `Review`/`Block`/`Error`、超时、权限、额度、重复/过期回调和拒绝后清理；不得在生产发送违规样本或故意破坏生产凭证。",
     "只有 D45.18A 与本项均完成、独立放行审批通过且观察指标满足条件后，才可另行讨论将任一 intake 切为 `moderated`；本任务不执行该切换。"
   ];
 
-  assert.deepEqual(
-    liveChecklistItems.map(({ text }) => text).sort(),
-    [...expectedLiveChecklistTexts].sort(),
-    "D45.18 live checklist texts must match the exact reviewed set"
-  );
-  for (const { mark, text } of liveChecklistItems) {
-    assert.equal(mark, " ", `D45.18 live checklist item must remain unchecked: ${text}`);
+  for (const completedMilestoneText of completedMilestoneTexts) {
+    const matchingItems = checklistItems.filter(({ text }) => text === completedMilestoneText);
+    assert.equal(
+      matchingItems.length,
+      1,
+      `expected exactly one D45.18 completed milestone: ${completedMilestoneText}`
+    );
+    assert.equal(
+      matchingItems[0].mark,
+      "x",
+      `D45.18 evidenced milestone must be checked: ${completedMilestoneText}`
+    );
   }
+
+  const completedMilestoneTextSet = new Set(completedMilestoneTexts);
+  const unexpectedChecklistItems = checklistItems.filter(
+    ({ text }) => !completedMilestoneTextSet.has(text)
+  );
+  assert.deepEqual(
+    unexpectedChecklistItems,
+    [],
+    "D45.18 must not contain unreviewed checklist items"
+  );
 });
 
 test("contract source stays an exact offline, dependency-free preflight", () => {

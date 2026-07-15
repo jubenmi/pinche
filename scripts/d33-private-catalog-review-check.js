@@ -267,7 +267,7 @@ const publicStoresRoute = sourceSliceAfter(
 );
 assert(
   publicStoresRoute.includes("optionalAuthUser(request)") &&
-    publicStoresRoute.includes("listActiveStores(Object.fromEntries(url.searchParams), user)"),
+    /listActiveStores\(\s*Object\.fromEntries\(url\.searchParams\),\s*user(?:,\s*\{[\s\S]*?\})?\s*\)/.test(publicStoresRoute),
   "GET /api/stores must pass optional auth user into listActiveStores"
 );
 
@@ -277,7 +277,7 @@ const publicScriptsRoute = sourceSliceAfter(
 );
 assert(
   publicScriptsRoute.includes("optionalAuthUser(request)") &&
-    publicScriptsRoute.includes("listActiveScripts(Object.fromEntries(url.searchParams), user)"),
+    /listActiveScripts\(\s*Object\.fromEntries\(url\.searchParams\),\s*user(?:,\s*\{[\s\S]*?\})?\s*\)/.test(publicScriptsRoute),
   "GET /api/scripts must pass optional auth user into listActiveScripts"
 );
 

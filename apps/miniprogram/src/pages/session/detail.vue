@@ -169,6 +169,7 @@ import {
   request
 } from "../../utils/api";
 import { contentModerationErrorText } from "../../utils/contentModeration";
+import { normalizeAuthorPrivateSession } from "../../utils/authorPrivateText";
 import { showToast } from "../../utils/tdesignFeedback";
 
 function coordinateNumber(value, min, max) {
@@ -493,7 +494,7 @@ export default {
       }
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
-        this.session = dataOf(response) || {};
+        this.session = normalizeAuthorPrivateSession(dataOf(response) || {});
         this.accessScope = this.session.access_scope || "";
         this.loadStatusText = "";
         if (this.focusedSeatId && this.focusedSeat) {
@@ -686,6 +687,9 @@ export default {
       );
     },
     canApplyNpcRole(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return false;
+      }
       if (!this.npcSelfJoinEnabled) {
         return false;
       }
@@ -747,6 +751,9 @@ export default {
       return "unavailable";
     },
     npcRoleStateKind(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return "pendingReview";
+      }
       if (this.currentUserId && Number(role.bound_user_id || 0) === Number(this.currentUserId)) {
         return "mine";
       }
@@ -762,6 +769,9 @@ export default {
       return this.npcSelfJoinEnabled ? "available" : "unavailable";
     },
     npcRoleStatusLabel(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return role.moderation_message || "仅自己可见 · 审核中";
+      }
       const stateKind = this.npcRoleStateKind(role);
       if (stateKind === "mine") {
         return "";

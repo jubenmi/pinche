@@ -11,7 +11,8 @@ const PROVIDER_TRANSITIONS = Object.freeze({
   error: new Set(["pending", "processing", "approved", "review", "rejected"]),
   review: new Set(),
   approved: new Set(),
-  rejected: new Set()
+  rejected: new Set(),
+  cancelled: new Set()
 });
 
 const ADMIN_TRANSITIONS = Object.freeze({
@@ -20,14 +21,27 @@ const ADMIN_TRANSITIONS = Object.freeze({
   pending: new Set(["rejected"]),
   processing: new Set(["rejected"]),
   approved: new Set(),
-  rejected: new Set()
+  rejected: new Set(),
+  cancelled: new Set()
+});
+
+const USER_TRANSITIONS = Object.freeze({
+  pending: new Set(["cancelled"]),
+  processing: new Set(["cancelled"]),
+  review: new Set(["cancelled"]),
+  error: new Set(["cancelled"]),
+  rejected: new Set(["cancelled"]),
+  approved: new Set(),
+  cancelled: new Set()
 });
 
 const PROPOSAL_TRANSITIONS = Object.freeze({
-  pending: new Set(["approved", "rejected", "stale"]),
+  pending: new Set(["approved", "rejected", "stale", "cancelled"]),
   approved: new Set(),
-  rejected: new Set(),
-  stale: new Set()
+  rejected: new Set(["superseded", "cancelled"]),
+  stale: new Set(),
+  cancelled: new Set(),
+  superseded: new Set()
 });
 
 function invalidTransition(fromStatus, toStatus) {
@@ -53,11 +67,18 @@ export function assertModerationTransition(
   toStatus,
   { source = "provider", decidedByAdminUserId = null } = {}
 ) {
+  if (!["provider", "admin", "user"].includes(source)) {
+    throw invalidTransition(fromStatus, toStatus);
+  }
   if (fromStatus === toStatus) return true;
   if (source === "provider" && decidedByAdminUserId) {
     throw invalidTransition(fromStatus, toStatus);
   }
-  const transitions = source === "admin" ? ADMIN_TRANSITIONS : PROVIDER_TRANSITIONS;
+  const transitions = source === "admin"
+    ? ADMIN_TRANSITIONS
+    : source === "user"
+      ? USER_TRANSITIONS
+      : PROVIDER_TRANSITIONS;
   if (!transitions[fromStatus]?.has(toStatus)) {
     throw invalidTransition(fromStatus, toStatus);
   }

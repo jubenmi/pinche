@@ -2,7 +2,25 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { assertModeratedTextResult, normalizeError } from "../src/server.js";
+import {
+  assertModeratedTextResult,
+  moderatedTextHeaders,
+  moderatedTextHttpStatus,
+  normalizeError
+} from "../src/server.js";
+
+const authorPrivateDto = Object.freeze({
+  draft_id: 51,
+  content_ref: "text-proposal:51",
+  publication_state: "author_only",
+  moderation_status: "review",
+  moderation_message: "仅自己可见 · 进一步审核",
+  published_id: 12,
+  content: { note: "新的说明" },
+  can_edit: false,
+  can_delete: true,
+  can_resubmit: false
+});
 
 test("public moderation outcomes preserve only stable codes and safe messages", () => {
   const openidRequired = Object.assign(new Error("private producer text"), {
@@ -33,10 +51,14 @@ test("public moderation outcomes preserve only stable codes and safe messages", 
 });
 
 test("server routes all D45.5 text mutations through the shared WeChat moderation boundary", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const [source, handlerSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
+  ]);
 
   assert.match(source, /createWechatContentSecurityClient/);
   assert.match(source, /createTextProposalApplicator/);
+  assert.match(source, /createProductionTextProposalHandlers/);
   assert.match(source, /function moderateCoveredText/);
   assert.match(source, /function applyApprovedTextProposal/);
   assert.match(source, /applyTextProposal: \(connection, input\) => textProposalApplicator\.apply\(connection, input\)/);
@@ -50,7 +72,7 @@ test("server routes all D45.5 text mutations through the shared WeChat moderatio
     "update_session_npc_role",
     "upsert_session_review"
   ]) {
-    assert.match(source, new RegExp(`action: "${action}"`));
+    assert.match(handlerSource, new RegExp(`(?:action:\\s*)?"${action}"`));
   }
 });
 
@@ -86,13 +108,16 @@ test("the text intake gate leaves profile-only updates outside the D45 text boun
 });
 
 test("NPC-role proposal application locks its role and parent session before revalidating ownership", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const [source, handlerSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
+  ]);
   const helperStart = source.indexOf("async function currentNpcRoleTextBase");
   const helperEnd = source.indexOf("async function currentReviewTextBase", helperStart);
   const helper = source.slice(helperStart, helperEnd);
-  const handlerStart = source.indexOf("async function applySessionNpcRoleUpdateProposal");
-  const handlerEnd = source.indexOf("async function applySessionReviewProposal", handlerStart);
-  const handler = source.slice(handlerStart, handlerEnd);
+  const handlerStart = handlerSource.indexOf("async update_session_npc_role");
+  const handlerEnd = handlerSource.indexOf("async upsert_session_review", handlerStart);
+  const handler = handlerSource.slice(handlerStart, handlerEnd);
 
   assert.match(helper, /JOIN sessions AS session/);
   assert.match(helper, /createTextBaseline/);
@@ -100,7 +125,7 @@ test("NPC-role proposal application locks its role and parent session before rev
   assert.match(helper, /FOR UPDATE/);
   assert.match(
     handler,
-    /currentNpcRoleTextBase\(connection, npcRoleId, actor\.user\.id, \{ forUpdate: true \}\)/
+    /currentNpcRoleTextBase\([\s\S]{0,180}\{ forUpdate: true \}/
   );
 });
 
@@ -131,14 +156,13 @@ test("a cancelled session message is rejected during capture instead of after We
 });
 
 test("profile proposals apply only the canonical nickname/avatar/gender patch", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
-  const profileSource = await readFile(
-    new URL("../src/modules/content-moderation/text-profile-patch.js", import.meta.url),
-    "utf8"
-  );
-  const start = source.indexOf("async function applyNicknameProposal");
-  const end = source.indexOf("function assertCreationProposal", start);
-  const handler = source.slice(start, end);
+  const [handlerSource, profileSource] = await Promise.all([
+    readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/modules/content-moderation/text-profile-patch.js", import.meta.url), "utf8")
+  ]);
+  const start = handlerSource.indexOf("async update_nickname");
+  const end = handlerSource.indexOf("async create_private_store", start);
+  const handler = handlerSource.slice(start, end);
 
   assert.match(profileSource, /\["nickname", "avatarUrl", "gender"\]/);
   assert.match(handler, /profilePatchFromProposalBody\(payload\.body\)/);
@@ -148,20 +172,20 @@ test("profile proposals apply only the canonical nickname/avatar/gender patch", 
 });
 
 test("each text moderation job uses an operation identity while retaining its real target in the proposal", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const [source, handlerSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
+  ]);
   const moderateStart = source.indexOf("async function moderateCoveredText");
   const moderateEnd = source.indexOf("async function loadTextProposalActor", moderateStart);
   const moderate = source.slice(moderateStart, moderateEnd);
-  const handlersStart = source.indexOf("function assertProposalOperationTarget");
-  const handlersEnd = source.indexOf("const textProposalApplicator", handlersStart);
-  const handlers = source.slice(handlersStart, handlersEnd);
 
   assert.match(moderate, /textProposalTargetSubjectId/);
   assert.match(moderate, /targetSubjectId: proposalTargetId/);
   assert.match(moderate, /textOperationSubjectId/);
-  assert.match(handlers, /String\(payload\?\.targetSubjectId \|\| ""\) !== target/);
-  assert.match(handlers, /idempotencyKey: proposal\?\.idempotency_key/);
-  assert.match(handlers, /currentNpcRoleTextBase\(connection, npcRoleId, actor\.user\.id, \{ forUpdate: true \}\)/);
+  assert.match(handlerSource, /String\(payload\?\.targetSubjectId \|\| ""\) !== target/);
+  assert.match(handlerSource, /idempotencyKey: proposal\?\.idempotency_key/);
+  assert.match(handlerSource, /currentNpcRoleTextBase\([\s\S]{0,180}\{ forUpdate: true \}/);
 });
 
 test("an enabled moderation route cannot fall through to a second business write", async () => {
@@ -175,6 +199,17 @@ test("an enabled moderation route cannot fall through to a second business write
     code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
   });
   assert.equal(businessWrites, 0);
+  assert.deepEqual(routeResult(authorPrivateDto), authorPrivateDto);
+  assert.equal(moderatedTextHttpStatus(authorPrivateDto, 201), 202);
+  assert.deepEqual(moderatedTextHeaders(authorPrivateDto), {
+    "cache-control": "private, no-store"
+  });
+  assert.equal(moderatedTextHttpStatus({ id: 88, kind: "create_private_store" }, 201), 201);
+  assert.deepEqual(moderatedTextHeaders({ id: 88, kind: "create_private_store" }), {});
+  assert.throws(() => assertModeratedTextResult({
+    ...authorPrivateDto,
+    provider_result: { label: "100" }
+  }), { code: "CONTENT_MODERATION_CONFIGURATION_ERROR" });
   assert.deepEqual(routeResult({ id: 88, kind: "create_private_store" }), {
     id: 88,
     kind: "create_private_store"
@@ -189,6 +224,19 @@ test("an enabled moderation route cannot fall through to a second business write
     /assertModeratedTextResult\(await contentModeration\.moderateTextMutation\(descriptor\)\)/
   );
   assert.doesNotMatch(source, /moderated \|\|/);
+});
+
+test("D46 server separates replacement control data and adapts only author-private outcomes to 202", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function moderateCoveredText");
+  const end = source.indexOf("async function loadTextProposalActor", start);
+  const moderate = source.slice(start, end);
+
+  assert.match(moderate, /parseTextDraftReplacement\(body\)/);
+  assert.match(moderate, /replacesDraftId/);
+  assert.match(source, /moderatedTextHttpStatus\(moderated,/);
+  assert.match(source, /moderatedTextHeaders\(moderated\)/);
+  assert.doesNotMatch(moderate, /replaces[_A-Za-z]*Draft[^\n]*canonicalPayload/);
 });
 
 test("pseudo-chat routes use the same moderation boundary for messages and pins", async () => {
