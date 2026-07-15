@@ -42,8 +42,8 @@ CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS=60
 
 ## 1. 上线前的共同前提
 
-- API、`content-moderation-retry`、`content-moderation-orphan-scan` 和迁移任务必须使用同一个 `PINCHE_API_IMAGE` 镜像 digest；不得让不同 schema 版本的 Worker 混跑。
-- 先备份数据库，执行迁移至 `0029_content_moderation_production_preflight.sql`，确认 `npm run migrate` 成功后再启动 API 与 Worker。
+- API、`content-moderation-retry`、`content-moderation-orphan-scan`、`content-moderation-production-preflight-timeout` 和迁移任务必须使用同一个 `PINCHE_API_IMAGE` 镜像 digest；不得让不同 schema 版本的 Worker 混跑。
+- 先备份数据库，执行迁移至 `0030_author_private_content_visibility.sql`，确认 `npm run migrate` 成功后再启动 API 与 Worker。
 - 所有密钥只从生产密钥管理系统注入 `.env.production`；示例文件中的占位值不可用于生产。
 - COS Bucket 必须保持私有。客户端不得拥有任意对象读权限；只有服务端在权限、隐私和审核门禁均通过后签发短时 URL。
 - 上线与联调使用无害测试样本及测试账号；不要将违规样本正文、完整媒体、token 或可复用 URL 保存到记录中。
@@ -212,7 +212,7 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 
 每一步必须记录部署版本、开关、观察开始/结束时间、指标摘要和回滚决定；记录不得包含敏感样本或 URL。
 
-1. **数据结构与门禁**：执行迁移，部署 API、后台、两个 Worker；保持 `CONTENT_MODERATION_ENABLED=true`，并将三个 `*_INTAKE_MODE` 都设为 `closed`。验证新提交返回 `CONTENT_MODERATION_INTAKE_CLOSED`，且未批准媒体仍无法通过列表、预览、下载、range、封面或公开分享读取。
+1. **数据结构与门禁**：执行迁移，部署 API、后台、三个 Worker；保持 `CONTENT_MODERATION_ENABLED=true`，并将三个 `*_INTAKE_MODE` 都设为 `closed`。验证新提交返回 `CONTENT_MODERATION_INTAKE_CLOSED`，且未批准媒体仍无法通过列表、预览、下载、range、封面或公开分享读取。
 2. **后台、指标与扫描**：确认管理员队列、审计、上述指标和告警可见。先开启孤儿扫描的 report-only，保持 cleanup 为 `false`。
 3. **生产受控预演（D45.18A）**：只在三个 `*_INTAKE_MODE` 均为 `closed` 时运行一次性预演 Job。该步骤只验证 harmless pass、鉴权、私有 COS 读取、回调、标准化结果和清理，不表示可以把任何正常用户入口切到 `moderated`。
 4. **微信文本**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_TEXT_ENABLED=true` 并另行讨论 `CONTENT_MODERATION_TEXT_INTAKE_MODE=moderated`；观察至少一个业务高峰窗口。
