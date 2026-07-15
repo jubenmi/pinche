@@ -383,6 +383,42 @@ test("Tencent video transport signs CI video request and parses async job", asyn
   assert.equal(JSON.stringify(calls).includes("secret-key"), false);
 });
 
+test("Tencent video transport follows the official CI empty signed-header example", async () => {
+  const calls = [];
+  const config = buildContentModerationConfig(validEnv());
+  const transport = createTencentVideoModerationTransport({
+    config,
+    now: () => new Date("2026-07-12T00:00:00.000Z"),
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return new Response(
+        "<Response><JobsDetail><JobId>ci-video-1</JobId><State>Submitted</State><DataId>d2</DataId></JobsDetail></Response>",
+        { status: 200 }
+      );
+    }
+  });
+
+  await transport({
+    kind: "video",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    dataId: "d2",
+    policyId: "video-policy",
+    bucket: "bucket-123",
+    callbackUrl: config.tencentVideoCallbackUrl,
+    region: "ap-nanjing"
+  });
+
+  assert.equal(calls[0].options.headers["content-type"], "application/xml");
+  assert.equal(
+    calls[0].options.headers["content-length"],
+    String(Buffer.byteLength(calls[0].options.body))
+  );
+  assert.match(
+    calls[0].options.headers.authorization,
+    /&q-header-list=&q-url-param-list=&/
+  );
+});
+
 test("Tencent production preflight transport accepts only its derived private video key", async () => {
   const calls = [];
   const runId = "11111111-1111-4111-8111-111111111111";
