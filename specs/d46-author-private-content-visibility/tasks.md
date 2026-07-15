@@ -91,13 +91,13 @@
   - [x] 在 `apps/api/src/modules/content-moderation/admin-api.js` 和 `apps/api/src/server.js` 增加独立 purge 动作：system_admin、必填原因、二次确认、审计、幂等清理；普通 reject 不 purge。
   - [x] 验证作者删除、purge、迟到转码输出、旧 lease、对象 404 和部分清理失败均安全重试且不恢复媒体。
 
-- [ ] D46.12 实现小程序统一作者私有媒体体验。
-  - [ ] 先新增 `apps/miniprogram/test/authorPrivateContent.test.mjs`，锁定三类文案、原位置显示、真实预览、禁用下载/标签/分享、删除与账号切换清理。
-  - [ ] 修改 `apps/miniprogram/src/utils/contentModeration.js`，增加带“仅自己可见”的作者文案映射；普通公开状态文案保持兼容。
-  - [ ] 修改 `apps/miniprogram/src/pages/session/album.vue`，允许 `publication_state=author_only && is_mine` 渲染预览/视频，但 `isDownloadableAlbumImage`、标签、分享和时间线继续只认公开状态。
-  - [ ] 修改 `apps/miniprogram/src/utils/albumMediaUrls.js`，把作者预览选择与公共下载候选拆成不同函数，禁止把作者 URL 进入下载/分享集合。
-  - [ ] 页面刷新、隐藏、退出或账号变化时清理作者 URL 和投影；服务端不再返回时立即移除本地卡片。
-  - [ ] 运行：`node --test apps/miniprogram/test/authorPrivateContent.test.mjs apps/miniprogram/test/contentModeration.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs`；预期全绿。
+- [x] D46.12 实现小程序统一作者私有媒体体验。
+  - [x] 先新增 `apps/miniprogram/test/authorPrivateContent.test.mjs`，锁定三类文案、原位置显示、真实预览、禁用下载/标签/分享、删除与账号切换清理。
+  - [x] 修改 `apps/miniprogram/src/utils/contentModeration.js`，增加带“仅自己可见”的作者文案映射；普通公开状态文案保持兼容。
+  - [x] 修改 `apps/miniprogram/src/pages/session/album.vue`，允许 `publication_state=author_only && is_mine` 渲染预览/视频，但 `isDownloadableAlbumImage`、标签、分享和时间线继续只认公开状态。
+  - [x] 修改 `apps/miniprogram/src/utils/albumMediaUrls.js`，把作者预览选择与公共下载候选拆成不同函数，禁止把作者 URL 进入下载/分享集合。
+  - [x] 页面刷新、隐藏、退出或账号变化时清理作者 URL 和投影；服务端不再返回时立即移除本地卡片。
+  - [x] 运行：`node --test apps/miniprogram/test/authorPrivateContent.test.mjs apps/miniprogram/test/contentModeration.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs`；预期全绿。
 
 - [ ] D46.13 完成公共路径、防缓存和防泄漏验证。
   - [ ] 新增 `apps/api/test/content-moderation-author-leak-gates.test.mjs`，逐项检查公共列表、详情、搜索、推荐、首页、日历、计数、评价聚合、未读、标签、通知、分享、下载、播放、Range 和封面。
@@ -164,3 +164,5 @@
 - 2026-07-15 D46.10 GREEN：图片仅 uploader + v1 获得最长 60 秒的独立 HMAC 能力 URL，能力载荷只含对象版本指纹；视频 URL API 仅本人可把合法 display/source 签为 60 秒 COS URL。响应不含对象 Key/ETag、下载、标签、封面或分享能力，公共 getter 保持原批准门禁。专项与图片/视频/COS/D45 媒体回归共 94 项及 URL 定向 12 项通过。
 - 2026-07-15 D46.11 RED：新增拒绝保留/删除/purge 契约测试后，按预期因缺少 `parseAdminModerationPurgeBody` 与持久化媒体保留判断导出失败；不是测试语法错误。补齐初版后，迟到删除中视频用例继续发现 processing lookup 只允许 active，证明 deleting 回调合并分支尚未真正可达。
 - 2026-07-15 D46.11 GREEN：普通 provider/admin reject 仅对持久化 `author_visibility_version=1` 的 active 图片/视频保留对象，版本 0 继续 D45 清理。作者图片/视频 DELETE 统一取消精确版本审核、退休 attempt、标记 deleting 并复用耐久 cleanup；旧 lease 重排不丢 attempts。独立管理员 purge 要求 system_admin、原因和字面量 `PURGE`，重复/已完成请求只审计一次。active D46 拒绝视频可吸收合法迟到 display/cover，deleting 只扩充清理；orphan scan 将 active/rejected D46 记录视为受保护引用。D45 单元回归 514 项、D45/D46 静态检查、D42 删除兼容检查及 diff 检查全部通过。
+- 2026-07-15 D46.12 RED：作者私有媒体客户端专项测试先因缺少作者文案与预览策略导出失败；补齐工具后，页面接线断言继续因相册仍未使用作者预览分支失败。账号切换顺序测试还识别出 `onShow` 的跳过刷新判断早于身份清理，证明生命周期边界测试有效。
+- 2026-07-15 D46.12 GREEN：相册仅对当前 uploader 的 `author_only + can_preview` 行在原位置展示短时图片或视频，三类安全文案生效；下载、标签、分享与时间线仍只认批准状态。作者图片只保存在当前页面内存，不进入文件缓存；隐藏、退出、统一登录态事件、账号切换和服务端移除都会清理私有行、URL、异步请求与预览。D46.12 定向 27 项、小程序全量 51 项、D45 回归 514 项、`build:mp-weixin`、`npm run d46:check` 与 diff 检查全部通过。

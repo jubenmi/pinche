@@ -5,6 +5,70 @@ import {
   shouldRefreshAlbumMedia
 } from "@pinche/shared";
 
+const AUTHOR_PRIVATE_MEDIA_STATUSES = new Set([
+  "pending",
+  "processing",
+  "error",
+  "review",
+  "rejected"
+]);
+
+function samePositiveUserId(left, right) {
+  const leftId = Number(left);
+  const rightId = Number(right);
+  return (
+    Number.isSafeInteger(leftId) && leftId > 0 &&
+    Number.isSafeInteger(rightId) && rightId > 0 &&
+    leftId === rightId
+  );
+}
+
+export function isAuthorPrivateAlbumMedia(photo = {}, viewerUserId) {
+  return (
+    photo?.publication_state === "author_only" &&
+    photo?.is_mine === true &&
+    photo?.can_preview === true &&
+    !isModerationPublished(photo?.moderation_status) &&
+    AUTHOR_PRIVATE_MEDIA_STATUSES.has(String(photo?.moderation_status || "")) &&
+    samePositiveUserId(photo?.uploader_user_id, viewerUserId)
+  );
+}
+
+export function isPreviewableAlbumMedia(photo = {}, options = {}) {
+  if (isModerationPublished(photo?.moderation_status)) return true;
+  return (
+    options.timelineMode !== true &&
+    isAuthorPrivateAlbumMedia(photo, options.viewerUserId)
+  );
+}
+
+export function isCurrentPreviewableAlbumMedia(
+  photos = [],
+  requestedPhoto = {},
+  options = {}
+) {
+  if (!isPreviewableAlbumMedia(requestedPhoto, options)) return false;
+  return (photos || []).some((photo) => (
+    String(photo?.id) === String(requestedPhoto?.id) &&
+    isPreviewableAlbumMedia(photo, options) &&
+    (
+      isModerationPublished(photo?.moderation_status) ||
+      String(photo?.moderation_status) === String(requestedPhoto?.moderation_status)
+    )
+  ));
+}
+
+export function pruneAlbumMediaPreviewCache(cache = {}, photos = [], options = {}) {
+  const previewableIds = new Set(
+    (photos || [])
+      .filter((photo) => isPreviewableAlbumMedia(photo, options))
+      .map((photo) => String(photo.id))
+  );
+  return Object.fromEntries(
+    Object.entries(cache || {}).filter(([photoId]) => previewableIds.has(String(photoId)))
+  );
+}
+
 export function pruneUnpublishedAlbumMediaCache(cache = {}, photos = []) {
   const publishedIds = new Set(
     (photos || [])
@@ -89,6 +153,27 @@ export function normalizeAlbumImageUrls(photo = {}) {
       photo.preview_url ||
       photo.image_url ||
       "",
+    expiresAt: photo.media_url_expires_at || ""
+  };
+}
+
+export function normalizeAuthorPrivateAlbumImageUrls(photo = {}, viewerUserId) {
+  if (!isAuthorPrivateAlbumMedia(photo, viewerUserId) || photo?.media_type !== "image") {
+    return { thumbnailUrl: "", previewUrl: "", downloadUrl: "", expiresAt: "" };
+  }
+  return {
+    thumbnailUrl:
+      photo.thumbnail_display_url ||
+      photo.thumbnail_load_url ||
+      photo.thumbnail_url ||
+      "",
+    previewUrl:
+      photo.preview_display_url ||
+      photo.preview_load_url ||
+      photo.preview_url ||
+      photo.image_url ||
+      "",
+    downloadUrl: "",
     expiresAt: photo.media_url_expires_at || ""
   };
 }
