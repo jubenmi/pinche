@@ -99,12 +99,12 @@
   - [x] 页面刷新、隐藏、退出或账号变化时清理作者 URL 和投影；服务端不再返回时立即移除本地卡片。
   - [x] 运行：`node --test apps/miniprogram/test/authorPrivateContent.test.mjs apps/miniprogram/test/contentModeration.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs`；预期全绿。
 
-- [ ] D46.13 完成公共路径、防缓存和防泄漏验证。
-  - [ ] 新增 `apps/api/test/content-moderation-author-leak-gates.test.mjs`，逐项检查公共列表、详情、搜索、推荐、首页、日历、计数、评价聚合、未读、标签、通知、分享、下载、播放、Range 和封面。
-  - [ ] 断言公共响应不含 `draft_id`、`content_ref`、`author_only`、未批准正文或作者 URL；包含作者数据的响应必须 `private, no-store`。
-  - [ ] 修改 `apps/api/src/modules/core/session-album-media-count.js`、相关 SQL/序列化器和 server 缓存头，只做满足断言的最小调整。
-  - [ ] 增加日志/指标 canary 测试，证明正文、对象 Key、签名 URL 和服务商敏感字段不进入输出。
-  - [ ] 运行 D31/D32/D38/D39/D40/D45 的静态与单测回归，任何公共行为变化即停止。
+- [x] D46.13 完成公共路径、防缓存和防泄漏验证。
+  - [x] 新增 `apps/api/test/content-moderation-author-leak-gates.test.mjs`，逐项检查公共列表、详情、搜索、推荐、首页、日历、计数、评价聚合、未读、标签、通知、分享、下载、播放、Range 和封面。
+  - [x] 断言公共响应不含 `draft_id`、`content_ref`、`author_only`、未批准正文或作者 URL；包含作者数据的响应必须 `private, no-store`。
+  - [x] 修改 `apps/api/src/modules/core/session-album-media-count.js`、相关 SQL/序列化器和 server 缓存头，只做满足断言的最小调整。
+  - [x] 增加日志/指标 canary 测试，证明正文、对象 Key、签名 URL 和服务商敏感字段不进入输出。
+  - [x] 运行 D31/D32/D38/D39/D40/D45 的静态与单测回归，任何公共行为变化即停止。
 
 - [ ] D46.14 补齐配置、指标与容量告警。
   - [ ] 修改 `apps/api/src/config.js`、`.env.example` 和生产 compose 示例，增加三个默认关闭的 D46 gate、固定十个 action 的显式子集配置与严格 TTL 校验；空 action 集保持关闭，未知/重复 action 或非法 TTL 启动失败且不输出配置值。
@@ -166,3 +166,5 @@
 - 2026-07-15 D46.11 GREEN：普通 provider/admin reject 仅对持久化 `author_visibility_version=1` 的 active 图片/视频保留对象，版本 0 继续 D45 清理。作者图片/视频 DELETE 统一取消精确版本审核、退休 attempt、标记 deleting 并复用耐久 cleanup；旧 lease 重排不丢 attempts。独立管理员 purge 要求 system_admin、原因和字面量 `PURGE`，重复/已完成请求只审计一次。active D46 拒绝视频可吸收合法迟到 display/cover，deleting 只扩充清理；orphan scan 将 active/rejected D46 记录视为受保护引用。D45 单元回归 514 项、D45/D46 静态检查、D42 删除兼容检查及 diff 检查全部通过。
 - 2026-07-15 D46.12 RED：作者私有媒体客户端专项测试先因缺少作者文案与预览策略导出失败；补齐工具后，页面接线断言继续因相册仍未使用作者预览分支失败。账号切换顺序测试还识别出 `onShow` 的跳过刷新判断早于身份清理，证明生命周期边界测试有效。
 - 2026-07-15 D46.12 GREEN：相册仅对当前 uploader 的 `author_only + can_preview` 行在原位置展示短时图片或视频，三类安全文案生效；下载、标签、分享与时间线仍只认批准状态。作者图片只保存在当前页面内存，不进入文件缓存；隐藏、退出、统一登录态事件、账号切换和服务端移除都会清理私有行、URL、异步请求与预览。D46.12 定向 27 项、小程序全量 51 项、D45 回归 514 项、`build:mp-weixin`、`npm run d46:check` 与 diff 检查全部通过。
+- 2026-07-15 D46.13 RED：公共泄漏专项先因缺少 `response-privacy.js` 失败；补齐首版后，防御性测试证明公开相册序列化器仍会信任上游并保留注入的 `author_only` 行。D31 回归随后暴露其动态页面夹具缺少新预览方法，不是产品行为变化。
+- 2026-07-15 D46.13 GREEN：新增有界、循环安全的作者私有响应识别与低基数泄漏 canary，告警只含 route/reason/priority，观测失败也不能阻止关闭式拒绝；所有作者响应统一 `private, no-store`。公开相册序列化器再次按批准状态过滤并重算可见数，即使上游误传私有行也不输出。计数 SQL 无需调整，继续只认批准状态；D31/D32/D38/D39/D40、D45 静态检查和含新增用例的 D45 520 项回归全部通过。

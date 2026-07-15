@@ -238,6 +238,11 @@ import {
 import { createContentModerationService } from "./modules/content-moderation/service.js";
 import { createAuthorDraftService } from "./modules/content-moderation/author-drafts.js";
 import { emitContentModerationEvent } from "./modules/content-moderation/telemetry.js";
+import {
+  assertPublicResponseSafe,
+  authorPrivateResponseHeaders as responsePrivacyHeaders,
+  containsAuthorPrivateContent
+} from "./modules/content-moderation/response-privacy.js";
 import { createAdminModerationApi } from "./modules/content-moderation/admin-api.js";
 import { createAdminModerationPreviewBuilder } from "./modules/content-moderation/admin-preview.js";
 import {
@@ -360,20 +365,12 @@ export function moderatedTextHeaders(result) {
 }
 
 export function containsAuthorPrivateText(value, depth = 0) {
-  if (depth > 6 || value === null || value === undefined) return false;
-  if (isAuthorPrivateTextDto(value)) return true;
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsAuthorPrivateText(entry, depth + 1));
-  }
-  if (typeof value !== "object") return false;
-  if (value.publication_state === "author_only") return true;
-  return Object.values(value).some((entry) => containsAuthorPrivateText(entry, depth + 1));
+  void depth;
+  return isAuthorPrivateTextDto(value) || containsAuthorPrivateContent(value);
 }
 
 function authorPrivateResponseHeaders(value) {
-  return containsAuthorPrivateText(value)
-    ? { "cache-control": "private, no-store" }
-    : {};
+  return responsePrivacyHeaders(value);
 }
 
 function authorPrivateMediaOptions() {
@@ -3112,7 +3109,9 @@ export function attachPublicSessionAlbumMediaUrls(
 ) {
   const resolved = albumImageUrlOptions(options);
   let signedImageCount = 0;
-  const photos = album.photos.map((photo) => {
+  const photos = (album.photos || [])
+    .filter((photo) => isModerationPublished(photo?.moderation_status))
+    .map((photo) => {
       if (photo.media_type === "video") {
         const safePhoto = stripAlbumVideoInternalFields(photo);
         const approved = isModerationPublished(photo.moderation_status);
@@ -3136,11 +3135,16 @@ export function attachPublicSessionAlbumMediaUrls(
   (options.emit || emitAlbumImageEvent)("media_urls_signed", {
     sessionId: Number(album.session_id), outcome: "public-share", signedImageCount
   });
-  return {
+  const result = {
     ...album,
+    visible_count: photos.length,
     photos,
     media: photos
   };
+  return assertPublicResponseSafe(result, {
+    routeKind: "session_public_share",
+    emit: options.emitPublicLeak
+  });
 }
 
 async function sessionAlbumThumbnailBuffer(file) {
