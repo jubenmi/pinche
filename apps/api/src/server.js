@@ -202,10 +202,13 @@ import {
 } from "./modules/content-moderation/wechat-callback.js";
 import {
   claimInitialModerationLease,
+  cancelModerationJobByUser,
+  cancelTextProposalByAuthor,
   createModerationJob,
   createTextProposal,
   enqueueRejectedMediaCleanup,
   failModerationJob,
+  findAuthorTextDraftById,
   findTextProposalByJobId,
   findCurrentModerationAttempt,
   findModerationAttemptByProviderJobId,
@@ -222,9 +225,11 @@ import {
   listAdminModerationJobs,
   requeueModerationJob,
   transitionMediaModeration,
-  transitionModerationJob
+  transitionModerationJob,
+  supersedeRejectedTextProposal
 } from "./modules/content-moderation/repository.js";
 import { createContentModerationService } from "./modules/content-moderation/service.js";
+import { createAuthorDraftService } from "./modules/content-moderation/author-drafts.js";
 import { emitContentModerationEvent } from "./modules/content-moderation/telemetry.js";
 import { createAdminModerationApi } from "./modules/content-moderation/admin-api.js";
 import { createAdminModerationPreviewBuilder } from "./modules/content-moderation/admin-preview.js";
@@ -1257,6 +1262,17 @@ const buildAdminModerationPreview = createAdminModerationPreviewBuilder({
     expiresInSeconds,
     queryEntries
   )
+});
+
+const authorDrafts = createAuthorDraftService({
+  transaction: withTransaction,
+  repository: {
+    findAuthorTextDraftById,
+    cancelTextProposalByAuthor,
+    cancelModerationJobByUser,
+    retireCurrentModerationAttempt,
+    supersedeRejectedTextProposal
+  }
 });
 
 const adminModerationApi = createAdminModerationApi({
@@ -3971,6 +3987,21 @@ async function route(request, response) {
     jsonResponse(response, adminModerationRoute.statusCode, {
       ok: true,
       data: adminModerationRoute.data
+    }, {
+      "cache-control": "private, no-store"
+    });
+    return;
+  }
+
+  const authorDraftId = idMatch(
+    url.pathname,
+    /^\/api\/content-moderation\/author-drafts\/(\d+)$/
+  );
+  if (request.method === "DELETE" && authorDraftId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await authorDrafts.cancel({ user, draftId: authorDraftId })
     }, {
       "cache-control": "private, no-store"
     });

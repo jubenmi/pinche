@@ -20,6 +20,23 @@ function duplicateKeyError(error) {
   return error?.code === "ER_DUP_ENTRY" || Number(error?.errno) === 1062;
 }
 
+function textProposalAuthorVisibilityFacts(input) {
+  const version = input?.authorVisibilityVersion === undefined
+    ? 0
+    : Number(input.authorVisibilityVersion);
+  if (![0, 1].includes(version) || !Number.isInteger(version)) {
+    throw new TypeError("authorVisibilityVersion must be 0 or 1");
+  }
+  if (version === 0) {
+    return { targetSubjectId: null, authorVisibilityVersion: 0 };
+  }
+  const targetSubjectId = String(input?.targetSubjectId || "").trim();
+  if (!targetSubjectId || targetSubjectId.length > 128) {
+    throw new TypeError("targetSubjectId is required for author-private proposals");
+  }
+  return { targetSubjectId, authorVisibilityVersion: 1 };
+}
+
 function safeAppliedResultJson(result) {
   const safe = projectSafeTextAppliedResult(result);
   return safe ? JSON.stringify(safe) : null;
@@ -444,6 +461,7 @@ export async function transitionModerationJob(connection, input) {
 }
 
 export async function createTextProposal(connection, input) {
+  const authorVisibility = textProposalAuthorVisibilityFacts(input);
   const byIdempotency = await findTextProposalByIdempotency(connection, input, { forUpdate: true });
   if (byIdempotency) return compatibleTextProposalId(byIdempotency, input);
 
@@ -453,19 +471,22 @@ export async function createTextProposal(connection, input) {
   try {
     const [result] = await connection.query(
       `INSERT INTO content_moderation_text_proposals
-        (moderation_job_id, subject_type, subject_id, base_version, action,
-         normalized_payload_json, payload_digest, idempotency_key, status, created_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        (moderation_job_id, subject_type, subject_id, target_subject_id, base_version, action,
+         normalized_payload_json, payload_digest, idempotency_key, status, created_by_user_id,
+         author_visibility_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       [
         Number(input.jobId),
         String(input.subjectType),
         String(input.subjectId),
+        authorVisibility.targetSubjectId,
         String(input.baseVersion),
         String(input.action),
         JSON.stringify(input.normalizedPayload),
         String(input.payloadDigest),
         String(input.idempotencyKey),
-        Number(input.userId)
+        Number(input.userId),
+        authorVisibility.authorVisibilityVersion
       ]
     );
     return result.insertId;
@@ -507,6 +528,105 @@ export async function findTextProposalByIdempotency(
     [Number(input.userId), String(input.action), String(input.idempotencyKey)]
   );
   return rows[0] || null;
+}
+
+export async function findLatestAuthorTextProposal(
+  connection,
+  { userId, action, targetSubjectId, forUpdate = false }
+) {
+  const [rows] = await connection.query(
+    `SELECT proposal.*, proposal.status AS proposal_status, job.status AS job_status
+     FROM content_moderation_text_proposals AS proposal
+     INNER JOIN content_moderation_jobs AS job
+       ON job.id = proposal.moderation_job_id
+     WHERE proposal.created_by_user_id = ?
+       AND proposal.action = ?
+       AND proposal.target_subject_id = ?
+       AND proposal.author_visibility_version = 1
+       AND proposal.status IN ('pending', 'rejected')
+       AND job.status IN ('pending', 'processing', 'review', 'error', 'rejected')
+     ORDER BY proposal.updated_at DESC, proposal.id DESC
+     LIMIT 1${lockClause(forUpdate)}`,
+    [Number(userId), String(action), String(targetSubjectId)]
+  );
+  return rows[0] || null;
+}
+
+export async function findAuthorTextDraftById(
+  connection,
+  { draftId, userId, forUpdate = false }
+) {
+  const [rows] = await connection.query(
+    `SELECT proposal.*, proposal.status AS proposal_status, job.status AS job_status
+     FROM content_moderation_text_proposals AS proposal
+     INNER JOIN content_moderation_jobs AS job
+       ON job.id = proposal.moderation_job_id
+     WHERE proposal.id = ?
+       AND proposal.created_by_user_id = ?
+     LIMIT 1${lockClause(forUpdate)}`,
+    [Number(draftId), Number(userId)]
+  );
+  return rows[0] || null;
+}
+
+export async function cancelTextProposalByAuthor(
+  connection,
+  { proposalId, userId, fromStatus }
+) {
+  assertTextProposalTransition(fromStatus, "cancelled");
+  const [result] = await connection.query(
+    `UPDATE content_moderation_text_proposals
+     SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+       AND created_by_user_id = ?
+       AND status = ?
+       AND author_visibility_version = 1`,
+    [Number(proposalId), Number(userId), String(fromStatus)]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function cancelModerationJobByUser(
+  connection,
+  { jobId, fromStatus }
+) {
+  assertModerationTransition(fromStatus, "cancelled", { source: "user" });
+  const [result] = await connection.query(
+    `UPDATE content_moderation_jobs
+     SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP,
+         next_retry_at = NULL, lease_token = NULL, lease_expires_at = NULL
+     WHERE id = ? AND status = ?`,
+    [Number(jobId), String(fromStatus)]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function supersedeRejectedTextProposal(
+  connection,
+  { proposalId, newProposalId, userId, action, targetSubjectId }
+) {
+  assertTextProposalTransition("rejected", "superseded");
+  const previousId = Number(proposalId);
+  const replacementId = Number(newProposalId);
+  if (
+    !Number.isSafeInteger(previousId) || previousId <= 0 ||
+    !Number.isSafeInteger(replacementId) || replacementId <= 0 ||
+    previousId === replacementId
+  ) {
+    throw new TypeError("proposal replacement ids must be distinct positive integers");
+  }
+  const [result] = await connection.query(
+    `UPDATE content_moderation_text_proposals
+     SET status = 'superseded', superseded_by_proposal_id = ?
+     WHERE id = ?
+       AND created_by_user_id = ?
+       AND action = ?
+       AND target_subject_id = ?
+       AND status = 'rejected'
+       AND author_visibility_version = 1`,
+    [replacementId, previousId, Number(userId), String(action), String(targetSubjectId)]
+  );
+  return Number(result.affectedRows || 0) === 1;
 }
 
 export async function markTextProposalStatus(

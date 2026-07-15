@@ -30,13 +30,13 @@
   - [x] 验证普通 system_admin 请求不获得 author scope，管理员审核预览继续走 `admin-api.js`。
   - [x] 运行：`node --test apps/api/test/content-moderation-author-visibility.test.mjs apps/api/test/content-moderation-media-gates.test.mjs`；预期全绿。
 
-- [ ] D46.4 实现作者文本提案仓储、取消与替代。
-  - [ ] 先新增失败测试 `apps/api/test/content-moderation-author-drafts.test.mjs`，覆盖按作者/action/target 查询唯一最新投影、并发锁、取消、替代、重复请求和非作者拒绝。
-  - [ ] 修改 `apps/api/src/modules/content-moderation/repository.js`：创建提案时写入 `target_subject_id`/policy version；新增精确查询、原子 cancel、rejected→superseded、退休 attempt 和 lease 清理方法。
-  - [ ] 新增 `apps/api/src/modules/content-moderation/author-drafts.js`，封装所有权校验和取消事务；不得把任意 action/payload 执行能力暴露给通用 API。
-  - [ ] 修改 `apps/api/src/server.js`，新增 `DELETE /api/content-moderation/author-drafts/:draftId`，在通用业务路由之前精确匹配并使用现有认证。
-  - [ ] 确保取消 pending/review/error/rejected 后 Worker、管理员普通决定和迟到 provider 结果均不能应用。
-  - [ ] 运行：`node --test apps/api/test/content-moderation-author-drafts.test.mjs apps/api/test/content-moderation-retry.test.mjs apps/api/test/content-moderation-callback.test.mjs`；预期全绿。
+- [x] D46.4 实现作者文本提案仓储、取消与替代。
+  - [x] 先新增失败测试 `apps/api/test/content-moderation-author-drafts.test.mjs`，覆盖按作者/action/target 查询唯一最新投影、并发锁、取消、替代、重复请求和非作者拒绝。
+  - [x] 修改 `apps/api/src/modules/content-moderation/repository.js`：创建提案时写入 `target_subject_id`/policy version；新增精确查询、原子 cancel、rejected→superseded、退休 attempt 和 lease 清理方法。
+  - [x] 新增 `apps/api/src/modules/content-moderation/author-drafts.js`，封装所有权校验和取消事务；不得把任意 action/payload 执行能力暴露给通用 API。
+  - [x] 修改 `apps/api/src/server.js`，新增 `DELETE /api/content-moderation/author-drafts/:draftId`，在通用业务路由之前精确匹配并使用现有认证。
+  - [x] 确保取消 pending/review/error/rejected 后 Worker、管理员普通决定和迟到 provider 结果均不能应用。
+  - [x] 运行：`node --test apps/api/test/content-moderation-author-drafts.test.mjs apps/api/test/content-moderation-retry.test.mjs apps/api/test/content-moderation-callback.test.mjs`；预期全绿。
 
 - [ ] D46.5 调整文本审核提交结果与重新提交协议。
   - [ ] 先扩展 `apps/api/test/content-moderation-text-service.test.mjs`：D46 gate 开启时 Pass 返回公开实体，Review/Block/Error 返回作者 DTO；gate 关闭时保持 D45 行为。
@@ -148,3 +148,5 @@
 - 2026-07-15 D46.2 GREEN：迁移、状态机及 D45 回归共 88 项通过；覆盖首次升级、历史默认版本 0、幂等重跑、DDL 后迁移记录失败重跑、错误结构关闭式失败和迟到结果不可复活。
 - 2026-07-15 D46.3 RED：作者策略定向测试按预期因 `author-visibility.js` 尚不存在失败；随后独立 worktree 依赖解析回退到主目录旧版 shared，使用本机已有 submodule Git 对象和离线 workspace 安装修复测试环境，未访问生产。
 - 2026-07-15 D46.3 GREEN：作者身份/状态/策略版本、安全 DTO、D45 媒体公共门禁、管理员审核回归及 D46 契约共 33 项通过；`npm run d46:check` 通过，D46.1 的预期 RED 已转 GREEN。
+- 2026-07-15 D46.4 RED：作者草稿定向测试按预期因 `author-drafts.js` 尚不存在失败；补实现后又由路由源码定位断言发现测试匹配串过严，修正为匹配实际正则路由，不改变实现。
+- 2026-07-15 D46.4 GREEN：作者草稿、仓储、重试、回调、管理员与 D45 仓储回归共 91 项通过；取消在单事务内条件更新 proposal/job、清 lease、退休 attempt，替代按固定锁顺序验证新旧提案，HTTP 只暴露精确 DELETE。
