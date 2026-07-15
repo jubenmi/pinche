@@ -46,12 +46,12 @@
   - [x] 实现 rejected 重新提交：先成功创建新 job/proposal，再在同一事务 supersede 同作者/动作/目标旧提案；失败时旧投影保持可见。
   - [x] 运行：`node --test apps/api/test/content-moderation-text-service.test.mjs apps/api/test/content-moderation-text-server-wiring.test.mjs apps/api/test/content-moderation-text-boundaries.test.mjs`；预期全绿。
 
-- [ ] D46.6 实现十个动作的作者文本投影器。
-  - [ ] 先新增失败测试 `apps/api/test/content-moderation-author-text-projection.test.mjs`，逐个锁定十个 action 的允许字段、正式 ID/草稿 ID、禁用动作和敏感字段剔除。
-  - [ ] 新增 `apps/api/src/modules/content-moderation/text-author-projection.js`，为每个 action 写显式 projector；default 必须失败，禁止透传 `normalized_payload_json`。
-  - [ ] 创建类投影返回 `published_id=null`、`is_draft=true`；修改类投影保留正式 ID 并只覆盖被审核字段。
-  - [ ] 验证手机号、openid、context、base version、幂等键、provider 标签/分数和审核正文不进入 DTO。
-  - [ ] 运行：`node --test apps/api/test/content-moderation-author-text-projection.test.mjs apps/api/test/content-moderation-text-proposal-applicator.test.mjs`；预期全绿。
+- [x] D46.6 实现十个动作的作者文本投影器。
+  - [x] 先新增失败测试 `apps/api/test/content-moderation-author-text-projection.test.mjs`，逐个锁定十个 action 的允许字段、正式 ID/草稿 ID、禁用动作和敏感字段剔除。
+  - [x] 新增 `apps/api/src/modules/content-moderation/text-author-projection.js`，为每个 action 写显式 projector；default 必须失败，禁止透传 `normalized_payload_json`。
+  - [x] 创建类投影返回 `published_id=null`、`is_draft=true`；修改类投影保留正式 ID 并只覆盖被审核字段。
+  - [x] 验证手机号、openid、context、base version、幂等键、provider 标签/分数和审核正文不进入 DTO。
+  - [x] 运行：`node --test apps/api/test/content-moderation-author-text-projection.test.mjs apps/api/test/content-moderation-text-proposal-applicator.test.mjs`；预期全绿。
 
 - [ ] D46.7 集成昵称、私有门店和私有剧本作者视图。
   - [ ] 先新增 API 契约测试：`GET /api/users/me` 只给本人覆盖 `update_nickname` 待审昵称，其他用户资料仍为旧值；门店/剧本本人列表追加 `create_private_store`/`create_private_script` 草稿，公共目录不追加。
@@ -152,3 +152,5 @@
 - 2026-07-15 D46.4 GREEN：作者草稿、仓储、重试、回调、管理员与 D45 仓储回归共 91 项通过；取消在单事务内条件更新 proposal/job、清 lease、退休 attempt，替代按固定锁顺序验证新旧提案，HTTP 只暴露精确 DELETE。
 - 2026-07-15 D46.5 RED：文本服务、边界、HTTP 适配和替代幂等测试按预期因缺少 `parseTextDraftReplacement`、202 响应适配、author-private outcome 与替代重放失败；原 D45 用例继续通过。
 - 2026-07-15 D46.5 GREEN：D46.5 定向用例 61 项通过；随后作者可见性、草稿、文本、仓储、重试、回调、管理员回归共 150 项通过，`npm run d46:check` 通过。非 Pass 仅在当前 gate/action 与持久化 version 1、作者、目标全部一致时返回安全 DTO；验证/身份/intake 仍走原错误，替换控制字段不进入审核正文。
+- 2026-07-15 D46.6 RED：十动作投影定向测试按预期因 `text-author-projection.js` 不存在失败；不是测试语法错误。
+- 2026-07-15 D46.6 GREEN：十个 action 显式投影、嵌套克隆、创建/修改身份和敏感字段剔除测试通过；联合 applicator、作者策略、草稿、文本、仓储、回调、重试与管理员回归共 156 项通过，`npm run d46:check` 与 `git diff --check` 通过。

@@ -7,6 +7,7 @@ import {
 import { buildTextProposalPayload } from "./text-boundaries.js";
 import { createAuthorPrivateTextDto } from "./author-dto.js";
 import { resolveAuthorVisibility } from "./author-visibility.js";
+import { projectAuthorTextProposal } from "./text-author-projection.js";
 import { projectSafeTextAppliedResult } from "./text-applied-result.js";
 import { proposalStaleForRevalidationError } from "./text-proposal-applicator.js";
 import { textProposalPayloadDigest } from "./text-proposal-digest.js";
@@ -258,12 +259,6 @@ function returnPreparedTerminalTextOutcome(outcome) {
   throw replayErrorForStatus(outcome.status);
 }
 
-const AUTHOR_PRIVATE_PUBLISHED_TARGET_ACTIONS = new Set([
-  "update_nickname",
-  "update_session",
-  "update_session_npc_role"
-]);
-
 function authorPrivateTextActionEnabled(config, action) {
   if (config?.authorPrivateTextEnabled !== true) return false;
   const configured = config?.authorPrivateTextActions;
@@ -285,12 +280,6 @@ function parseProposalPayload(proposal) {
   } catch {
     return null;
   }
-}
-
-function authorPrivatePublishedId(action, targetSubjectId) {
-  if (!AUTHOR_PRIVATE_PUBLISHED_TARGET_ACTIONS.has(action)) return null;
-  const parsed = Number(targetSubjectId);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 export function createContentModerationService(dependencies) {
@@ -328,12 +317,17 @@ export function createContentModerationService(dependencies) {
       contentKind: "text"
     });
     if (visibility.scope !== "author_only") return null;
+    const projection = projectAuthorTextProposal({
+      action,
+      targetSubjectId,
+      body: payload.body
+    });
     return createAuthorPrivateTextDto({
       draftId: proposal.id,
       action,
       moderationStatus,
-      publishedId: authorPrivatePublishedId(action, targetSubjectId),
-      content: payload.body,
+      publishedId: projection.publishedId,
+      content: projection.content,
       visibility
     });
   }
