@@ -119,6 +119,11 @@
   - [x] 运行迁移 dry run、`npm run d46:unit`、`npm run d46:check`、`npm run d46:smoke`、`npm run d45:unit`、`npm run d45:check`、`npm run d45:smoke` 和根 `npm run check`。
   - [x] 保留 RED→GREEN 命令与结果；不得以静态搜索代替业务/安全测试。
 
+- [x] D46.15A 微信开发者工具本地运行验收。
+  - [x] 从当前 D46 提交重新构建并导入微信开发者工具，确认编译和启动无阻断错误。
+  - [x] 检查控制台、作者私有状态文案及关键交互门禁；不得修改生产数据，正式交互验收使用隔离 Mock，任何意外生产只读访问必须记录并立即停止。
+  - [x] 记录开发者工具版本、构建提交和本地验收结论；不得据此勾选生产发布任务。
+
 - [ ] D46.16 受控发布与验收。
   - [ ] 先以全部 D46 gate=false 发布迁移与代码，核验公共 API 字段、缓存头、D45 Worker、回调、健康检查和三个 intake 无变化。
   - [ ] 使用无害测试账号按 action 白名单分批开启文本作者投影；逐项验证作者原位置、其他账号、匿名/分享、取消、重提和公开旧版本。
@@ -175,3 +180,4 @@
 - 2026-07-15 D46.15 REVIEW RED：独立代码评审发现四项 Important：取消/替代提案可被幂等重放复活、作者媒体预览与删除存在 TOCTOU、视频迟到回调未绑定完整输入/任务/输出身份，以及十动作 smoke 只做行状态模拟。前三项定向失败测试均复现；真实十动作生命周期矩阵随后进一步复现了替换草稿进入 `review` 后同一请求无法幂等重放的问题。
 - 2026-07-15 D46.15 REVIEW GREEN：取消/替代/失效提案重放关闭式失败；图片能力校验、图片读取和视频签名在同一媒体行锁内消费；视频回调绑定 media/source/provider job/output 对象身份。十动作矩阵现逐项穿过正式 `buildTextModerationDescriptor`、`createContentModerationService`、生产与服务器共用的 `createProductionTextProposalHandlers`、`createTextProposalApplicator` 与 `createAuthorDraftService`；逐动作验证 operation/target、真实 `assertProposalBase`、`current*TextBase(...,{forUpdate:true})`、显式业务 writer、正式写入、作者/非作者隔离、取消事务、驳回后替换、重复提交和 stale 不写入。置顶消息首次通过与幂等回放统一返回安全 `{id, kind}`。替换重放仅接受 `pending + pending/processing/review/error`、`rejected + rejected` 或 `approved + approved` 配对，cancelled/stale 继续拒绝。最终独立复核未发现 Blocker 或 Important；修复后 `d46:unit` 148 项、进程内 `d46:smoke` 121 项及 `d46:check` 全绿。
 - 2026-07-15 D46.15 FINAL VERIFY：`d45:unit` API/小程序 545 项加 talk 8 项、`d45:smoke` 79 项、D46 迁移兼容 5 项、根级 `npm run check`、`git diff --check` 全部通过；管理端和微信小程序生产构建成功。D46.16 与整份生产验收清单继续保持未勾选，未连接或修改任何生产资源。
+- 2026-07-16 D46.15A DEVTOOLS GREEN：在提交 `4741a0fc3e2585a5dc6f6ea03b8e1bb72769d12b` 上重新运行 `npm run build:mp-weixin`，退出码 0；作者私有小程序专项 `authorPrivateContent`、`authorPrivateSocial`、`authorPrivateText` 共 12/12 通过。微信开发者工具 Nightly `2.01.2512242`、基础库 `3.12.1` 从 `dist/dev/mp-weixin` 手动编译并稳定启动，首页和隔离相册复编译后均为 0 error；剩余提示仅为 SharedArrayBuffer 弃用、全局组件性能、关闭域名校验及本地 HTTP 图片夹具警告。最终验收临时把生成目录（未跟踪产物）的 API 地址切到 `127.0.0.1:3029`，只读 Mock 除本地登录会话外拒绝所有非 GET：记录到的请求只有本地登录、本人空列表、作者相册和夹具图片，无业务写入。作者卡片实际显示“仅自己可见 · 进一步审核”，只提供删除，不出现下载/标注；本地夹具预览可打开且无下载入口；删除仅打开二次确认后取消，Mock 未收到 DELETE。测试后已停止 Mock、恢复生成物 API 地址、移除本地编译模式并关闭项目。首次按仓库默认锁定地址启动时曾发生公开首页只读请求，确认无写入后立即切换到上述隔离验收；D46.16 和生产验收清单继续保持未勾选。
