@@ -113,11 +113,11 @@
   - [x] 管理后台详情显示 `author_private_retained`，但不显示作者 URL、对象 Key 或服务商敏感结果。
   - [x] 更新生产手册，明确 D46 gate 与 D45 intake 独立、回滚顺序和紧急 purge 操作边界。
 
-- [ ] D46.15 建立专项自动化与完整回归。
-  - [ ] 新增 `scripts/d46-author-private-content-smoke.js`，使用假 provider 与隔离数据验证文本新建/修改、图片、视频、取消、替代、拒绝保留、作者删除和非作者不可发现。
-  - [ ] 在 `package.json` 增加 `d46:unit`、`d46:check`、`d46:smoke` 并接入根 `precheck`。
-  - [ ] 运行迁移 dry run、`npm run d46:unit`、`npm run d46:check`、`npm run d46:smoke`、`npm run d45:unit`、`npm run d45:check`、`npm run d45:smoke` 和根 `npm run check`。
-  - [ ] 保留 RED→GREEN 命令与结果；不得以静态搜索代替业务/安全测试。
+- [x] D46.15 建立专项自动化与完整回归。
+  - [x] 新增 `scripts/d46-author-private-content-smoke.js`，使用假 provider 与隔离数据验证文本新建/修改、图片、视频、取消、替代、拒绝保留、作者删除和非作者不可发现。
+  - [x] 在 `package.json` 增加 `d46:unit`、`d46:check`、`d46:smoke` 并接入根 `precheck`。
+  - [x] 运行迁移 dry run、`npm run d46:unit`、`npm run d46:check`、`npm run d46:smoke`、`npm run d45:unit`、`npm run d45:check`、`npm run d45:smoke` 和根 `npm run check`。
+  - [x] 保留 RED→GREEN 命令与结果；不得以静态搜索代替业务/安全测试。
 
 - [ ] D46.16 受控发布与验收。
   - [ ] 先以全部 D46 gate=false 发布迁移与代码，核验公共 API 字段、缓存头、D45 Worker、回调、健康检查和三个 intake 无变化。
@@ -170,3 +170,5 @@
 - 2026-07-15 D46.13 GREEN：新增有界、循环安全的作者私有响应识别与低基数泄漏 canary，告警只含 route/reason/priority，观测失败也不能阻止关闭式拒绝；所有作者响应统一 `private, no-store`。公开相册序列化器再次按批准状态过滤并重算可见数，即使上游误传私有行也不输出。计数 SQL 无需调整，继续只认批准状态；D31/D32/D38/D39/D40、D45 静态检查和含新增用例的 D45 520 项回归全部通过。
 - 2026-07-15 D46.14 RED：新增作者私有运维专项测试后，按预期因缺少 `emitAuthorPrivateRetentionSnapshot` 导出失败；补齐初版后继续识别 TTL 错误会回显非法值片段、管理端测试路径写错两个独立问题，分别修正为不含配置值的稳定错误和正确仓库路径。
 - 2026-07-15 D46.14 GREEN：五项 D46 配置进入实际运行时，三个 gate 默认关闭，文本 action 仅接受十项显式无重复子集，TTL 严格限制 `1..60`；生产媒体 gate 额外要求私有 COS。新增作者私有生命周期、访问拒绝和公共泄漏低基数指标；重试 Worker 统计 active/rejected/version 1 媒体数量、图片/视频字节与 30 天长期保留量，只告警不删除。后台列表纳入 Rejected，详情仅增加 `author_private_retained`；生产手册明确与 D45 intake 独立、回滚和 purge 边界。D46.14 专项 8 项、配置/仓储/服务/草稿/Worker/管理端定向回归 149 项、`npm run d46:check`、`npm run d45:check` 与 diff 检查全部通过。
+- 2026-07-15 D46.15 RED：专项 smoke 与根级全回归接入后，完整 `npm run check` 先后识别出 D42 视频 INSERT 参数、通用小程序 URL/下载契约，以及 D15 日历去重、D18 图片耐久删除四组旧静态断言仍锁定改造前源码形态。逐项核对现行业务测试与实现后，仅更新兼容断言以覆盖 D46 新字段、作者 URL 分支和现有耐久删除协议，没有放宽公开可见性或修改业务逻辑。
+- 2026-07-15 D46.15 GREEN：迁移模拟 dry run 5 项、`d46:unit` 134 项、隔离 smoke 96 项、`d45:unit` 529+8 项、`d45:smoke` 77 项全部通过；`d46:check`、`d45:check`、根级 `check` 及 D42/D15/D18/小程序兼容检查全绿。管理端生产构建和微信小程序构建成功；smoke 强制拒绝 production，使用隔离数据库、假 provider、关闭外部云依赖并覆盖文本新建/修改、图片/视频、取消/替代、拒绝保留、作者删除和非作者不可发现。
