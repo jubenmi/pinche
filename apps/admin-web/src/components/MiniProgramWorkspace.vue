@@ -647,6 +647,13 @@
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
+import {
+  beijingDateKey,
+  beijingDateParts,
+  beijingTimeText,
+  formatBeijingDateTime,
+  parseBusinessDateTime
+} from "@pinche/shared";
 import { miniScreens, sessionBackedMiniScreens, writeAdminRoute } from "../adminRoute";
 import {
   approveSignup,
@@ -906,9 +913,7 @@ function normalizeInitialMiniScreen(screenValue, sessionIdValue) {
 }
 
 function defaultDate() {
-  const date = new Date();
-  date.setDate(date.getDate() + 1);
-  return date.toISOString().slice(0, 10);
+  return beijingDateKey(new Date(Date.now() + DAY_MS));
 }
 
 function parseJsonArray(value) {
@@ -1338,7 +1343,7 @@ function createMineCalendarItem({ session = null, signup = null }) {
 
 function refreshMineCalendarItem(item) {
   const source = item.session || item.signup || {};
-  const startDate = parseMineStartAt(source.start_at);
+  const startDate = parseBusinessDateTime(source.start_at);
   item.sessionId = item.session?.id || item.signup?.session_id || "";
   item.key = `mine-calendar-${item.sessionId}`;
   item.isOrganized = Boolean(item.session);
@@ -1465,7 +1470,7 @@ function groupMineCalendarItems(items) {
   return items.reduce((groups, item) => {
     let group = groups[groups.length - 1];
     if (!group || group.dateKey !== item.dateKey) {
-      const date = parseMineStartAt(item.startAt);
+      const date = parseBusinessDateTime(item.startAt);
       group = createMineDayGroup(date);
       groups.push(group);
     }
@@ -1476,12 +1481,13 @@ function groupMineCalendarItems(items) {
 
 function createMineDayGroup(date) {
   const offset = mineDayOffset(date);
+  const parts = beijingDateParts(date);
   return {
     dateKey: mineDateKey(date),
     markerText: mineDayMarkerText(date, offset),
     relativeLabel: mineRelativeDayLabel(offset),
-    dateLabel: `${date.getMonth() + 1}/${date.getDate()}`,
-    weekday: WEEKDAYS[date.getDay()],
+    dateLabel: parts ? `${parts.month}/${parts.day}` : "",
+    weekday: parts ? WEEKDAYS[parts.weekday] : "",
     items: []
   };
 }
@@ -2208,41 +2214,12 @@ function storeMeta(store) {
     .join(" · ");
 }
 
-function parseMineStartAt(value) {
-  if (!value) {
-    return null;
-  }
-  if (value instanceof Date) {
-    return value;
-  }
-  const raw = String(value);
-  const localMatch = raw.match(
-    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/
-  );
-  if (localMatch) {
-    return new Date(
-      Number(localMatch[1]),
-      Number(localMatch[2]) - 1,
-      Number(localMatch[3]),
-      Number(localMatch[4] || 0),
-      Number(localMatch[5] || 0),
-      Number(localMatch[6] || 0)
-    );
-  }
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 function mineTodayStart() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return parseBusinessDateTime(`${beijingDateKey(new Date())} 00:00:00`);
 }
 
 function mineStartOfDay(date) {
-  const next = new Date(date);
-  next.setHours(0, 0, 0, 0);
-  return next;
+  return parseBusinessDateTime(`${beijingDateKey(date)} 00:00:00`);
 }
 
 function mineDayOffset(date, baseDate = mineTodayStart()) {
@@ -2250,11 +2227,11 @@ function mineDayOffset(date, baseDate = mineTodayStart()) {
 }
 
 function mineDateKey(date) {
-  return `${date.getFullYear()}-${minePad(date.getMonth() + 1)}-${minePad(date.getDate())}`;
+  return beijingDateKey(date);
 }
 
 function mineTimeText(date) {
-  return `${minePad(date.getHours())}:${minePad(date.getMinutes())}`;
+  return beijingTimeText(date);
 }
 
 function mineRelativeDayLabel(offset) {
@@ -2277,41 +2254,14 @@ function mineDayMarkerText(date, offset) {
   if (offset === 1) {
     return "明";
   }
-  return minePad(date.getDate());
-}
-
-function minePad(value) {
-  return String(value).padStart(2, "0");
+  return String(beijingDateParts(date)?.day || "");
 }
 
 function formatDate(value) {
   if (!value) {
     return "-";
   }
-  const text = String(value);
-  const hasTimeZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
-  if (!hasTimeZone) {
-    return text.replace("T", " ").slice(0, 16);
-  }
-  const date = new Date(text);
-  if (!Number.isFinite(date.getTime())) {
-    return text;
-  }
-  return formatShanghaiDate(date);
-}
-
-function formatShanghaiDate(date) {
-  const parts = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`;
+  return formatBeijingDateTime(value, String(value));
 }
 
 function sessionStatusLabel(value) {

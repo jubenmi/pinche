@@ -169,23 +169,23 @@ git commit -m "fix: render mini-program times in Beijing time"
 - Modify: `apps/admin-web/src/components/SessionAlbumWorkspace.vue`
 - Modify: `scripts/d47-beijing-time-check.js`
 
-- [ ] **Step 1: Extend the failing source contract**
+- [x] **Step 1: Extend the failing source contract**
 
 Add assertions that admin files import shared Beijing formatters, `MiniProgramWorkspace.vue` has no `parseMineStartAt`, and no targeted formatter uses device-local calendar getters for business dates.
 
-- [ ] **Step 2: Run the source contract and verify RED**
+- [x] **Step 2: Run the source contract and verify RED**
 
 Run: `node scripts/d47-beijing-time-check.js`
 
 Expected: FAIL on `parseMineStartAt` and duplicate `formatShanghaiDate` implementations.
 
-- [ ] **Step 3: Replace duplicates with shared functions**
+- [x] **Step 3: Replace duplicates with shared functions**
 
 Import shared helpers from `@pinche/shared`. Replace `parseMineStartAt`, `formatShanghaiDate`, and direct `Intl.DateTimeFormat` duplicates. Preserve each component's existing fallback (`"-"`, `"无"`, or original text) by passing it to the shared formatter.
 
 For preview calendar grouping, use `beijingDateKey()` and shared parts instead of `getDate()`, `getHours()`, and `getDay()` on device-local dates.
 
-- [ ] **Step 4: Run admin tests and build**
+- [x] **Step 4: Run admin tests and build**
 
 Run: `node scripts/d47-beijing-time-check.js`
 
@@ -199,7 +199,7 @@ Run: `npm run build:admin-web`
 
 Expected: build exits 0.
 
-- [ ] **Step 5: Commit admin integration**
+- [x] **Step 5: Commit admin integration**
 
 ```bash
 git add apps/admin-web/src/App.vue apps/admin-web/src/components/CatalogWorkspace.vue apps/admin-web/src/components/MiniProgramWorkspace.vue apps/admin-web/src/components/SessionAlbumWorkspace.vue scripts/d47-beijing-time-check.js
