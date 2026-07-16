@@ -18,7 +18,7 @@
 - Create: `packages/shared/test/beijingTime.test.mjs`
 - Modify: `packages/shared/package.json`
 
-- [ ] **Step 1: Write failing shared time tests**
+- [x] **Step 1: Write failing shared time tests**
 
 Cover absolute ISO values, explicit offsets, legacy no-zone database values, cross-midnight date keys, invalid values, and Beijing wall-time conversion:
 
@@ -55,13 +55,13 @@ test("converts Beijing wall input to UTC transport", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `node --test packages/shared/test/beijingTime.test.mjs`
 
 Expected: FAIL with `ERR_MODULE_NOT_FOUND` for `src/beijingTime.js`.
 
-- [ ] **Step 3: Implement the shared module**
+- [x] **Step 3: Implement the shared module**
 
 Implement a full-string parser that checks an explicit timezone before legacy wall time. Use a fixed `+08:00` only for legacy no-zone input, and use `Intl.DateTimeFormat(..., { timeZone: "Asia/Shanghai" })` for output parts. Return `null` for invalid parse functions and stable fallback labels for display functions.
 
@@ -79,13 +79,13 @@ export function beijingWallTimeToIso(value) {}
 
 Re-export these from `packages/shared/src/index.js`, and add `test:time` to `packages/shared/package.json`.
 
-- [ ] **Step 4: Run the test and verify GREEN**
+- [x] **Step 4: Run the test and verify GREEN**
 
 Run: `TZ=America/New_York node --test packages/shared/test/beijingTime.test.mjs`
 
 Expected: all tests pass, proving no dependence on the process timezone.
 
-- [ ] **Step 5: Commit the shared contract**
+- [x] **Step 5: Commit the shared contract**
 
 ```bash
 git add packages/shared/src/beijingTime.js packages/shared/src/index.js packages/shared/test/beijingTime.test.mjs packages/shared/package.json
