@@ -1234,6 +1234,124 @@ test("production preflight job exposes main and redacts confirmation on rejected
   assert.equal(output.join("").includes("unsupported production preflight argument"), false);
 });
 
+test("production preflight scope owns and disposes its Redis resolver", async () => {
+  const job = await import("../src/jobs/content-moderation-production-preflight.js");
+  const calls = [];
+  const resolver = async () => null;
+  resolver.reset = () => calls.push("resolver.reset");
+  const tokenProvider = { getAccessToken: async () => "token" };
+  let resolverOptions;
+  let providerOptions;
+  const scope = job.createProductionPreflightWechatClientScope({
+    moderationConfig: {
+      redisEnabled: true,
+      wechatAppId: "wx-d45-test",
+      wechatAppSecret: "wechat-app-secret"
+    },
+    env: { REDIS_HOST: "cache.example.test", REDIS_PORT: "6379" },
+    createRedisResolver: (options) => {
+      resolverOptions = options;
+      return resolver;
+    },
+    createTokenProvider: (options) => {
+      providerOptions = options;
+      return tokenProvider;
+    },
+    createWechatClient: ({ tokenProvider: receivedTokenProvider }) => ({ receivedTokenProvider })
+  });
+
+  assert.equal(resolverOptions.enabled(), true);
+  assert.equal(resolverOptions.url(), "redis://cache.example.test:6379");
+  assert.equal(providerOptions.getRedis, resolver);
+  assert.equal(providerOptions.resetRedis, resolver.reset);
+  assert.equal(scope.wechatClient.receivedTokenProvider, tokenProvider);
+  await scope.dispose();
+  assert.deepEqual(calls, ["resolver.reset"]);
+});
+
+async function assertJobScopeReleased(job, outcome) {
+  const calls = [];
+  const scope = {
+    wechatClient: { checkText: async () => ({ suggestion: "pass" }) },
+    dispose: async () => calls.push("wechat.dispose")
+  };
+  const options = {
+    caseId: "wechat-text-v1",
+    moderationConfig: { nodeEnv: "production" },
+    env: {},
+    stdout: { write: () => undefined },
+    createConnection: async () => ({
+      end: async () => calls.push("connection.end")
+    }),
+    createWechatClientScope: () => scope,
+    createRunner: ({ wechatClient }) => {
+      assert.equal(wechatClient, scope.wechatClient);
+      return {};
+    },
+    buildRuntime: async () => ({}),
+    runCase: async () => {
+      if (outcome.error) throw outcome.error;
+      return outcome.result;
+    }
+  };
+
+  if (outcome.error) {
+    await assert.rejects(job.runProductionPreflightJob(options), outcome.error);
+  } else {
+    assert.deepEqual(await job.runProductionPreflightJob(options), outcome.result);
+  }
+  assert.deepEqual(calls, ["connection.end", "wechat.dispose"]);
+}
+
+test("production preflight job releases its job-scoped WeChat client after a passed run", async () => {
+  const job = await import("../src/jobs/content-moderation-production-preflight.js");
+  await assertJobScopeReleased(job, { result: { runId: "run-passed", state: "passed" } });
+});
+
+test("production preflight job releases its job-scoped WeChat client after awaiting callback", async () => {
+  const job = await import("../src/jobs/content-moderation-production-preflight.js");
+  await assertJobScopeReleased(job, {
+    result: { runId: "run-awaiting", state: "awaiting_callback" }
+  });
+});
+
+test("production preflight job releases its job-scoped WeChat client when provider work fails", async () => {
+  const job = await import("../src/jobs/content-moderation-production-preflight.js");
+  await assertJobScopeReleased(job, { error: new Error("provider failed") });
+});
+
+test("production preflight job releases its job-scoped WeChat client when database close fails", async () => {
+  const job = await import("../src/jobs/content-moderation-production-preflight.js");
+  const calls = [];
+  const closeError = new Error("database close failed");
+  const scope = {
+    wechatClient: {},
+    dispose: async () => calls.push("wechat.dispose")
+  };
+
+  await assert.rejects(
+    job.runProductionPreflightJob({
+      caseId: "wechat-text-v1",
+      moderationConfig: { nodeEnv: "production" },
+      env: {},
+      stdout: { write: () => undefined },
+      createConnection: async () => ({
+        end: async () => {
+          calls.push("connection.end");
+          throw closeError;
+        }
+      }),
+      createWechatClientScope: () => scope,
+      createRunner: () => ({}),
+      buildRuntime: async () => ({}),
+      runCase: async () => ({ runId: "run-passed", state: "passed" })
+    }),
+    closeError
+  );
+
+  assert.deepEqual(calls, ["connection.end", "wechat.dispose"]);
+});
+
 test("production preflight job emits a safe high-priority alert for synchronous cleanup failure", async () => {
   const source = await readFile(
     new URL("../src/jobs/content-moderation-production-preflight.js", import.meta.url),
