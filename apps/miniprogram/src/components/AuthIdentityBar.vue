@@ -29,7 +29,7 @@
         </view>
         <view v-if="rolesText" class="auth-roles">{{ rolesText }}</view>
       </button>
-      <view v-if="messageBadgeText" class="auth-side">
+      <view v-if="messageChipVisible" class="auth-side">
         <t-button
           class="auth-message-chip"
           hover-class="auth-message-chip-hover"
@@ -39,7 +39,7 @@
             <text>消息</text>
             <t-badge
               class="auth-message-count"
-              :count="organizerMessageCount"
+              :count="messageBadgeCount"
               :max-count="99"
             />
           </view>
@@ -50,7 +50,7 @@
     <view v-if="messagePanelVisible" class="message-panel" @tap.stop>
       <view class="message-panel-head">
         <view>
-          <view class="message-panel-title">待处理申请</view>
+          <view class="message-panel-title">消息</view>
           <view class="message-panel-subtitle">{{ messagePanelSummary }}</view>
         </view>
         <view class="message-panel-actions">
@@ -67,33 +67,68 @@
       </view>
 
       <view v-if="messagesLoading" class="message-empty">正在同步消息...</view>
-      <view v-else-if="messagesError" class="message-empty error">{{ messagesError }}</view>
+      <view
+        v-else-if="messageLoadError && authMessages.length === 0"
+        class="message-empty error"
+      >{{ messageLoadError }}</view>
       <t-empty
-        v-else-if="organizerMessages.length === 0"
+        v-else-if="authMessages.length === 0"
         class="message-empty"
-        description="暂无待处理申请。"
+        description="暂无消息。"
       />
       <block v-else>
         <t-button
-          v-for="message in organizerMessages"
+          v-for="message in authMessages"
           :key="message.key"
           class="message-item"
           hover-class="message-item-hover"
-          @tap.stop="goManageFromMessage(message)"
+          @tap.stop="handleMessageTap(message)"
         >
           <view class="message-item-content">
             <view class="message-copy">
               <view class="message-title-row">
                 <text class="message-title">{{ message.title }}</text>
-                <t-tag class="message-count" theme="warning" variant="light" size="small">
+                <t-tag
+                  v-if="message.kind === 'pending_signup'"
+                  class="message-count"
+                  theme="warning"
+                  variant="light"
+                  size="small"
+                >
                   {{ message.count }}待审
                 </t-tag>
+                <t-tag
+                  v-else
+                  class="message-count"
+                  :theme="message.tagTheme"
+                  variant="light"
+                  size="small"
+                >
+                  {{ message.typeTag }}
+                </t-tag>
+                <text
+                  v-if="message.kind === 'persistent' && message.unread"
+                  class="message-unread"
+                >未读</text>
               </view>
               <text class="message-subtitle">{{ message.subtitle }}</text>
             </view>
             <text class="message-action">{{ message.actionText }}</text>
           </view>
         </t-button>
+        <view v-if="notificationsHasMore || notificationsLoadMoreError" class="message-load-more">
+          <t-button
+            class="message-panel-tool"
+            :class="{ disabled: notificationsLoadingMore }"
+            :disabled="notificationsLoadingMore"
+            @tap.stop="loadMoreNotifications"
+          >
+            {{ notificationsLoadingMore ? "加载中..." : "加载更多" }}
+          </t-button>
+          <text v-if="notificationsLoadMoreError" class="message-load-more-error">
+            {{ notificationsLoadMoreError }}
+          </text>
+        </view>
       </block>
     </view>
 
@@ -265,7 +300,14 @@ import {
   userGenderLabel
 } from "../utils/api";
 import {
+  authMessageIdentityKey,
   buildOrganizerSignupMessages,
+  buildPersistentMessages,
+  mergePersistentMessagePages,
+  mergeAuthMessages,
+  restorePersistentUnread,
+  shouldApplyMessageRefresh,
+  totalMessageBadgeCount,
   totalOrganizerSignupMessageCount
 } from "../utils/authMessages";
 import { showToast } from "../utils/tdesignFeedback";
@@ -337,8 +379,18 @@ export default {
       avatarChoosing: false,
       avatarChooseTimer: null,
       organizerMessages: [],
+      persistentMessages: [],
+      persistentUnreadCount: 0,
+      notificationsNextCursor: null,
+      notificationsHasMore: false,
+      notificationsLoadingMore: false,
+      notificationsLoadMoreError: "",
+      notificationReadInFlight: [],
       messagesLoading: false,
-      messagesError: "",
+      sessionsMessagesError: "",
+      notificationsMessagesError: "",
+      messageRefreshGeneration: 0,
+      activeMessageIdentityKey: "",
       messagePanelVisible: false,
       phoneVisible: false,
       phoneRequired: false,
@@ -449,23 +501,41 @@ export default {
     organizerMessageCount() {
       return totalOrganizerSignupMessageCount(this.organizerMessages);
     },
+    authMessages() {
+      return mergeAuthMessages(this.organizerMessages, this.persistentMessages);
+    },
+    messageBadgeCount() {
+      return totalMessageBadgeCount(this.organizerMessages, this.persistentUnreadCount);
+    },
+    messageChipVisible() {
+      return Boolean(this.user) &&
+        (this.messagesLoading || this.authMessages.length > 0 || Boolean(this.messageLoadError));
+    },
+    messageLoadError() {
+      if (this.sessionsMessagesError && this.notificationsMessagesError) {
+        return "消息加载失败，请稍后重试。";
+      }
+      return this.sessionsMessagesError || this.notificationsMessagesError;
+    },
     messageBadgeText() {
-      if (!this.user || this.organizerMessageCount < 1) {
+      if (!this.user || this.messageBadgeCount < 1) {
         return "";
       }
-      return this.organizerMessageCount > 99 ? "99+" : String(this.organizerMessageCount);
+      return this.messageBadgeCount > 99 ? "99+" : String(this.messageBadgeCount);
     },
     messagePanelSummary() {
       if (this.messagesLoading) {
-        return "正在同步车头消息";
+        return "正在同步消息";
       }
-      if (this.messagesError) {
-        return "稍后可以再试一次";
+      if (this.sessionsMessagesError || this.notificationsMessagesError) {
+        return this.authMessages.length > 0
+          ? `${this.authMessages.length}条消息，部分消息同步失败，请刷新重试`
+          : "部分消息同步失败，请刷新重试";
       }
-      if (this.organizerMessageCount < 1) {
-        return "没有新的上车申请";
+      if (this.authMessages.length < 1) {
+        return "暂无消息";
       }
-      return `${this.organizerMessages.length}辆车，${this.organizerMessageCount}个待审核`;
+      return `${this.authMessages.length}条消息，${this.messageBadgeCount}条待处理或未读`;
     }
   },
   created() {
@@ -510,36 +580,170 @@ export default {
     },
     clearOrganizerMessages() {
       this.organizerMessages = [];
-      this.messagesError = "";
+      this.persistentMessages = [];
+      this.persistentUnreadCount = 0;
+      this.notificationsNextCursor = null;
+      this.notificationsHasMore = false;
+      this.notificationsLoadingMore = false;
+      this.notificationsLoadMoreError = "";
+      this.notificationReadInFlight = [];
+      this.sessionsMessagesError = "";
+      this.notificationsMessagesError = "";
+      this.messageRefreshGeneration += 1;
+      this.activeMessageIdentityKey = "";
       this.messagesLoading = false;
       this.messagePanelVisible = false;
     },
     async refreshOrganizerMessages() {
-      if (!this.user || !getToken()) {
+      const token = getToken();
+      const identityKey = authMessageIdentityKey(this.user?.id, token);
+      if (!this.user || !identityKey) {
         this.clearOrganizerMessages();
         return;
       }
-      if (this.messagesLoading) {
-        return;
+      const generation = this.messageRefreshGeneration + 1;
+      this.messageRefreshGeneration = generation;
+      this.notificationsLoadingMore = false;
+      const requestContext = { generation, identityKey };
+      if (this.activeMessageIdentityKey !== identityKey) {
+        this.organizerMessages = [];
+        this.persistentMessages = [];
+        this.persistentUnreadCount = 0;
+        this.notificationsNextCursor = null;
+        this.notificationsHasMore = false;
+        this.notificationsLoadingMore = false;
+        this.notificationsLoadMoreError = "";
+        this.notificationReadInFlight = [];
+        this.sessionsMessagesError = "";
+        this.notificationsMessagesError = "";
+        this.activeMessageIdentityKey = identityKey;
       }
 
       this.messagesLoading = true;
-      this.messagesError = "";
       try {
-        const response = await request({ url: "/api/users/me/sessions?limit=50" });
-        this.organizerMessages = buildOrganizerSignupMessages(dataOf(response) || []);
-        if (this.organizerMessages.length === 0) {
-          this.messagePanelVisible = false;
+        const [sessionsResult, notificationsResult] = await Promise.allSettled([
+          request({ url: "/api/users/me/sessions?limit=50" }),
+          request({ url: "/api/users/me/notifications" })
+        ]);
+        const authError = [sessionsResult, notificationsResult].find(
+          (result) => result.status === "rejected" && result.reason?.statusCode === 401
+        );
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (!shouldApplyMessageRefresh(requestContext, currentContext)) {
+          return;
+        }
+        if (authError) {
+          clearAuth();
+          this.refreshIdentity();
+          return;
+        }
+        if (sessionsResult.status === "fulfilled") {
+          this.organizerMessages = buildOrganizerSignupMessages(dataOf(sessionsResult.value) || []);
+          this.sessionsMessagesError = "";
+        } else {
+          this.organizerMessages = [];
+          this.sessionsMessagesError = "待审核申请同步失败。";
+        }
+        if (notificationsResult.status === "fulfilled") {
+          const inbox = dataOf(notificationsResult.value) || {};
+          this.persistentMessages = buildPersistentMessages(inbox.items || []);
+          this.persistentUnreadCount = Math.max(0, Number(inbox.unread_count) || 0);
+          this.notificationsNextCursor = inbox.next_cursor || null;
+          this.notificationsHasMore = Boolean(inbox.has_more && this.notificationsNextCursor);
+          this.notificationsLoadMoreError = "";
+          this.notificationsMessagesError = "";
+        } else {
+          this.persistentMessages = [];
+          this.persistentUnreadCount = 0;
+          this.notificationsNextCursor = null;
+          this.notificationsHasMore = false;
+          this.notificationsMessagesError = "通知消息同步失败。";
         }
       } catch (error) {
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (!shouldApplyMessageRefresh(requestContext, currentContext)) {
+          return;
+        }
         if (error?.statusCode === 401) {
           clearAuth();
           this.refreshIdentity();
           return;
         }
-        this.messagesError = "消息加载失败，请稍后重试。";
+        this.organizerMessages = [];
+        this.persistentMessages = [];
+        this.persistentUnreadCount = 0;
+        this.notificationsNextCursor = null;
+        this.notificationsHasMore = false;
+        this.sessionsMessagesError = "待审核申请同步失败。";
+        this.notificationsMessagesError = "通知消息同步失败。";
       } finally {
-        this.messagesLoading = false;
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (shouldApplyMessageRefresh(requestContext, currentContext)) {
+          this.messagesLoading = false;
+        }
+      }
+    },
+    async loadMoreNotifications() {
+      const cursor = this.notificationsNextCursor;
+      const requestContext = {
+        generation: this.messageRefreshGeneration,
+        identityKey: authMessageIdentityKey(this.user?.id, getToken())
+      };
+      if (!cursor || !this.notificationsHasMore || this.notificationsLoadingMore) {
+        return;
+      }
+      this.notificationsLoadingMore = true;
+      this.notificationsLoadMoreError = "";
+      try {
+        const response = await request({
+          url: `/api/users/me/notifications?cursor=${encodeURIComponent(cursor)}`
+        });
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (!shouldApplyMessageRefresh(requestContext, currentContext)) {
+          return;
+        }
+        const inbox = dataOf(response) || {};
+        this.persistentMessages = mergePersistentMessagePages(
+          this.persistentMessages,
+          buildPersistentMessages(inbox.items || [])
+        );
+        this.persistentUnreadCount = Math.max(0, Number(inbox.unread_count) || 0);
+        this.notificationsNextCursor = inbox.next_cursor || null;
+        this.notificationsHasMore = Boolean(inbox.has_more && this.notificationsNextCursor);
+      } catch (error) {
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (!shouldApplyMessageRefresh(requestContext, currentContext)) {
+          return;
+        }
+        if (error?.statusCode === 401) {
+          clearAuth();
+          this.refreshIdentity();
+          return;
+        }
+        this.notificationsLoadMoreError = "更多通知加载失败，请重试。";
+      } finally {
+        const currentContext = {
+          generation: this.messageRefreshGeneration,
+          identityKey: authMessageIdentityKey(this.user?.id, getToken())
+        };
+        if (shouldApplyMessageRefresh(requestContext, currentContext)) {
+          this.notificationsLoadingMore = false;
+        }
       }
     },
     toggleMessagePanel() {
@@ -557,6 +761,62 @@ export default {
       }
       this.messagePanelVisible = false;
       uni.navigateTo({ url: `/pages/session/manage?id=${message.sessionId}` });
+    },
+    handleMessageTap(message) {
+      if (message?.kind === "pending_signup") {
+        this.goManageFromMessage(message);
+        return;
+      }
+      if (!message?.targetUrl) {
+        return;
+      }
+      const notificationId = message.notificationId;
+      if (notificationId && this.notificationReadInFlight.includes(notificationId)) {
+        return;
+      }
+      if (notificationId) {
+        const identityKey = this.activeMessageIdentityKey;
+        const wasUnread = Boolean(message.unread);
+        this.notificationReadInFlight = [...this.notificationReadInFlight, notificationId];
+        if (wasUnread) {
+          this.persistentMessages = this.persistentMessages.map((item) =>
+            item.notificationId === notificationId ? { ...item, unread: false } : item
+          );
+          this.persistentUnreadCount = Math.max(0, this.persistentUnreadCount - 1);
+        }
+        request({
+          url: `/api/users/me/notifications/${notificationId}/read`,
+          method: "POST"
+        })
+          .catch((error) => {
+            if (identityKey !== this.activeMessageIdentityKey) {
+              return;
+            }
+            if (error?.statusCode === 401) {
+              clearAuth();
+              this.refreshIdentity();
+              return;
+            }
+            if (wasUnread) {
+              const restored = restorePersistentUnread(
+                this.persistentMessages,
+                this.persistentUnreadCount,
+                notificationId
+              );
+              this.persistentMessages = restored.messages;
+              this.persistentUnreadCount = restored.unreadCount;
+            }
+          })
+          .finally(() => {
+            if (identityKey === this.activeMessageIdentityKey) {
+              this.notificationReadInFlight = this.notificationReadInFlight.filter(
+                (id) => id !== notificationId
+              );
+            }
+          });
+      }
+      this.messagePanelVisible = false;
+      uni.navigateTo({ url: message.targetUrl });
     },
     clearAvatarChoosing() {
       this.avatarChoosing = false;
@@ -1154,6 +1414,18 @@ export default {
   color: #a4473d;
 }
 
+.message-load-more {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding-top: 16rpx;
+}
+
+.message-load-more-error {
+  color: #b42318;
+  font-size: 22rpx;
+}
+
 .message-item {
   display: flex;
   align-items: center;
@@ -1205,6 +1477,14 @@ export default {
   flex: 0 0 auto;
   color: #c94d3f;
   font-size: 21rpx;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.message-unread {
+  flex: 0 0 auto;
+  color: #c94d3f;
+  font-size: 20rpx;
   font-weight: 700;
   line-height: 1.3;
 }
