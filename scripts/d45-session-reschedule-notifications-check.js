@@ -43,6 +43,10 @@ const rescheduleHelper = readFileSync(
   new URL("../apps/miniprogram/src/utils/sessionReschedule.js", import.meta.url),
   "utf8"
 );
+const sharedBeijingTime = readFileSync(
+  new URL("../packages/shared/src/beijingTime.js", import.meta.url),
+  "utf8"
+);
 const miniSubscribeHelper = readFileSync(
   new URL("../apps/miniprogram/src/utils/subscribeMessages.js", import.meta.url),
   "utf8"
@@ -147,7 +151,9 @@ assertIncludes(rescheduleHelper, "export function rescheduleErrorRequiresRefresh
 assertIncludes(rescheduleHelper, "export function rescheduleConfirmationRequired");
 assertIncludes(rescheduleHelper, "export function rescheduleErrorText");
 assertIncludes(rescheduleHelper, 'error?.message || ""');
-assertIncludes(rescheduleHelper, 'timeZone: "Asia/Shanghai"');
+assertIncludes(rescheduleHelper, "formatBeijingDateTime");
+assertIncludes(rescheduleHelper, "parseBusinessDateTime");
+assertIncludes(sharedBeijingTime, 'BEIJING_TIME_ZONE = "Asia/Shanghai"');
 assertIncludes(managePage, 'v-if="canReschedule"');
 assertIncludes(managePage, '<t-date-time-picker');
 assertIncludes(managePage, ':mode="[\'date\', \'minute\']"');

@@ -28,6 +28,7 @@ test("parseSessionStartAt rejects invalid or empty values", () => {
 
 test("formatSessionStartAt displays Asia/Shanghai local minute precision", () => {
   assert.equal(formatSessionStartAt("2026-07-12T02:30:45Z"), "2026-07-12 10:30");
+  assert.equal(formatSessionStartAt("2026-07-18T05:00:00Z"), "2026-07-18 13:00");
   assert.equal(formatSessionStartAt("invalid"), "时间待定");
 });
 

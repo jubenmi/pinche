@@ -239,6 +239,12 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
+import {
+  beijingDateKey,
+  beijingDateParts,
+  beijingTimeText,
+  parseBusinessDateTime
+} from "@pinche/shared";
 import { dataOf, request } from "../utils/api";
 import {
   discoveryRequestBody,
@@ -883,7 +889,7 @@ function createDiscoveryCalendarItems(rows = [], itemType = "city") {
   return (rows || [])
     .map((session) => {
       const sessionId = session?.id;
-      const startDate = parseStartAt(session?.start_at);
+      const startDate = parseBusinessDateTime(session?.start_at);
       if (!sessionId || !startDate) {
         return null;
       }
@@ -992,7 +998,7 @@ function createCalendarItem({ session = null, signup = null }) {
 
 function refreshCalendarItem(item) {
   const source = item.session || item.signup || {};
-  const startDate = parseStartAt(source.start_at);
+  const startDate = parseBusinessDateTime(source.start_at);
   item.isAuthorPrivate = isAuthorPrivateText(item.session?.author_private);
   item.sessionId = item.session?.id || item.signup?.session_id || "";
   item.key = item.isAuthorPrivate
@@ -1108,7 +1114,7 @@ function isCalendarItemPostStart(item) {
 }
 
 function isStartedAt(startAt) {
-  const startDate = parseStartAt(startAt);
+  const startDate = parseBusinessDateTime(startAt);
   return Boolean(startDate && startDate.getTime() <= Date.now());
 }
 
@@ -1144,6 +1150,7 @@ function groupItemsByDay(items) {
 function createDayBand(date, items) {
   const offset = dayOffset(date);
   const key = dateKey(date);
+  const parts = beijingDateParts(date);
   return {
     kind: "day",
     key,
@@ -1151,8 +1158,8 @@ function createDayBand(date, items) {
     dateKey: key,
     relativeLabel: relativeDayLabel(offset),
     markerText: markerText(offset),
-    dateLabel: `${date.getMonth() + 1}/${date.getDate()}`,
-    weekday: WEEKDAYS[date.getDay()],
+    dateLabel: parts ? `${parts.month}/${parts.day}` : "",
+    weekday: parts ? WEEKDAYS[parts.weekday] : "",
     isToday: offset === 0,
     items
   };
@@ -1242,41 +1249,12 @@ function targetElementIdForDate(key) {
   return nearestBand?.elementId || dayBands[dayBands.length - 1]?.elementId || "";
 }
 
-function parseStartAt(value) {
-  if (!value) {
-    return null;
-  }
-  if (value instanceof Date) {
-    return value;
-  }
-  const raw = String(value);
-  const localMatch = raw.match(
-    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/
-  );
-  if (localMatch) {
-    return new Date(
-      Number(localMatch[1]),
-      Number(localMatch[2]) - 1,
-      Number(localMatch[3]),
-      Number(localMatch[4] || 0),
-      Number(localMatch[5] || 0),
-      Number(localMatch[6] || 0)
-    );
-  }
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 function todayStart() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return dateFromKey(beijingDateKey(new Date()));
 }
 
 function startOfDay(date) {
-  const next = new Date(date);
-  next.setHours(0, 0, 0, 0);
-  return next;
+  return dateFromKey(beijingDateKey(date));
 }
 
 function addDays(date, amount) {
@@ -1284,12 +1262,11 @@ function addDays(date, amount) {
 }
 
 function dateKey(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return beijingDateKey(date);
 }
 
 function dateFromKey(key) {
-  const [year, month, day] = key.split("-").map(Number);
-  return new Date(year, month - 1, day);
+  return parseBusinessDateTime(`${key} 00:00:00`);
 }
 
 function dayOffset(date, baseDate = todayStart()) {
@@ -1297,7 +1274,7 @@ function dayOffset(date, baseDate = todayStart()) {
 }
 
 function timeText(date) {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return beijingTimeText(date);
 }
 
 function relativeDayLabel(offset) {
