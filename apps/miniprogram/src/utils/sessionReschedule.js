@@ -1,60 +1,19 @@
-const SHANGHAI_OFFSET = "+08:00";
-const DATABASE_DATE_TIME = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+import {
+  beijingWallTimeToIso,
+  formatBeijingDateTime,
+  parseBusinessDateTime
+} from "@pinche/shared";
 
 function wholeSeconds(value) {
   return Math.floor(value.getTime() / 1000);
 }
 
 export function parseSessionStartAt(value) {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : new Date(value.getTime());
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-  const text = value.trim();
-  const databaseMatch = text.match(DATABASE_DATE_TIME);
-  if (databaseMatch) {
-    const [year, month, day] = databaseMatch[1].split("-").map(Number);
-    const [hour, minute] = databaseMatch[2].split(":").map(Number);
-    const second = Number(databaseMatch[3] || 0);
-    const calendar = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-    if (
-      calendar.getUTCFullYear() !== year ||
-      calendar.getUTCMonth() !== month - 1 ||
-      calendar.getUTCDate() !== day ||
-      calendar.getUTCHours() !== hour ||
-      calendar.getUTCMinutes() !== minute ||
-      calendar.getUTCSeconds() !== second
-    ) {
-      return null;
-    }
-  }
-  const normalized = databaseMatch
-    ? `${databaseMatch[1]}T${databaseMatch[2]}:${databaseMatch[3] || "00"}${
-        databaseMatch[4] ? `.${databaseMatch[4].padEnd(3, "0")}` : ""
-      }${SHANGHAI_OFFSET}`
-    : text;
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? null : date;
+  return parseBusinessDateTime(value);
 }
 
 export function formatSessionStartAt(value) {
-  const date = parseSessionStartAt(value);
-  if (!date) {
-    return "时间待定";
-  }
-  const parts = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(date);
-  const part = (type) => parts.find((item) => item.type === type)?.value || "";
-  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
+  return formatBeijingDateTime(value);
 }
 
 export function canRescheduleSession(startAt, now = new Date()) {
@@ -79,7 +38,10 @@ export function validateRescheduleSelection(selectedStartAt, currentStartAt, now
   }
   return {
     valid: true,
-    startAt: new Date(selectedSeconds * 1000).toISOString()
+    startAt:
+      typeof selectedStartAt === "string" && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(selectedStartAt)
+        ? beijingWallTimeToIso(selectedStartAt)
+        : new Date(selectedSeconds * 1000).toISOString()
   };
 }
 

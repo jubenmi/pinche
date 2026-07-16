@@ -102,7 +102,7 @@ git commit -m "feat: add shared Beijing time contract"
 - Modify: `apps/miniprogram/test/sessionReschedule.test.mjs`
 - Create: `scripts/d47-beijing-time-check.js`
 
-- [ ] **Step 1: Add failing mini-program regression assertions**
+- [x] **Step 1: Add failing mini-program regression assertions**
 
 Extend `sessionReschedule.test.mjs` so `formatSessionStartAt("2026-07-18T05:00:00Z")` equals `2026-07-18 13:00`, and create `d47-beijing-time-check.js` to assert:
 
@@ -114,13 +114,13 @@ assert.match(detailSource, /formatBeijingDateTime/);
 assert.match(shareSource, /formatBeijingDateTime/);
 ```
 
-- [ ] **Step 2: Run the check and verify RED**
+- [x] **Step 2: Run the check and verify RED**
 
 Run: `node scripts/d47-beijing-time-check.js`
 
 Expected: FAIL because `SessionCalendar.vue` still has `parseStartAt()` and device-local getters.
 
-- [ ] **Step 3: Integrate the shared functions**
+- [x] **Step 3: Integrate the shared functions**
 
 In `sessionReschedule.js`, replace its private parser/formatter with imports from `@pinche/shared`, while preserving public function names:
 
@@ -139,7 +139,7 @@ In `SessionCalendar.vue`, import `parseBusinessDateTime`, `beijingDateKey`, and 
 
 In detail/share pages, replace raw interpolation and `.slice(0, 16)` with `formatBeijingDateTime()`.
 
-- [ ] **Step 4: Run mini-program tests and build**
+- [x] **Step 4: Run mini-program tests and build**
 
 Run: `node --test apps/miniprogram/test/sessionReschedule.test.mjs apps/miniprogram/test/authMessages.test.mjs`
 
@@ -153,7 +153,7 @@ Run: `npm run build:mp-weixin`
 
 Expected: build exits 0.
 
-- [ ] **Step 5: Commit mini-program integration**
+- [x] **Step 5: Commit mini-program integration**
 
 ```bash
 git add apps/miniprogram/src/utils/sessionReschedule.js apps/miniprogram/src/components/SessionCalendar.vue apps/miniprogram/src/pages/session/detail.vue apps/miniprogram/src/pages/session/share.vue apps/miniprogram/test/sessionReschedule.test.mjs scripts/d47-beijing-time-check.js
