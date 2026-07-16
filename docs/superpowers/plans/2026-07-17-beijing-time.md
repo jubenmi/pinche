@@ -260,15 +260,21 @@ git commit -m "fix: make API database timezone explicit"
 - Modify: `package.json`
 - Modify: `docs/superpowers/plans/2026-07-17-beijing-time.md`
 
-- [ ] **Step 1: Add the time checks to the root check command**
+- [x] **Step 1: Add the time checks to the root check command**
 
 Add `npm --workspace packages/shared run test:time` and `node scripts/d47-beijing-time-check.js` near the start of the root `check` script.
 
-- [ ] **Step 2: Run the complete automated verification**
+- [x] **Step 2: Run the complete automated verification**
 
 Run: `TZ=America/New_York npm run check`
 
 Expected: exit 0 with no failed tests or checks.
+
+Result: the Beijing-time tests, reschedule tests, source contracts, API syntax check,
+and both production builds pass. The complete root check reaches the existing
+`d32-admin-album-video-check.js` and fails there; the same failure reproduces on
+the untouched `develop` worktree, so it is recorded as a pre-existing video-check
+failure outside this timezone change.
 
 - [ ] **Step 3: Refresh WeChat Developer Tools**
 
@@ -276,7 +282,11 @@ Run: `node scripts/devtools-refresh-hook.js`
 
 Open the mini-program calendar and the “野菩萨” management page. Verify both show `2026-07-18 13:00`, and the calendar card shows `13:00`, never `05:00`.
 
-- [ ] **Step 4: Check the final diff and preserve unrelated files**
+Result: the corrected development build is running in WeChat Developer Tools. The
+Mac became locked before the final visual assertion, so this checkbox remains open;
+the exact `05:00:00Z -> 13:00` regression is covered by the passing automated test.
+
+- [x] **Step 4: Check the final diff and preserve unrelated files**
 
 Run: `git status --short` and `git diff --check`.
 
