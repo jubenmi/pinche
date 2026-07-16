@@ -276,15 +276,16 @@ and both production builds pass. The complete root check reaches the existing
 the untouched `develop` worktree, so it is recorded as a pre-existing video-check
 failure outside this timezone change.
 
-- [ ] **Step 3: Refresh WeChat Developer Tools**
+- [x] **Step 3: Refresh WeChat Developer Tools**
 
 Run: `node scripts/devtools-refresh-hook.js`
 
 Open the mini-program calendar and the “野菩萨” management page. Verify both show `2026-07-18 13:00`, and the calendar card shows `13:00`, never `05:00`.
 
-Result: the corrected development build is running in WeChat Developer Tools. The
-Mac became locked before the final visual assertion, so this checkbox remains open;
-the exact `05:00:00Z -> 13:00` regression is covered by the passing automated test.
+Result: the corrected development build is running in WeChat Developer Tools from
+the `codex/beijing-time` worktree. The calendar card shows `明天 7/18 周六` and
+`13:00`; the “野菩萨” management page shows `2026-07-18 13:00` in both the overview
+and time field. The former `05:00` mismatch is no longer present.
 
 - [x] **Step 4: Check the final diff and preserve unrelated files**
 
