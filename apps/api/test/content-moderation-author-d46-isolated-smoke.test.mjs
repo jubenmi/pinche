@@ -64,6 +64,7 @@ function isolatedEnv(overrides = {}) {
     WECHAT_SUBSCRIBE_MESSAGE_ENABLED: "false",
     WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_CREATED: "",
     WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED: "",
+    WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID: "",
     ...overrides
   };
 }
@@ -176,7 +177,8 @@ test("D46 isolated smoke environment rejects every production-adjacent prerequis
     ["GAODE_MAP_KEY", ""],
     ["WECHAT_SUBSCRIBE_MESSAGE_ENABLED", "false"],
     ["WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_CREATED", ""],
-    ["WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED", ""]
+    ["WECHAT_SUBSCRIBE_TEMPLATE_SIGNUP_REVIEWED", ""],
+    ["WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID", ""]
   ]) {
     const unsafeValue = expectedValue === "" ? "production-value" : "true";
     assert.throws(
