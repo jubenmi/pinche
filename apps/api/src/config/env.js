@@ -5,12 +5,21 @@ import { fileURLToPath } from "node:url";
 
 import { MODERATION_RETRY_LEASE_MIN_MS } from "../modules/content-moderation/constants.js";
 import { AUTHOR_PRIVATE_TEXT_ACTIONS } from "../modules/content-moderation/author-dto.js";
+import { assertD46IsolatedSmokeEnvironment } from "../modules/content-moderation/d46-isolated-smoke.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../../..");
 
+export function shouldLoadDotEnv(env = process.env) {
+  return String(env?.D46_SMOKE_ISOLATED || "").trim() !== "1";
+}
+
 function loadDotEnv() {
+  if (!shouldLoadDotEnv(process.env)) {
+    return;
+  }
+
   const envPath = path.join(repoRoot, ".env");
 
   if (!fs.existsSync(envPath)) {
@@ -46,6 +55,10 @@ function loadDotEnv() {
 }
 
 loadDotEnv();
+
+if (String(process.env.D46_SMOKE_ISOLATED || "").trim() === "1") {
+  assertD46IsolatedSmokeEnvironment(process.env);
+}
 
 function booleanEnv(name, fallback) {
   const raw = process.env[name];

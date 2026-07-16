@@ -34,7 +34,10 @@ function cleanupHarness(items) {
   const state = { expired: 0, cleaned: [], failed: [], completedMedia: [] };
   const repository = {
     expireOverdueAlbumImageIntents: async () => { state.expired += 1; },
-    claimAllCleanup: async () => items,
+    claimAllCleanup: async (_connection, input) => {
+      state.claimInput = input;
+      return items;
+    },
     completeIntentCleanup: async (_c, input) => state.cleaned.push(input),
     failIntentCleanup: async (_c, input) => state.failed.push(input),
     completeMediaCleanup: async (_c, input) => state.completedMedia.push(input),
@@ -42,6 +45,82 @@ function cleanupHarness(items) {
   };
   return { state, repository };
 }
+
+test("fixture-scoped cleanup skips global expiry and claims only explicit media cleanup jobs", async () => {
+  const harness = cleanupHarness([{
+    type: "media",
+    row: {
+      id: 7,
+      media_id: 91,
+      storage_kind: "local",
+      local_path: "/uploads/session-album/display/d46-fixture.jpg"
+    }
+  }]);
+  await runAlbumImageCleanupBatch({
+    repository: harness.repository,
+    storage: {},
+    unlinkFile: async () => {},
+    withTransaction: async (run) => run({}),
+    now: () => 1000,
+    randomUUID: () => "lease",
+    mediaCleanupJobIds: [7]
+  });
+  assert.equal(harness.state.expired, 0);
+  assert.deepEqual(harness.state.claimInput.mediaCleanupJobIds, [7]);
+  assert.equal(harness.state.completedMedia.length, 1);
+});
+
+test("fixture-scoped cleanup rejects an empty or invalid job scope before any global work", async () => {
+  for (const mediaCleanupJobIds of [[], [0], ["not-a-job"]]) {
+    const harness = cleanupHarness([]);
+    await assert.rejects(
+      runAlbumImageCleanupBatch({
+        repository: harness.repository,
+        storage: {},
+        withTransaction: async (run) => run({}),
+        mediaCleanupJobIds
+      }),
+      /media cleanup job ids/
+    );
+    assert.equal(harness.state.expired, 0);
+    assert.equal(harness.state.claimInput, undefined);
+  }
+});
+
+test("scoped media cleanup SQL never falls back to an unbounded job scan", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, values) {
+      calls.push({ sql: String(sql), values });
+      if (/^\s*SELECT/.test(sql)) return [[{ id: 7 }]];
+      return [{ affectedRows: 1 }];
+    }
+  };
+  await claimAlbumObjectCleanupJobs(connection, {
+    leaseToken: "lease",
+    now: new Date(0),
+    leaseExpiresAt: new Date(60_000),
+    limit: 10,
+    mediaCleanupJobIds: [7, 9]
+  });
+  assert.match(calls[0].sql, /id IN \(\?, \?\)/);
+  assert.deepEqual(calls[0].values.slice(2, 4), [7, 9]);
+
+  const invalidCalls = [];
+  await claimAlbumObjectCleanupJobs({
+    async query(sql, values) {
+      invalidCalls.push({ sql: String(sql), values });
+      return [[], []];
+    }
+  }, {
+    leaseToken: "lease",
+    now: new Date(0),
+    leaseExpiresAt: new Date(60_000),
+    limit: 10,
+    mediaCleanupJobIds: [7, 0]
+  });
+  assert.deepEqual(invalidCalls, []);
+});
 
 test("local cleanup accepts only owned image and video source/display/cover paths", () => {
   for (const localPath of [

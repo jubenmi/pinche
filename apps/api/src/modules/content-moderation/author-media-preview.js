@@ -57,17 +57,29 @@ function previewRecord(media, options = {}) {
   if (mediaType === "image") {
     const imageObjectKey = String(media?.object_key || "");
     const objectEtag = String(media?.object_etag || "");
-    if (
-      !controlledImageKey(imageObjectKey) ||
-      String(media?.photo_url || "") !== `/${imageObjectKey}` ||
-      !objectEtag || objectEtag !== objectVersion
-    ) return null;
+    const photoUrl = String(media?.photo_url || "");
+    const localImageObjectKey = photoUrl.replace(/^\//, "");
+    const imageByteSize = positiveInteger(media?.image_byte_size);
+    const cosObjectMatches =
+      controlledImageKey(imageObjectKey) &&
+      photoUrl === `/${imageObjectKey}` &&
+      Boolean(objectEtag) &&
+      objectEtag === objectVersion;
+    const localObjectMatches =
+      options.allowLocalD46Preview === true &&
+      !imageObjectKey &&
+      !objectEtag &&
+      imageByteSize !== null &&
+      controlledImageKey(localImageObjectKey) &&
+      photoUrl === `/${localImageObjectKey}` &&
+      objectVersion === `local:${photoUrl}:${imageByteSize}`;
+    if (!cosObjectMatches && !localObjectMatches) return null;
     return Object.freeze({
       mediaId,
       userId,
       mediaType,
-      imageObjectKey,
-      previewPath: `/${imageObjectKey}`,
+      imageObjectKey: cosObjectMatches ? imageObjectKey : localImageObjectKey,
+      previewPath: photoUrl,
       objectVersion
     });
   }
@@ -229,14 +241,15 @@ export function validateAuthorImageCapabilityClaims(media, claims, options = {})
     !Number.isSafeInteger(Number(claims.exp)) ||
     Number(claims.exp) - Number(claims.iat) < 1 ||
     Number(claims.exp) - Number(claims.iat) > ttlSeconds ||
-    nowSeconds < Number(claims.iat) || nowSeconds > Number(claims.exp) ||
+    nowSeconds < Number(claims.iat) || nowSeconds >= Number(claims.exp) ||
     String(claims.mediaType || "") !== "image" ||
     Number(claims.mediaId) !== Number(media?.id)
   ) return null;
   const record = previewRecord(media, {
     viewerUserId: claims.userId,
     imageEnabled: true,
-    videoEnabled: false
+    videoEnabled: false,
+    allowLocalD46Preview: options.allowLocalD46Preview === true
   });
   if (!record || typeof options.fingerprint !== "function") return null;
   const expected = String(options.fingerprint(record) || "");

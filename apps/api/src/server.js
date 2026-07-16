@@ -182,6 +182,13 @@ import {
   validateAuthorImageCapabilityClaims
 } from "./modules/content-moderation/author-media-preview.js";
 import {
+  buildD46AuthorVideoCapabilityClaims,
+  buildD46IsolatedSmokeImageUrl,
+  createD46IsolatedSmokeModerationClient,
+  d46IsolatedSmokeRuntime,
+  validateD46AuthorVideoCapabilityClaims
+} from "./modules/content-moderation/d46-isolated-smoke.js";
+import {
   TENCENT_VIDEO_CALLBACK_MAX_BYTES,
   authenticateTencentCallback,
   parseTencentCallbackPayload,
@@ -325,22 +332,27 @@ const avatarMimeTypes = {
   "image/png": ".png"
 };
 
-const moderationTransport = createTencentVideoModerationTransport({
-  config: config.contentModeration
-});
-const tencentVideoModerationClient = createTencentVideoModerationClient({
-  config: config.contentModeration,
-  transport: moderationTransport
-});
-const wechatContentSecurityClient = (
-  config.contentModeration.wechatTextEnabled || config.contentModeration.wechatImageEnabled
-)
-  ? createWechatContentSecurityClient({ emit: emitContentModerationEvent })
-  : {};
-const moderationClient = {
-  ...tencentVideoModerationClient,
-  ...wechatContentSecurityClient
-};
+const d46IsolatedSmokeRuntimeEnabled = d46IsolatedSmokeRuntime(config, process.env);
+const moderationClient = d46IsolatedSmokeRuntimeEnabled
+  ? createD46IsolatedSmokeModerationClient(d46IsolatedSmokeRuntimeEnabled)
+  : (() => {
+      const moderationTransport = createTencentVideoModerationTransport({
+        config: config.contentModeration
+      });
+      const tencentVideoModerationClient = createTencentVideoModerationClient({
+        config: config.contentModeration,
+        transport: moderationTransport
+      });
+      const wechatContentSecurityClient = (
+        config.contentModeration.wechatTextEnabled || config.contentModeration.wechatImageEnabled
+      )
+        ? createWechatContentSecurityClient({ emit: emitContentModerationEvent })
+        : {};
+      return {
+        ...tencentVideoModerationClient,
+        ...wechatContentSecurityClient
+      };
+    })();
 const wechatImageModerationEnabled = Boolean(
   config.contentModeration.enabled && config.contentModeration.wechatImageEnabled
 );
@@ -426,7 +438,8 @@ function authorPrivateMediaOptions() {
     authorPrivateImageEnabled:
       config.contentModeration.authorPrivateImageEnabled === true,
     authorPrivateVideoEnabled:
-      config.contentModeration.authorPrivateVideoEnabled === true
+      config.contentModeration.authorPrivateVideoEnabled === true,
+    allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true
   };
 }
 
@@ -1069,6 +1082,9 @@ export const contentModeration = createContentModerationService({
       return users[0]?.open_id || "";
     }),
   buildWechatImageUrl: ({ objectKey }) => {
+    if (d46IsolatedSmokeRuntimeEnabled) {
+      return buildD46IsolatedSmokeImageUrl(objectKey);
+    }
     if (!cosStorageEnabled(config.cos)) {
       throw new AppError(
         503,
@@ -3551,14 +3567,61 @@ async function route(request, response) {
       authorAlbumImagePreviewId,
       {
         enabled: config.contentModeration.authorPrivateImageEnabled === true,
+        allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true,
         consume: async (media) => {
           const record = validateAuthorImageCapabilityClaims(media, claims, {
             nowSeconds: Math.floor(Date.now() / 1000),
             ttlSeconds: authorPreviewTtlSeconds(),
-            fingerprint: authorMediaPreviewFingerprint
+            fingerprint: authorMediaPreviewFingerprint,
+            allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true
           });
           if (!record) throw notFound("Album photo not found");
           await serveUploadedSessionAlbumPhoto(media, response, { variant: claims.variant });
+        }
+      }
+    );
+    return;
+  }
+
+  const d46AuthorAlbumVideoPreviewId = idMatch(
+    url.pathname,
+    /^\/api\/testing\/d46-smoke\/author-media\/videos\/(\d+)\/preview$/
+  );
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    d46AuthorAlbumVideoPreviewId
+  ) {
+    if (!d46IsolatedSmokeRuntimeEnabled || isCosUploadStorageEnabled()) {
+      throw notFound("Album video not found");
+    }
+    const claims = verifySignedPayload(
+      "d46-author-video-preview",
+      url.searchParams.get("token") || "",
+      "D46 author video preview token"
+    );
+    const userId = tokenPositiveInteger(claims.userId, "userId");
+    await getAuthorAlbumVideoPreview(
+      { user: { id: userId }, roles: [] },
+      d46AuthorAlbumVideoPreviewId,
+      {
+        enabled: config.contentModeration.authorPrivateVideoEnabled === true,
+        allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true,
+        consume: async (media, record) => {
+          const capability = validateD46AuthorVideoCapabilityClaims(record, claims, {
+            nowSeconds: Math.floor(Date.now() / 1000),
+            ttlSeconds: authorPreviewTtlSeconds(),
+            fingerprint: authorMediaPreviewFingerprint
+          });
+          if (!capability) throw notFound("Album video not found");
+          await serveUploadedSessionAlbumVideoFile(
+            { ...media, display_url: capability.previewPath, source_url: capability.previewPath },
+            response,
+            {
+              method: request.method,
+              range: request.headers.range,
+              cosEnabled: false
+            }
+          );
         }
       }
     );
@@ -3687,20 +3750,38 @@ async function route(request, response) {
       );
     } catch (error) {
       if (error?.contentModerationDenied !== true) throw error;
-      if (!isCosUploadStorageEnabled()) throw notFound("Album video not found");
       const expiresInSeconds = authorPreviewTtlSeconds();
+      if (!isCosUploadStorageEnabled() && !d46IsolatedSmokeRuntimeEnabled) {
+        throw notFound("Album video not found");
+      }
       const data = await getAuthorAlbumVideoPreview(user, sessionAlbumMediaVideoUrlId, {
         enabled: config.contentModeration.authorPrivateVideoEnabled === true,
-        consume: async (_media, record) => ({
-          url: signedCosAlbumVideoUrl(
-            { display_url: record.previewPath, source_url: record.previewPath },
-            "GET",
+        allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true,
+        consume: async (_media, record) => {
+          if (d46IsolatedSmokeRuntimeEnabled && !isCosUploadStorageEnabled()) {
+            const claims = buildD46AuthorVideoCapabilityClaims(record, {
+              nowSeconds: Math.floor(Date.now() / 1000),
+              ttlSeconds: expiresInSeconds,
+              fingerprint: authorMediaPreviewFingerprint
+            });
+            const token = signSignedPayload("d46-author-video-preview", claims);
+            return {
+              url: `/api/testing/d46-smoke/author-media/videos/${record.mediaId}/preview?token=${encodeURIComponent(token)}`,
+              expiresInSeconds,
+              publication_state: "author_only"
+            };
+          }
+          return {
+            url: signedCosAlbumVideoUrl(
+              { display_url: record.previewPath, source_url: record.previewPath },
+              "GET",
+              expiresInSeconds,
+              [{ name: "response-cache-control", value: AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL }]
+            ),
             expiresInSeconds,
-            [{ name: "response-cache-control", value: AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL }]
-          ),
-          expiresInSeconds,
-          publication_state: "author_only"
-        })
+            publication_state: "author_only"
+          };
+        }
       });
       jsonResponse(response, 200, { ok: true, data }, {
         "cache-control": AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL
@@ -4156,6 +4237,25 @@ async function route(request, response) {
         mode: "d40",
         isolated: true,
         database: config.mysql.database
+      }
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/testing/d46-smoke-target") {
+    if (!d46IsolatedSmokeRuntimeEnabled) {
+      throw new AppError(
+        409,
+        "SMOKE_DATABASE_NOT_ISOLATED",
+        "D46 smoke requires the dedicated local pinche_d46_test database"
+      );
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        mode: "d46",
+        isolated: true,
+        database: "pinche_d46_test"
       }
     });
     return;
@@ -5137,7 +5237,8 @@ async function route(request, response) {
         contentModeration.createVideoJob(connection, input),
       submitVideoModeration: (job) => contentModeration.submitVideoJob(job),
       authorPrivateVideoEnabled:
-        config.contentModeration.authorPrivateVideoEnabled === true
+        config.contentModeration.authorPrivateVideoEnabled === true,
+      allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true
     });
     const videoData = video.publication_state === "author_only"
       ? attachSessionAlbumMediaUrls({
@@ -5482,7 +5583,10 @@ export function createApp() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const server = createApp();
-  server.listen(config.port, () => {
+  const listenOptions = d46IsolatedSmokeRuntimeEnabled
+    ? { port: config.port, host: "127.0.0.1" }
+    : { port: config.port };
+  server.listen(listenOptions, () => {
     console.log(
       JSON.stringify({
         ok: true,

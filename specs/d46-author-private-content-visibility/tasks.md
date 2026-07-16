@@ -1,6 +1,6 @@
 # D46 Tasks：作者私有可见与审核后公开
 
-更新日期：2026-07-15
+更新日期：2026-07-17
 
 版本：v1.0
 
@@ -125,10 +125,15 @@
   - [x] 记录开发者工具版本、构建提交和本地验收结论；不得据此勾选生产发布任务。
 
 - [ ] D46.16 受控发布与验收。
+  - 收口中（2026-07-17）：严格本机隔离 HTTP 验收实现、串行化复验、七表零残留断言和根级回归均已完成；当前仅处理该批验收基础设施的最终 spec/code review、提交及 develop→main→publish 受控 CI 发布。生产 D45 intake 与 D46 gate 不在本轮开启，真实流量仍属于 requirements 明确排除且需独立审批的后续事项。
   - 进行中（2026-07-16）：已完成全部 D46 gate=false 的生产迁移、镜像部署与基线核验；小程序源码及开发/生产构建产物继续指向 `https://api.pinche.jubenmi.com`。尚未开启任何 D46 gate，也未改变 D45 intake；后续真实流量验收仍需逐项独立审批。
+  - 2026-07-16：已在无 `.env` 的隔离 worktree 完成 D46 专用 HTTP smoke 基础设施；它使用 D40 风格身份夹具、D42 风格本地数据库隔离/清理，并且只允许严格本机 runtime 选择无网络 provider-shaped adapter。
   - 2026-07-16：用户已明确授权完整受控验收；执行顺序固定为 D45 预演（intake 保持 `closed`）→ 文本 → 图片 → 视频。每一类完成验证后立即恢复对应 intake 与 D46 gate 为 `closed`/`false`，不得扩大到其他服务或用户流量。
   - 2026-07-16：当前生产镜像上的 D45 前置预检已完成：文本 `passed/pass/not_required`，图片、视频均为 `passed/pass/deleted`；预检临时容器已删除。最终 API 三类 intake 均为 `closed`，D46 文本/图片/视频 gate 均为 `false`，API 与数据库健康检查为 200。D46 多账号真实可见性条目仍未执行：缺少隔离测试账号/会话与经批准的无害非 Pass 固定结果，不能以向全体生产用户打开 gate 的方式替代。
+  - 进行中（2026-07-16）：已新增并复核隔离 HTTP 验收实施计划 `docs/superpowers/plans/2026-07-16-d46-isolated-http-acceptance.md`。该计划固定为回环 MySQL/Redis、专用 `pinche_d46_test`、真实 HTTP/数据库/回调路径和严格 gated 本地 provider-shaped adapter；不得打开生产 intake 或 D46 gate。
+  - 2026-07-16：本地 D46 专用 Compose 首次运行时，MySQL/Redis 虽健康但 Docker `internal: true` 未发布所需回环端口；已先以静态契约复现 RED，再仅移除该网络属性，保留专用项目/网络和精确 `127.0.0.1:3346`、`127.0.0.1:6446` 绑定。复建后两端口确认仅本机监听，迁移及真实本地 HTTP 验收完成后已删除该专用 Compose 项目、卷和网络。
   - [x] 先以全部 D46 gate=false 发布迁移与代码，核验公共 API 字段、缓存头、D45 Worker、回调、健康检查和三个 intake 无变化。
+  - [x] 严格本机隔离多账号 HTTP 验收：D46 标志在读取 `.env` 前关闭式校验，严格锁定回环 MySQL/Redis、假微信/COS 值、回环视频回调及显式关闭的云能力；六个通用 job 在该标志下直接拒绝执行。Docker context 已验证为本机 Unix socket，32 项迁移在专用 `pinche_d46_test` 完成。夹具自动产生的 `session_create` 审核记录由高水位补收集，验收同连接以非阻塞 MySQL 命名锁串行化；实测占锁时第二轮在任何 fixture 写入前失败，七张临时审核/相册表独立统计为 `0/0/0/0/0/0/0`。释放锁后，诊断与正常多账号 HTTP 验收均通过，最终独立统计仍为 `0/0/0/0/0/0/0`；专用 API、容器、卷、网络及 3046/3346/6446 监听均已清理。独立安全复核通过。本项不代表生产真实流量开启或服务商替代验证。
   - [ ] 使用无害测试账号按 action 白名单分批开启文本作者投影；逐项验证作者原位置、其他账号、匿名/分享、取消、重提和公开旧版本。
   - [ ] 分别开启图片、视频作者预览，验证 60 秒 URL、源/display 选择、拒绝保留、作者删除清理、容量指标和非作者拒绝。
   - [ ] 记录功能 gate、镜像摘要、迁移版本、测试账号、结果类别和清理结论；不记录正文、对象 Key 或可复用 URL。
@@ -186,3 +191,7 @@
 - 2026-07-16 D46.15A DEVTOOLS GREEN：在提交 `4741a0fc3e2585a5dc6f6ea03b8e1bb72769d12b` 上重新运行 `npm run build:mp-weixin`，退出码 0；作者私有小程序专项 `authorPrivateContent`、`authorPrivateSocial`、`authorPrivateText` 共 12/12 通过。微信开发者工具 Nightly `2.01.2512242`、基础库 `3.12.1` 从 `dist/dev/mp-weixin` 手动编译并稳定启动，首页和隔离相册复编译后均为 0 error；剩余提示仅为 SharedArrayBuffer 弃用、全局组件性能、关闭域名校验及本地 HTTP 图片夹具警告。最终验收临时把生成目录（未跟踪产物）的 API 地址切到 `127.0.0.1:3029`，只读 Mock 除本地登录会话外拒绝所有非 GET：记录到的请求只有本地登录、本人空列表、作者相册和夹具图片，无业务写入。作者卡片实际显示“仅自己可见 · 进一步审核”，只提供删除，不出现下载/标注；本地夹具预览可打开且无下载入口；删除仅打开二次确认后取消，Mock 未收到 DELETE。测试后已停止 Mock、恢复生成物 API 地址、移除本地编译模式并关闭项目。首次按仓库默认锁定地址启动时曾发生公开首页只读请求，确认无写入后立即切换到上述隔离验收；D46.16 和生产验收清单继续保持未勾选。
 - 2026-07-16 D46.16 GATE-FALSE RELEASE GREEN：`develop`、`main`、`publish` 的 Docker Publish 分别通过运行 `29457740860`（第二次尝试；首次仅腾讯云仓库连接超时）、`29457954448`、`29458101273`；正式发布提交为 `e712faf9d25dc16dabba7612e5ea41af2e1a6f1c`。API 使用不可变 manifest `sha256:2a170eead6e496d2931d3514e6f70e17fd2410ab84d776f1a4f5f14273cc65ac`，管理端使用 `sha256:16e4ba3e929cc3f9fb1e2cd5fafa5bcf50160b7f43024d828b5cd92d89057075`；API 与三个审核 Worker 的本地 image ID 均为 `sha256:6874aa3a8e21ceaae2b682c1b1c7f09294e05ce487490cb4f796682ddd07ab37`。迁移前确认 TDSQL-C 集群 `cynosdbmysql-o6c4ezij` 的成功自动备份与连续日志覆盖恢复点 `2026-07-16 07:23:46 +08:00`；一次性容器 `pinche-d46-migrate-20260716-1` 退出码 0，记录 `0030_author_private_content_visibility.sql` 已执行、迁移总数 32。
 - 2026-07-16 D46.16 BASELINE VERIFY GREEN：API 与三个 Worker 均使用同一不可变 API digest；命令分别为 `node src/server.js`、`job:content-moderation-retry`、`job:content-moderation-orphan-scan`、`job:content-moderation-production-preflight-timeout`，Worker 仅连接 `pinche_internal` 且均为 `unless-stopped`。四容器的 text/image/video intake 均为 `closed`，D46 三个 gate 均为 `false`、文本 action 为空、TTL 为 60；API Watchtower 标签为 `false`，三个 Worker 无启用标签。首次恢复 D45 开关时因遗漏四个 `TENCENT_CI_VIDEO_*` 变量，API 按配置契约关闭式拒绝启动；在启动任何 Worker 前即补回原生产变量并恢复健康，未放开 intake、未消费审核任务。超过一个 Watchtower 扫描周期后，API `/health` 与 `/health/db`、管理端均为 200；微信无效回调为预期 400、腾讯无 token 回调为预期 401；公共门店、剧本和近期车局 API 均为 200，顶层字段仍为 `ok/data`、公共缓存头未改变，响应不含 `draft_id`、`content_ref`、`author_only`、`publication_state` 或作者预览 URL 标记。真实 D46 gate 与生产 intake 均未开启。
+- 2026-07-16 D46.16 LOCAL HTTP：此前在无继承环境的回环 MySQL/Redis 专用 Compose 项目中完成 32 个迁移；严格目标探针、诊断和普通输出的多账号 HTTP 验收均成功，残留计数为 0 且资源已清理。独立安全复核随后识别出旧版腾讯视频/COS 回调 token 及其他云能力配置可在启动 guard 后由 `.env` 继承的静态缺口；已将本机验收子项重新打开，改为 D46 标志下完全跳过 `.env`，并以两项 token 显式空值为纵深防御，待重新完整运行。此前及本次修复均不连接、修改或开启生产服务、D45 intake 或 D46 生产 gate。
+- 2026-07-16 D46.16 LOCAL HTTP FINAL GREEN：严格 `env -i` 的负向探针按预期在顶层 guard 失败，未开始 HTTP/数据库 I/O；本机 Unix-socket Docker context 的全新专用 MySQL/Redis 完成 32 项迁移，严格目标探针、诊断与正常 HTTP 多账号验收均通过。修复自动通过 `session_create` 生成的未跟踪文本提案后，脚本将七张临时审核/相册表归零作为成功条件，独立统计为 `0/0/0/0/0/0/0`。专用 API、容器、卷、网络及 3046/3346/6446 监听均已清除；D46 专项 164 项、进程内 smoke 122 项、静态契约与根级 `npm run check` 全绿。生产 D45 intake 与 D46 gate 未连接、未修改，仍保持 `closed`/`false`；D46.16 父项及真实流量项继续不勾选。
+- 2026-07-16 D46.16 LOCAL HTTP FINAL GREEN（串行化复验）：在干净的 `pinche-d46-smoke` 本机项目中，严格 launcher 的目标探针成功；临时占用专用 MySQL 命名锁后，第二个严格验收按预期在 fixture 写入前失败，相关七表仍为 `0/0/0/0/0/0/0`。锁释放后，诊断和正常 HTTP 多账号验收均通过，最终独立七表统计仍为 `0/0/0/0/0/0/0`。API、容器、卷、网络和 3046/3346/6446 监听均已删除；独立安全复核确认锁覆盖 cleanup 与归零断言且无云侧 I/O。生产 D45 intake 与 D46 gate 未连接、未修改，D46.16 父项和真实流量项继续不勾选。
+- 2026-07-17 D46.16 ISOLATED ACCEPTANCE REVIEW GREEN：最终 spec 复核先发现主脚本依赖 import 早于严格 guard、图片缺少 `review` 整链两项 Important；均按 TDD 修复并复审通过。图片现真实穿过 `pending → 加密微信 review 回调 → 管理员 reject → rejected 保留 → 作者删除/精确 cleanup`，作者读取真实字节且 member、第二管理员、匿名、share 与 direct-public 全部不可发现。质量复核进一步修正图片/视频 capability 在 `now == exp` 仍有效的边界，现 `exp-1` 有效、`exp` 立即失效；cleanup trap 也会确认 launcher 退出后才删除 Compose。修复后严格本机诊断与正常 HTTP 两轮均通过，独立七表计数两次均为 `0/0/0/0/0/0/0`，专用容器、卷、网络和 3046/3346/6446 监听已清除；D46 单测 169 项、smoke 122 项、两项静态契约及 diff 检查全绿。生产 D45 intake 与 D46 gate 未连接、未修改，真实流量仍为本 spec 非目标。

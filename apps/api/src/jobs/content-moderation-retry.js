@@ -1,6 +1,7 @@
 import { config } from "../config/env.js";
 import { withTransaction } from "../db/mysql.js";
 import { contentModeration } from "../server.js";
+import { assertD46IsolatedSmokeGenericJobDisabled } from "../modules/content-moderation/d46-isolated-smoke.js";
 import * as repository from "../modules/content-moderation/repository.js";
 import { MODERATION_RETRY_LEASE_MIN_MS } from "../modules/content-moderation/constants.js";
 import { MODERATION_RETRY_ROUTES, runContentModerationRetryBatch } from "../modules/content-moderation/retry.js";
@@ -164,6 +165,7 @@ export async function run({ signal, isStopping } = {}) {
 }
 
 async function main({ isStopping, signal } = {}) {
+  assertD46IsolatedSmokeGenericJobDisabled("content-moderation-retry");
   const once = process.argv.includes("--once");
   const pollMs = boundedPositiveInteger(
     config.contentModeration.retryPollMs,

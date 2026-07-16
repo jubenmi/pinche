@@ -273,7 +273,7 @@ test("pinned-message moderation preserves the business default when pinnedMessag
   assert.deepEqual(contentFallback.fields, { content: "this is the requested pin" });
 });
 
-test("D46 replacement draft id is parsed separately and never enters audited or provider text", () => {
+test("D46 replacement draft id is parsed separately, carried as control data, and never enters audited or provider text", () => {
   assert.equal(parseTextDraftReplacement({ replaces_draft_id: 51 }), 51);
   assert.equal(parseTextDraftReplacement({ replacesDraftId: "52" }), 52);
   assert.equal(parseTextDraftReplacement({}), null);
@@ -292,9 +292,12 @@ test("D46 replacement draft id is parsed separately and never enters audited or 
     replaces_draft_id: 51,
     replacesDraftId: undefined
   }, {
-    context: { sessionId: 12, targetSubjectId: "12" }
+    context: { sessionId: 12, targetSubjectId: "12" },
+    replacesDraftId: 51
   }));
-  assert.equal(JSON.stringify(descriptor).includes("replaces"), false);
+  assert.equal(descriptor.replacesDraftId, 51);
+  assert.equal(JSON.stringify(descriptor.payload).includes("replaces"), false);
+  assert.equal(JSON.stringify(descriptor.fields).includes("replaces"), false);
   assert.deepEqual(descriptor.payload.context, {
     targetSubjectId: "12",
     sessionId: 12

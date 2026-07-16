@@ -3,6 +3,7 @@
 import { buildWechatImageModerationUrl } from "../modules/album-image/signed-urls.js";
 import { buildContentModerationConfig, buildRedisUrl, config } from "../config/env.js";
 import { createDatabaseConnection } from "../db/mysql.js";
+import { assertD46IsolatedSmokeGenericJobDisabled } from "../modules/content-moderation/d46-isolated-smoke.js";
 import {
   assertProductionPreflightGuards,
   createProductionPreflightRunner,
@@ -37,6 +38,7 @@ export async function main({
   exit = process.exit
 } = {}) {
   try {
+    assertD46IsolatedSmokeGenericJobDisabled("content-moderation-production-preflight", env);
     const { caseId } = parseProductionPreflightCliArgs(argv);
     const moderationConfig = buildContentModerationConfig(env);
     return await runProductionPreflightJob({ caseId, moderationConfig, env, stdout });
