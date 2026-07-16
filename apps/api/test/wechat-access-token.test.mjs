@@ -158,6 +158,27 @@ test("default Redis cache connection has a bounded deadline, disconnects, and ca
   assert.equal(created.length, 2, "a late first connect must not replace the recovered client");
 });
 
+test("default Redis cache resolver releases a successfully connected client when reset", async () => {
+  let disconnects = 0;
+  const client = {
+    on() {},
+    isOpen: true,
+    connect: async () => undefined,
+    disconnect: () => { disconnects += 1; }
+  };
+  const resolver = createDefaultRedisClientResolver({
+    enabled: () => true,
+    url: () => "redis://cache.example.test:6379",
+    createRedisClient: () => client
+  });
+
+  assert.equal(await resolver(), client);
+  assert.equal(resolver.reset(), true);
+  assert.equal(disconnects, 1);
+  assert.equal(resolver.reset(), false);
+  assert.equal(disconnects, 1);
+});
+
 test("a token operation deadline covers a hanging Redis command, resets it, and permits a later retry", async () => {
   const timers = createManualTimers();
   const hangingRead = deferred();
