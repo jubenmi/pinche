@@ -550,6 +550,9 @@ export function buildTextModerationDescriptor(input = {}) {
     baseVersion: String(input.baseVersion || ""),
     idempotencyKey: String(input.idempotencyKey || ""),
     idempotencyExplicit: input.idempotencyExplicit === true,
+    replacesDraftId: input.replacesDraftId === null || input.replacesDraftId === undefined
+      ? null
+      : Number(input.replacesDraftId),
     fields: definition.fields,
     payload
   };

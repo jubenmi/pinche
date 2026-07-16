@@ -344,3 +344,15 @@ TTL 生产只接受 `1..60`。`TEXT_ACTIONS` 只接受 requirements 中十个 ac
 - 不允许作者私有内容进入公开搜索、分享、通知或互动。
 - 不支持媒体原地编辑。
 - 不改变审核服务商、内容策略或生产 intake。
+
+## 17. D46.16 本地隔离 HTTP 验收
+
+为完成不触碰生产入口的多账号/API 级验收，D46.16 增加一套仅本机可运行的隔离验证路径。它不替代 D45 已完成的微信/腾讯云真实服务商前置预检，也不改变任何生产功能门禁。
+
+启动条件必须同时满足：`NODE_ENV=test`、`WECHAT_MOCK_LOGIN=true`、`D46_SMOKE_ISOLATED=1`；API 精确监听 `127.0.0.1:3046` 且 `APP_BASE_URL=http://127.0.0.1:3046`；MySQL 为回环地址、端口 `3346`、用户/密码为专用本机值且数据库名精确为 `pinche_d46_test`；Redis 精确为 `redis://127.0.0.1:6446/15`；`DATABASE_TARGET_LOCK` 与 `DATABASE_TARGET_LOCK_HOST` 均为空；COS 未启用。D46 标志一旦为 `1`，配置加载器必须完全跳过 `.env`，使任何未在启动命令中显式提供的云配置都不能被回填，并且在构造任何配置/数据库连接前复用严格 guard。微信回调材料、COS ID/key/bucket/region、腾讯视频业务类型/回调 token 必须逐项匹配代码中固定的无害本地占位值，且腾讯视频回调 URL 必须精确为本机 loopback 地址；`TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN`、`COS_CI_CALLBACK_TOKEN` 与 `D45_PREFLIGHT_CONFIRMATION` 必须作为环境变量显式传入空字符串，不能缺失（双重防止旧云回调材料继承）。生产预检、孤儿扫描/清理与订阅消息开关必须显式为 `false`，其余预检确认/HMAC/指纹、地图 key aliases 和订阅模板 ID 必须显式为空。六个通用后台 job（图片清理/回填、审核重试、孤儿扫描、预检及其超时）在 D46 标志下必须在执行前关闭式拒绝；验收仅允许迁移、严格 API 和 fixture-scoped 专用清理。不得继承任何云凭证、云回调、地图 key 或订阅消息配置。任一条件不满足时，验收启动器、目标探针和本地审核适配器均关闭式失败；数据库和 Redis 也仅绑定回环端口。即使经常规 `node src/server.js` 启动，只要严格 D46 runtime 成立也必须强制绑定 loopback。
+
+该路径继续使用真实 API 认证、权限、DTO、MySQL 事务、审核状态机、回调解析、缓存头和清理路径。为避免测试触达微信、腾讯云或 COS，仅在上述全部条件成立时替换审核网络客户端为确定性、无网络的 provider-shaped adapter：文本根据无害固定标记产生 `pass`/`review`/`risky`，视频产生可被真实腾讯回调解析器关联的 JobId，图片/视频结果仍经现有回调与 `applyMediaResult` 写入。普通公开读取器、公开分享/下载/播放端点不接收该适配器产生的作者能力。
+
+本地图片夹具可用事务后的受控元数据和 provider attempt 模拟 COS finalize 的已持久化事实；它只作用于随机 D46 fixture 行。本地未批准视频预览使用独立的、严格 gated 的短时作者 capability 并再次锁定作者/版本后读取本地文件；生产环境仍只签发私有 COS URL。验收必须在 `pending` 回调前读取图片真实字节、读取视频真实 Range 字节，再分别验证 `review`/`rejected` 后的作者预览和非作者不可发现性。拒绝后的对象清理使用只接受当前 fixture cleanup job ID 的专用 runner：它不执行全库过期/领取，也不进行 COS I/O。夹具创建可能触发自动通过的文本审核时，脚本必须先记录该作者提案 ID 的高水位、再只记录本次夹具产生的精确新增 ID；不能用用户范围、时间范围或前缀范围删除。同一专用数据库一次只允许一个验收写入者：在数据库身份校验后、任何登录或 fixture 写入前，以同一连接非阻塞获取 `GET_LOCK('pinche-d46-isolated-acceptance', 0)`；未获锁立即失败，获锁后必须覆盖 cleanup 与七表归零断言，并在断开连接前 `RELEASE_LOCK`。`finally` 清理后，专用空库中的审核 job/提案/attempt/audit 及相册媒体/upload intent/cleanup job 七张临时表必须全部为零，否则验收失败。Compose 启动前还必须拒绝 `DOCKER_HOST` 覆盖并确认当前 Docker context 的 endpoint 为本机 Unix/npipe socket。验收脚本不记录正文、对象 Key、URL、token 或云凭证。
+
+本地图片在创建响应阶段尚未持久化 COS `object_key/object_etag` 时，作者预览只接受受控 display `photo_url`、两项对象事实均为空、正整数图片大小和精确 `local:${photo_url}:${image_byte_size}` 版本的组合；其余缺失或混合事实均关闭式拒绝。该回退还必须显式收到 `allowLocalD46Preview=true`，且该参数只能由严格 D46 runtime 注入；普通 development/test 或仅打开图片 gate 的路径不能启用它。回退不回填对象字段，因而保留本地对象的原有删除清理语义；验收夹具后续模拟 finalize 时才写入受控对象事实。

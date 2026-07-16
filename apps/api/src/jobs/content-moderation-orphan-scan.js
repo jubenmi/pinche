@@ -1,5 +1,6 @@
 import { config } from "../config/env.js";
 import { withTransaction } from "../db/mysql.js";
+import { assertD46IsolatedSmokeGenericJobDisabled } from "../modules/content-moderation/d46-isolated-smoke.js";
 import {
   runContentModerationOrphanScanBatch
 } from "../modules/content-moderation/orphan-scan.js";
@@ -116,6 +117,7 @@ export async function run({ signal, isStopping } = {}) {
 }
 
 async function main({ signal, isStopping } = {}) {
+  assertD46IsolatedSmokeGenericJobDisabled("content-moderation-orphan-scan");
   const once = process.argv.includes("--once");
   const pollMs = boundedInteger(
     config.contentModeration.orphanScanPollMs,

@@ -25,6 +25,18 @@ function stableErrorCode(error) {
     : "ALBUM_IMAGE_CLEANUP_FAILED";
 }
 
+function scopedMediaCleanupJobIds(value) {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError("media cleanup job ids must be a non-empty array");
+  }
+  const ids = value.map((item) => Number(item));
+  if (!ids.every((id) => Number.isSafeInteger(id) && id > 0)) {
+    throw new TypeError("media cleanup job ids must be positive integers");
+  }
+  return [...new Set(ids)];
+}
+
 async function cleanupIntent({ row, leaseToken, repository, storage, withTransaction, now, emit }) {
   try {
     try {
@@ -142,12 +154,16 @@ export async function runAlbumImageCleanupBatch({
   now = () => Date.now(),
   randomUUID = () => crypto.randomUUID(),
   limit = 25,
-  emit = emitAlbumImageEvent
+  emit = emitAlbumImageEvent,
+  mediaCleanupJobIds
 }) {
-  await withTransaction((connection) => repository.expireOverdueAlbumImageIntents(
-    connection,
-    new Date(now())
-  ));
+  const scopedJobIds = scopedMediaCleanupJobIds(mediaCleanupJobIds);
+  if (scopedJobIds === null) {
+    await withTransaction((connection) => repository.expireOverdueAlbumImageIntents(
+      connection,
+      new Date(now())
+    ));
+  }
   const leaseToken = randomUUID();
   const claimTime = now();
   const claimed = await withTransaction((connection) => repository.claimAllCleanup(
@@ -156,7 +172,8 @@ export async function runAlbumImageCleanupBatch({
       leaseToken,
       now: new Date(claimTime),
       leaseExpiresAt: new Date(claimTime + 60_000),
-      limit
+      limit,
+      mediaCleanupJobIds: scopedJobIds || undefined
     }
   ));
   for (const item of claimed) {

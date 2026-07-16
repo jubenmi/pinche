@@ -65,6 +65,43 @@ test("D46 image author receives a private view with no storage facts or download
     "uploads/session-album/display/album-9-7-1-a.jpg");
 });
 
+test("D46 local image preview accepts only an exact local storage identity", () => {
+  const photoUrl = "/uploads/session-album/display/album-9-7-1-a.jpg";
+  const version = `local:${photoUrl}:123`;
+  const localMedia = image({
+    object_key: null,
+    object_etag: null,
+    image_byte_size: 123,
+    moderation_object_version: version
+  });
+  assert.equal(createAuthorPrivateMediaView(localMedia, {
+    viewerUserId: 7,
+    imageEnabled: true
+  }), null);
+  const view = createAuthorPrivateMediaView(localMedia, {
+    viewerUserId: 7,
+    imageEnabled: true,
+    allowLocalD46Preview: true
+  });
+
+  assert.equal(view?.publication_state, "author_only");
+  assert.equal(getAuthorMediaPreviewRecord(view)?.previewPath, photoUrl);
+  assert.equal(getAuthorMediaPreviewRecord(view)?.objectVersion, version);
+
+  for (const invalid of [
+    image({ ...localMedia, moderation_object_version: `${version}-changed` }),
+    image({ ...localMedia, image_byte_size: null }),
+    image({ ...localMedia, object_key: "uploads/session-album/display/album-9-7-1-a.jpg" }),
+    image({ ...localMedia, photo_url: "/uploads/session-album/display/../unowned.jpg" })
+  ]) {
+    assert.equal(createAuthorPrivateMediaView(invalid, {
+      viewerUserId: 7,
+      imageEnabled: true,
+      allowLocalD46Preview: true
+    }), null);
+  }
+});
+
 test("D46 author scope rejects organizer, member, tagged user, admin, anonymous, legacy, and public rows", () => {
   for (const viewerUserId of [1, 2, 3, 99, null]) {
     assert.equal(createAuthorPrivateMediaView(image(), {
@@ -136,6 +173,16 @@ test("D46 image capability lasts at most 60 seconds and closes on row/version ch
     ttlSeconds: 60,
     fingerprint
   }));
+  assert.ok(validateAuthorImageCapabilityClaims(image(), captured[0], {
+    nowSeconds: captured[0].exp - 1,
+    ttlSeconds: 60,
+    fingerprint
+  }));
+  assert.equal(validateAuthorImageCapabilityClaims(image(), captured[0], {
+    nowSeconds: captured[0].exp,
+    ttlSeconds: 60,
+    fingerprint
+  }), null);
   assert.equal(validateAuthorImageCapabilityClaims(image({ object_etag: "changed" }), captured[0], {
     nowSeconds: 1000,
     ttlSeconds: 60,
