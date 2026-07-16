@@ -2112,6 +2112,9 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (manageSource.includes("时间：{{ session.start_at }}")) {
     fail("Manage page must not expose the raw ISO session time");
   }
+  if (!manageSource.includes("return `${this.session.store_name_snapshot} / ${this.formattedStartAt}`")) {
+    fail("Manage summary must use the localized formattedStartAt value");
+  }
   if (/section-title">\s*车况/.test(manageSource)) {
     fail("Manage page must not keep a separate 车况 section after overview consolidation");
   }

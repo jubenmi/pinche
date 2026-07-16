@@ -6,6 +6,7 @@
   "scripts": {
     "check": "node ../../scripts/check-api-js.js src",
     "test:album-image": "node --test test/album-image-*.test.mjs",
+    "test:session-reschedule": "node --test test/session-reschedule*.test.mjs",
     "job:album-image-cleanup": "node src/jobs/album-image-cleanup.js",
     "job:album-image-backfill": "node src/jobs/backfill-album-image-object-keys.js",
     "job:content-moderation-retry": "node src/jobs/content-moderation-retry.js",
