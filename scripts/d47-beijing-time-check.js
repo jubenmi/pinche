@@ -10,7 +10,8 @@ const [
   adminAppSource,
   adminCatalogSource,
   adminPreviewSource,
-  adminAlbumSource
+  adminAlbumSource,
+  mysqlSource
 ] = await Promise.all([
   read("apps/miniprogram/src/components/SessionCalendar.vue"),
   read("apps/miniprogram/src/pages/session/detail.vue"),
@@ -18,7 +19,8 @@ const [
   read("apps/admin-web/src/App.vue"),
   read("apps/admin-web/src/components/CatalogWorkspace.vue"),
   read("apps/admin-web/src/components/MiniProgramWorkspace.vue"),
-  read("apps/admin-web/src/components/SessionAlbumWorkspace.vue")
+  read("apps/admin-web/src/components/SessionAlbumWorkspace.vue"),
+  read("apps/api/src/db/mysql.js")
 ]);
 
 assert.match(calendarSource, /@pinche\/shared/, "calendar must use shared Beijing-time helpers");
@@ -44,5 +46,7 @@ assert.doesNotMatch(
   /function formatShanghaiDate\(/,
   "admin workspaces must not duplicate Beijing formatting"
 );
+assert.match(mysqlSource, /timezone:\s*"Z"/, "mysql2 must interpret DATETIME values as UTC");
+assert.match(mysqlSource, /SET time_zone = '\+00:00'/, "MySQL sessions must run in UTC");
 
 console.log("Beijing time source contract passed.");

@@ -214,7 +214,7 @@ git commit -m "fix: render admin times in Beijing time"
 - Modify: `apps/api/package.json`
 - Modify: `scripts/d47-beijing-time-check.js`
 
-- [ ] **Step 1: Write failing MySQL boundary tests**
+- [x] **Step 1: Write failing MySQL boundary tests**
 
 Test that connection options contain `timezone: "Z"` and that `configureConnectionTimeZone()` executes exactly `SET time_zone = '+00:00'` against a fake connection.
 
@@ -227,17 +227,17 @@ test("configures driver and MySQL session for UTC", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `node --test apps/api/test/mysql-timezone.test.mjs`
 
 Expected: FAIL because `configureConnectionTimeZone` and UTC options do not exist.
 
-- [ ] **Step 3: Configure every created connection**
+- [x] **Step 3: Configure every created connection**
 
 Add `timezone: "Z"` to `serverConnectionOptions()`. Export `configureConnectionTimeZone(connection)`, call it immediately after both server and database connections are created, and close/rethrow if session configuration fails.
 
-- [ ] **Step 4: Run API tests**
+- [x] **Step 4: Run API tests**
 
 Run: `node --test apps/api/test/mysql-timezone.test.mjs`
 
@@ -247,7 +247,7 @@ Run: `npm --workspace apps/api run test:session-reschedule`
 
 Expected: 22 tests pass, 0 fail.
 
-- [ ] **Step 5: Commit the API boundary**
+- [x] **Step 5: Commit the API boundary**
 
 ```bash
 git add apps/api/src/db/mysql.js apps/api/test/mysql-timezone.test.mjs apps/api/package.json scripts/d47-beijing-time-check.js
