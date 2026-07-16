@@ -838,7 +838,8 @@ function albumMediaResponse(media, tags = [], options = {}) {
     const authorPrivate = createAuthorPrivateMediaView(media, {
       viewerUserId: options.userId,
       imageEnabled: options.authorPrivateImageEnabled === true,
-      videoEnabled: options.authorPrivateVideoEnabled === true
+      videoEnabled: options.authorPrivateVideoEnabled === true,
+      allowLocalD46Preview: options.allowLocalD46Preview === true
     });
     if (authorPrivate) {
       authorPrivate.uploader_name =
@@ -5912,7 +5913,8 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
         photos.push(albumMediaResponse(photo, [], {
           userId: user.user.id,
           authorPrivateImageEnabled: options.authorPrivateImageEnabled,
-          authorPrivateVideoEnabled: options.authorPrivateVideoEnabled
+          authorPrivateVideoEnabled: options.authorPrivateVideoEnabled,
+          allowLocalD46Preview: options.allowLocalD46Preview === true
         }));
         continue;
       }
@@ -6079,7 +6081,8 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}, option
     const photo = await findById(connection, "session_album_photos", result.insertId);
     return albumMediaResponse(photo, [], {
       userId: user.user.id,
-      authorPrivateImageEnabled: options.authorPrivateImageEnabled
+      authorPrivateImageEnabled: options.authorPrivateImageEnabled,
+      allowLocalD46Preview: options.allowLocalD46Preview === true
     });
   });
 }
@@ -6128,7 +6131,8 @@ function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId
   const authorPrivate = createAuthorPrivateMediaView(media, {
     viewerUserId: userId,
     imageEnabled: false,
-    videoEnabled: options.authorPrivateVideoEnabled === true
+    videoEnabled: options.authorPrivateVideoEnabled === true,
+    allowLocalD46Preview: options.allowLocalD46Preview === true
   });
   if (authorPrivate) return authorPrivate;
   const isMine = Number(media.uploader_user_id) === Number(userId);
@@ -6794,7 +6798,8 @@ async function getAuthorAlbumMediaPreview(user, mediaId, mediaType, options = {}
     const record = getAuthorMediaPreviewRecordForRow(media, {
       viewerUserId: user?.user?.id,
       imageEnabled: mediaType === "image" && options.enabled === true,
-      videoEnabled: mediaType === "video" && options.enabled === true
+      videoEnabled: mediaType === "video" && options.enabled === true,
+      allowLocalD46Preview: options.allowLocalD46Preview === true
     });
     if (!record || record.mediaType !== mediaType) {
       throw moderationUnpublishedNotFound(`album_${mediaType}`);

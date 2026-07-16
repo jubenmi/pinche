@@ -1,0 +1,43 @@
+name: pinche-d46-smoke
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: pinche_d46_root_local_only
+      MYSQL_DATABASE: pinche_d46_test
+      MYSQL_USER: pinche_d46
+      MYSQL_PASSWORD: pinche_d46_local_only
+    ports:
+      - "127.0.0.1:3346:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u pinche_d46 -ppinche_d46_local_only --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6446:6379"
+    tmpfs:
+      - /data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+networks:
+  internal:
+
+volumes:
+  mysql_data:

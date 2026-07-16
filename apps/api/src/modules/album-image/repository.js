@@ -131,8 +131,20 @@ export async function claimExpiredAlbumImageIntents(
 
 export async function claimAlbumObjectCleanupJobs(
   connection,
-  { leaseToken, now, leaseExpiresAt, limit }
+  { leaseToken, now, leaseExpiresAt, limit, mediaCleanupJobIds }
 ) {
+  const normalizedRequestedJobIds = Array.isArray(mediaCleanupJobIds)
+    ? mediaCleanupJobIds.map((value) => Number(value))
+    : null;
+  const requestedJobIds = normalizedRequestedJobIds === null
+    ? null
+    : normalizedRequestedJobIds.every((id) => Number.isSafeInteger(id) && id > 0)
+      ? [...new Set(normalizedRequestedJobIds)]
+      : [];
+  if (requestedJobIds !== null && requestedJobIds.length === 0) return [];
+  const requestedJobFilter = requestedJobIds === null
+    ? ""
+    : `AND id IN (${requestedJobIds.map(() => "?").join(", ")})`;
   const [rows] = await connection.query(
     `SELECT * FROM session_album_object_cleanup_jobs
      WHERE (
@@ -140,9 +152,10 @@ export async function claimAlbumObjectCleanupJobs(
        OR (status = 'leased' AND lease_expires_at <= ?)
      )
        AND (next_retry_at IS NULL OR next_retry_at <= ?)
+       ${requestedJobFilter}
      ORDER BY created_at
      LIMIT ? FOR UPDATE SKIP LOCKED`,
-    [now, now, Number(limit)]
+    [now, now, ...(requestedJobIds || []), Number(limit)]
   );
   for (const row of rows) {
     await connection.query(
@@ -156,7 +169,10 @@ export async function claimAlbumObjectCleanupJobs(
 }
 
 export async function claimAllCleanup(connection, input) {
-  const intents = await claimExpiredAlbumImageIntents(connection, input);
+  const scopedMediaJobs = Array.isArray(input.mediaCleanupJobIds);
+  const intents = scopedMediaJobs
+    ? []
+    : await claimExpiredAlbumImageIntents(connection, input);
   const remaining = Math.max(0, Number(input.limit) - intents.length);
   const media = remaining > 0
     ? await claimAlbumObjectCleanupJobs(connection, { ...input, limit: remaining })
