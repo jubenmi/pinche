@@ -3,10 +3,34 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import { assertDatabaseTargetLock, buildRedisUrl } from "../apps/api/src/config/env.js";
+import { config } from "../apps/api/src/config/env.js";
 
 const productionEnvExample = readFileSync(
   new URL("../.env.production.example", import.meta.url),
   "utf8"
+);
+const developmentEnvExample = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
+
+assert.equal(
+  config.subscribeMessage.sessionRescheduledTemplateId,
+  process.env.WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID || "",
+  "rescheduled subscription template id should map from the environment"
+);
+assert(
+  developmentEnvExample.includes("WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID="),
+  "development env example should document the reschedule template id"
+);
+assert(
+  productionEnvExample.includes("WECHAT_SUBSCRIBE_SESSION_RESCHEDULED_TEMPLATE_ID="),
+  "production env example should document the reschedule template id"
+);
+assert(
+  developmentEnvExample.includes("VITE_SUBSCRIBE_TEMPLATE_SESSION_RESCHEDULED="),
+  "development env example should document the Mini Program reschedule template id"
+);
+assert(
+  productionEnvExample.includes("VITE_SUBSCRIBE_TEMPLATE_SESSION_RESCHEDULED="),
+  "production env example should document the Mini Program reschedule template id"
 );
 
 assert.equal(

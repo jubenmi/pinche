@@ -15,6 +15,9 @@
 - Create `apps/api/migrations/0024_user_notifications.sql`: persistent notification schema and indexes.
 - Create `apps/api/src/modules/core/user-notifications.js`: notification constants, payload serialization, row mapping, insert/list/read helpers.
 - Modify `apps/api/src/modules/core/service.js`: transactional reschedule, recipient selection, notification list/read exports, and signup-review notification inserts.
+- Create `apps/api/src/modules/core/session-reschedule.js`: explicit-offset parsing, MySQL-second normalization, operation-key generation, and safe response shaping.
+- Create `apps/api/test/session-reschedule.test.mjs`: pure reschedule time and operation-key tests.
+- Create `apps/api/test/session-reschedule-service.test.mjs`: executable transaction behavior tests with a fake connection.
 - Modify `apps/api/src/server.js`: reschedule and notification routes.
 - Modify `apps/api/src/config/env.js`: reschedule template ID configuration.
 - Modify `apps/api/src/modules/wechat/subscribe-message.js`: reschedule message builder/sender.
@@ -102,12 +105,16 @@ git commit -m "feat: add persistent user notifications"
 
 **Files:**
 - Modify: `apps/api/src/modules/core/service.js`
+- Create: `apps/api/src/modules/core/session-reschedule.js`
+- Create: `apps/api/test/session-reschedule.test.mjs`
+- Create: `apps/api/test/session-reschedule-service.test.mjs`
 - Modify: `apps/api/src/server.js`
+- Modify: `apps/api/package.json`
 - Modify: `scripts/d45-session-reschedule-notifications-check.js`
 
 - [ ] **Step 1: Extend the failing contract check**
 
-Assert the service exports `rescheduleSession`, uses `SELECT ... FOR UPDATE`, checks `membersConfirmed`, inserts `SESSION_RESCHEDULED`, and the server matches `POST /api/sessions/:id/reschedule` before the generic session update route.
+Assert the service exports `rescheduleSession` and its testable transaction worker, uses the database-computed `start_at <= CURRENT_TIMESTAMP` lifecycle flag plus session/seat/NPC-role `SELECT ... FOR UPDATE` lock order, checks `membersConfirmed`, inserts `SESSION_RESCHEDULED`, and the server matches `POST /api/sessions/:id/reschedule` before the generic session update route without exposing internal recipients.
 
 - [ ] **Step 2: Verify RED**
 
@@ -117,7 +124,9 @@ Expected: FAIL with missing `rescheduleSession` and route assertions.
 
 - [ ] **Step 3: Implement recipient selection and validation**
 
-In `service.js`, add a transaction that locks the session row, calls the existing organizer/admin authorization rule, rejects when `start_at <= CURRENT_TIMESTAMP`, parses `body.startAt`, rejects invalid/past/unchanged values, and selects distinct non-organizer users from confirmed/locked seats plus bound active NPC roles.
+In `service.js`, add a transaction that locks the session row and reads `(start_at <= CURRENT_TIMESTAMP) AS session_started`, calls the existing organizer/admin authorization rule, and rejects when that database-authoritative flag is true. Require an explicit ISO-8601 offset or `Z`, normalize input and the driver-returned current `Date` to MySQL second precision, and reject invalid/past/unchanged (including sub-second-only) values. Lock indexed child membership in session → seats → NPC roles order before selecting distinct non-organizer users from confirmed/locked seats plus bound active NPC roles.
+
+Extract the transaction work as an exported connection-accepting function while keeping `rescheduleSession(user, id, body)` as the unchanged public service API. Add executable fake-connection tests for authorization before mutation, confirmation conflict without writes, seat/NPC recipient dedupe, lock order, notification failure rejection, internal recipients, and safe public response shaping.
 
 Use an explicit conflict response when recipients exist without confirmation:
 
@@ -139,7 +148,7 @@ Update `sessions.start_at`, then insert one `session_rescheduled` row per dedupl
 }
 ```
 
-Use dedupe key `session-rescheduled:<sessionId>:<normalizedStartAt>` and return the updated session plus recipient `userId`/`openid` records to the outer scope.
+Use one operation-scoped dedupe key `session-rescheduled:<sessionId>:<operationId>` shared by all recipient inserts, and return the updated session plus recipient `userId`/`openid` records to the outer scope. Generate `operationId` once per successful transaction so retries that roll back remain harmless while a later legitimate reschedule back to an earlier time (for example B→A) still creates new notifications.
 
 - [ ] **Step 5: Add the dedicated route**
 
@@ -147,14 +156,14 @@ Parse `/api/sessions/(\d+)/reschedule`, require authentication, read JSON, call 
 
 - [ ] **Step 6: Run checks**
 
-Run: `node scripts/d45-session-reschedule-notifications-check.js && npm --workspace apps/api run check`
+Run: `npm --workspace apps/api run test:session-reschedule && node scripts/d45-session-reschedule-notifications-check.js && npm --workspace apps/api run check`
 
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/api/src/modules/core/service.js apps/api/src/server.js scripts/d45-session-reschedule-notifications-check.js
+git add apps/api/src/modules/core/service.js apps/api/src/modules/core/session-reschedule.js apps/api/test/session-reschedule.test.mjs apps/api/test/session-reschedule-service.test.mjs apps/api/src/server.js apps/api/package.json scripts/d45-session-reschedule-notifications-check.js
 git commit -m "feat: add transactional session reschedule API"
 ```
 
@@ -425,7 +434,12 @@ Add `d45:check` and `d45:smoke`; include the static check and both Mini Program 
 
 - [ ] **Step 4: Run migration and smoke test against the approved local test stack**
 
-Run: `npm run migrate`
+Rebuild a disposable local database named `pinche_d45_test`, then run migrations with explicit
+`MYSQL_HOST=127.0.0.1`, `MYSQL_PORT=3307`, and `MYSQL_DATABASE=pinche_d45_test`. Start the API
+with `D45_SMOKE_ISOLATED=1`, `WECHAT_MOCK_LOGIN=true`, and messaging disabled. The smoke's
+read-only preflight must verify those server-loaded values before login or fixture writes. Drop
+`pinche_d45_test` after the run so bootstrap-admin and uniquely prefixed fixture rows cannot leak
+into later runs. Never run this step against the repository's default `.env`.
 
 Run: `WECHAT_SUBSCRIBE_MESSAGE_ENABLED=false BASE_URL=http://127.0.0.1:3029 node scripts/d45-session-reschedule-notifications-smoke.js`
 
@@ -451,3 +465,14 @@ Confirm all seven acceptance criteria in `docs/superpowers/specs/2026-07-12-sess
 git add scripts/d45-session-reschedule-notifications-smoke.js scripts/d45-session-reschedule-notifications-check.js package.json
 git commit -m "test: cover session reschedule notifications"
 ```
+
+### Final review blockers (2026-07-12)
+
+- [x] Reject legacy `PATCH /api/sessions/:id` bodies containing `startAt` or `start_at`, with regression coverage for future/member/started sessions and manage-settings compatibility.
+- [x] Add bounded, owner-scoped, tamper-safe cursor pagination to `GET /api/users/me/notifications`, preserving one unread-count snapshot per page.
+- [x] Add Mini Program message-center load-more behavior with race-safe reset/append merging, deduplication, and partial-error handling.
+- [x] Hide member reschedule reminder eligibility from the session organizer, including organizer seat/NPC identities.
+- [x] Update D45/D25 assertions and design wording, run the requested focused/aggregate verification, self-review, and commit the blocker fixes.
+- [x] Keep manage overview summary and 时间 row on `formatSessionStartAt` (`Asia/Shanghai`, `YYYY-MM-DD HH:mm`) with no raw ISO output.
+- [x] Encode notification cursors from a DB-native canonical `created_at` string so mysql2 `Date` UTC serialization cannot shift keyset boundaries.
+- [x] Reset stale load-more state immediately when a same-identity full refresh invalidates the prior generation.

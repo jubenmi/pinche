@@ -106,7 +106,14 @@ import {
   writeCreateFlow
 } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
-import { requestSignupReviewedSubscription } from "../../utils/subscribeMessages";
+import {
+  isConfirmedSessionMember,
+  requestSubscriptionAfterConfirmedJoin
+} from "../../utils/sessionMembership";
+import {
+  requestSessionRescheduledSubscription,
+  requestSignupReviewedSubscription
+} from "../../utils/subscribeMessages";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 export default {
@@ -924,6 +931,7 @@ export default {
       try {
         const seatId = role.seatId || role.id;
         if (this.session.join_policy === "direct") {
+          const wasConfirmedMember = isConfirmedSessionMember(this.session, this.currentUserId);
           const claimResponse = await request({
             url: `/api/session-seats/${seatId}/claim`,
             method: "POST",
@@ -931,9 +939,20 @@ export default {
               note: this.isAlbumEntry ? "相册分享页直接上车" : "分享页选择角色上车"
             }
           });
-          const joinResult = dataOf(claimResponse)?.join_result || "joined";
+          const joinResult = dataOf(claimResponse)?.join_result;
+          await requestSubscriptionAfterConfirmedJoin(
+            wasConfirmedMember,
+            joinResult,
+            "joined",
+            requestSessionRescheduledSubscription
+          );
           this.pendingRole = null;
           await this.loadPublishedSession(this.sessionId);
+          if (joinResult !== "joined") {
+            this.statusText = "上车结果异常，请刷新后确认角色状态。";
+            showToast({ title: "上车结果异常，请稍后确认", icon: "none" });
+            return;
+          }
           if (this.isAlbumEntry && joinResult === "joined") {
             if (!this.navigatingAlbum) {
               uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
@@ -1029,6 +1048,7 @@ export default {
         if (!auth) {
           return;
         }
+        const wasConfirmedMember = isConfirmedSessionMember(this.session, this.currentUserId);
         const response = await request({
           url: `/api/session-npc-roles/${targetRole.id}/claim`,
           method: "POST",
@@ -1037,8 +1057,14 @@ export default {
           }
         });
         const result = dataOf(response) || {};
-        await this.loadPublishedSession(this.sessionId);
         if (result.join_result === "npc_joined") {
+          await requestSubscriptionAfterConfirmedJoin(
+            wasConfirmedMember,
+            result.join_result,
+            "npc_joined",
+            requestSessionRescheduledSubscription
+          );
+          await this.loadPublishedSession(this.sessionId);
           this.statusText = "已选择NPC角色。";
           if (this.isAlbumEntry && !this.navigatingAlbum) {
             uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
@@ -1048,10 +1074,15 @@ export default {
           return;
         }
         if (result.join_result === "pending_review") {
+          await this.loadPublishedSession(this.sessionId);
           this.statusText = "已提交NPC角色申请，等待车头审核。";
           showToast({ title: "已提交申请", icon: "none" });
           requestSignupReviewedSubscription();
+          return;
         }
+        await this.loadPublishedSession(this.sessionId);
+        this.statusText = "上车结果异常，请刷新后确认NPC角色状态。";
+        showToast({ title: "上车结果异常，请稍后确认", icon: "none" });
       } catch (error) {
         if (error?.statusCode === 403) {
           this.statusText = "本场NPC由车头安排。";

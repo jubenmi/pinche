@@ -49,6 +49,14 @@
         <view class="overview-line">时间：{{ formattedStartAt }}</view>
       </view>
       <view v-if="session.id" class="overview-actions">
+        <t-button
+          v-if="canReschedule"
+          class="mini-button muted"
+          :disabled="busyAction"
+          @tap="openReschedulePicker"
+        >
+          改期
+        </t-button>
         <t-button class="mini-button muted" :disabled="busyAction" @tap="subscribeSignupReminder">
           申请提醒
         </t-button>
@@ -61,6 +69,17 @@
         >
           退出车头
         </t-button>
+        <t-date-time-picker
+          title="选择新的开本时间"
+          :mode="['date', 'minute']"
+          format="YYYY-MM-DD HH:mm"
+          :visible="reschedulePickerVisible"
+          :value="rescheduleValue"
+          :start="rescheduleMinimum"
+          @confirm="confirmRescheduleSelection"
+          @cancel="closeReschedulePicker"
+          @close="closeReschedulePicker"
+        />
       </view>
       <view v-if="session.id" class="overview-pinned">
         <ManagePinnedMessage
@@ -204,6 +223,15 @@ import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinn
 import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
+import {
+  buildRescheduleConfirmation,
+  canRescheduleSession,
+  formatSessionStartAt,
+  rescheduleConfirmationRequired,
+  rescheduleErrorRequiresRefresh as shouldRefreshAfterRescheduleError,
+  rescheduleErrorText as formatRescheduleErrorText,
+  validateRescheduleSelection
+} from "../../utils/sessionReschedule";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
 import { showActionSheet, showModal, showToast } from "../../utils/tdesignFeedback";
 
@@ -218,17 +246,7 @@ function booleanSetting(value, fallback = true) {
 }
 
 function formatSessionDateTime(value) {
-  if (!value) {
-    return "时间待定";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  const pad = (number) => String(number).padStart(2, "0");
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${pad(
-    date.getHours()
-  )}:${pad(date.getMinutes())}`;
+  return formatSessionStartAt(value);
 }
 
 export default {
@@ -245,7 +263,10 @@ export default {
       statusText: "",
       busyAction: false,
       busyText: "",
-      cancelReason: ""
+      cancelReason: "",
+      reschedulePickerVisible: false,
+      rescheduleValue: "",
+      rescheduleMinimum: ""
     };
   },
   computed: {
@@ -263,6 +284,9 @@ export default {
     },
     formattedStartAt() {
       return formatSessionDateTime(this.session.start_at);
+    },
+    canReschedule() {
+      return canRescheduleSession(this.session.start_at);
     },
     seatSummary() {
       const seats = this.session.seats || [];
@@ -289,16 +313,30 @@ export default {
       return { dataOf, request };
     },
     hasOtherOnboardMembers() {
-      const seats = this.session.seats || [];
-      if (seats.length > 0) {
-        return seats.some(
-          (seat) =>
-            ["confirmed", "locked"].includes(seat.status) &&
-            seat.confirmed_user_id &&
-            Number(seat.confirmed_user_id) !== Number(this.session.organizer_user_id)
-        );
+      return this.otherOnboardMemberCount > 0;
+    },
+    otherOnboardMemberCount() {
+      const organizerId = Number(this.session.organizer_user_id);
+      const userIds = new Set();
+      for (const seat of this.session.seats || []) {
+        const userId = Number(seat.confirmed_user_id);
+        if (["confirmed", "locked"].includes(seat.status) && userId && userId !== organizerId) {
+          userIds.add(userId);
+        }
       }
-      return Number(this.session.other_onboard_member_count || 0) > 0;
+      for (const role of this.session.session_npc_roles || []) {
+        const userId = Number(role.bound_user_id);
+        if (role.status === "active" && userId && userId !== organizerId) {
+          userIds.add(userId);
+        }
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(this.session, "seats") ||
+        Object.prototype.hasOwnProperty.call(this.session, "session_npc_roles")
+      ) {
+        return userIds.size;
+      }
+      return Number(this.session.other_onboard_member_count || 0);
     },
     hasActiveAlbumPhotos() {
       return Number(this.session.active_album_photo_count || this.session.photo_count || 0) > 0;
@@ -492,6 +530,105 @@ export default {
       }
       await this.loadSession();
       await this.loadSignups();
+    },
+    openReschedulePicker() {
+      if (this.busyAction || !this.canReschedule) {
+        return;
+      }
+      if (!this.rescheduleValue) {
+        this.rescheduleValue = formatSessionStartAt(this.session.start_at);
+      }
+      this.rescheduleMinimum = formatSessionStartAt(new Date());
+      this.reschedulePickerVisible = true;
+    },
+    closeReschedulePicker() {
+      this.reschedulePickerVisible = false;
+    },
+    confirmRescheduleSelection(event) {
+      const selectedValue = event?.detail?.value || this.rescheduleValue;
+      this.rescheduleValue = selectedValue;
+      this.reschedulePickerVisible = false;
+      const validation = validateRescheduleSelection(
+        selectedValue,
+        this.session.start_at,
+        new Date()
+      );
+      if (!validation.valid) {
+        this.statusText = validation.message;
+        return;
+      }
+      this.showRescheduleConfirmation(validation.startAt);
+    },
+    showRescheduleConfirmation(startAt) {
+      const memberCount = this.otherOnboardMemberCount;
+      showModal({
+        title: "确认改期",
+        content: buildRescheduleConfirmation({
+          memberCount,
+          oldStartAt: this.session.start_at,
+          newStartAt: startAt
+        }),
+        confirmText: "确认改期",
+        cancelText: "再想想",
+        success: (result) => {
+          if (result.confirm) {
+            this.rescheduleSession(startAt, memberCount > 0);
+          }
+        }
+      });
+    },
+    async rescheduleSession(startAt, membersConfirmed) {
+      if (this.busyAction) {
+        return;
+      }
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
+      this.busyAction = true;
+      this.busyText = "正在改期，请稍候...";
+      let needsFreshConfirmation = false;
+      try {
+        const response = await request({
+          url: `/api/sessions/${this.sessionId}/reschedule`,
+          method: "POST",
+          data: { startAt, membersConfirmed }
+        });
+        const updatedSession = dataOf(response) || {};
+        const delivery = updatedSession.notification_delivery || {};
+        await this.reload();
+        this.statusText = this.rescheduleDeliveryText(delivery);
+        showToast({ title: "改期成功", icon: "none" });
+      } catch (error) {
+        this.statusText = this.rescheduleErrorText(error);
+        if (rescheduleConfirmationRequired(error)) {
+          needsFreshConfirmation = true;
+          await this.reload();
+          this.statusText = "已刷新上车成员，请按最新人数重新确认改期。";
+        } else if (this.rescheduleErrorRequiresRefresh(error)) {
+          await this.reload();
+          this.statusText = this.rescheduleErrorText(error);
+        }
+      } finally {
+        this.busyAction = false;
+        this.busyText = "";
+      }
+      if (needsFreshConfirmation) {
+        this.showRescheduleConfirmation(startAt);
+      }
+    },
+    rescheduleDeliveryText(delivery) {
+      const recipients = Number(delivery.recipients || 0);
+      const sent = Number(delivery.sent || 0);
+      const skipped = Number(delivery.skipped || 0);
+      const failed = Number(delivery.failed || 0);
+      return `改期成功。通知对象 ${recipients} 人：已发送 ${sent}，已跳过 ${skipped}，失败 ${failed}。`;
+    },
+    rescheduleErrorRequiresRefresh(error) {
+      return shouldRefreshAfterRescheduleError(error);
+    },
+    rescheduleErrorText(error) {
+      return formatRescheduleErrorText(error);
     },
     async loadSession() {
       try {
