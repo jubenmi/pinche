@@ -30,6 +30,27 @@ import {
   visibleSignupAlbumMediaCount
 } from "./session-album-media-count.js";
 import {
+  cancelMediaModerationJobsForDeletion,
+  createAuditLog,
+  enqueueRejectedMediaCleanup,
+  findModerationAuditLogByAction,
+  findModerationJobById
+} from "../content-moderation/repository.js";
+import { shouldRetainRejectedMedia } from "../content-moderation/media-retention.js";
+import { isModerationPublished } from "@pinche/shared";
+import { textCreationTargetSubjectId } from "../content-moderation/text-request-identity.js";
+import {
+  appendAuthorSessionCreationForUser,
+  mergeAuthorNpcRoleView,
+  mergeAuthorSessionUpdate,
+  mergeAuthorSessionView
+} from "../content-moderation/author-session-read.js";
+import { mergeAuthorReviewState } from "../content-moderation/author-social-read.js";
+import {
+  createAuthorPrivateMediaView,
+  getAuthorMediaPreviewRecordForRow
+} from "../content-moderation/author-media-preview.js";
+import {
   USER_NOTIFICATION_TYPES,
   insertUserNotification,
   listMyNotifications as listMyNotificationsFromConnection,
@@ -39,7 +60,6 @@ import {
   createSessionRescheduleDedupeKey,
   normalizeSessionRescheduleStartAt
 } from "./session-reschedule.js";
-import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
 import {
   findOwnedUserImageAssetById,
@@ -47,7 +67,6 @@ import {
   scheduleUserImageAssetCleanup
 } from "../user-image-assets/repository.js";
 import { cosStorageEnabled } from "../../storage/cos.js";
-import { isModerationPublished } from "@pinche/shared";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -673,6 +692,38 @@ function mergeCiJobIds(currentValue, nextValue) {
   return merged.length <= 128 ? merged : currentParts.join(",") || next;
 }
 
+function ciJobIds(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => normalizeCiJobId(part))
+    .filter(Boolean);
+}
+
+function videoProcessingIdentityMatches(media, { mediaId, sourceUrl, ciJobId }) {
+  if (!media || albumMediaType(media) !== "video") return false;
+  if (mediaId && Number(media.id) !== Number(mediaId)) return false;
+  if (sourceUrl && String(media.source_url || "") !== String(sourceUrl)) return false;
+  if (ciJobId) {
+    const currentJobIds = ciJobIds(media.ci_job_id);
+    if (currentJobIds.length > 0 && !currentJobIds.includes(ciJobId)) return false;
+    if (currentJobIds.length === 0 && !sourceUrl) return false;
+  }
+  return true;
+}
+
+function albumVideoObjectIdentity(value) {
+  const filename = String(value || "").split("/").pop() || "";
+  return filename.replace(/\.(?:mp4|jpe?g)$/i, "");
+}
+
+function albumVideoOutputMatchesSource(sourceUrl, outputUrl) {
+  if (!outputUrl) return true;
+  const sourceIdentity = albumVideoObjectIdentity(sourceUrl);
+  return Boolean(
+    sourceIdentity && sourceIdentity === albumVideoObjectIdentity(outputUrl)
+  );
+}
+
 function albumVideoProcessingError(value) {
   const text = String(value || "").trim();
   return text ? text.slice(0, 255) : null;
@@ -684,9 +735,14 @@ async function findSessionAlbumVideoForProcessing(
 ) {
   if (mediaId) {
     const media = await findById(connection, "session_album_photos", mediaId, { forUpdate });
-    if (media && media.status === "active" && albumMediaType(media) === "video") {
+    if (
+      media &&
+      ["active", "deleting"].includes(String(media.status)) &&
+      videoProcessingIdentityMatches(media, { mediaId, sourceUrl, ciJobId })
+    ) {
       return media;
     }
+    return null;
   }
 
   if (sourceUrl) {
@@ -695,15 +751,16 @@ async function findSessionAlbumVideoForProcessing(
         SELECT *
         FROM session_album_photos
         WHERE media_type = 'video'
-          AND status = 'active'
+          AND status IN ('active', 'deleting')
           AND source_url = ?
         LIMIT 1${forUpdate ? " FOR UPDATE" : ""}
       `,
       [sourceUrl]
     );
-    if (rows[0]) {
+    if (videoProcessingIdentityMatches(rows[0], { sourceUrl, ciJobId })) {
       return rows[0];
     }
+    return null;
   }
 
   if (ciJobId) {
@@ -712,7 +769,7 @@ async function findSessionAlbumVideoForProcessing(
         SELECT *
         FROM session_album_photos
         WHERE media_type = 'video'
-          AND status = 'active'
+          AND status IN ('active', 'deleting')
           AND (
             ci_job_id = ?
             OR ci_job_id LIKE ?
@@ -723,9 +780,10 @@ async function findSessionAlbumVideoForProcessing(
       `,
       [ciJobId, `${ciJobId},%`, `%,${ciJobId}`, `%,${ciJobId},%`]
     );
-    if (rows[0]) {
+    if (videoProcessingIdentityMatches(rows[0], { ciJobId })) {
       return rows[0];
     }
+    return null;
   }
 
   return null;
@@ -796,6 +854,17 @@ function albumMediaResponse(media, tags = [], options = {}) {
   };
 
   if (!published) {
+    const authorPrivate = createAuthorPrivateMediaView(media, {
+      viewerUserId: options.userId,
+      imageEnabled: options.authorPrivateImageEnabled === true,
+      videoEnabled: options.authorPrivateVideoEnabled === true,
+      allowLocalD46Preview: options.allowLocalD46Preview === true
+    });
+    if (authorPrivate) {
+      authorPrivate.uploader_name =
+        media.uploader_nickname || media.uploader_open_id || "车友";
+      return authorPrivate;
+    }
     return {
       ...common,
       tags: [],
@@ -2155,7 +2224,7 @@ async function clearPreStartReviewEligibilityForSession(connection, sessionId) {
   );
 }
 
-export async function listActiveStores(filters = {}, user = null) {
+export async function listActiveStores(filters = {}, user = null, options = {}) {
   return withDatabaseConnection(async (connection) => {
     const where = [
       `
@@ -2190,15 +2259,26 @@ export async function listActiveStores(filters = {}, user = null) {
       `SELECT * FROM stores WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return rows
+    const result = rows
       .filter(
         (row) => isPublicCatalogUsable(row) || isPrivateCatalogUsableByUser(row, user)
       )
       .map(catalogResponse);
+    const authorTextReader = options.authorTextReader;
+    if (!user?.user?.id || typeof authorTextReader?.find !== "function") return result;
+    const projection = await authorTextReader.find(connection, {
+      userId: user.user.id,
+      action: "create_private_store",
+      targetSubjectId: textCreationTargetSubjectId({
+        action: "create_private_store",
+        actorUserId: user.user.id
+      })
+    });
+    return projection ? [...result, projection] : result;
   });
 }
 
-export async function listActiveScripts(filters = {}, user = null) {
+export async function listActiveScripts(filters = {}, user = null, options = {}) {
   return withDatabaseConnection(async (connection) => {
     const where = [];
     const values = [];
@@ -2289,7 +2369,7 @@ export async function listActiveScripts(filters = {}, user = null) {
       `SELECT ${select} FROM ${from} WHERE ${where.join(" AND ")} ORDER BY scripts.id DESC LIMIT ${limitValue(filters.limit)} `,
       values
     );
-    return attachScriptNpcRoles(
+    const result = await attachScriptNpcRoles(
       connection,
       rows
         .filter(
@@ -2297,6 +2377,17 @@ export async function listActiveScripts(filters = {}, user = null) {
         )
         .map((row) => catalogResponse(publicScriptRow(row)))
     );
+    const authorTextReader = options.authorTextReader;
+    if (!user?.user?.id || typeof authorTextReader?.find !== "function") return result;
+    const projection = await authorTextReader.find(connection, {
+      userId: user.user.id,
+      action: "create_private_script",
+      targetSubjectId: textCreationTargetSubjectId({
+        action: "create_private_script",
+        actorUserId: user.user.id
+      })
+    });
+    return projection ? [...result, projection] : result;
   });
 }
 
@@ -3505,10 +3596,15 @@ export async function getSessionForViewer(id, options = {}) {
         (isAdmin(viewer) || (await isSessionAlbumMember(connection, session, viewer.user.id)))
     );
     if (memberAllowed) {
-      return {
+      const detail = {
         ...(await memberSessionDetail(connection, session)),
         access_scope: "member"
       };
+      return mergeAuthorSessionView(connection, {
+        reader: options.authorTextReader,
+        userId: viewer.user.id,
+        session: detail
+      });
     }
     if (publicSessionAvailable(session)) {
       return publicSessionPreview(connection, session);
@@ -3619,7 +3715,7 @@ export async function getSessionShareStats(sessionId) {
   });
 }
 
-export async function listMySessions(user, filters = {}) {
+export async function listMySessions(user, filters = {}, options = {}) {
   if (filters.scope === "album") {
     return listMyAlbumSessions(user, filters);
   }
@@ -3664,10 +3760,24 @@ export async function listMySessions(user, filters = {}) {
       `,
       values
     );
-    return rows.map((row) => ({
+    const sessions = rows.map((row) => ({
       ...row,
       album_media_count: Number(row.album_media_count || 0)
     }));
+    const authorTextReader = options.authorTextReader;
+    const merged = [];
+    for (const session of sessions) {
+      merged.push(await mergeAuthorSessionUpdate(connection, {
+        reader: authorTextReader,
+        userId: user.user.id,
+        session
+      }));
+    }
+    return appendAuthorSessionCreationForUser(connection, {
+      reader: authorTextReader,
+      userId: user.user.id,
+      sessions: merged
+    });
   });
 }
 
@@ -4469,13 +4579,19 @@ function normalizeNpcRoleStatus(value) {
   return status;
 }
 
-export async function listSessionNpcRoles(user, sessionId) {
+export async function listSessionNpcRoles(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
     await requireSessionOwner(connection, id, user);
+    const npcRoles = await mergeAuthorNpcRoleView(connection, {
+      reader: options.authorTextReader,
+      userId: user.user.id,
+      sessionId: id,
+      roles: await sessionNpcRolesForSession(connection, id)
+    });
     return {
       session_id: id,
-      npc_roles: await sessionNpcRolesForSession(connection, id)
+      npc_roles: npcRoles
     };
   });
 }
@@ -5894,15 +6010,17 @@ export async function assertSessionAlbumImageUploadAllowed(
 
 export async function insertFinalizedSessionAlbumImage(
   connection,
-  { intent, metadata, moderationRequired = false }
+  { intent, metadata, moderationRequired = false, authorVisibilityVersion = 0 }
 ) {
   const moderationStatus = moderationStatusForIntake({ moderationRequired });
+  const policyVersion = Number(authorVisibilityVersion) === 1 ? 1 : 0;
   const [result] = await connection.query(
     `INSERT INTO session_album_photos
       (session_id, uploader_user_id, media_type, photo_url, object_key, object_etag,
        image_width, image_height, image_byte_size, image_content_type,
-       processing_status, moderation_status, moderation_object_version, status)
-     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', ?, ?, 'active')`,
+       processing_status, moderation_status, moderation_object_version,
+       author_visibility_version, status)
+     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', ?, ?, ?, 'active')`,
     [
       Number(intent.session_id),
       Number(intent.user_id),
@@ -5913,24 +6031,28 @@ export async function insertFinalizedSessionAlbumImage(
       metadata.height,
       metadata.byteSize,
       moderationStatus,
-      metadata.etag
+      metadata.etag,
+      policyVersion
     ]
   );
   return findById(connection, "session_album_photos", result.insertId);
 }
 
-export async function getFinalizedSessionAlbumImage(connection, { mediaId, user }) {
+export async function getFinalizedSessionAlbumImage(
+  connection,
+  { mediaId, user }
+) {
   const photo = await findById(connection, "session_album_photos", mediaId);
   if (!photo || albumMediaType(photo) !== "image" || photo.status !== "active") {
     throw notFound("Album photo not found");
   }
   const session = await requireSessionAlbumOpen(connection, photo.session_id);
   await requireSessionAlbumMember(connection, session, user);
-  return albumMediaResponse(photo, [], { userId: user.user.id });
+  return photo;
 }
 
-export function serializeSessionAlbumImage(media, userId) {
-  return albumMediaResponse(media, [], { userId });
+export function serializeSessionAlbumImage(media, userId, options = {}) {
+  return albumMediaResponse(media, [], { userId, ...options });
 }
 
 export async function getMySessionAlbumPrivacy(user, sessionId) {
@@ -6024,7 +6146,7 @@ export async function getSessionAlbumShareSubject(user, sessionId) {
   });
 }
 
-export async function listSessionAlbum(user, sessionId) {
+export async function listSessionAlbum(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
     const session = await requireSessionAlbumOpen(connection, id);
@@ -6070,7 +6192,12 @@ export async function listSessionAlbum(user, sessionId) {
       const processingStatus = albumMediaProcessingStatus(photo);
       if (!isModerationPublished(photo.moderation_status)) {
         if (Number(photo.uploader_user_id) !== Number(user.user.id)) continue;
-        photos.push(albumMediaResponse(photo, [], { userId: user.user.id }));
+        photos.push(albumMediaResponse(photo, [], {
+          userId: user.user.id,
+          authorPrivateImageEnabled: options.authorPrivateImageEnabled,
+          authorPrivateVideoEnabled: options.authorPrivateVideoEnabled,
+          allowLocalD46Preview: options.allowLocalD46Preview === true
+        }));
         continue;
       }
       if (
@@ -6230,9 +6357,10 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}, option
             processing_status,
             moderation_status,
             moderation_object_version,
+            author_visibility_version,
             status
           )
-        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', ?, ?, 'active')
+        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', ?, ?, ?, 'active')
       `,
       [
         id,
@@ -6243,11 +6371,16 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}, option
         imageByteSize,
         imageContentType,
         moderationStatus,
-        `local:${photoUrl}:${imageByteSize}`
+        `local:${photoUrl}:${imageByteSize}`,
+        options.authorPrivateImageEnabled === true ? 1 : 0
       ]
     );
     const photo = await findById(connection, "session_album_photos", result.insertId);
-    return albumMediaResponse(photo, [], { userId: user.user.id });
+    return albumMediaResponse(photo, [], {
+      userId: user.user.id,
+      authorPrivateImageEnabled: options.authorPrivateImageEnabled,
+      allowLocalD46Preview: options.allowLocalD46Preview === true
+    });
   });
 }
 
@@ -6291,7 +6424,14 @@ function inspectedAlbumVideoMetadata(value) {
   };
 }
 
-function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId) {
+function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId, options = {}) {
+  const authorPrivate = createAuthorPrivateMediaView(media, {
+    viewerUserId: userId,
+    imageEnabled: false,
+    videoEnabled: options.authorPrivateVideoEnabled === true,
+    allowLocalD46Preview: options.allowLocalD46Preview === true
+  });
+  if (authorPrivate) return authorPrivate;
   const isMine = Number(media.uploader_user_id) === Number(userId);
   const moderationStatus = media.moderation_status || "pending";
   const published = isModerationPublished(moderationStatus);
@@ -6412,6 +6552,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
               processing_status,
               moderation_status,
               moderation_object_version,
+              author_visibility_version,
               status
             )
           VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
@@ -6430,7 +6571,8 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
           ciJobId,
           processingStatus,
           moderationStatus,
-          videoObjectVersion
+          videoObjectVersion,
+          options.authorPrivateVideoEnabled === true ? 1 : 0
         ]
       );
       const insertedMedia = await findById(connection, "session_album_photos", result.insertId);
@@ -6465,7 +6607,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
     }
   }
 
-  return sessionAlbumVideoCreateResponse(media, processingStatus, user.user.id);
+  return sessionAlbumVideoCreateResponse(media, processingStatus, user.user.id, options);
 }
 
 export async function updateSessionAlbumVideoProcessingResult(
@@ -6513,8 +6655,8 @@ export async function updateSessionAlbumVideoProcessingResult(
     }
   }
 
-  if (!mediaId && !sourceUrl && !ciJobId) {
-    throw badRequest("video processing callback must include mediaId, sourceUrl, or ciJobId");
+  if (!sourceUrl && !ciJobId) {
+    throw badRequest("video processing callback must include sourceUrl or ciJobId");
   }
 
   return runWithTransaction(async (connection) => {
@@ -6527,23 +6669,12 @@ export async function updateSessionAlbumVideoProcessingResult(
     if (!media) {
       throw notFound("Album video not found for processing callback");
     }
-    if (media.moderation_status === "rejected") {
-      const lateOutputEvent = Boolean(displayUrl || coverUrl);
-      await enqueueRejectedCleanup(connection, {
-        ...media,
-        source_url: media.source_url,
-        display_url: displayUrl || media.display_url || null,
-        cover_url: coverUrl || media.cover_url || null
-      }, lateOutputEvent ? { lateOutputEvent: true } : undefined);
-      return {
-        id: Number(media.id),
-        session_id: Number(media.session_id),
-        media_type: "video",
-        processing_status: albumMediaProcessingStatus(media),
-        ignored: "moderation_rejected"
-      };
+    if (
+      !albumVideoOutputMatchesSource(media.source_url, displayUrl) ||
+      !albumVideoOutputMatchesSource(media.source_url, coverUrl)
+    ) {
+      throw badRequest("video processing output does not match the source object");
     }
-
     const nextCiJobId = mergeCiJobIds(media.ci_job_id, ciJobId);
     const nextDisplayUrl = displayUrl || media.display_url || null;
     const nextCoverUrl = coverUrl || media.cover_url || null;
@@ -6564,6 +6695,44 @@ export async function updateSessionAlbumVideoProcessingResult(
               "Video processing failed"
           )
         : null;
+
+    if (media.moderation_status === "rejected") {
+      if (media.status === "deleting" || !shouldRetainRejectedMedia(media)) {
+        const lateOutputEvent = Boolean(displayUrl || coverUrl);
+        await enqueueRejectedCleanup(connection, {
+          ...media,
+          source_url: media.source_url,
+          display_url: nextDisplayUrl,
+          cover_url: nextCoverUrl
+        }, lateOutputEvent ? { lateOutputEvent: true } : undefined);
+        return {
+          id: Number(media.id),
+          session_id: Number(media.session_id),
+          media_type: "video",
+          processing_status: albumMediaProcessingStatus(media),
+          ignored: "moderation_rejected"
+        };
+      }
+
+      // The output remains behind the author-only v1 serializer. Persisting a
+      // validated late display/cover object keeps the retained author preview
+      // useful without restoring any public capability.
+      await connection.query(
+        `UPDATE session_album_photos
+         SET display_url = ?, cover_url = ?, ci_job_id = ?,
+             processing_status = ?, processing_error = ?
+         WHERE id = ? AND status = 'active' AND moderation_status = 'rejected'
+           AND author_visibility_version = 1`,
+        [nextDisplayUrl, nextCoverUrl, nextCiJobId, nextStatus, nextError, media.id]
+      );
+      return {
+        id: Number(media.id),
+        session_id: Number(media.session_id),
+        media_type: "video",
+        processing_status: nextStatus,
+        ignored: "moderation_rejected_retained"
+      };
+    }
 
     await connection.query(
       `
@@ -6700,15 +6869,26 @@ export async function deleteSessionAlbumPhoto(user, photoId) {
 
 export async function requestAlbumImageDeletion(connection, { user, mediaId }) {
   const id = positiveId(mediaId, "mediaId");
+  const snapshot = await findById(connection, "session_album_photos", id);
+  if (!snapshot || !["active", "deleting"].includes(snapshot.status)) {
+    throw notFound("Album photo not found");
+  }
+  if (Number(snapshot.uploader_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the photo uploader can delete this photo");
+  }
+  await cancelMediaModerationJobsForDeletion(connection, snapshot);
+
   const photo = await findById(connection, "session_album_photos", id, { forUpdate: true });
   if (!photo || !["active", "deleting"].includes(photo.status)) {
     throw notFound("Album photo not found");
   }
-  if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
-    throw forbidden("Only the photo uploader can delete this photo");
-  }
-  if (albumMediaType(photo) !== "image") {
-    throw badRequest("Video deletion must use the video cleanup path");
+  if (
+    Number(photo.uploader_user_id) !== Number(user.user.id) ||
+    albumMediaType(photo) !== albumMediaType(snapshot) ||
+    String(photo.moderation_object_version || "") !==
+      String(snapshot.moderation_object_version || "")
+  ) {
+    throw conflict("Album media changed while deletion was requested");
   }
   if (photo.status === "deleting") {
     const [jobs] = await connection.query(
@@ -6716,43 +6896,163 @@ export async function requestAlbumImageDeletion(connection, { user, mediaId }) {
        WHERE media_id = ? LIMIT 1 FOR UPDATE`,
       [id]
     );
-    if (!jobs[0]) throw conflict("Album image deletion job is missing");
+    if (!jobs[0]) throw conflict("Album media deletion job is missing");
     return { id, status: "deleting", job: jobs[0] };
   }
 
-  let storageKind;
-  let objectKey = null;
-  let localPath = null;
-  if (photo.object_key) {
-    storageKind = "cos";
-    objectKey = String(photo.object_key);
-  } else {
-    const path = String(photo.photo_url || "");
-    if (!/^\/uploads\/session-album\/display\/[A-Za-z0-9._-]+$/.test(path)) {
-      throw badRequest("Album image local path is invalid");
-    }
-    storageKind = "local";
-    localPath = path;
-  }
-  await connection.query(
+  const [changed] = await connection.query(
     "UPDATE session_album_photos SET status = 'deleting' WHERE id = ? AND status = 'active'",
     [id]
   );
-  const [inserted] = await connection.query(
-    `INSERT INTO session_album_object_cleanup_jobs
-      (media_id, session_id, storage_kind, object_key, local_path, status)
-     VALUES (?, ?, ?, ?, ?, 'pending')`,
-    [id, Number(photo.session_id), storageKind, objectKey, localPath]
-  );
+  if (Number(changed.affectedRows || 0) !== 1) {
+    throw conflict("Album media changed while deletion was requested");
+  }
+  const cleanupJobId = await enqueueRejectedMediaCleanup(connection, photo, {
+    deletionRequested: true
+  });
   return {
     id,
     status: "deleting",
-    job: { id: Number(inserted.insertId), media_id: id, status: "pending" }
+    job: { id: Number(cleanupJobId), media_id: id, status: "pending" }
   };
 }
 
 export async function requestSessionAlbumImageDeletion(user, mediaId) {
   return withTransaction((connection) => requestAlbumImageDeletion(connection, { user, mediaId }));
+}
+
+export async function purgeSessionAlbumMedia(
+  { admin, jobId, reason, confirmation } = {},
+  { transaction = withTransaction } = {}
+) {
+  if (!admin || !Array.isArray(admin.roles) || !isAdmin(admin)) {
+    throw forbidden("system_admin role required");
+  }
+  const id = positiveId(jobId, "jobId");
+  const purgeReason = String(reason || "").trim();
+  if (
+    confirmation !== "PURGE" ||
+    !purgeReason ||
+    [...purgeReason].length > 500 ||
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/.test(purgeReason)
+  ) {
+    throw badRequest("purge requires a valid reason and literal PURGE confirmation");
+  }
+
+  return transaction(async (connection) => {
+    const job = await findModerationJobById(connection, id, { forUpdate: true });
+    if (
+      !job ||
+      !["album_image", "album_video"].includes(String(job.subject_type)) ||
+      !["rejected", "cancelled"].includes(String(job.status))
+    ) {
+      throw conflict("Only retained rejected media can be purged");
+    }
+    const mediaId = positiveId(job.subject_id, "mediaId");
+    const snapshot = await findById(connection, "session_album_photos", mediaId);
+    const existingPurgeAudit = await findModerationAuditLogByAction(connection, {
+      jobId: id,
+      action: "purge",
+      forUpdate: true
+    });
+    const expectedMediaType = job.subject_type === "album_video" ? "video" : "image";
+    if (!snapshot && job.status === "cancelled") {
+      if (!existingPurgeAudit) {
+        await createAuditLog(connection, {
+          jobId: id,
+          adminUserId: admin.user.id,
+          action: "purge",
+          previousStatus: "cancelled",
+          nextStatus: "cancelled",
+          reason: purgeReason
+        });
+      }
+      return {
+        id: mediaId,
+        moderation_job_id: id,
+        status: "deleted",
+        purge_pending: false
+      };
+    }
+    if (
+      !snapshot ||
+      !["active", "deleting"].includes(String(snapshot.status)) ||
+      String(snapshot.media_type) !== expectedMediaType ||
+      Number(snapshot.author_visibility_version) !== 1 ||
+      String(snapshot.moderation_status) !== "rejected" ||
+      String(snapshot.moderation_object_version || "") !== String(job.subject_version || "")
+    ) {
+      throw conflict("Retained media is no longer purgeable");
+    }
+
+    if (snapshot.status === "deleting") {
+      const [jobs] = await connection.query(
+        `SELECT * FROM session_album_object_cleanup_jobs
+         WHERE media_id = ? LIMIT 1 FOR UPDATE`,
+        [mediaId]
+      );
+      if (!jobs[0]) throw conflict("Album media deletion job is missing");
+      if (!existingPurgeAudit) {
+        await createAuditLog(connection, {
+          jobId: id,
+          adminUserId: admin.user.id,
+          action: "purge",
+          previousStatus: String(job.status),
+          nextStatus: "cancelled",
+          reason: purgeReason
+        });
+      }
+      return {
+        id: mediaId,
+        moderation_job_id: id,
+        status: "deleting",
+        purge_pending: true
+      };
+    }
+
+    const cancelled = await cancelMediaModerationJobsForDeletion(connection, snapshot);
+    const target = cancelled.find((entry) => Number(entry.id) === id);
+    if (!target && job.status !== "cancelled") {
+      throw conflict("Moderation job changed while purge was requested");
+    }
+
+    const media = await findById(connection, "session_album_photos", mediaId, {
+      forUpdate: true
+    });
+    if (
+      !media ||
+      media.status !== "active" ||
+      Number(media.author_visibility_version) !== 1 ||
+      String(media.moderation_status) !== "rejected" ||
+      String(media.moderation_object_version || "") !== String(job.subject_version || "")
+    ) {
+      throw conflict("Retained media changed while purge was requested");
+    }
+    const [changed] = await connection.query(
+      "UPDATE session_album_photos SET status = 'deleting' WHERE id = ? AND status = 'active'",
+      [mediaId]
+    );
+    if (Number(changed.affectedRows || 0) !== 1) {
+      throw conflict("Retained media changed while purge was requested");
+    }
+    await enqueueRejectedMediaCleanup(connection, media, { deletionRequested: true });
+    if (!existingPurgeAudit) {
+      await createAuditLog(connection, {
+        jobId: id,
+        adminUserId: admin.user.id,
+        action: "purge",
+        previousStatus: target?.previousStatus || "cancelled",
+        nextStatus: "cancelled",
+        reason: purgeReason
+      });
+    }
+    return {
+      id: mediaId,
+      moderation_job_id: id,
+      status: "deleting",
+      purge_pending: true
+    };
+  });
 }
 
 export async function prepareSessionAlbumPhotoDeletion(user, photoId) {
@@ -6793,6 +7093,36 @@ export async function finalizeSessionAlbumPhotoDeletion(user, photoId, snapshot)
     await connection.query("DELETE FROM session_album_photos WHERE id = ?", [id]);
     return { id, deleted: true };
   });
+}
+
+async function getAuthorAlbumMediaPreview(user, mediaId, mediaType, options = {}) {
+  const id = positiveId(mediaId, "mediaId");
+  if (typeof options.consume !== "function") {
+    throw new TypeError("author media preview consumer is required");
+  }
+  return withTransaction(async (connection) => {
+    const media = await findById(connection, "session_album_photos", id, {
+      forUpdate: true
+    });
+    const record = getAuthorMediaPreviewRecordForRow(media, {
+      viewerUserId: user?.user?.id,
+      imageEnabled: mediaType === "image" && options.enabled === true,
+      videoEnabled: mediaType === "video" && options.enabled === true,
+      allowLocalD46Preview: options.allowLocalD46Preview === true
+    });
+    if (!record || record.mediaType !== mediaType) {
+      throw moderationUnpublishedNotFound(`album_${mediaType}`);
+    }
+    return options.consume(media, record);
+  });
+}
+
+export async function getAuthorAlbumImagePreview(user, mediaId, options = {}) {
+  return getAuthorAlbumMediaPreview(user, mediaId, "image", options);
+}
+
+export async function getAuthorAlbumVideoPreview(user, mediaId, options = {}) {
+  return getAuthorAlbumMediaPreview(user, mediaId, "video", options);
 }
 
 export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
@@ -6997,7 +7327,7 @@ export async function listSessionReviews(sessionId) {
   });
 }
 
-export async function getMySessionReview(user, sessionId) {
+export async function getMySessionReview(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
     const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
@@ -7016,7 +7346,7 @@ export async function getMySessionReview(user, sessionId) {
     const photosByReview = review
       ? await reviewPhotos(connection, [Number(review.id)])
       : new Map();
-    return {
+    const state = {
       can_review: Boolean(eligibleSignup),
       review: review
         ? {
@@ -7025,6 +7355,15 @@ export async function getMySessionReview(user, sessionId) {
           }
         : null
     };
+    const authorTextReader = options.authorTextReader;
+    const projection = typeof authorTextReader?.find === "function"
+      ? await authorTextReader.find(connection, {
+          userId: user.user.id,
+          action: "upsert_session_review",
+          targetSubjectId: String(id)
+        })
+      : null;
+    return mergeAuthorReviewState(state, projection);
   });
 }
 

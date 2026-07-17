@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { buildWechatImageModerationUrl } from "../modules/album-image/signed-urls.js";
-import { buildContentModerationConfig, config } from "../config/env.js";
+import { buildContentModerationConfig, buildRedisUrl, config } from "../config/env.js";
 import { createDatabaseConnection } from "../db/mysql.js";
+import { assertD46IsolatedSmokeGenericJobDisabled } from "../modules/content-moderation/d46-isolated-smoke.js";
 import {
   assertProductionPreflightGuards,
   createProductionPreflightRunner,
@@ -23,6 +24,10 @@ import {
 } from "../modules/content-moderation/tencent-video-client.js";
 import { emitContentModerationEvent } from "../modules/content-moderation/telemetry.js";
 import { createWechatContentSecurityClient } from "../modules/content-moderation/wechat-client.js";
+import {
+  createDefaultRedisClientResolver,
+  createWechatAccessTokenProvider
+} from "../modules/wechat/access-token.js";
 import { deleteCosObject, headCosObject, putCosObject } from "../storage/cos.js";
 
 export async function main({
@@ -33,26 +38,10 @@ export async function main({
   exit = process.exit
 } = {}) {
   try {
+    assertD46IsolatedSmokeGenericJobDisabled("content-moderation-production-preflight", env);
     const { caseId } = parseProductionPreflightCliArgs(argv);
     const moderationConfig = buildContentModerationConfig(env);
-    const connection = await createDatabaseConnection();
-    try {
-      const runner = createProductionPreflightRunnerFromRuntime({
-        connection,
-        moderationConfig,
-        env
-      });
-      const runtime = await buildProductionPreflightRuntime({
-        connection,
-        moderationConfig,
-        env
-      });
-      const result = await runProductionPreflightCase(runner, { caseId, runtime });
-      stdout.write(JSON.stringify({ ok: true, caseId, runId: result.runId, state: result.state }) + "\n");
-      return result;
-    } finally {
-      await connection.end();
-    }
+    return await runProductionPreflightJob({ caseId, moderationConfig, env, stdout });
   } catch (error) {
     stderr.write(JSON.stringify({
       ok: false,
@@ -60,6 +49,64 @@ export async function main({
     }) + "\n");
     exit(1);
   }
+}
+
+export async function runProductionPreflightJob({
+  caseId,
+  moderationConfig,
+  env = process.env,
+  stdout = process.stdout,
+  createConnection = createDatabaseConnection,
+  createRunner = createProductionPreflightRunnerFromRuntime,
+  buildRuntime = buildProductionPreflightRuntime,
+  runCase = runProductionPreflightCase,
+  createWechatClientScope = createProductionPreflightWechatClientScope
+} = {}) {
+  const connection = await createConnection();
+  let disposeWechatClient = () => undefined;
+  try {
+    const wechatClientScope = createWechatClientScope({ moderationConfig, env });
+    disposeWechatClient = wechatClientScope.dispose;
+    const runner = createRunner({
+      connection,
+      moderationConfig,
+      env,
+      wechatClient: wechatClientScope.wechatClient
+    });
+    const runtime = await buildRuntime({ connection, moderationConfig, env });
+    const result = await runCase(runner, { caseId, runtime });
+    stdout.write(JSON.stringify({ ok: true, caseId, runId: result.runId, state: result.state }) + "\n");
+    return result;
+  } finally {
+    try {
+      await connection.end();
+    } finally {
+      await disposeWechatClient();
+    }
+  }
+}
+
+export function createProductionPreflightWechatClientScope({
+  moderationConfig,
+  env = process.env,
+  createRedisResolver = createDefaultRedisClientResolver,
+  createTokenProvider = createWechatAccessTokenProvider,
+  createWechatClient = createWechatContentSecurityClient
+} = {}) {
+  const redisResolver = createRedisResolver({
+    enabled: () => Boolean(moderationConfig?.redisEnabled),
+    url: () => buildRedisUrl(env)
+  });
+  const tokenProvider = createTokenProvider({
+    appId: moderationConfig?.wechatAppId,
+    appSecret: moderationConfig?.wechatAppSecret,
+    getRedis: redisResolver,
+    resetRedis: redisResolver.reset
+  });
+  return {
+    wechatClient: createWechatClient({ tokenProvider }),
+    dispose: () => redisResolver.reset()
+  };
 }
 
 export function createProductionPreflightRunnerFromRuntime({

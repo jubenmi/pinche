@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   CONTENT_MODERATION_ORPHAN_SCAN_NAMES,
+  isRetainedAuthorPrivateMediaRecord,
   runContentModerationOrphanScanBatch
 } from "../src/modules/content-moderation/orphan-scan.js";
 import { createContentModerationOrphanScanWorker } from "../src/jobs/content-moderation-orphan-scan.js";
@@ -66,6 +67,42 @@ function createStorage({ objects, missingKeys = [], deleteError = null } = {}) {
     }
   };
 }
+
+test("D46 active rejected media remains a protected reference, never an orphan candidate", async () => {
+  const key = "uploads/session-album/display/retained.jpg";
+  const media = {
+    id: 72,
+    media_type: "image",
+    status: "active",
+    moderation_status: "rejected",
+    moderation_object_version: "etag-72",
+    author_visibility_version: 1,
+    object_key: key,
+    moderation_jobs: [{
+      provider: "wechat_sec_check",
+      subject_type: "album_image",
+      subject_version: "etag-72",
+      status: "rejected"
+    }]
+  };
+  assert.equal(isRetainedAuthorPrivateMediaRecord(media), true);
+  const repository = createRepository({ references: [key], media: [media] });
+  const storage = createStorage({
+    objects: [{ key, lastModified: "2026-07-01T08:00:00.000Z" }]
+  });
+  const result = await runContentModerationOrphanScanBatch({
+    repository,
+    storage,
+    withTransaction: async (run) => run({}),
+    now: () => Date.parse("2026-07-15T08:00:00.000Z"),
+    randomUUID: () => "retained-scan-lease",
+    limit: 10,
+    retentionMs: 48 * 60 * 60 * 1000,
+    cleanupEnabled: true
+  });
+  assert.equal(result.cos.candidates, 0);
+  assert.deepEqual(storage.deletes, []);
+});
 
 test("orphan scan reports only aggregate candidates across COS, media, and moderation jobs", async () => {
   const old = "2026-07-09T08:00:00.000Z";

@@ -84,7 +84,7 @@
           查看地图
         </t-button>
       </view>
-      <view class="info-row">时间：{{ session.start_at }}</view>
+      <view class="info-row">时间：{{ sessionStartAtText }}</view>
       <view class="info-row">指定DM：{{ session.dm_name_snapshot || "未指定" }}</view>
       <view class="info-row">指定NPC：{{ session.npc_name_snapshot || "未指定" }}</view>
       <view class="info-row">状态：{{ statusLabel(session.status) }}</view>
@@ -169,6 +169,7 @@
 </template>
 
 <script>
+import { formatBeijingDateTime } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -183,6 +184,7 @@ import {
   request
 } from "../../utils/api";
 import { contentModerationErrorText } from "../../utils/contentModeration";
+import { normalizeAuthorPrivateSession } from "../../utils/authorPrivateText";
 import { showToast } from "../../utils/tdesignFeedback";
 import { canRequestRescheduleReminder } from "../../utils/sessionMembership";
 import { requestSessionRescheduledSubscription } from "../../utils/subscribeMessages";
@@ -242,7 +244,10 @@ export default {
       if (this.isPostStart) {
         return "相册、照片标注和车友记录会沉淀在这里。";
       }
-      return `${this.session.store_name_snapshot} / ${this.session.start_at}`;
+      return `${this.session.store_name_snapshot} / ${this.sessionStartAtText}`;
+    },
+    sessionStartAtText() {
+      return formatBeijingDateTime(this.session.start_at);
     },
     focusedSeat() {
       return (this.session.seats || []).find(
@@ -516,7 +521,7 @@ export default {
       }
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
-        this.session = dataOf(response) || {};
+        this.session = normalizeAuthorPrivateSession(dataOf(response) || {});
         this.accessScope = this.session.access_scope || "";
         this.loadStatusText = "";
         if (this.focusedSeatId && this.focusedSeat) {
@@ -727,6 +732,9 @@ export default {
       );
     },
     canApplyNpcRole(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return false;
+      }
       if (!this.npcSelfJoinEnabled) {
         return false;
       }
@@ -788,6 +796,9 @@ export default {
       return "unavailable";
     },
     npcRoleStateKind(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return "pendingReview";
+      }
       if (this.currentUserId && Number(role.bound_user_id || 0) === Number(this.currentUserId)) {
         return "mine";
       }
@@ -803,6 +814,9 @@ export default {
       return this.npcSelfJoinEnabled ? "available" : "unavailable";
     },
     npcRoleStatusLabel(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return role.moderation_message || "仅自己可见 · 审核中";
+      }
       const stateKind = this.npcRoleStateKind(role);
       if (stateKind === "mine") {
         return "";

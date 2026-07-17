@@ -359,7 +359,7 @@ assert(
   "admin web Dockerfile should copy the shared package implementation before building"
 );
 assert(
-  (dockerWorkflow.match(/docker\/build-push-action@v6/g) || []).length >= 2,
+  (dockerWorkflow.match(/docker\/build-push-action@v7/g) || []).length >= 2,
   "docker workflow should run docker build-push action for both images"
 );
 

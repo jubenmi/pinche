@@ -34,6 +34,7 @@ export function serverConnectionOptions() {
     port: config.mysql.port,
     user: config.mysql.user,
     password: config.mysql.password,
+    timezone: "Z",
     multipleStatements: false
   };
 }
@@ -45,12 +46,27 @@ export function databaseConnectionOptions() {
   };
 }
 
+export async function configureConnectionTimeZone(connection) {
+  await connection.query("SET time_zone = '+00:00'");
+}
+
+async function createUtcConnection(options) {
+  const connection = await mysql.createConnection(options);
+  try {
+    await configureConnectionTimeZone(connection);
+    return connection;
+  } catch (error) {
+    await connection.end();
+    throw error;
+  }
+}
+
 export async function createServerConnection() {
-  return mysql.createConnection(serverConnectionOptions());
+  return createUtcConnection(serverConnectionOptions());
 }
 
 export async function createDatabaseConnection() {
-  return mysql.createConnection(databaseConnectionOptions());
+  return createUtcConnection(databaseConnectionOptions());
 }
 
 export async function withDatabaseConnection(work) {

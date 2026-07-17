@@ -23,6 +23,7 @@
           :key="value"
           class="rating-button"
           :class="{ active: rating >= value }"
+          :disabled="saving || !canEditDraft"
           @tap="rating = value"
         >
           ★
@@ -38,6 +39,7 @@
         maxlength="500"
         placeholder="写一点这车的体验"
         placeholder-class="placeholder"
+        :disabled="saving || !canEditDraft"
         @change="content = $event.detail.value"
       />
       <view class="counter">{{ content.length }}/500</view>
@@ -48,7 +50,7 @@
         <view class="section-title">照片</view>
         <t-button
           class="photo-add"
-          :disabled="photos.length + pendingPhotoCount >= 9 || saving"
+          :disabled="photos.length + pendingPhotoCount >= 9 || saving || !canEditDraft"
           @tap="choosePhotos"
         >
           添加
@@ -57,14 +59,22 @@
       <view class="photo-grid">
         <view v-for="(photo, index) in photos" :key="photo" class="photo-cell">
           <t-image class="photo-image" :src="assetUrl(photo)" mode="aspectFill" />
-          <t-button class="photo-remove" :disabled="saving" @tap="removePhoto(index)">移除</t-button>
+          <t-button class="photo-remove" :disabled="saving || !canEditDraft" @tap="removePhoto(index)">移除</t-button>
         </view>
       </view>
     </view>
 
     <view class="bottom-action">
+      <t-button
+        v-if="activeDraft"
+        class="button secondary"
+        :disabled="saving"
+        @tap="cancelDraft"
+      >
+        取消这版
+      </t-button>
       <t-button class="button" :disabled="saving || !canSave" @tap="saveReview">
-        {{ saving ? "保存中..." : "保存记录" }}
+        {{ saving ? "保存中..." : activeDraft?.can_resubmit ? "修改后重新提交" : "保存记录" }}
       </t-button>
     </view>
   </view>
@@ -84,6 +94,10 @@ import {
   uploadSessionReviewPhotos
 } from "../../utils/api";
 import { contentModerationErrorText } from "../../utils/contentModeration";
+import {
+  authorPrivateStatusText,
+  isAuthorPrivateText
+} from "../../utils/authorPrivateText";
 import { showToast } from "../../utils/tdesignFeedback";
 
 export default {
@@ -96,6 +110,7 @@ export default {
       content: "",
       photos: [],
       pendingPhotoCount: 0,
+      activeDraft: null,
       statusText: "",
       saving: false
     };
@@ -103,7 +118,10 @@ export default {
   computed: {
     canSave() {
       return this.canReview && this.rating >= 1 && this.rating <= 5 &&
-        this.pendingPhotoCount === 0;
+        this.pendingPhotoCount === 0 && this.canEditDraft;
+    },
+    canEditDraft() {
+      return !this.activeDraft || this.activeDraft.can_edit === true;
     }
   },
   async onLoad(options) {
@@ -137,6 +155,14 @@ export default {
           this.rating = Number(data.review.rating || 5);
           this.content = data.review.content || "";
           this.photos = data.review.photos || [];
+          this.activeDraft = isAuthorPrivateText(data.review.author_private)
+            ? data.review.author_private
+            : null;
+          if (this.activeDraft) {
+            this.statusText = authorPrivateStatusText(this.activeDraft);
+          }
+        } else {
+          this.activeDraft = null;
         }
         const recovered = await recoverPendingSessionReviewPhotos({ sessionId: this.sessionId });
         this.photos = [...new Set([...this.photos, ...recovered.approvedPaths])].slice(0, 9);
@@ -203,19 +229,30 @@ export default {
         const reviewAssociationCutoff = captureSessionReviewPhotoAssociationCutoff({
           sessionId: this.sessionId
         });
-        await request({
+        const response = await request({
           url: `/api/sessions/${this.sessionId}/review`,
           method: "PUT",
           data: {
             rating: this.rating,
             content: this.content.trim(),
-            photoUrls: this.photos
+            photoUrls: this.photos,
+            ...(this.activeDraft?.can_resubmit
+              ? { replaces_draft_id: this.activeDraft.draft_id }
+            : {})
           }
         });
         acknowledgeSessionReviewPhotoAssociations(this.photos,
           { sessionId: this.sessionId },
           reviewAssociationCutoff
         );
+        const result = dataOf(response);
+        if (isAuthorPrivateText(result)) {
+          this.activeDraft = result;
+          this.statusText = authorPrivateStatusText(result);
+          showToast({ title: this.statusText, icon: "none" });
+          return;
+        }
+        this.activeDraft = null;
         showToast({ title: "记录已保存", icon: "none" });
         setTimeout(() => {
           uni.navigateBack();
@@ -233,6 +270,23 @@ export default {
         } else {
           this.statusText = "记录保存失败，请稍后重试。";
         }
+      } finally {
+        this.saving = false;
+      }
+    },
+    async cancelDraft() {
+      if (!this.activeDraft || this.saving) return;
+      this.saving = true;
+      try {
+        await request({
+          url: `/api/content-moderation/author-drafts/${this.activeDraft.draft_id}`,
+          method: "DELETE"
+        });
+        this.activeDraft = null;
+        await this.loadMyReview();
+        showToast({ title: "已取消这版内容", icon: "none" });
+      } catch (error) {
+        this.statusText = error?.userMessage || "取消失败，请稍后重试。";
       } finally {
         this.saving = false;
       }

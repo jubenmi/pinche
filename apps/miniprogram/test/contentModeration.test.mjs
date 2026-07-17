@@ -117,6 +117,11 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
     "both waterfall columns must show the mapped media status"
   );
   assert.match(album, /contentModerationStatusText/);
+  assert.match(album, /contentModerationErrorText/);
+  assert.match(
+    album,
+    /const moderationMessage = contentModerationErrorText\(error\);[\s\S]*if \(moderationMessage\) \{[\s\S]*return moderationMessage;/
+  );
   assert.match(album, /this\.timelineMode \|\| !photo\?\.is_mine/);
   assert.match(album, /videoStateText\(photo\)[\s\S]*mediaModerationStatusText\(photo\)/);
   assert.doesNotMatch(album, /moderation_message|photo\.(?:provider|provider_job_id|score|suggestion|hit_words)/);
@@ -168,13 +173,13 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
   assertSuccessfulUpdateFollowsRequest(setup, "const sessionResponse = await request({", "uni.redirectTo({ url:");
   assertSuccessfulUpdateFollowsRequest(
     chat,
-    "const message = await this.api.sendMessage(",
-    "this.messages = [...this.messages, message];"
+    "const result = await this.api.sendMessage(",
+    "this.messages = ["
   );
   assertSuccessfulUpdateFollowsRequest(
     pinned,
     "const result = await this.api.updatePinnedMessage(",
-    "this.pinnedMessage = result.pinnedMessage || null;"
+    "this.pinnedMessage = isAuthorPrivateProjection(result)"
   );
 });
 
@@ -189,7 +194,7 @@ test("the D46 static moderation checker passes and is wired into root check", as
   assert.match(packageJson.scripts.precheck, /d46:check/);
   assert.equal(
     packageJson.scripts["d46:check"],
-    "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js"
+    "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js && node scripts/d46-author-private-content-check.js"
   );
 });
 

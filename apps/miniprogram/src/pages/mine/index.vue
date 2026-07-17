@@ -3,6 +3,14 @@
     <AuthIdentityBar />
     <FeedbackHost />
 
+    <t-notice-bar
+      v-if="hasLogin && profileModerationText"
+      class="notice"
+      theme="warning"
+      :visible="true"
+      :content="profileModerationText"
+    />
+
     <view v-if="!hasLogin" class="section login-section">
       <view class="title">我的</view>
       <view class="text">{{ statusText }}</view>
@@ -54,6 +62,7 @@
             {{ reviewStatusLabel(item.review_status) }}
           </view>
         </view>
+        <view v-if="item.moderation_message" class="catalog-note">{{ item.moderation_message }}</view>
         <view v-if="item.review_note" class="catalog-note">审核备注：{{ item.review_note }}</view>
         <view v-if="item.merged_into_name" class="catalog-note">已合并到：{{ item.merged_into_name }}</view>
         <view v-if="canEditCatalogItem(item) && editingCatalogKey !== catalogKey(item)" class="catalog-actions">
@@ -147,8 +156,14 @@ import {
   request
 } from "../../utils/api";
 import { showToast } from "../../utils/tdesignFeedback";
+import {
+  authorPrivateCatalogItem,
+  authorPrivateStatusText,
+  isAuthorPrivateText
+} from "../../utils/authorPrivateText";
 
 const statusText = ref("未登录");
+const profileModerationText = ref("");
 const roles = ref([]);
 const hasLogin = ref(false);
 const sessions = ref([]);
@@ -203,7 +218,21 @@ function hydrateAuth() {
     return;
   }
   loadCalendar();
+  loadAuthorProfile();
   loadCatalogSubmissions();
+}
+
+async function loadAuthorProfile() {
+  try {
+    const response = await request({ url: "/api/users/me" });
+    const auth = dataOf(response) || {};
+    if (auth.user) {
+      statusText.value = loginName(auth.user);
+      profileModerationText.value = authorPrivateStatusText(auth.user.author_private);
+    }
+  } catch (error) {
+    if (error?.statusCode === 401) handleAuthExpired(error);
+  }
 }
 
 async function login() {
@@ -237,6 +266,7 @@ function resetLoggedOutState() {
   roles.value = [];
   hasLogin.value = false;
   statusText.value = "未登录";
+  profileModerationText.value = "";
   sessions.value = [];
   sessionStatusText.value = "";
   signups.value = [];
@@ -330,8 +360,20 @@ async function loadCatalogSubmissions() {
   catalogLoading.value = true;
   catalogStatusText.value = "";
   try {
-    const response = await request({ url: "/api/catalog-review-items/mine" });
-    catalogItems.value = dataOf(response) || [];
+    const [reviewResponse, storeResponse, scriptResponse] = await Promise.all([
+      request({ url: "/api/catalog-review-items/mine" }),
+      request({ url: "/api/stores?limit=50" }),
+      request({ url: "/api/scripts?limit=50" })
+    ]);
+    const drafts = [
+      ...(dataOf(storeResponse) || [])
+        .filter(isAuthorPrivateText)
+        .map((item) => authorPrivateCatalogItem(item, "store")),
+      ...(dataOf(scriptResponse) || [])
+        .filter(isAuthorPrivateText)
+        .map((item) => authorPrivateCatalogItem(item, "script"))
+    ].filter(Boolean);
+    catalogItems.value = [...drafts, ...(dataOf(reviewResponse) || [])];
   } catch (error) {
     if (error?.statusCode === 401) {
       handleAuthExpired(error);
@@ -344,7 +386,7 @@ async function loadCatalogSubmissions() {
 }
 
 function catalogKey(item) {
-  return `${item.type}:${item.id}`;
+  return item.draft_id ? `${item.type}:draft:${item.draft_id}` : `${item.type}:${item.id}`;
 }
 
 function itemTypeLabel(type) {
@@ -354,6 +396,9 @@ function itemTypeLabel(type) {
 function reviewStatusLabel(status) {
   const labels = {
     pending: "待审核",
+    processing: "审核中",
+    review: "进一步审核",
+    error: "审核中",
     needs_changes: "需要补充",
     approved: "已公开",
     rejected: "未通过",

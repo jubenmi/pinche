@@ -21,6 +21,7 @@ test("only approved and approved_legacy media pass the content gate", () => {
 test("lower-level local image creation defaults direct and rejects unwired moderation before INSERT", async () => {
   let inserts = 0;
   let insertedModerationStatus = null;
+  let insertedAuthorVisibilityVersion = null;
   const timeline = [];
   const photo = {
     id: 31, session_id: 8, uploader_user_id: 3, media_type: "image",
@@ -31,7 +32,8 @@ test("lower-level local image creation defaults direct and rejects unwired moder
       if (String(sql).includes("INSERT INTO session_album_photos")) {
         timeline.push("insert_business");
         inserts += 1;
-        insertedModerationStatus = values.at(-2);
+        insertedModerationStatus = values.at(-3);
+        insertedAuthorVisibilityVersion = values.at(-1);
         return [{ insertId: photo.id }];
       }
       if (String(sql).includes("SELECT * FROM session_album_photos WHERE id")) return [[photo]];
@@ -54,6 +56,7 @@ test("lower-level local image creation defaults direct and rejects unwired moder
   );
   assert.equal(result.moderation_status, "approved_legacy");
   assert.equal(insertedModerationStatus, "approved_legacy");
+  assert.equal(insertedAuthorVisibilityVersion, 0);
 
   timeline.length = 0;
   await assert.rejects(createSessionAlbumPhoto(

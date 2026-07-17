@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { config } from "../config/env.js";
 import { withTransaction } from "../db/mysql.js";
+import { assertD46IsolatedSmokeGenericJobDisabled } from "../modules/content-moderation/d46-isolated-smoke.js";
 import {
   assertLocalAlbumCleanupPath,
   runAlbumImageCleanupBatch
@@ -50,6 +51,7 @@ async function runOnce() {
 }
 
 async function main() {
+  assertD46IsolatedSmokeGenericJobDisabled("album-image-cleanup");
   const once = process.argv.includes("--once");
   do {
     const result = await runOnce();

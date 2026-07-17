@@ -248,8 +248,8 @@ test("album page uses the approved download helper for candidates and blocks cac
   assert.match(candidateBlock, /isApprovedAlbumImageDownloadCandidate/);
   assert.match(downloadBlock, /isApprovedAlbumImageDownloadCandidate/);
   assert.match(downloadBlock, /isCurrentPublishedAlbumMedia\(photo\)/);
-  assert.match(previewBlock, /isModerationPublished\(photo\?\.moderation_status\)/);
-  assert.match(source, /pruneUnpublishedAlbumMediaCache/);
+  assert.match(previewBlock, /isCurrentPreviewableAlbumMedia\(photo\)/);
+  assert.match(source, /pruneAlbumMediaPreviewCache/);
   assert.match(source, /isCurrentPublishedAlbumMedia/);
   assert.match(source, /mediaLoadSerial \+= 1/);
 });

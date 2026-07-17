@@ -6,6 +6,14 @@ const STATUS_TEXT = Object.freeze({
   rejected: "内容未通过安全审核"
 });
 
+const AUTHOR_PRIVATE_STATUS_TEXT = Object.freeze({
+  pending: "仅自己可见 · 审核中",
+  processing: "仅自己可见 · 审核中",
+  error: "仅自己可见 · 审核中",
+  review: "仅自己可见 · 进一步审核",
+  rejected: "仅自己可见 · 未通过"
+});
+
 const ERROR_STATUS = Object.freeze({
   CONTENT_MODERATION_UNAVAILABLE: "error",
   WECHAT_CONTENT_SECURITY_RESPONSE_INVALID: "error",
@@ -24,6 +32,10 @@ export function contentModerationStatusText(status) {
 export function isContentModerationError(error = {}) {
   const code = String(error?.code || "").trim();
   return code.startsWith("CONTENT_MODERATION_") || code.startsWith("WECHAT_CONTENT_SECURITY_");
+}
+
+export function authorPrivateContentModerationStatusText(status) {
+  return AUTHOR_PRIVATE_STATUS_TEXT[String(status || "").trim().toLowerCase()] || "";
 }
 
 export function contentModerationErrorText(error = {}) {

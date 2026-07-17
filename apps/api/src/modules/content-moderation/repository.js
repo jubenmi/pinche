@@ -24,6 +24,23 @@ function duplicateKeyError(error) {
   return error?.code === "ER_DUP_ENTRY" || Number(error?.errno) === 1062;
 }
 
+function textProposalAuthorVisibilityFacts(input) {
+  const version = input?.authorVisibilityVersion === undefined
+    ? 0
+    : Number(input.authorVisibilityVersion);
+  if (![0, 1].includes(version) || !Number.isInteger(version)) {
+    throw new TypeError("authorVisibilityVersion must be 0 or 1");
+  }
+  if (version === 0) {
+    return { targetSubjectId: null, authorVisibilityVersion: 0 };
+  }
+  const targetSubjectId = String(input?.targetSubjectId || "").trim();
+  if (!targetSubjectId || targetSubjectId.length > 128) {
+    throw new TypeError("targetSubjectId is required for author-private proposals");
+  }
+  return { targetSubjectId, authorVisibilityVersion: 1 };
+}
+
 function safeAppliedResultJson(result) {
   const safe = projectSafeTextAppliedResult(result);
   return safe ? JSON.stringify(safe) : null;
@@ -455,6 +472,7 @@ export async function transitionModerationJob(connection, input) {
 }
 
 export async function createTextProposal(connection, input) {
+  const authorVisibility = textProposalAuthorVisibilityFacts(input);
   const byIdempotency = await findTextProposalByIdempotency(connection, input, { forUpdate: true });
   if (byIdempotency) return compatibleTextProposalId(byIdempotency, input);
 
@@ -464,19 +482,22 @@ export async function createTextProposal(connection, input) {
   try {
     const [result] = await connection.query(
       `INSERT INTO content_moderation_text_proposals
-        (moderation_job_id, subject_type, subject_id, base_version, action,
-         normalized_payload_json, payload_digest, idempotency_key, status, created_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        (moderation_job_id, subject_type, subject_id, target_subject_id, base_version, action,
+         normalized_payload_json, payload_digest, idempotency_key, status, created_by_user_id,
+         author_visibility_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       [
         Number(input.jobId),
         String(input.subjectType),
         String(input.subjectId),
+        authorVisibility.targetSubjectId,
         String(input.baseVersion),
         String(input.action),
         JSON.stringify(input.normalizedPayload),
         String(input.payloadDigest),
         String(input.idempotencyKey),
-        Number(input.userId)
+        Number(input.userId),
+        authorVisibility.authorVisibilityVersion
       ]
     );
     return result.insertId;
@@ -518,6 +539,138 @@ export async function findTextProposalByIdempotency(
     [Number(input.userId), String(input.action), String(input.idempotencyKey)]
   );
   return rows[0] || null;
+}
+
+export async function findLatestAuthorTextProposal(
+  connection,
+  { userId, action, targetSubjectId, forUpdate = false }
+) {
+  const [rows] = await connection.query(
+    `SELECT proposal.*, proposal.status AS proposal_status, job.status AS job_status
+     FROM content_moderation_text_proposals AS proposal
+     INNER JOIN content_moderation_jobs AS job
+       ON job.id = proposal.moderation_job_id
+     WHERE proposal.created_by_user_id = ?
+       AND proposal.action = ?
+       AND proposal.target_subject_id = ?
+       AND proposal.author_visibility_version = 1
+       AND proposal.status IN ('pending', 'rejected')
+       AND job.status IN ('pending', 'processing', 'review', 'error', 'rejected')
+     ORDER BY proposal.updated_at DESC, proposal.id DESC
+     LIMIT 1${lockClause(forUpdate)}`,
+    [Number(userId), String(action), String(targetSubjectId)]
+  );
+  return rows[0] || null;
+}
+
+export async function findAuthorTextDraftById(
+  connection,
+  { draftId, userId, forUpdate = false }
+) {
+  const [rows] = await connection.query(
+    `SELECT proposal.*, proposal.status AS proposal_status, job.status AS job_status
+     FROM content_moderation_text_proposals AS proposal
+     INNER JOIN content_moderation_jobs AS job
+       ON job.id = proposal.moderation_job_id
+     WHERE proposal.id = ?
+       AND proposal.created_by_user_id = ?
+     LIMIT 1${lockClause(forUpdate)}`,
+    [Number(draftId), Number(userId)]
+  );
+  return rows[0] || null;
+}
+
+export async function cancelTextProposalByAuthor(
+  connection,
+  { proposalId, userId, fromStatus }
+) {
+  assertTextProposalTransition(fromStatus, "cancelled");
+  const [result] = await connection.query(
+    `UPDATE content_moderation_text_proposals
+     SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+       AND created_by_user_id = ?
+       AND status = ?
+       AND author_visibility_version = 1`,
+    [Number(proposalId), Number(userId), String(fromStatus)]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function cancelModerationJobByUser(
+  connection,
+  { jobId, fromStatus }
+) {
+  assertModerationTransition(fromStatus, "cancelled", { source: "user" });
+  const [result] = await connection.query(
+    `UPDATE content_moderation_jobs
+     SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP,
+         next_retry_at = NULL, lease_token = NULL, lease_expires_at = NULL
+     WHERE id = ? AND status = ?`,
+    [Number(jobId), String(fromStatus)]
+  );
+  return Number(result.affectedRows || 0) === 1;
+}
+
+export async function cancelMediaModerationJobsForDeletion(connection, media) {
+  const mediaId = Number(media?.id);
+  const mediaType = String(media?.media_type || "");
+  const subjectVersion = String(media?.moderation_object_version || "");
+  if (!Number.isSafeInteger(mediaId) || mediaId <= 0) {
+    throw new TypeError("media id must be a positive safe integer");
+  }
+  if (!["image", "video"].includes(mediaType)) {
+    throw new TypeError("media type must be image or video");
+  }
+  if (!subjectVersion) return [];
+
+  const subjectType = mediaType === "video" ? "album_video" : "album_image";
+  const [jobs] = await connection.query(
+    `SELECT id, status FROM content_moderation_jobs
+     WHERE subject_type = ? AND subject_id = ? AND subject_version = ?
+       AND status IN ('pending', 'processing', 'review', 'error', 'rejected')
+     ORDER BY id FOR UPDATE`,
+    [subjectType, String(mediaId), subjectVersion]
+  );
+  const cancelled = [];
+  for (const job of jobs) {
+    const changed = await cancelModerationJobByUser(connection, {
+      jobId: job.id,
+      fromStatus: job.status
+    });
+    if (!changed) continue;
+    await retireCurrentModerationAttempt(connection, { jobId: job.id });
+    cancelled.push({ id: Number(job.id), previousStatus: String(job.status) });
+  }
+  return cancelled;
+}
+
+export async function supersedeRejectedTextProposal(
+  connection,
+  { proposalId, newProposalId, userId, action, targetSubjectId }
+) {
+  assertTextProposalTransition("rejected", "superseded");
+  const previousId = Number(proposalId);
+  const replacementId = Number(newProposalId);
+  if (
+    !Number.isSafeInteger(previousId) || previousId <= 0 ||
+    !Number.isSafeInteger(replacementId) || replacementId <= 0 ||
+    previousId === replacementId
+  ) {
+    throw new TypeError("proposal replacement ids must be distinct positive integers");
+  }
+  const [result] = await connection.query(
+    `UPDATE content_moderation_text_proposals
+     SET status = 'superseded', superseded_by_proposal_id = ?
+     WHERE id = ?
+       AND created_by_user_id = ?
+       AND action = ?
+       AND target_subject_id = ?
+       AND status = 'rejected'
+       AND author_visibility_version = 1`,
+    [replacementId, previousId, Number(userId), String(action), String(targetSubjectId)]
+  );
+  return Number(result.affectedRows || 0) === 1;
 }
 
 export async function markTextProposalStatus(
@@ -562,6 +715,21 @@ export async function createAuditLog(connection, input) {
     ]
   );
   return result.insertId;
+}
+
+export async function findModerationAuditLogByAction(
+  connection,
+  { jobId, action, forUpdate = false }
+) {
+  const [rows] = await connection.query(
+    `SELECT id, moderation_job_id, admin_user_id, action, previous_status,
+            next_status, reason, created_at
+     FROM content_moderation_audit_logs
+     WHERE moderation_job_id = ? AND action = ?
+     ORDER BY id LIMIT 1${lockClause(forUpdate)}`,
+    [Number(jobId), String(action)]
+  );
+  return rows[0] || null;
 }
 
 export async function findModerationMedia(connection, job, { forUpdate = false } = {}) {
@@ -762,7 +930,7 @@ async function enqueueRejectedVideoCleanup(
   connection,
   media,
   objectUrls,
-  { lateOutputEvent = false } = {}
+  { lateOutputEvent = false, deletionRequested = false } = {}
 ) {
   let cleanupJob = await findRejectedMediaCleanupJob(connection, media.id);
   if (!cleanupJob) {
@@ -785,7 +953,7 @@ async function enqueueRejectedVideoCleanup(
   const cleanupChanged =
     cleanupJob.storage_kind !== "multi" ||
     JSON.stringify(existingObjectUrls) !== JSON.stringify(mergedObjectUrls);
-  if (!cleanupChanged && !lateOutputEvent) return cleanupJob.id;
+  if (!cleanupChanged && !lateOutputEvent && !deletionRequested) return cleanupJob.id;
 
   // A validated late callback means CI observed an output event. Requeue even
   // when it reused the same deterministic key: a worker may have already
@@ -805,7 +973,7 @@ async function enqueueRejectedVideoCleanup(
 export async function enqueueRejectedMediaCleanup(
   connection,
   media,
-  { lateOutputEvent = false } = {}
+  { lateOutputEvent = false, deletionRequested = false } = {}
 ) {
   const mediaType = media.media_type === "video" ? "video" : "image";
   let storageKind = "cos";
@@ -830,7 +998,33 @@ export async function enqueueRejectedMediaCleanup(
       ? { storageKind: "local", localPath: String(value) }
       : { storageKind: "cos", objectKey: String(value).replace(/^\//, "") }
     );
-    return enqueueRejectedVideoCleanup(connection, media, objectUrls, { lateOutputEvent });
+    return enqueueRejectedVideoCleanup(connection, media, objectUrls, {
+      lateOutputEvent,
+      deletionRequested
+    });
+  }
+  if (deletionRequested) {
+    let cleanupJob = await findRejectedMediaCleanupJob(connection, media.id);
+    if (!cleanupJob) {
+      const result = await insertRejectedMediaCleanupJob(connection, {
+        media,
+        storageKind,
+        objectKey,
+        localPath,
+        objectUrls
+      });
+      cleanupJob = await findRejectedMediaCleanupJob(connection, media.id);
+      if (!cleanupJob) return Number(result.insertId);
+    }
+    await connection.query(
+      `UPDATE session_album_object_cleanup_jobs
+       SET storage_kind = ?, object_key = ?, local_path = ?, object_urls_json = NULL,
+           status = 'pending', next_retry_at = NULL, lease_token = NULL,
+           lease_expires_at = NULL, completed_at = NULL
+       WHERE id = ?`,
+      [storageKind, objectKey, localPath, Number(cleanupJob.id)]
+    );
+    return Number(cleanupJob.id);
   }
   const result = await insertRejectedMediaCleanupJob(connection, {
     media,
@@ -962,6 +1156,45 @@ export async function getModerationQueueStats(connection, { now = new Date() } =
     [snapshotAt]
   );
   return rows;
+}
+
+export async function getAuthorPrivateRetentionStats(
+  connection,
+  { longLivedDays = 30 } = {}
+) {
+  const days = Number(longLivedDays);
+  if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
+    throw new TypeError("author-private retention age must be from 1 to 3650 days");
+  }
+  const [rows] = await connection.query(
+    `SELECT COUNT(*) AS retained_object_count,
+            COALESCE(SUM(
+              CASE
+                WHEN media_type = 'image' THEN COALESCE(image_byte_size, 0)
+                WHEN media_type = 'video' THEN COALESCE(video_byte_size, 0)
+                ELSE 0
+              END
+            ), 0) AS retained_bytes,
+            COALESCE(SUM(
+              CASE WHEN created_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? DAY) THEN 1 ELSE 0 END
+            ), 0) AS long_lived_count
+     FROM session_album_photos
+     WHERE author_visibility_version = 1
+       AND status = 'active'
+       AND moderation_status = 'rejected'
+       AND media_type IN ('image', 'video')`,
+    [days]
+  );
+  const row = rows[0] || {};
+  const safeCount = (value) => {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+  };
+  return {
+    retained_object_count: safeCount(row.retained_object_count),
+    retained_bytes: safeCount(row.retained_bytes),
+    long_lived_count: safeCount(row.long_lived_count)
+  };
 }
 
 export async function claimOrphanScanState(
@@ -1116,6 +1349,7 @@ export async function listModerationMediaForReconciliation(
   const batchLimit = boundedPositiveInteger(limit, 1000, "media reconciliation limit");
   const [mediaRows] = await connection.query(
     `SELECT id, media_type, status, moderation_status, moderation_object_version,
+            author_visibility_version,
             object_key, source_url, display_url, cover_url
      FROM session_album_photos
      WHERE id > ? AND media_type IN ('image', 'video') AND status IN ('active', 'deleting')
@@ -1174,7 +1408,7 @@ export async function listAdminModerationJobs(
   connection,
   { provider, status, subjectType, label, dateFrom, dateTo, limit = 100 } = {}
 ) {
-  const where = ["job.status IN ('review', 'error')"];
+  const where = ["job.status IN ('review', 'error', 'rejected')"];
   const values = [];
   if (provider) { where.push("job.provider = ?"); values.push(String(provider)); }
   if (subjectType) { where.push("job.subject_type = ?"); values.push(String(subjectType)); }
@@ -1189,8 +1423,10 @@ export async function listAdminModerationJobs(
             media.session_id,
             COALESCE(media.uploader_user_id, user_media.owner_user_id) AS uploader_user_id,
             COALESCE(media.media_type, IF(user_media.id IS NULL, NULL, 'image')) AS media_type,
+            COALESCE(media.status, user_media.status) AS media_record_status,
             media.processing_status,
-            COALESCE(media.moderation_status, user_media.moderation_status) AS moderation_status
+            COALESCE(media.moderation_status, user_media.moderation_status) AS moderation_status,
+            media.author_visibility_version
      FROM content_moderation_jobs job
      LEFT JOIN content_moderation_text_proposals proposal
        ON proposal.moderation_job_id = job.id
@@ -1215,6 +1451,7 @@ export async function getAdminModerationJob(connection, jobId) {
             media.id AS media_id, media.session_id, media.uploader_user_id,
             media.media_type, media.status AS media_record_status,
             media.processing_status, media.moderation_status, media.moderation_object_version,
+            media.author_visibility_version,
             media.object_key, media.source_url, media.display_url, media.cover_url,
             user_media.id AS user_media_id,
             user_media.owner_user_id AS user_media_owner_user_id,
@@ -1231,7 +1468,7 @@ export async function getAdminModerationJob(connection, jobId) {
      LEFT JOIN user_image_assets user_media
        ON job.subject_type IN ('avatar_image', 'review_image')
       AND user_media.id = CAST(job.subject_id AS UNSIGNED)
-     WHERE job.id = ? AND job.status IN ('review', 'error') LIMIT 1`,
+     WHERE job.id = ? AND job.status IN ('review', 'error', 'rejected') LIMIT 1`,
     [Number(jobId)]
   );
   const row = rows[0];

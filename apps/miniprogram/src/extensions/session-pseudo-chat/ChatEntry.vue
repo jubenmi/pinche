@@ -32,6 +32,9 @@
           <view v-if="pinnedMessage" class="pinned-message">
             <view class="pinned-label">置顶</view>
             <view class="pinned-text">{{ pinnedMessage.content }}</view>
+            <view v-if="pinnedMessage.author_private" class="draft-status">
+              {{ pinnedMessage.author_private.moderation_message }}
+            </view>
           </view>
 
           <t-notice-bar
@@ -50,7 +53,7 @@
             />
             <view
               v-for="message in messages"
-              :key="message.id"
+              :key="message.id || `draft-${message.draft_id}`"
               class="message-item"
               :class="{ mine: isMine(message) }"
             >
@@ -59,6 +62,17 @@
                 <text>{{ timeText(message.created_at) }}</text>
               </view>
               <view class="message-content">{{ message.content }}</view>
+              <view v-if="isAuthorPrivate(message)" class="draft-status">
+                {{ message.moderation_message }}
+              </view>
+              <view v-if="isAuthorPrivate(message)" class="draft-actions">
+                <t-button
+                  v-if="message.author_private.can_resubmit"
+                  class="draft-button"
+                  @tap="editRejectedMessage(message)"
+                >编辑重发</t-button>
+                <t-button class="draft-button" @tap="cancelMessageDraft(message)">取消</t-button>
+              </view>
             </view>
           </view>
         </scroll-view>
@@ -70,7 +84,7 @@
             placeholder="输入留言"
             placeholder-class="placeholder"
             confirm-type="send"
-            :disabled="!canChat || session.status === 'cancelled'"
+            :disabled="!canComposeMessage"
             @change="draftMessage = $event.detail.value"
             @enter="sendMessage"
           />
@@ -80,7 +94,7 @@
             :disabled="!canSendMessage"
             @tap="sendMessage"
           >
-            发送
+            {{ replacementDraftId ? "重新提交" : "发送" }}
           </t-button>
         </view>
       </view>
@@ -89,7 +103,12 @@
 </template>
 
 <script>
-import { chatApi } from "./api.js";
+import {
+  authorPrivateMessageView,
+  chatApi,
+  isAuthorPrivateProjection,
+  publicChatMessages
+} from "./api.js";
 
 export default {
   props: {
@@ -104,6 +123,7 @@ export default {
       pinnedMessage: null,
       messages: [],
       draftMessage: "",
+      replacementDraftId: null,
       messageStatusText: "",
       canChat: false,
       chatModalOpen: false,
@@ -120,9 +140,20 @@ export default {
     },
     canSendMessage() {
       return (
-        this.canChat &&
-        this.session.status !== "cancelled" &&
+        this.canComposeMessage &&
         Boolean(this.draftMessage.trim())
+      );
+    },
+    activeMessageDraft() {
+      return [...this.messages].reverse().find((message) => this.isAuthorPrivate(message)) || null;
+    },
+    canComposeMessage() {
+      if (!this.canChat || this.session.status === "cancelled") return false;
+      if (!this.activeMessageDraft) return true;
+      return Boolean(
+        this.replacementDraftId &&
+        Number(this.activeMessageDraft.draft_id) === Number(this.replacementDraftId) &&
+        this.activeMessageDraft.author_private.can_resubmit
       );
     },
     showChatEntry() {
@@ -161,6 +192,7 @@ export default {
       this.pinnedMessage = null;
       this.messages = [];
       this.draftMessage = "";
+      this.replacementDraftId = null;
       this.messageStatusText = "";
       this.canChat = false;
       this.chatModalOpen = false;
@@ -237,14 +269,15 @@ export default {
       this.chatModalOpen = false;
     },
     updateUnreadCount(nextMessages = []) {
-      const latestId = this.latestMessageId(nextMessages);
+      const publicMessages = publicChatMessages(nextMessages);
+      const latestId = this.latestMessageId(publicMessages);
       if (!latestId) {
         this.unreadCount = 0;
         this.lastSeenMessageId = "";
         return;
       }
       if (this.chatModalOpen) {
-        this.markChatRead(nextMessages);
+        this.markChatRead(publicMessages);
         return;
       }
       if (!this.lastSeenMessageId) {
@@ -252,16 +285,16 @@ export default {
         this.unreadCount = 0;
         return;
       }
-      const lastSeenIndex = nextMessages.findIndex((message) => {
+      const lastSeenIndex = publicMessages.findIndex((message) => {
         return String(message.id) === String(this.lastSeenMessageId);
       });
       this.unreadCount =
         lastSeenIndex === -1
-          ? nextMessages.length
-          : Math.max(0, nextMessages.length - lastSeenIndex - 1);
+          ? publicMessages.length
+          : Math.max(0, publicMessages.length - lastSeenIndex - 1);
     },
     markChatRead(messages = this.messages) {
-      this.lastSeenMessageId = this.latestMessageId(messages);
+      this.lastSeenMessageId = this.latestMessageId(publicChatMessages(messages));
       this.unreadCount = 0;
     },
     latestMessageId(messages = []) {
@@ -290,19 +323,28 @@ export default {
         return;
       }
       try {
-        const message = await this.api.sendMessage(
+        const result = await this.api.sendMessage(
           this.sessionId,
-          this.draftMessage.trim()
+          this.draftMessage.trim(),
+          this.replacementDraftId
         );
+        const message = authorPrivateMessageView(result, this.localUserId || this.currentUserId) || result;
         if (message) {
-          this.messages = [...this.messages, message];
+          this.messages = [
+            ...this.messages.filter((entry) => (
+              !this.replacementDraftId ||
+              Number(entry.draft_id) !== Number(this.replacementDraftId)
+            )),
+            message
+          ];
           if (this.chatModalOpen) {
             this.markChatRead(this.messages);
           }
         }
         this.draftMessage = "";
+        this.replacementDraftId = null;
         this.canChat = true;
-        this.messageStatusText = "";
+        this.messageStatusText = message?.moderation_message || "";
         this.startMessagePolling();
       } catch (error) {
         this.messageStatusText = this.messageErrorText(error);
@@ -324,6 +366,31 @@ export default {
       const userId = this.localUserId || this.currentUserId;
       return userId && Number(message.sender_user_id) === Number(userId);
     },
+    isAuthorPrivate(message) {
+      return isAuthorPrivateProjection(message?.author_private);
+    },
+    editRejectedMessage(message) {
+      if (!this.isAuthorPrivate(message) || !message.author_private.can_resubmit) return;
+      this.draftMessage = message.content || "";
+      this.replacementDraftId = message.draft_id;
+      this.messageStatusText = "修改后重新提交审核，提交前仍仅自己可见。";
+    },
+    async cancelMessageDraft(message) {
+      if (!this.isAuthorPrivate(message)) return;
+      try {
+        await this.api.cancelDraft(message.draft_id);
+        this.messages = this.messages.filter((entry) => (
+          Number(entry.draft_id) !== Number(message.draft_id)
+        ));
+        if (Number(this.replacementDraftId) === Number(message.draft_id)) {
+          this.replacementDraftId = null;
+          this.draftMessage = "";
+        }
+        this.messageStatusText = "已取消这条待审消息。";
+      } catch (error) {
+        this.messageStatusText = this.messageErrorText(error);
+      }
+    },
     timeText(value) {
       if (!value) {
         return "";
@@ -344,6 +411,28 @@ export default {
   color: #1f7a68;
   font-size: 24rpx;
   line-height: 1.5;
+}
+
+.draft-status {
+  margin-top: 8rpx;
+  color: #9a6700;
+  font-size: 22rpx;
+}
+
+.draft-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10rpx;
+  margin-top: 10rpx;
+}
+
+.draft-button {
+  min-width: 104rpx;
+  height: 48rpx;
+  margin: 0;
+  padding: 0 14rpx;
+  font-size: 22rpx;
+  line-height: 48rpx;
 }
 
 .empty {

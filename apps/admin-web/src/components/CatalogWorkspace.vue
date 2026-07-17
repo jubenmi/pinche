@@ -469,6 +469,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
+import { formatBeijingDateTime } from "@pinche/shared";
 import { catalogTabs, writeAdminRoute } from "../adminRoute";
 import {
   approveCatalogReviewItem,
@@ -1145,19 +1146,7 @@ function formatDateTime(value) {
   if (!value) {
     return "-";
   }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).format(date);
+  return formatBeijingDateTime(value, String(value));
 }
 
 watch(tab, load);

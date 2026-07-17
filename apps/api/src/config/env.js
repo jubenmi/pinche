@@ -4,12 +4,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { MODERATION_RETRY_LEASE_MIN_MS } from "../modules/content-moderation/constants.js";
+import { AUTHOR_PRIVATE_TEXT_ACTIONS } from "../modules/content-moderation/author-dto.js";
+import { assertD46IsolatedSmokeEnvironment } from "../modules/content-moderation/d46-isolated-smoke.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../../..");
 
+export function shouldLoadDotEnv(env = process.env) {
+  return String(env?.D46_SMOKE_ISOLATED || "").trim() !== "1";
+}
+
 function loadDotEnv() {
+  if (!shouldLoadDotEnv(process.env)) {
+    return;
+  }
+
   const envPath = path.join(repoRoot, ".env");
 
   if (!fs.existsSync(envPath)) {
@@ -45,6 +55,10 @@ function loadDotEnv() {
 }
 
 loadDotEnv();
+
+if (String(process.env.D46_SMOKE_ISOLATED || "").trim() === "1") {
+  assertD46IsolatedSmokeEnvironment(process.env);
+}
 
 function booleanEnv(name, fallback) {
   const raw = process.env[name];
@@ -226,6 +240,45 @@ function validWechatEventAesKey(raw) {
 }
 
 const CONTENT_MODERATION_INTAKE_MODES = new Set(["legacy", "closed", "moderated"]);
+const AUTHOR_PRIVATE_TEXT_ACTION_SET = new Set(AUTHOR_PRIVATE_TEXT_ACTIONS);
+
+function authorPrivateTextActions(env) {
+  const raw = stringValue(env, "CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ACTIONS");
+  if (!raw) return [];
+  const actions = raw.split(",").map((value) => value.trim());
+  const unique = new Set();
+  if (actions.some((action) => !action || !AUTHOR_PRIVATE_TEXT_ACTION_SET.has(action))) {
+    throw moderationConfigurationError(
+      "CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ACTIONS contains an unsupported action"
+    );
+  }
+  for (const action of actions) {
+    if (unique.has(action)) {
+      throw moderationConfigurationError(
+        "CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ACTIONS contains a duplicate action"
+      );
+    }
+    unique.add(action);
+  }
+  return actions;
+}
+
+function authorPrivatePreviewTtl(env) {
+  const raw = stringValue(env, "CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS");
+  if (!raw) return 60;
+  if (!/^\d+$/.test(raw)) {
+    throw moderationConfigurationError(
+      "CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS is outside the allowed duration"
+    );
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 60) {
+    throw moderationConfigurationError(
+      "CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS is outside the allowed duration"
+    );
+  }
+  return value;
+}
 
 function moderationNodeEnv(env) {
   return String(
@@ -260,6 +313,20 @@ export function buildContentModerationConfig(env = process.env) {
     videoIntakeMode: contentModerationIntakeMode(env, "CONTENT_MODERATION_VIDEO_INTAKE_MODE", {
       nodeEnv
     }),
+    authorPrivateTextEnabled: booleanValue(
+      env.CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ENABLED,
+      false
+    ),
+    authorPrivateTextActions: authorPrivateTextActions(env),
+    authorPrivateImageEnabled: booleanValue(
+      env.CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED,
+      false
+    ),
+    authorPrivateVideoEnabled: booleanValue(
+      env.CONTENT_MODERATION_AUTHOR_PRIVATE_VIDEO_ENABLED,
+      false
+    ),
+    authorPreviewTtlSeconds: authorPrivatePreviewTtl(env),
     redisEnabled: booleanValue(env.REDIS_ENABLED, false),
     redisUrl: stringValue(env, "REDIS_URL"),
     redisHost: stringValue(env, "REDIS_HOST"),
@@ -387,6 +454,16 @@ export function assertContentModerationConfig(
     missing.push("CONTENT_MODERATION_ORPHAN_SCAN_ENABLED");
   }
   if (moderationConfig.orphanScanEnabled) {
+    if (!moderationConfig.cosEnabled) missing.push("COS_ENABLED");
+    if (!moderationConfig.secretId) missing.push("COS_SECRET_ID");
+    if (!moderationConfig.secretKey) missing.push("COS_SECRET_KEY");
+    if (!moderationConfig.bucket) missing.push("COS_BUCKET");
+    if (!moderationConfig.cosRegion) missing.push("COS_REGION");
+  }
+  if (
+    normalizedNodeEnv === "production" &&
+    (moderationConfig.authorPrivateImageEnabled || moderationConfig.authorPrivateVideoEnabled)
+  ) {
     if (!moderationConfig.cosEnabled) missing.push("COS_ENABLED");
     if (!moderationConfig.secretId) missing.push("COS_SECRET_ID");
     if (!moderationConfig.secretKey) missing.push("COS_SECRET_KEY");

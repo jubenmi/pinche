@@ -239,6 +239,12 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
+import {
+  beijingDateKey,
+  beijingDateParts,
+  beijingTimeText,
+  parseBusinessDateTime
+} from "@pinche/shared";
 import { dataOf, request } from "../utils/api";
 import {
   discoveryRequestBody,
@@ -249,6 +255,10 @@ import {
 } from "../utils/cityDiscovery";
 import { sessionCalendarStripeTone } from "../utils/sessionCalendarStripe";
 import { showModal, showToast } from "../utils/tdesignFeedback";
+import {
+  authorPrivateSessionItem,
+  isAuthorPrivateText
+} from "../utils/authorPrivateText";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -692,6 +702,10 @@ function handleCalendarCardTap(item) {
 }
 
 function handleCalendarAction(item) {
+  if (item.isAuthorPrivate) {
+    showToast({ title: item.raw?.moderation_message || "仅自己可见 · 审核中", icon: "none" });
+    return;
+  }
   if (item.type === "guest") {
     goGuestDetail(item.sessionId);
     return;
@@ -707,7 +721,20 @@ function handleCalendarAction(item) {
   goShare(item.sessionId);
 }
 
-function hideCalendarItem(item) {
+async function hideCalendarItem(item) {
+  if (item.isAuthorPrivate) {
+    try {
+      await request({
+        url: `/api/content-moderation/author-drafts/${item.raw.draft_id}`,
+        method: "DELETE"
+      });
+      showToast({ title: "已取消待审车局", icon: "none" });
+      emit("refresh");
+    } catch (error) {
+      showToast({ title: error?.userMessage || "取消失败，请稍后重试", icon: "none" });
+    }
+    return;
+  }
   if (item.isOrganized) {
     if (hasOtherOnboardMembers(item.session)) {
       leaveOrganizedSession(item.session);
@@ -862,7 +889,7 @@ function createDiscoveryCalendarItems(rows = [], itemType = "city") {
   return (rows || [])
     .map((session) => {
       const sessionId = session?.id;
-      const startDate = parseStartAt(session?.start_at);
+      const startDate = parseBusinessDateTime(session?.start_at);
       if (!sessionId || !startDate) {
         return null;
       }
@@ -926,11 +953,18 @@ function mergeCalendarItems(createdSessions = [], joinedSignups = []) {
   const itemsBySession = new Map();
 
   (createdSessions || []).forEach((session) => {
-    const sessionId = String(session?.id || "");
-    if (!sessionId) {
+    const normalizedSession = isAuthorPrivateText(session)
+      ? authorPrivateSessionItem(session)
+      : session;
+    const sessionKey = normalizedSession?.id
+      ? String(normalizedSession.id)
+      : normalizedSession?.draft_id
+        ? `draft:${normalizedSession.draft_id}`
+        : "";
+    if (!sessionKey) {
       return;
     }
-    itemsBySession.set(sessionId, createCalendarItem({ session }));
+    itemsBySession.set(sessionKey, createCalendarItem({ session: normalizedSession }));
   });
 
   (joinedSignups || []).forEach((signup) => {
@@ -964,11 +998,14 @@ function createCalendarItem({ session = null, signup = null }) {
 
 function refreshCalendarItem(item) {
   const source = item.session || item.signup || {};
-  const startDate = parseStartAt(source.start_at);
+  const startDate = parseBusinessDateTime(source.start_at);
+  item.isAuthorPrivate = isAuthorPrivateText(item.session?.author_private);
   item.sessionId = item.session?.id || item.signup?.session_id || "";
-  item.key = `calendar-${item.sessionId}`;
+  item.key = item.isAuthorPrivate
+    ? `calendar-draft-${item.session?.draft_id}`
+    : `calendar-${item.sessionId}`;
   item.isOrganized = Boolean(item.session);
-  item.canManage = item.isOrganized;
+  item.canManage = item.isOrganized && !item.isAuthorPrivate;
   item.canRemove = true;
   item.isJoined = Boolean(item.signup);
   item.type = item.isOrganized ? "organized" : "joined";
@@ -1019,6 +1056,10 @@ function calendarItemFailed(item) {
 
 function calendarIdentityTags(item) {
   const tags = [];
+  if (item.isAuthorPrivate) {
+    tags.push({ key: "author-private", label: "仅自己可见", tone: "pending" });
+    return tags;
+  }
   if (item.isOrganized) {
     tags.push({ key: "organized", label: "发起", tone: "organized" });
   }
@@ -1027,6 +1068,7 @@ function calendarIdentityTags(item) {
 
 function calendarItemIsPending(item) {
   return (
+    item.isAuthorPrivate ||
     Number(item.session?.pending_signup_count || 0) > 0 ||
     item.sessionStatus === "draft" ||
     item.signupStatus === "pending"
@@ -1046,6 +1088,9 @@ function calendarMetaText(item) {
 }
 
 function calendarItemStatusText(item) {
+  if (item.isAuthorPrivate) {
+    return item.raw?.moderation_message || "仅自己可见 · 审核中";
+  }
   if (isCalendarItemPostStart(item)) {
     return calendarPostStartText(item.raw);
   }
@@ -1069,7 +1114,7 @@ function isCalendarItemPostStart(item) {
 }
 
 function isStartedAt(startAt) {
-  const startDate = parseStartAt(startAt);
+  const startDate = parseBusinessDateTime(startAt);
   return Boolean(startDate && startDate.getTime() <= Date.now());
 }
 
@@ -1105,6 +1150,7 @@ function groupItemsByDay(items) {
 function createDayBand(date, items) {
   const offset = dayOffset(date);
   const key = dateKey(date);
+  const parts = beijingDateParts(date);
   return {
     kind: "day",
     key,
@@ -1112,8 +1158,8 @@ function createDayBand(date, items) {
     dateKey: key,
     relativeLabel: relativeDayLabel(offset),
     markerText: markerText(offset),
-    dateLabel: `${date.getMonth() + 1}/${date.getDate()}`,
-    weekday: WEEKDAYS[date.getDay()],
+    dateLabel: parts ? `${parts.month}/${parts.day}` : "",
+    weekday: parts ? WEEKDAYS[parts.weekday] : "",
     isToday: offset === 0,
     items
   };
@@ -1203,41 +1249,12 @@ function targetElementIdForDate(key) {
   return nearestBand?.elementId || dayBands[dayBands.length - 1]?.elementId || "";
 }
 
-function parseStartAt(value) {
-  if (!value) {
-    return null;
-  }
-  if (value instanceof Date) {
-    return value;
-  }
-  const raw = String(value);
-  const localMatch = raw.match(
-    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/
-  );
-  if (localMatch) {
-    return new Date(
-      Number(localMatch[1]),
-      Number(localMatch[2]) - 1,
-      Number(localMatch[3]),
-      Number(localMatch[4] || 0),
-      Number(localMatch[5] || 0),
-      Number(localMatch[6] || 0)
-    );
-  }
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 function todayStart() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return dateFromKey(beijingDateKey(new Date()));
 }
 
 function startOfDay(date) {
-  const next = new Date(date);
-  next.setHours(0, 0, 0, 0);
-  return next;
+  return dateFromKey(beijingDateKey(date));
 }
 
 function addDays(date, amount) {
@@ -1245,12 +1262,11 @@ function addDays(date, amount) {
 }
 
 function dateKey(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return beijingDateKey(date);
 }
 
 function dateFromKey(key) {
-  const [year, month, day] = key.split("-").map(Number);
-  return new Date(year, month - 1, day);
+  return parseBusinessDateTime(`${key} 00:00:00`);
 }
 
 function dayOffset(date, baseDate = todayStart()) {
@@ -1258,7 +1274,7 @@ function dayOffset(date, baseDate = todayStart()) {
 }
 
 function timeText(date) {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return beijingTimeText(date);
 }
 
 function relativeDayLabel(offset) {

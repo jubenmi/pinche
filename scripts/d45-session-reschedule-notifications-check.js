@@ -43,6 +43,10 @@ const rescheduleHelper = readFileSync(
   new URL("../apps/miniprogram/src/utils/sessionReschedule.js", import.meta.url),
   "utf8"
 );
+const sharedBeijingTime = readFileSync(
+  new URL("../packages/shared/src/beijingTime.js", import.meta.url),
+  "utf8"
+);
 const miniSubscribeHelper = readFileSync(
   new URL("../apps/miniprogram/src/utils/subscribeMessages.js", import.meta.url),
   "utf8"
@@ -147,7 +151,9 @@ assertIncludes(rescheduleHelper, "export function rescheduleErrorRequiresRefresh
 assertIncludes(rescheduleHelper, "export function rescheduleConfirmationRequired");
 assertIncludes(rescheduleHelper, "export function rescheduleErrorText");
 assertIncludes(rescheduleHelper, 'error?.message || ""');
-assertIncludes(rescheduleHelper, 'timeZone: "Asia/Shanghai"');
+assertIncludes(rescheduleHelper, "formatBeijingDateTime");
+assertIncludes(rescheduleHelper, "parseBusinessDateTime");
+assertIncludes(sharedBeijingTime, 'BEIJING_TIME_ZONE = "Asia/Shanghai"');
 assertIncludes(managePage, 'v-if="canReschedule"');
 assertIncludes(managePage, '<t-date-time-picker');
 assertIncludes(managePage, ':mode="[\'date\', \'minute\']"');
@@ -244,22 +250,26 @@ for (const token of [
 assertIncludes(smokeSafety, "verifyD45SmokePreflight");
 assertIncludes(smoke, "await verifyD45SmokePreflight");
 assert.equal(
-  packageJson.scripts["d45:reschedule-check"],
-  "node scripts/d45-session-reschedule-notifications-safety-check.js && node scripts/d45-session-reschedule-notifications-check.js"
-);
-assert.equal(
-  packageJson.scripts["d45:reschedule-smoke"],
+  packageJson.scripts["session-reschedule:smoke"],
   "node scripts/d45-session-reschedule-notifications-smoke.js"
 );
+assert.equal(
+  packageJson.scripts["session-reschedule:safety"],
+  "node scripts/d45-session-reschedule-notifications-safety-check.js"
+);
 for (const command of [
-  "npm run d45:reschedule-check",
-  "npm run d45:reschedule-smoke"
+  "node --check scripts/d45-session-reschedule-notifications-smoke.js",
+  "node scripts/d45-session-reschedule-notifications-safety-check.js",
+  "node scripts/d45-session-reschedule-notifications-check.js",
+  "node --test apps/miniprogram/test/sessionReschedule.test.mjs apps/miniprogram/test/authMessages.test.mjs apps/miniprogram/test/sessionMembership.test.mjs",
+  "npm --workspace apps/api run test:session-reschedule"
 ]) {
   assert(
-    packageJson.scripts.precheck.includes(command),
-    `root precheck must include D45 verification command: ${command}`
+    packageJson.scripts["session-reschedule:verify"].includes(command),
+    `session-reschedule verification must include command: ${command}`
   );
 }
+assertIncludes(packageJson.scripts.check, "npm run session-reschedule:verify");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(

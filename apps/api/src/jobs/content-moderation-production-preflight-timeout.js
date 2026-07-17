@@ -1,5 +1,6 @@
 import { config } from "../config/env.js";
 import { withDatabaseConnection } from "../db/mysql.js";
+import { assertD46IsolatedSmokeGenericJobDisabled } from "../modules/content-moderation/d46-isolated-smoke.js";
 import { assertProductionPreflightGuards } from "../modules/content-moderation/production-preflight.js";
 import {
   finalizeProductionPreflightRun,
@@ -155,6 +156,7 @@ async function cleanupPreflightObject(storage, objectKey) {
 }
 
 async function main({ signal, isStopping } = {}) {
+  assertD46IsolatedSmokeGenericJobDisabled("content-moderation-production-preflight-timeout");
   const once = process.argv.includes("--once");
   const pollMs = boundedInteger(
     config.contentModeration?.productionPreflight?.timeoutPollMs,

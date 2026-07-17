@@ -301,6 +301,24 @@ for (const [decision, expectedStatus] of [["pass", "approved"], ["review", "revi
   });
 }
 
+test("D46 provider block retains an active policy-version-one video without cleanup", async () => {
+  const { service, state } = harness({
+    mediaOverrides: { author_visibility_version: 1 }
+  });
+  const result = await service.applyMediaResult({
+    jobId: 7,
+    provider: "tencent_ci_video",
+    providerJobId: "current-video-job",
+    subjectVersion: "etag-1",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    result: { decision: "block", suggestion: "block", label: "label", score: 80 }
+  });
+
+  assert.equal(result.status, "rejected");
+  assert.equal(state.mediaUpdates[0].toStatus, "rejected");
+  assert.deepEqual(state.cleanup, []);
+});
+
 test("an unknown Tencent decision transitions the current video to the unified hidden error state", async () => {
   const { service, state } = harness();
   const result = await service.applyMediaResult({

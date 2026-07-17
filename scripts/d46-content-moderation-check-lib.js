@@ -178,7 +178,10 @@ export function assertOnlyApprovedMiniProgramModerationCopy(path, source) {
   const allowed = new Set([
     "内容正在安全审核",
     "内容未通过安全审核",
-    "内容安全服务暂未就绪，暂时无法发布，请稍后再试"
+    "内容安全服务暂未就绪，暂时无法发布，请稍后再试",
+    "仅自己可见 · 审核中",
+    "仅自己可见 · 进一步审核",
+    "仅自己可见 · 未通过"
   ]);
   for (const value of [...sourceStringLiterals(source), ...sourceTemplateText(source)]) {
     if (isContentModerationCopy(value)) {

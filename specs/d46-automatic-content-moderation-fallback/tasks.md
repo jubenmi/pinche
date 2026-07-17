@@ -41,6 +41,7 @@
   - 2026-07-17：真实预检能力隔离本地实现完成——预检就绪条件已与三个正式 provider 开关解耦，预检启用时独立关闭式校验 Redis、WeChat、COS 与 Tencent CI 原始依赖；同一配置下普通内容仍按 D46 默认直发或双开关阻断。严格 RED/GREEN 后聚焦 44/44、D45 主套件 542/542、D45/D46 静态、API 语法/环境检查通过；在一次性 `pinche_d45_test`、隔离 Redis/API 环境中运行 `WECHAT_SUBSCRIBE_MESSAGE_ENABLED=false BASE_URL=http://127.0.0.1:3029 npm run check` 退出码 0，测试库已按契约删除。运行手册已明确常驻 API/异步回调窗口与正式开关隔离。三类真实 provider 均为 `passed` 且图片/视频清理为 `deleted` 前保持未勾选。
   - 2026-07-17：最终复审整改中——发现常驻 API 的异步回调 runtime 仍复制旧 provider-enabled 判定，正式开关关闭时会把合法图片/视频预检回调收口为 guard failure。须先补静态 RED、复用同一预检 runtime builder 并重跑全量验证；整改完成前保持未勾选且不得发布。
   - 2026-07-17：最终复审整改完成——一次性 Job、常驻 API 回调与预检超时 Worker 现在只复用一个 raw-provider runtime builder，三个正式 provider 开关不再进入任何预检 guard；超时 Worker 继续保留独立 HMAC 指纹校验。两处遗漏均完成静态 RED/GREEN，全仓搜索只剩一个 `providerConfig` 构造点；聚焦 45/45、D45/D46 静态、API 语法和最后一次一次性 `pinche_d45_test` 全量 `npm run check` 均通过，测试库与容器已清理。真实三类 provider 与清理证据完成前 D46.8 保持未勾选。
+  - 2026-07-17：远端集成门禁完成——隔离分支已合入最新 `origin/develop` 的北京时间、改期通知与 D46 作者私有能力，并逐项解决重叠实现；预检/门禁 53/53、D45 665/665、D46 170/170、改期通知后端 22/22 与小程序 25/25 均通过。随后在一次性 `pinche_d45_test` 执行 35 个迁移并运行仓库级 `BASE_URL=http://127.0.0.1:3029 npm run check`，退出码 0；测试 API、数据库与容器均已清理。真实三类 provider 与图片/视频 `cleanup_status=deleted` 证据完成前 D46.8 继续保持未勾选。
 
 ## 完成标准
 

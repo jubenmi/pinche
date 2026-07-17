@@ -59,7 +59,6 @@ import {
   parseMultipartAlbumVideoStream,
   uploadTempAlbumVideoToCos
 } from "./modules/album-video/multipart-stream.js";
-import { cleanupAlbumVideoBeforeDelete } from "./modules/album-video/lifecycle.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
   assertSessionAlbumImageUploadAllowed,
@@ -88,9 +87,8 @@ import {
   createStore,
   createSubscriptionRequest,
   deleteAdminSession,
-  prepareSessionAlbumPhotoDeletion,
+  purgeSessionAlbumMedia,
   requestSessionAlbumImageDeletion,
-  finalizeSessionAlbumPhotoDeletion,
   deleteScript,
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
@@ -100,6 +98,8 @@ import {
   getSessionShareStats,
   getMySessionAlbumPrivacy,
   getMySessionReview,
+  getAuthorAlbumImagePreview,
+  getAuthorAlbumVideoPreview,
   getVisibleSessionAlbumPhotoForMedia,
   getVisibleSessionAlbumVideoForPlayback,
   getFinalizedSessionAlbumImage,
@@ -177,6 +177,18 @@ import {
   buildWechatImageModerationUrl
 } from "./modules/album-image/signed-urls.js";
 import {
+  AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL,
+  buildAuthorImageCapabilityUrls,
+  validateAuthorImageCapabilityClaims
+} from "./modules/content-moderation/author-media-preview.js";
+import {
+  buildD46AuthorVideoCapabilityClaims,
+  buildD46IsolatedSmokeImageUrl,
+  createD46IsolatedSmokeModerationClient,
+  d46IsolatedSmokeRuntime,
+  validateD46AuthorVideoCapabilityClaims
+} from "./modules/content-moderation/d46-isolated-smoke.js";
+import {
   TENCENT_VIDEO_CALLBACK_MAX_BYTES,
   authenticateTencentCallback,
   parseTencentCallbackPayload,
@@ -209,11 +221,15 @@ import {
 } from "./modules/content-moderation/wechat-callback.js";
 import {
   claimInitialModerationLease,
+  cancelModerationJobByUser,
+  cancelTextProposalByAuthor,
   createModerationJob,
   createTextProposal,
   enqueueRejectedMediaCleanup,
   enqueueUserImageAssetCleanup as enqueueModerationUserImageAssetCleanup,
   failModerationJob,
+  findAuthorTextDraftById,
+  findLatestAuthorTextProposal,
   findTextProposalByJobId,
   findCurrentModerationAttempt,
   findModerationAttemptByProviderJobId,
@@ -230,10 +246,17 @@ import {
   listAdminModerationJobs,
   requeueModerationJob,
   transitionMediaModeration,
-  transitionModerationJob
+  transitionModerationJob,
+  supersedeRejectedTextProposal
 } from "./modules/content-moderation/repository.js";
 import { createContentModerationService } from "./modules/content-moderation/service.js";
+import { createAuthorDraftService } from "./modules/content-moderation/author-drafts.js";
 import { emitContentModerationEvent } from "./modules/content-moderation/telemetry.js";
+import {
+  assertPublicResponseSafe,
+  authorPrivateResponseHeaders as responsePrivacyHeaders,
+  containsAuthorPrivateContent
+} from "./modules/content-moderation/response-privacy.js";
 import { createAdminModerationApi } from "./modules/content-moderation/admin-api.js";
 import { createAdminModerationPreviewBuilder } from "./modules/content-moderation/admin-preview.js";
 import {
@@ -242,12 +265,21 @@ import {
 } from "./modules/content-moderation/text-baseline.js";
 import { createTextProposalApplicator } from "./modules/content-moderation/text-proposal-applicator.js";
 import {
+  createProductionTextProposalHandlers,
+  expectedTextCreationBase
+} from "./modules/content-moderation/text-proposal-handlers.js";
+import {
   buildTextModerationDescriptor,
-  buildTextProposalPayload
+  buildTextProposalPayload,
+  parseTextDraftReplacement
 } from "./modules/content-moderation/text-boundaries.js";
 import { projectSafeTextAppliedResult } from "./modules/content-moderation/text-applied-result.js";
+import { isAuthorPrivateTextDto } from "./modules/content-moderation/author-dto.js";
 import {
-  profilePatchFromProposalBody,
+  createAuthorTextProjectionReader,
+  mergeAuthorTextProjection
+} from "./modules/content-moderation/author-text-read.js";
+import {
   profileTextSnapshot
 } from "./modules/content-moderation/text-profile-patch.js";
 import {
@@ -327,32 +359,33 @@ const avatarMimeTypes = {
   "image/png": ".png"
 };
 
-const moderationTransport = createTencentVideoModerationTransport({
-  config: config.contentModeration
-});
-const tencentVideoModerationClient = createTencentVideoModerationClient({
-  config: config.contentModeration,
-  transport: moderationTransport
-});
-const wechatContentSecurityClient = (
-  config.contentModeration.wechatTextEnabled || config.contentModeration.wechatImageEnabled
-)
-  ? createWechatContentSecurityClient({ emit: emitContentModerationEvent })
-  : {};
-const moderationClient = {
-  ...tencentVideoModerationClient,
-  ...wechatContentSecurityClient
-};
+const d46IsolatedSmokeRuntimeEnabled = d46IsolatedSmokeRuntime(config, process.env);
+const moderationClient = d46IsolatedSmokeRuntimeEnabled
+  ? createD46IsolatedSmokeModerationClient(d46IsolatedSmokeRuntimeEnabled)
+  : (() => {
+      const moderationTransport = createTencentVideoModerationTransport({
+        config: config.contentModeration
+      });
+      const tencentVideoModerationClient = createTencentVideoModerationClient({
+        config: config.contentModeration,
+        transport: moderationTransport
+      });
+      const wechatContentSecurityClient = (
+        config.contentModeration.wechatTextEnabled || config.contentModeration.wechatImageEnabled
+      )
+        ? createWechatContentSecurityClient({ emit: emitContentModerationEvent })
+        : {};
+      return {
+        ...tencentVideoModerationClient,
+        ...wechatContentSecurityClient
+      };
+    })();
 const wechatImageModerationEnabled = Boolean(
   config.contentModeration.enabled && config.contentModeration.wechatImageEnabled
 );
 
-function textProposalStale(message) {
-  return new AppError(409, "CONTENT_MODERATION_PROPOSAL_STALE", message);
-}
-
 export function assertModeratedTextResult(result) {
-  if (!projectSafeTextAppliedResult(result)) {
+  if (!projectSafeTextAppliedResult(result) && !isAuthorPrivateTextDto(result)) {
     throw new AppError(
       500,
       "CONTENT_MODERATION_CONFIGURATION_ERROR",
@@ -362,9 +395,102 @@ export function assertModeratedTextResult(result) {
   return result;
 }
 
+export function moderatedTextHttpStatus(result, publicStatusCode) {
+  return isAuthorPrivateTextDto(result) ? 202 : publicStatusCode;
+}
+
+export function moderatedTextHeaders(result) {
+  return isAuthorPrivateTextDto(result)
+    ? { "cache-control": "private, no-store" }
+    : {};
+}
+
+export function containsAuthorPrivateText(value, depth = 0) {
+  void depth;
+  return isAuthorPrivateTextDto(value) || containsAuthorPrivateContent(value);
+}
+
+function authorPrivateResponseHeaders(value) {
+  const headers = responsePrivacyHeaders(value);
+  if (headers["cache-control"] === "private, no-store") {
+    try {
+      emitContentModerationEvent("author_private_read", {
+        subjectType: authorPrivateResponseSubjectType(value),
+        outcome: "unpublished"
+      });
+    } catch {
+      // Observability must not change a private response.
+    }
+  }
+  return headers;
+}
+
+function authorPrivateResponseSubjectType(value) {
+  const stack = [value];
+  const visited = new Set();
+  let scanned = 0;
+  while (stack.length > 0 && scanned < 1_000) {
+    const current = stack.pop();
+    scanned += 1;
+    if (!current || typeof current !== "object" || visited.has(current)) continue;
+    visited.add(current);
+    if (Array.isArray(current)) {
+      stack.push(...current);
+      continue;
+    }
+    if (current.publication_state === "author_only") {
+      if (current.media_type === "video") return "album_video";
+      if (current.media_type === "image") return "album_image";
+      if (typeof current.subject_type === "string") return current.subject_type;
+    }
+    stack.push(...Object.values(current));
+  }
+  return "unknown";
+}
+
+function emitAuthorPrivateCreated(value) {
+  if (!containsAuthorPrivateContent(value)) return;
+  try {
+    emitContentModerationEvent("author_private_created", {
+      subjectType: authorPrivateResponseSubjectType(value),
+      outcome: "pending"
+    });
+  } catch {
+    // Observability must not change a successful private submission.
+  }
+}
+
+function authorPrivateMediaOptions() {
+  return {
+    authorPrivateImageEnabled:
+      config.contentModeration.authorPrivateImageEnabled === true,
+    authorPrivateVideoEnabled:
+      config.contentModeration.authorPrivateVideoEnabled === true,
+    allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true
+  };
+}
+
+function authorPreviewTtlSeconds(value = config.contentModeration.authorPreviewTtlSeconds ?? 60) {
+  const ttl = Number(value);
+  if (!Number.isSafeInteger(ttl) || ttl < 1 || ttl > 60) {
+    throw new AppError(
+      500,
+      "CONTENT_MODERATION_CONFIGURATION_ERROR",
+      "CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS must be between 1 and 60"
+    );
+  }
+  return ttl;
+}
+
 function moderationBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return {};
-  const { idempotencyKey: _idempotencyKey, idempotency_key: _idempotencyKeySnake, ...rest } = body;
+  const {
+    idempotencyKey: _idempotencyKey,
+    idempotency_key: _idempotencyKeySnake,
+    replacesDraftId: _replacesDraftId,
+    replaces_draft_id: _replacesDraftIdSnake,
+    ...rest
+  } = body;
   return rest;
 }
 
@@ -379,10 +505,6 @@ function textProposalTargetSubjectId({ action, actorUserId, subjectId, context =
     return textSessionNpcRoleTargetSubjectId(sessionId);
   }
   return textCreationTargetSubjectId({ action, actorUserId });
-}
-
-function expectedCreationBase(actorUserId) {
-  return createTextBaseline({ kind: "creation", actor_id: Number(actorUserId) });
 }
 
 function sessionTextSnapshot(row = {}) {
@@ -804,7 +926,7 @@ async function captureTextModerationBase({ action, user, subjectId, body, contex
       });
     case "create_private_store":
     case "create_private_script":
-      return expectedCreationBase(user?.user?.id);
+      return expectedTextCreationBase(user?.user?.id);
     case "create_session":
       return withDatabaseConnection((connection) =>
         currentSessionCreateTextBase(connection, user?.user?.id, body)
@@ -869,6 +991,7 @@ async function applyDirectCoveredTextMutation(
 }
 
 async function moderateCoveredText({ request, user, action, subjectId, body, context = {} }) {
+  const replacesDraftId = parseTextDraftReplacement(body);
   const cleanBody = moderationBody(body);
   const preflightDescriptor = buildTextModerationDescriptor({
     action,
@@ -936,6 +1059,7 @@ async function moderateCoveredText({ request, user, action, subjectId, body, con
     baseVersion,
     idempotencyKey: identity.idempotencyKey,
     idempotencyExplicit: identity.explicit,
+    replacesDraftId,
     body: canonicalPayload.body,
     context: canonicalPayload.context
   });
@@ -956,227 +1080,42 @@ async function loadTextProposalActor(connection, actorUserId) {
   return { user: publicUser(users[0]), roles: roleRows.map((row) => row.role) };
 }
 
-function proposalSessionId(payload) {
-  const sessionId = Number(payload?.context?.sessionId);
-  if (!Number.isInteger(sessionId) || sessionId <= 0) {
-    throw textProposalStale("text moderation session target changed");
-  }
-  return sessionId;
-}
-
-function proposalContextSessionId(payload) {
-  const sessionId = Number(payload?.context?.sessionId);
-  if (!Number.isInteger(sessionId) || sessionId <= 0) {
-    throw textProposalStale("text moderation session target changed");
-  }
-  return sessionId;
-}
-
-function assertProposalBase(proposal, actual) {
-  if (!actual || String(proposal?.base_version) !== String(actual)) {
-    throw textProposalStale("text moderation proposal base version changed");
-  }
-}
-
-function assertProposalOperationTarget({ action, actor, job, proposal, payload, targetSubjectId }) {
-  const target = String(targetSubjectId || "").trim();
-  if (!target || String(payload?.targetSubjectId || "") !== target) {
-    throw textProposalStale("text moderation proposal target changed");
-  }
-  const expectedSubjectId = textOperationSubjectId({
-    action,
-    actorUserId: actor?.user?.id,
-    idempotencyKey: proposal?.idempotency_key
-  });
-  if (String(job?.subject_id || "") !== expectedSubjectId) {
-    throw textProposalStale("text moderation proposal operation changed");
-  }
-}
-
-async function applyNicknameProposal(connection, { actor, job, proposal, payload }) {
-  assertProposalOperationTarget({
-    action: "update_nickname",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(actor.user.id)
-  });
-  const currentActor = await currentActorTextSnapshot(connection, actor.user.id, { forUpdate: true });
-  assertProposalBase(proposal, currentActor
-    ? createTextBaseline({
-      kind: "user_profile",
-      profile: profileTextSnapshot(currentActor)
-    })
-    : "");
-  return updateUserProfileWithConnection(
-    connection,
-    actor.user.id,
-    profilePatchFromProposalBody(payload.body)
-  );
-}
-
-function assertCreationProposal({ action, actor, job, proposal, payload }) {
-  assertProposalOperationTarget({
-    action,
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: textCreationTargetSubjectId({ action, actorUserId: actor.user.id })
-  });
-  assertProposalBase(proposal, expectedCreationBase(actor.user.id));
-}
-
-async function applyPrivateStoreProposal(connection, { actor, job, proposal, payload }) {
-  assertCreationProposal({ action: "create_private_store", actor, job, proposal, payload });
-  return createPrivateStoreWithConnection(connection, actor, payload.body);
-}
-
-async function applyPrivateScriptProposal(connection, { actor, job, proposal, payload }) {
-  assertCreationProposal({ action: "create_private_script", actor, job, proposal, payload });
-  return createPrivateScriptWithConnection(connection, actor, payload.body);
-}
-
-async function applySessionCreateProposal(connection, { actor, job, proposal, payload }) {
-  assertProposalOperationTarget({
-    action: "create_session",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: textCreationTargetSubjectId({ action: "create_session", actorUserId: actor.user.id })
-  });
-  assertProposalBase(
-    proposal,
-    await currentSessionCreateTextBase(connection, actor.user.id, payload.body, { forUpdate: true })
-  );
-  return createSessionWithConnection(connection, actor, payload.body);
-}
-
-async function applySessionUpdateProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalSessionId(payload);
-  assertProposalOperationTarget({
-    action: "update_session",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentSessionTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  return updateSessionWithConnection(connection, actor, sessionId, payload.body);
-}
-
-async function applySessionNpcRoleCreateProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalContextSessionId(payload);
-  assertProposalOperationTarget({
-    action: "create_session_npc_role",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: textSessionNpcRoleTargetSubjectId(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentSessionTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  return createSessionNpcRoleWithConnection(connection, actor, sessionId, payload.body);
-}
-
-async function applySessionNpcRoleUpdateProposal(connection, { actor, job, proposal, payload }) {
-  const npcRoleId = Number(payload?.targetSubjectId);
-  if (!Number.isInteger(npcRoleId) || npcRoleId <= 0) {
-    throw textProposalStale("text moderation NPC role target changed");
-  }
-  assertProposalOperationTarget({
-    action: "update_session_npc_role",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(npcRoleId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentNpcRoleTextBase(connection, npcRoleId, actor.user.id, { forUpdate: true })
-  );
-  return updateSessionNpcRoleWithConnection(connection, actor, npcRoleId, payload.body);
-}
-
-async function applySessionReviewProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalSessionId(payload);
-  assertProposalOperationTarget({
-    action: "upsert_session_review",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentReviewTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  return upsertMySessionReviewWithConnection(connection, actor, sessionId, payload.body);
-}
-
-async function applySessionMessageProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalSessionId(payload);
-  assertProposalOperationTarget({
-    action: "create_session_message",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentMessageTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  return createSessionMessageWithConnection(connection, actor, sessionId, payload.body);
-}
-
-async function applySessionPinnedMessageProposal(connection, { actor, job, proposal, payload }) {
-  const sessionId = proposalSessionId(payload);
-  assertProposalOperationTarget({
-    action: "update_session_pinned_message",
-    actor,
-    job,
-    proposal,
-    payload,
-    targetSubjectId: String(sessionId)
-  });
-  assertProposalBase(
-    proposal,
-    await currentPinnedTextBase(connection, sessionId, actor.user.id, { forUpdate: true })
-  );
-  const result = await updateSessionPinnedMessageWithConnection(connection, actor, sessionId, payload.body);
-  return {
-    ...result,
-    id: result?.pinnedMessage?.id,
-    kind: "session_pinned_message"
-  };
-}
-
+const productionTextProposalHandlers = createProductionTextProposalHandlers({
+  currentActorTextSnapshot,
+  currentSessionCreateTextBase,
+  currentSessionTextBase,
+  currentNpcRoleTextBase,
+  currentReviewTextBase,
+  currentMessageTextBase,
+  currentPinnedTextBase,
+  updateUserProfileWithConnection,
+  createPrivateStoreWithConnection,
+  createPrivateScriptWithConnection,
+  createSessionWithConnection,
+  updateSessionWithConnection,
+  createSessionNpcRoleWithConnection,
+  updateSessionNpcRoleWithConnection,
+  upsertMySessionReviewWithConnection,
+  createSessionMessageWithConnection,
+  updateSessionPinnedMessageWithConnection
+});
 const textProposalApplicator = createTextProposalApplicator({
   loadActor: loadTextProposalActor,
-  handlers: {
-    update_nickname: applyNicknameProposal,
-    create_private_store: applyPrivateStoreProposal,
-    create_private_script: applyPrivateScriptProposal,
-    create_session: applySessionCreateProposal,
-    update_session: applySessionUpdateProposal,
-    create_session_npc_role: applySessionNpcRoleCreateProposal,
-    update_session_npc_role: applySessionNpcRoleUpdateProposal,
-    upsert_session_review: applySessionReviewProposal,
-    create_session_message: applySessionMessageProposal,
-    update_session_pinned_message: applySessionPinnedMessageProposal
+  handlers: productionTextProposalHandlers
+});
+const authorTextProjectionReader = createAuthorTextProjectionReader({
+  config: config.contentModeration,
+  repository: { findLatestAuthorTextProposal }
+});
+const authorDrafts = createAuthorDraftService({
+  transaction: withTransaction,
+  emit: emitContentModerationEvent,
+  repository: {
+    findAuthorTextDraftById,
+    cancelTextProposalByAuthor,
+    cancelModerationJobByUser,
+    retireCurrentModerationAttempt,
+    supersedeRejectedTextProposal
   }
 });
 // The retry worker imports this controlled runtime. server.js only calls
@@ -1218,6 +1157,9 @@ export const contentModeration = createContentModerationService({
       return users[0]?.open_id || "";
     }),
   buildWechatImageUrl: ({ objectKey }) => {
+    if (d46IsolatedSmokeRuntimeEnabled) {
+      return buildD46IsolatedSmokeImageUrl(objectKey);
+    }
     if (!cosStorageEnabled(config.cos)) {
       throw new AppError(
         503,
@@ -1232,6 +1174,7 @@ export const contentModeration = createContentModerationService({
     });
   },
   applyTextProposal: (connection, input) => textProposalApplicator.apply(connection, input),
+  supersedeRejectedDraft: (connection, input) => authorDrafts.supersedeRejected(connection, input),
   emit: emitContentModerationEvent
 });
 
@@ -1440,6 +1383,19 @@ const adminModerationApi = createAdminModerationApi({
     getAdminModerationJob(connection, jobId)
   ),
   decide: (input) => contentModeration.decideAsAdmin(input),
+  purge: async (input) => {
+    const result = await purgeSessionAlbumMedia(input);
+    try {
+      emitContentModerationEvent("author_private_purged", {
+        subjectType: "unknown",
+        outcome: "unpublished",
+        routeKind: "admin_purge"
+      });
+    } catch {
+      // Observability must not change a completed purge request.
+    }
+    return result;
+  },
   buildPreview: buildAdminModerationPreview,
   applyTextProposal: applyApprovedTextProposal
 });
@@ -1476,9 +1432,19 @@ const albumImageUploads = createAlbumImageUploadService({
       imageInfo: ({ key, etag }) => getCosImageInfo({ key, etag, config: config.cos })
     }
   }),
-  insertFinalizedImage: insertFinalizedSessionAlbumImage,
+  insertFinalizedImage: (connection, input) => insertFinalizedSessionAlbumImage(
+    connection,
+    {
+      ...input,
+      authorVisibilityVersion:
+        config.contentModeration.authorPrivateImageEnabled === true ? 1 : 0
+    }
+  ),
   getFinalizedImage: getFinalizedSessionAlbumImage,
-  serializeImage: serializeSessionAlbumImage,
+  serializeImage: (media, userId) => serializeSessionAlbumImage(media, userId, {
+    authorPrivateImageEnabled:
+      config.contentModeration.authorPrivateImageEnabled === true
+  }),
   createWechatImageModerationJob: wechatImageModerationEnabled
     ? (connection, input) => contentModeration.createWechatImageModerationJob(connection, input)
     : undefined,
@@ -2713,6 +2679,16 @@ function attachAlbumImageUrls(photo, legacyUrls, options) {
   void ignoredObjectEtag;
   const moderationStatus = String(photo.moderation_status || "");
   if (!isModerationPublished(moderationStatus)) {
+    if (safePhoto.publication_state === "author_only") {
+      return {
+        ...safePhoto,
+        tags: [],
+        ...options.buildAuthorUrls(photo, {
+          nowSeconds: options.nowSeconds,
+          ttlSeconds: options.authorPreviewTtlSeconds
+        })
+      };
+    }
     return {
       ...safePhoto,
       moderation_status: moderationStatus,
@@ -2761,7 +2737,10 @@ function albumImageUrlOptions(options = {}) {
     directMediaUrls: options.directMediaUrls ?? config.albumMedia.directMediaUrls,
     nowSeconds: options.nowSeconds ?? Math.floor(Date.now() / 1000),
     cosConfig: options.cosConfig || config.cos,
-    buildUrls: options.buildUrls || buildAlbumImageUrls
+    buildUrls: options.buildUrls || buildAlbumImageUrls,
+    buildAuthorUrls: options.buildAuthorUrls || buildAuthorAlbumImageUrls,
+    authorPreviewTtlSeconds:
+      options.authorPreviewTtlSeconds ?? authorPreviewTtlSeconds()
   };
 }
 
@@ -3111,10 +3090,11 @@ export function attachSessionAlbumMediaUrls(album, userId, options = {}) {
       if (photo.media_type === "video") {
         const safePhoto = stripAlbumVideoInternalFields(photo);
         const approved = isModerationPublished(photo.moderation_status);
+        const authorOnly = photo.publication_state === "author_only";
         return {
           ...safePhoto,
           cover_url: approved && photo.has_cover ? signedAlbumVideoSnapshotUrl(photo, userId) : "",
-          video_url: approved && photo.processing_status === "ready"
+          video_url: (approved && photo.processing_status === "ready") || authorOnly
             ? sessionAlbumVideoUrlPath(photo.id)
             : ""
         };
@@ -3144,6 +3124,28 @@ export function attachSessionAlbumMediaUrls(album, userId, options = {}) {
     photos,
     media: photos
   };
+}
+
+function authorMediaPreviewFingerprint(record) {
+  return signedPayloadSignature(
+    "author-media-object-version",
+    JSON.stringify({
+      mediaId: Number(record.mediaId),
+      userId: Number(record.userId),
+      mediaType: String(record.mediaType),
+      previewPath: String(record.previewPath),
+      objectVersion: String(record.objectVersion)
+    })
+  );
+}
+
+function buildAuthorAlbumImageUrls(photo, options = {}) {
+  return buildAuthorImageCapabilityUrls(photo, {
+    nowSeconds: options.nowSeconds ?? Math.floor(Date.now() / 1000),
+    ttlSeconds: options.ttlSeconds ?? authorPreviewTtlSeconds(),
+    fingerprint: authorMediaPreviewFingerprint,
+    signToken: (claims) => signSignedPayload("author-media-preview", claims)
+  });
 }
 
 function signedPayloadSignature(purpose, payloadText) {
@@ -3321,7 +3323,9 @@ export function attachPublicSessionAlbumMediaUrls(
 ) {
   const resolved = albumImageUrlOptions(options);
   let signedImageCount = 0;
-  const photos = album.photos.map((photo) => {
+  const photos = (album.photos || [])
+    .filter((photo) => isModerationPublished(photo?.moderation_status))
+    .map((photo) => {
       if (photo.media_type === "video") {
         const safePhoto = stripAlbumVideoInternalFields(photo);
         const approved = isModerationPublished(photo.moderation_status);
@@ -3345,11 +3349,16 @@ export function attachPublicSessionAlbumMediaUrls(
   (options.emit || emitAlbumImageEvent)("media_urls_signed", {
     sessionId: Number(album.session_id), outcome: "public-share", signedImageCount
   });
-  return {
+  const result = {
     ...album,
+    visible_count: photos.length,
     photos,
     media: photos
   };
+  return assertPublicResponseSafe(result, {
+    routeKind: "session_public_share",
+    emit: options.emitPublicLeak
+  });
 }
 
 async function sessionAlbumThumbnailBuffer(file) {
@@ -3462,9 +3471,8 @@ export async function deleteUploadedObject({
         // originated from our signed storage client. Every other COS failure
         // remains retryable and must keep the video row as the cleanup anchor.
         if (isTrustedCosStorageError(error) && Number(error.statusCode) === 404) return;
-        // cleanupAlbumVideoBeforeDelete intentionally treats generic 404s as
-        // idempotent for injected/local adapters. Do not let an untrusted COS
-        // 404 reach that generic boundary and finalize the video row.
+        // Only a trusted signed-storage 404 proves idempotent deletion. Do not
+        // let an untrusted upstream 404 be mistaken for successful cleanup.
         if (hasObjectNotFoundStatus(error)) {
           throw new AppError(502, "COS_STORAGE_ERROR", "COS storage request failed");
         }
@@ -3894,6 +3902,83 @@ async function route(request, response) {
     return;
   }
 
+  const authorAlbumImagePreviewId = idMatch(
+    url.pathname,
+    /^\/api\/content-moderation\/author-media\/images\/(\d+)\/preview$/
+  );
+  if (request.method === "GET" && authorAlbumImagePreviewId) {
+    const claims = verifySignedPayload(
+      "author-media-preview",
+      url.searchParams.get("token") || "",
+      "author media preview token"
+    );
+    const userId = tokenPositiveInteger(claims.userId, "userId");
+    await getAuthorAlbumImagePreview(
+      { user: { id: userId }, roles: [] },
+      authorAlbumImagePreviewId,
+      {
+        enabled: config.contentModeration.authorPrivateImageEnabled === true,
+        allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true,
+        consume: async (media) => {
+          const record = validateAuthorImageCapabilityClaims(media, claims, {
+            nowSeconds: Math.floor(Date.now() / 1000),
+            ttlSeconds: authorPreviewTtlSeconds(),
+            fingerprint: authorMediaPreviewFingerprint,
+            allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true
+          });
+          if (!record) throw notFound("Album photo not found");
+          await serveUploadedSessionAlbumPhoto(media, response, { variant: claims.variant });
+        }
+      }
+    );
+    return;
+  }
+
+  const d46AuthorAlbumVideoPreviewId = idMatch(
+    url.pathname,
+    /^\/api\/testing\/d46-smoke\/author-media\/videos\/(\d+)\/preview$/
+  );
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    d46AuthorAlbumVideoPreviewId
+  ) {
+    if (!d46IsolatedSmokeRuntimeEnabled || isCosUploadStorageEnabled()) {
+      throw notFound("Album video not found");
+    }
+    const claims = verifySignedPayload(
+      "d46-author-video-preview",
+      url.searchParams.get("token") || "",
+      "D46 author video preview token"
+    );
+    const userId = tokenPositiveInteger(claims.userId, "userId");
+    await getAuthorAlbumVideoPreview(
+      { user: { id: userId }, roles: [] },
+      d46AuthorAlbumVideoPreviewId,
+      {
+        enabled: config.contentModeration.authorPrivateVideoEnabled === true,
+        allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true,
+        consume: async (media, record) => {
+          const capability = validateD46AuthorVideoCapabilityClaims(record, claims, {
+            nowSeconds: Math.floor(Date.now() / 1000),
+            ttlSeconds: authorPreviewTtlSeconds(),
+            fingerprint: authorMediaPreviewFingerprint
+          });
+          if (!capability) throw notFound("Album video not found");
+          await serveUploadedSessionAlbumVideoFile(
+            { ...media, display_url: capability.previewPath, source_url: capability.previewPath },
+            response,
+            {
+              method: request.method,
+              range: request.headers.range,
+              cosEnabled: false
+            }
+          );
+        }
+      }
+    );
+    return;
+  }
+
   const publicSessionAlbumMediaPhotoId = idMatch(
     url.pathname,
     /^\/api\/session-album\/public-share\/photos\/(\d+)\/image$/
@@ -4008,10 +4093,52 @@ async function route(request, response) {
   );
   if (request.method === "GET" && sessionAlbumMediaVideoUrlId) {
     const user = await getAuthUser(request);
-    const media = await getVisibleSessionAlbumVideoForPlayback(
-      user,
-      sessionAlbumMediaVideoUrlId
-    );
+    let media;
+    try {
+      media = await getVisibleSessionAlbumVideoForPlayback(
+        user,
+        sessionAlbumMediaVideoUrlId
+      );
+    } catch (error) {
+      if (error?.contentModerationDenied !== true) throw error;
+      const expiresInSeconds = authorPreviewTtlSeconds();
+      if (!isCosUploadStorageEnabled() && !d46IsolatedSmokeRuntimeEnabled) {
+        throw notFound("Album video not found");
+      }
+      const data = await getAuthorAlbumVideoPreview(user, sessionAlbumMediaVideoUrlId, {
+        enabled: config.contentModeration.authorPrivateVideoEnabled === true,
+        allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true,
+        consume: async (_media, record) => {
+          if (d46IsolatedSmokeRuntimeEnabled && !isCosUploadStorageEnabled()) {
+            const claims = buildD46AuthorVideoCapabilityClaims(record, {
+              nowSeconds: Math.floor(Date.now() / 1000),
+              ttlSeconds: expiresInSeconds,
+              fingerprint: authorMediaPreviewFingerprint
+            });
+            const token = signSignedPayload("d46-author-video-preview", claims);
+            return {
+              url: `/api/testing/d46-smoke/author-media/videos/${record.mediaId}/preview?token=${encodeURIComponent(token)}`,
+              expiresInSeconds,
+              publication_state: "author_only"
+            };
+          }
+          return {
+            url: signedCosAlbumVideoUrl(
+              { display_url: record.previewPath, source_url: record.previewPath },
+              "GET",
+              expiresInSeconds,
+              [{ name: "response-cache-control", value: AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL }]
+            ),
+            expiresInSeconds,
+            publication_state: "author_only"
+          };
+        }
+      });
+      jsonResponse(response, 200, { ok: true, data }, {
+        "cache-control": AUTHOR_MEDIA_PREVIEW_CACHE_CONTROL
+      });
+      return;
+    }
     jsonResponse(response, 200, {
       ok: true,
       data: {
@@ -4424,6 +4551,21 @@ async function route(request, response) {
     return;
   }
 
+  const authorDraftId = idMatch(
+    url.pathname,
+    /^\/api\/content-moderation\/author-drafts\/(\d+)$/
+  );
+  if (request.method === "DELETE" && authorDraftId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await authorDrafts.cancel({ user, draftId: authorDraftId })
+    }, {
+      "cache-control": "private, no-store"
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/uploads/cos-intent") {
     const user = await getAuthUser(request);
     const upload = isAlbumImageKind(body.kind)
@@ -4531,6 +4673,25 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/testing/d46-smoke-target") {
+    if (!d46IsolatedSmokeRuntimeEnabled) {
+      throw new AppError(
+        409,
+        "SMOKE_DATABASE_NOT_ISOLATED",
+        "D46 smoke requires the dedicated local pinche_d46_test database"
+      );
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        mode: "d46",
+        isolated: true,
+        database: "pinche_d46_test"
+      }
+    });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/testing/d45-smoke-target") {
     if (!d45SmokeDatabaseIsIsolated()) {
       throw new AppError(
@@ -4615,7 +4776,19 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname === "/api/users/me") {
     const user = await getAuthUser(request);
-    jsonResponse(response, 200, { ok: true, data: user });
+    const projection = await withDatabaseConnection((connection) =>
+      authorTextProjectionReader.find(connection, {
+        userId: user.user.id,
+        action: "update_nickname",
+        targetSubjectId: String(user.user.id)
+      })
+    );
+    jsonResponse(response, 200, {
+      ok: true,
+      data: projection
+        ? { ...user, user: mergeAuthorTextProjection(user.user, projection) }
+        : user
+    }, projection ? { "cache-control": "private, no-store" } : {});
     return;
   }
 
@@ -4643,29 +4816,35 @@ async function route(request, response) {
 
   if (request.method === "PATCH" && url.pathname === "/api/users/me") {
     const user = await getAuthUser(request);
-    const updatedUser = await moderateCoveredText({
+    const moderated = await moderateCoveredText({
       request,
       user,
       action: "update_nickname",
       subjectId: String(user.user.id),
       body
-    }) ?? await updateUserProfile(user.user.id, body);
-    jsonResponse(response, 200, {
+    });
+    const updatedUser = moderated ?? await updateUserProfile(user.user.id, body);
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 200), {
       ok: true,
-      data: {
+      data: isAuthorPrivateTextDto(moderated) ? moderated : {
         user: updatedUser,
         roles: user.roles
       }
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
   if (request.method === "GET" && url.pathname === "/api/stores") {
     const user = await optionalAuthUser(request);
+    const stores = await listActiveStores(
+      Object.fromEntries(url.searchParams),
+      user,
+      { authorTextReader: authorTextProjectionReader }
+    );
     jsonResponse(response, 200, {
       ok: true,
-      data: await listActiveStores(Object.fromEntries(url.searchParams), user)
-    });
+      data: stores
+    }, stores.some(isAuthorPrivateTextDto) ? { "cache-control": "private, no-store" } : {});
     return;
   }
 
@@ -4677,19 +4856,24 @@ async function route(request, response) {
       action: "create_private_store",
       body
     });
-    jsonResponse(response, 201, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 201), {
       ok: true,
       data: moderated ?? await createPrivateStore(user, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
   if (request.method === "GET" && url.pathname === "/api/scripts") {
     const user = await optionalAuthUser(request);
+    const scripts = await listActiveScripts(
+      Object.fromEntries(url.searchParams),
+      user,
+      { authorTextReader: authorTextProjectionReader }
+    );
     jsonResponse(response, 200, {
       ok: true,
-      data: await listActiveScripts(Object.fromEntries(url.searchParams), user)
-    });
+      data: scripts
+    }, scripts.some(isAuthorPrivateTextDto) ? { "cache-control": "private, no-store" } : {});
     return;
   }
 
@@ -4701,10 +4885,10 @@ async function route(request, response) {
       action: "create_private_script",
       body
     });
-    jsonResponse(response, 201, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 201), {
       ok: true,
       data: moderated ?? await createPrivateScript(user, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -5092,7 +5276,12 @@ async function route(request, response) {
       action: "create_session",
       body
     });
-    jsonResponse(response, 201, { ok: true, data: moderated ?? await createSession(user, body) });
+    jsonResponse(
+      response,
+      moderatedTextHttpStatus(moderated, 201),
+      { ok: true, data: moderated ?? await createSession(user, body) },
+      moderatedTextHeaders(moderated)
+    );
     return;
   }
 
@@ -5112,10 +5301,15 @@ async function route(request, response) {
     if (inviteClaims && Number(inviteClaims.sessionId) !== Number(sessionId)) {
       throw forbidden("session join invite token is invalid");
     }
+    const session = await getSessionForViewer(sessionId, {
+      viewer,
+      inviteClaims,
+      authorTextReader: authorTextProjectionReader
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await getSessionForViewer(sessionId, { viewer, inviteClaims })
-    });
+      data: session
+    }, authorPrivateResponseHeaders(session));
     return;
   }
   if (request.method === "PATCH" && sessionId) {
@@ -5128,20 +5322,23 @@ async function route(request, response) {
       body,
       context: { sessionId: Number(sessionId) }
     });
-    jsonResponse(response, 200, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 200), {
       ok: true,
       data: moderated ?? await updateSession(user, sessionId, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
   const sessionNpcRolesId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/npc-roles$/);
   if (request.method === "GET" && sessionNpcRolesId) {
     const user = await getAuthUser(request);
+    const npcRoles = await listSessionNpcRoles(user, sessionNpcRolesId, {
+      authorTextReader: authorTextProjectionReader
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await listSessionNpcRoles(user, sessionNpcRolesId)
-    });
+      data: npcRoles
+    }, authorPrivateResponseHeaders(npcRoles));
     return;
   }
   if (request.method === "POST" && sessionNpcRolesId) {
@@ -5153,10 +5350,10 @@ async function route(request, response) {
       body,
       context: { sessionId: Number(sessionNpcRolesId) }
     });
-    jsonResponse(response, 201, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 201), {
       ok: true,
       data: moderated ?? await createSessionNpcRole(user, sessionNpcRolesId, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -5170,10 +5367,10 @@ async function route(request, response) {
       subjectId: String(sessionNpcRoleId),
       body
     });
-    jsonResponse(response, 200, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 200), {
       ok: true,
       data: moderated ?? await updateSessionNpcRole(user, sessionNpcRoleId, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -5315,21 +5512,23 @@ async function route(request, response) {
       user,
       uploadId: albumUploadFinalizeId
     });
+    const data = attachLegacyFinalizedAlbumImageUrls(finalized);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachLegacyFinalizedAlbumImageUrls(finalized)
-    });
+      data
+    }, authorPrivateResponseHeaders(data));
     return;
   }
 
   const sessionAlbumId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/album$/);
   if (request.method === "GET" && sessionAlbumId) {
     const user = await getAuthUser(request);
-    const album = await listSessionAlbum(user, sessionAlbumId);
+    const album = await listSessionAlbum(user, sessionAlbumId, authorPrivateMediaOptions());
+    const data = attachSessionAlbumMediaUrls(album, user.user.id);
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album, user.user.id)
-    });
+      data
+    }, authorPrivateResponseHeaders(data));
     return;
   }
 
@@ -5340,11 +5539,16 @@ async function route(request, response) {
   if (request.method === "GET" && adminSessionAlbumId) {
     const user = await getAuthUser(request);
     await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumId);
-    const album = await listSessionAlbum(user, adminSessionAlbumId);
+    const album = await listSessionAlbum(
+      user,
+      adminSessionAlbumId,
+      authorPrivateMediaOptions()
+    );
+    const data = attachSessionAlbumMediaUrls(album, user.user.id, { routeKind: "admin" });
     jsonResponse(response, 200, {
       ok: true,
-      data: attachSessionAlbumMediaUrls(album, user.user.id, { routeKind: "admin" })
-    });
+      data
+    }, authorPrivateResponseHeaders(data));
     return;
   }
 
@@ -5414,7 +5618,9 @@ async function route(request, response) {
           photoUrl
         })
       );
-      jsonResponse(response, 201, { ok: true, data: finalized.photo });
+      emitAuthorPrivateCreated(finalized.photo);
+      jsonResponse(response, 201, { ok: true, data: finalized.photo },
+        authorPrivateResponseHeaders(finalized.photo));
       return;
     }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
@@ -5423,13 +5629,15 @@ async function route(request, response) {
       sessionAlbumPhotosId,
       { ...body, photoUrl, ...metadata },
       {
+        ...authorPrivateMediaOptions(),
         assertImageIntake: (connection) => resolveContentSecurityIntake("image", { connection })
       }
     );
+    emitAuthorPrivateCreated(photo);
     jsonResponse(response, 201, {
       ok: true,
       data: photo
-    });
+    }, authorPrivateResponseHeaders(photo));
     return;
   }
 
@@ -5451,7 +5659,9 @@ async function route(request, response) {
           photoUrl
         })
       );
-      jsonResponse(response, 201, { ok: true, data: finalized.photo });
+      emitAuthorPrivateCreated(finalized.photo);
+      jsonResponse(response, 201, { ok: true, data: finalized.photo },
+        authorPrivateResponseHeaders(finalized.photo));
       return;
     }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
@@ -5460,13 +5670,15 @@ async function route(request, response) {
       adminSessionAlbumPhotosId,
       { ...body, photoUrl, ...metadata },
       {
+        ...authorPrivateMediaOptions(),
         assertImageIntake: (connection) => resolveContentSecurityIntake("image", { connection })
       }
     );
+    emitAuthorPrivateCreated(photo);
     jsonResponse(response, 201, {
       ok: true,
       data: photo
-    });
+    }, authorPrivateResponseHeaders(photo));
     return;
   }
 
@@ -5491,12 +5703,23 @@ async function route(request, response) {
       ),
       createVideoModerationJob: (connection, input) =>
         contentModeration.createVideoJob(connection, input),
-      submitVideoModeration: (job) => contentModeration.submitVideoJob(job)
+      submitVideoModeration: (job) => contentModeration.submitVideoJob(job),
+      authorPrivateVideoEnabled:
+        config.contentModeration.authorPrivateVideoEnabled === true,
+      allowLocalD46Preview: d46IsolatedSmokeRuntimeEnabled === true
     });
+    const videoData = video.publication_state === "author_only"
+      ? attachSessionAlbumMediaUrls({
+          session_id: Number(video.session_id),
+          photos: [video],
+          media: [video]
+        }, user.user.id, { routeKind: "create" }).photos[0]
+      : video;
+    emitAuthorPrivateCreated(videoData);
     jsonResponse(response, 201, {
       ok: true,
-      data: video
-    });
+      data: videoData
+    }, authorPrivateResponseHeaders(videoData));
     return;
   }
 
@@ -5506,20 +5729,6 @@ async function route(request, response) {
   );
   if (request.method === "DELETE" && sessionAlbumPhotoId) {
     const user = await getAuthUser(request);
-    const deletionSnapshot = await prepareSessionAlbumPhotoDeletion(user, sessionAlbumPhotoId);
-    if (deletionSnapshot.media_type === "video") {
-      const deletedVideo = await cleanupAlbumVideoBeforeDelete({
-        urls: deletionSnapshot.object_urls,
-        deleteObject: deleteUploadedSessionAlbumPhotoObject,
-        finalizeSnapshot: (snapshot) => finalizeSessionAlbumPhotoDeletion(
-          user,
-          sessionAlbumPhotoId,
-          { object_urls: snapshot }
-        )
-      });
-      jsonResponse(response, 200, { ok: true, data: { id: deletedVideo.id, deleted: true } });
-      return;
-    }
     const deletion = await requestSessionAlbumImageDeletion(user, sessionAlbumPhotoId);
     jsonResponse(response, 202, {
       ok: true,
@@ -5561,10 +5770,13 @@ async function route(request, response) {
   const mySessionReviewId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/review$/);
   if (request.method === "GET" && mySessionReviewId) {
     const user = await getAuthUser(request);
+    const review = await getMySessionReview(user, mySessionReviewId, {
+      authorTextReader: authorTextProjectionReader
+    });
     jsonResponse(response, 200, {
       ok: true,
-      data: await getMySessionReview(user, mySessionReviewId)
-    });
+      data: review
+    }, authorPrivateResponseHeaders(review));
     return;
   }
   if (request.method === "PUT" && mySessionReviewId) {
@@ -5577,10 +5789,10 @@ async function route(request, response) {
       body,
       context: { sessionId: Number(mySessionReviewId) }
     });
-    jsonResponse(response, 200, {
+    jsonResponse(response, moderatedTextHttpStatus(moderated, 200), {
       ok: true,
       data: moderated ?? await upsertMySessionReview(user, mySessionReviewId, body)
-    });
+    }, moderatedTextHeaders(moderated));
     return;
   }
 
@@ -5601,11 +5813,15 @@ async function route(request, response) {
 
   if (
     await routeExtensions({
+      authorPrivateResponseHeaders,
+      authorTextReader: authorTextProjectionReader,
       body,
       getAuthUser,
       idMatch,
       jsonResponse,
       moderateCoveredText,
+      moderatedTextHeaders,
+      moderatedTextHttpStatus,
       request,
       response,
       url
@@ -5717,10 +5933,15 @@ async function route(request, response) {
 
   if (request.method === "GET" && url.pathname === "/api/users/me/sessions") {
     const user = await getAuthUser(request);
+    const sessions = await listMySessions(
+      user,
+      Object.fromEntries(url.searchParams),
+      { authorTextReader: authorTextProjectionReader }
+    );
     jsonResponse(response, 200, {
       ok: true,
-      data: await listMySessions(user, Object.fromEntries(url.searchParams))
-    });
+      data: sessions
+    }, authorPrivateResponseHeaders(sessions));
     return;
   }
 
@@ -5806,6 +6027,12 @@ export function createApp() {
             subjectType: error.contentModerationSubjectType,
             outcome: "unpublished"
           });
+          emitContentModerationEvent("author_private_access_denied", {
+            provider: error.contentModerationProvider,
+            subjectType: error.contentModerationSubjectType,
+            outcome: "unpublished",
+            reasonCode: "policy_denied"
+          });
         } catch {
           // Telemetry must not change the external 404 gate response.
         }
@@ -5824,7 +6051,10 @@ export function createApp() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const server = createApp();
-  server.listen(config.port, () => {
+  const listenOptions = d46IsolatedSmokeRuntimeEnabled
+    ? { port: config.port, host: "127.0.0.1" }
+    : { port: config.port };
+  server.listen(listenOptions, () => {
     console.log(
       JSON.stringify({
         ok: true,

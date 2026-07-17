@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildTextModerationDescriptor,
+  parseTextDraftReplacement,
   redactPhoneNumbers
 } from "../src/modules/content-moderation/text-boundaries.js";
 
@@ -270,4 +271,35 @@ test("pinned-message moderation preserves the business default when pinnedMessag
     content: "this is the requested pin"
   }));
   assert.deepEqual(contentFallback.fields, { content: "this is the requested pin" });
+});
+
+test("D46 replacement draft id is parsed separately, carried as control data, and never enters audited or provider text", () => {
+  assert.equal(parseTextDraftReplacement({ replaces_draft_id: 51 }), 51);
+  assert.equal(parseTextDraftReplacement({ replacesDraftId: "52" }), 52);
+  assert.equal(parseTextDraftReplacement({}), null);
+
+  for (const body of [
+    { replaces_draft_id: 0 },
+    { replacesDraftId: -1 },
+    { replaces_draft_id: "1.5" },
+    { replaces_draft_id: 51, replacesDraftId: 51 }
+  ]) {
+    assert.throws(() => parseTextDraftReplacement(body), { code: "BAD_REQUEST" });
+  }
+
+  const descriptor = buildTextModerationDescriptor(input("update_session", {
+    note: "新的拼车说明",
+    replaces_draft_id: 51,
+    replacesDraftId: undefined
+  }, {
+    context: { sessionId: 12, targetSubjectId: "12" },
+    replacesDraftId: 51
+  }));
+  assert.equal(descriptor.replacesDraftId, 51);
+  assert.equal(JSON.stringify(descriptor.payload).includes("replaces"), false);
+  assert.equal(JSON.stringify(descriptor.fields).includes("replaces"), false);
+  assert.deepEqual(descriptor.payload.context, {
+    targetSubjectId: "12",
+    sessionId: 12
+  });
 });

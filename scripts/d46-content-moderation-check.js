@@ -103,7 +103,7 @@ const miniSources = await Promise.all((await miniProgramSourcePaths()).map(async
 const packageJson = JSON.parse(packageRaw);
 assert.equal(
   packageJson.scripts["d46:check"],
-  "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js"
+  "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js && node scripts/d46-author-private-content-check.js"
 );
 assert.match(packageJson.scripts.precheck, /npm run d46:check/);
 assert.match(migration30, /content_security_settings/);
@@ -144,11 +144,16 @@ for (const action of [
   "update_session",
   "create_session_npc_role",
   "update_session_npc_role",
-  "upsert_session_review",
-  "create_session_message",
-  "update_session_pinned_message"
+  "upsert_session_review"
 ]) {
   assert.match(server, new RegExp(`action: "${action}"`), `missing moderated text action: ${action}`);
+}
+for (const action of ["create_session_message", "update_session_pinned_message"]) {
+  assert.match(
+    talkRoutes,
+    new RegExp(`action: "${action}"`),
+    `missing moderated Talk route action: ${action}`
+  );
 }
 
 const userImageWiring = sourceSection(

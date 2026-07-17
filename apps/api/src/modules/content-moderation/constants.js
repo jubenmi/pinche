@@ -6,7 +6,8 @@ export const MODERATION_JOB_STATUSES = Object.freeze([
   "approved",
   "review",
   "rejected",
-  "error"
+  "error",
+  "cancelled"
 ]);
 
 export const MODERATION_PROVIDERS = Object.freeze(["wechat_sec_check", "tencent_ci_video"]);

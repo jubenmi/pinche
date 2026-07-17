@@ -223,6 +223,7 @@ import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinn
 import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
 import { contentModerationErrorText } from "../../utils/contentModeration";
+import { normalizeAuthorPrivateSession } from "../../utils/authorPrivateText";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import {
   buildRescheduleConfirmation,
@@ -634,7 +635,7 @@ export default {
     async loadSession() {
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
-        this.session = dataOf(response) || {};
+        this.session = normalizeAuthorPrivateSession(dataOf(response) || {});
         this.syncSessionSettings();
       } catch (error) {
         this.statusText = "车详情加载失败，请稍后重试。";
@@ -1156,6 +1157,9 @@ export default {
       return "unavailable";
     },
     npcRoleStateKind(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return "pendingReview";
+      }
       if (role.bound_user_id) {
         return "taken";
       }
@@ -1168,6 +1172,9 @@ export default {
       return "available";
     },
     npcRoleActionText(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return "";
+      }
       if (role.bound_user_id) {
         return "移除成员";
       }
@@ -1177,6 +1184,9 @@ export default {
       return role.status && role.status !== "active" ? "开放角色" : "关闭角色";
     },
     npcRoleStatusLabel(role) {
+      if (role.author_private?.content?.is_draft === true) {
+        return role.moderation_message || "仅自己可见 · 审核中";
+      }
       const stateKind = this.npcRoleStateKind(role);
       if (stateKind === "taken") {
         return "已安排";

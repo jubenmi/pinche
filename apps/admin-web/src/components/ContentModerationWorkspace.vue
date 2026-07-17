@@ -5,7 +5,7 @@
         <div>
           <p class="eyebrow">CONTENT SAFETY</p>
           <h2>内容审核队列</h2>
-          <p>仅显示仍需人工处理或重试的审核任务。</p>
+          <p>显示待复核、异常与已拒绝的审核任务；已拒绝媒体可核对作者私有保留状态。</p>
         </div>
         <span class="moderation-count">当前 {{ rows.length }} 条</span>
       </div>
@@ -25,7 +25,7 @@
             </option>
           </select>
           <select v-model="filters.status" name="moderationStatus" aria-label="审核任务状态" :disabled="busy">
-            <option value="">复核与异常</option>
+            <option value="">复核、异常与拒绝</option>
             <option v-for="status in moderationStatusOptions" :key="status.value" :value="status.value">
               {{ status.label }}
             </option>
@@ -102,13 +102,13 @@
               </td>
             </tr>
             <tr v-if="!busy && rows.length === 0">
-              <td class="empty-cell" colspan="8">当前筛选下没有待处理审核任务。</td>
+              <td class="empty-cell" colspan="8">当前筛选下没有审核任务。</td>
             </tr>
           </tbody>
         </table>
       </div>
       <div class="table-footer">
-        <span>队列最多展示 100 条当前任务，不代表历史全量。</span>
+        <span>列表最多展示 100 条，不代表历史全量。</span>
         <button type="button" :disabled="busy" @click="loadQueue">刷新</button>
       </div>
     </div>
@@ -140,6 +140,7 @@
           <div><dt>提交时间</dt><dd>{{ formatDateTime(detail.submitted_at) }}</dd></div>
           <div><dt>创建时间</dt><dd>{{ formatDateTime(detail.created_at) }}</dd></div>
           <div><dt>更新时间</dt><dd>{{ formatDateTime(detail.updated_at) }}</dd></div>
+          <div><dt>作者私有保留</dt><dd>{{ detail.author_private_retained ? "是（仅作者可见）" : "否" }}</dd></div>
         </dl>
 
         <section v-if="detail.text" class="moderation-detail-section">

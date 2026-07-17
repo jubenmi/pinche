@@ -1,5 +1,32 @@
 # D45 混合内容审核生产发布与回滚手册
 
+## D46 作者私有可见性
+
+D46 gate 与 D45 intake 完全独立。D46 只决定待审内容能否对创建者本人形成私有投影或短时媒体预览，不改变 `CONTENT_MODERATION_*_INTAKE_MODE`、provider、回调、Worker 或公共发布门禁。部署 D46 代码时必须保持以下配置：
+
+```dotenv
+CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ENABLED=false
+CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ACTIONS=
+CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED=false
+CONTENT_MODERATION_AUTHOR_PRIVATE_VIDEO_ENABLED=false
+CONTENT_MODERATION_AUTHOR_PREVIEW_TTL_SECONDS=60
+```
+
+文本 action 仅允许批准 spec 中的十个固定 action 的显式子集；空集保持关闭。作者预览 TTL 只允许 `1..60` 秒。未知、重复 action 或非法 TTL 必须让 API/Worker 启动失败，错误中不得打印原配置值。
+
+### D46 观察与容量边界
+
+重试 Worker 只统计 `author_visibility_version=1`、`active`、`rejected` 的图片/视频对象数量、图片/视频字节数和超过 30 天的长期保留数量。达到阈值只发高优先级告警，不触发删除。系统不得根据容量告警自动删除用户内容。
+
+普通 reject 只阻止公开，不删除 D46 媒体。紧急 purge 是独立合规操作，只允许 `system_admin`，必须填写原因并输入字面量 `PURGE` 二次确认；它复用作者删除的耐久 cleanup，并保留审计。purge 不得作为普通审核默认动作。
+
+### D46 回滚顺序
+
+1. 先关闭 `CONTENT_MODERATION_AUTHOR_PRIVATE_TEXT_ENABLED`、`CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED`、`CONTENT_MODERATION_AUTHOR_PRIVATE_VIDEO_ENABLED`，并清空文本 action 子集，停止新的 D46 写入和作者 URL 签发。
+2. 保持 D45 intake 原状态，继续运行 provider、审核回调、重试 Worker、公共发布门禁和 cleanup Worker。
+3. 已保留的拒绝媒体继续保持私有；不得批量批准、恢复公开、改成孤儿或自动清理。
+4. 如确认单个对象必须紧急移除，只走上述管理员 purge，不放宽公共门禁。
+
 本手册适用于 D45 的新用户文本、相册图片和相册视频。发布原则是“先审后发”：数据库审核状态是唯一发布依据，只有 `approved` 和 `approved_legacy` 能生成普通用户媒体 URL。任何服务商、回调、网络或配置异常都必须让新内容继续隐藏，不能默认通过。
 
 审核分工固定如下：
@@ -15,8 +42,8 @@
 
 ## 1. 上线前的共同前提
 
-- API、`content-moderation-retry`、`content-moderation-orphan-scan` 和迁移任务必须使用同一个 `PINCHE_API_IMAGE` 镜像 digest；不得让不同 schema 版本的 Worker 混跑。
-- 先备份数据库，执行迁移至 `0029_content_moderation_production_preflight.sql`，确认 `npm run migrate` 成功后再启动 API 与 Worker。
+- API、`content-moderation-retry`、`content-moderation-orphan-scan`、`content-moderation-production-preflight-timeout` 和迁移任务必须使用同一个 `PINCHE_API_IMAGE` 镜像 digest；不得让不同 schema 版本的 Worker 混跑。
+- 先备份数据库，执行迁移至 `0030_author_private_content_visibility.sql`，确认 `npm run migrate` 成功后再启动 API 与 Worker。
 - 所有密钥只从生产密钥管理系统注入 `.env.production`；示例文件中的占位值不可用于生产。
 - COS Bucket 必须保持私有。客户端不得拥有任意对象读权限；只有服务端在权限、隐私和审核门禁均通过后签发短时 URL。
 - 上线与联调使用无害测试样本及测试账号；不要将违规样本正文、完整媒体、token 或可复用 URL 保存到记录中。
@@ -181,7 +208,7 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 
 每一步必须记录部署版本、开关、观察开始/结束时间、指标摘要和回滚决定；记录不得包含敏感样本或 URL。
 
-1. **数据结构与门禁**：执行迁移，部署 API、后台、两个 Worker；确认内容安全 DB 开关默认关闭，未启用审核能力时新内容以 `approved_legacy` 兼容发布。验证未批准媒体仍无法通过列表、预览、下载、range、封面或公开分享读取；若本次变更不允许兼容直发，在后台同时开启全局与对应类型的不可用阻断开关。
+1. **数据结构与门禁**：执行迁移，部署 API、后台、三个 Worker；确认内容安全 DB 开关默认关闭。未启用审核能力时，普通流量按 DB 开关降级：默认以 `approved_legacy` 兼容发布，仅当全局与对应类型阻断开关同时开启时返回 `CONTENT_MODERATION_INTAKE_CLOSED`。验证未批准媒体仍无法通过公开列表、下载、range、封面或分享读取；D46 作者私有内容仅允许作者通过受控预览读取。
 2. **后台、指标与扫描**：确认管理员队列、审计、上述指标和告警可见。先开启孤儿扫描的 report-only，保持 cleanup 为 `false`。
 3. **生产受控预演（D45.18A）**：部署常驻 API 与预演超时 Worker 时设置 `CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true`，再运行一次性预演 Job；三个正式 provider 开关必须全程保持 `false`。预演使用隔离的预演表、对象前缀和回调关联，不依赖 `*_INTAKE_MODE`，也不会改变普通流量的 D46 直发/阻断决策。该步骤只验证 harmless pass、鉴权、私有 COS 读取、回调、标准化结果和清理。
 4. **微信文本**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_TEXT_ENABLED=true`；启用后自动进入审核，观察至少一个业务高峰窗口。

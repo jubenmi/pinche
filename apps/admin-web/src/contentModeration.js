@@ -25,7 +25,8 @@ export const moderationProviderOptions = Object.freeze([
 
 export const moderationStatusOptions = Object.freeze([
   { value: "review", label: "待人工复核" },
-  { value: "error", label: "审核异常" }
+  { value: "error", label: "审核异常" },
+  { value: "rejected", label: "已拒绝" }
 ]);
 
 export function moderationSubjectTypesForProvider(provider = "") {
