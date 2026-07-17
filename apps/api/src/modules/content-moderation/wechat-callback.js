@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+import { MODERATION_IMAGE_SUBJECT_TYPES } from "./constants.js";
+
 const MAX_CALLBACK_BYTES = 256 * 1024;
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_LABEL_LENGTH = 64;
@@ -260,7 +262,7 @@ export async function dispatchWechatImageModerationEvent({
     if (
       !job ||
       String(job.provider) !== "wechat_sec_check" ||
-      String(job.subject_type) !== "album_image"
+      !MODERATION_IMAGE_SUBJECT_TYPES.includes(String(job.subject_type))
     ) {
       return null;
     }

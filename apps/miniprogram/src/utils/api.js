@@ -6,6 +6,10 @@ const TOKEN_KEY = "pinche_token";
 const USER_KEY = "pinche_user";
 const ROLES_KEY = "pinche_roles";
 const AUTH_BASE_URL_KEY = "pinche_auth_base_url";
+const USER_IMAGE_PENDING_KEYS = Object.freeze({
+  avatar: "pinche_pending_avatar_asset_id",
+  sessionReviewPhoto: "pinche_pending_review_image_asset_id"
+});
 export const AUTH_CHANGE_EVENT = "pinche-auth-change";
 export const AUTH_PROFILE_REQUEST_EVENT = "pinche-auth-profile-request";
 export const AUTH_PROFILE_ACK_EVENT = "pinche-auth-profile-ack";
@@ -278,6 +282,9 @@ export function clearAuth() {
   uni.removeStorageSync(AUTH_BASE_URL_KEY);
   uni.removeStorageSync(USER_KEY);
   uni.removeStorageSync(ROLES_KEY);
+  for (const key of Object.values(USER_IMAGE_PENDING_KEYS)) {
+    uni.removeStorageSync(key);
+  }
   notifyAuthChange();
 }
 
@@ -748,7 +755,13 @@ export function reportAlbumMediaEvent(event, fields = {}) {
   }).catch(() => {});
 }
 
-async function uploadCosBackedFile({ kind, filePath, fallbackUpload, intentData = {} }) {
+async function uploadCosBackedFile({
+  kind,
+  filePath,
+  fallbackUpload,
+  intentData = {},
+  recovery = null
+}) {
   const upload = await requestCosUploadIntent(kind, filePath, intentData);
   const localFileSize = await getLocalFileSize(filePath);
   const maxBytes = Number(upload.maxBytes || 0);
@@ -760,19 +773,68 @@ async function uploadCosBackedFile({ kind, filePath, fallbackUpload, intentData 
     };
   }
   if (!upload.direct) {
-    return fallbackUpload(filePath);
+    return fallbackUpload(filePath, recovery);
   }
   if (!localFileSize) {
-    return fallbackUpload(filePath);
+    return fallbackUpload(filePath, recovery);
   }
+  let uploadedPath;
   try {
-    return await uploadCosObject(upload, filePath);
+    uploadedPath = await uploadCosObject(upload, filePath);
   } catch (error) {
-    return fallbackUpload(filePath);
+    return fallbackUpload(filePath, recovery);
   }
+  if (kind !== "avatar" && kind !== "sessionReviewPhoto") {
+    return uploadedPath;
+  }
+  if (recovery) {
+    rememberPendingUserImageOperation(kind, recovery.operationKey, filePath, {
+      objectKey: upload.key
+    }, recovery.scope, recovery.operationSequence);
+  }
+  const finalized = dataOf(await request({
+    url: "/api/uploads/user-image/finalize",
+    method: "POST",
+    data: { key: upload.key },
+    suppressMaintenance: true
+  })) || {};
+  if (finalized.path) {
+    if (recovery) {
+      rememberPendingUserImageOperation(kind, recovery.operationKey, filePath, {
+        objectKey: upload.key,
+        assetId: Number(finalized.assetId),
+        approvedPath: finalized.path
+      }, recovery.scope, recovery.operationSequence);
+    }
+    return finalized.path;
+  }
+  if (finalized.moderationStatus === "pending") {
+    if (recovery) {
+      rememberPendingUserImageOperation(kind, recovery.operationKey, filePath, {
+        objectKey: upload.key,
+        assetId: Number(finalized.assetId)
+      }, recovery.scope, recovery.operationSequence);
+    }
+    throw {
+      statusCode: 202,
+      code: "CONTENT_MODERATION_REVIEW_PENDING",
+      assetId: Number(finalized.assetId),
+      errMsg: "content is pending moderation",
+      userMessage: "内容正在安全审核"
+    };
+  }
+  throw {
+    statusCode: 503,
+    code: "CONTENT_MODERATION_UNAVAILABLE",
+    errMsg: "user image finalize failed",
+    userMessage: "内容安全服务暂未就绪，暂时无法发布，请稍后再试"
+  };
 }
 
-function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage, failMessage }) {
+function uploadBackendFile({
+  filePath, url, name, responseField, timeoutMessage, failMessage,
+  extraHeaders = {}, onUploaded = null
+}) {
   if (shouldBlockBusinessRequests()) {
     return Promise.reject({
       statusCode: 0,
@@ -782,7 +844,7 @@ function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage,
     });
   }
 
-  const headers = {};
+  const headers = { ...extraHeaders };
   const token = getToken();
   if (token) {
     headers.Authorization = "Bearer " + token;
@@ -817,6 +879,16 @@ function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage,
           return;
         }
 
+        if (responseData.data?.moderationStatus === "pending") {
+          reject({
+            statusCode: 202,
+            code: "CONTENT_MODERATION_REVIEW_PENDING",
+            assetId: Number(responseData.data.assetId),
+            errMsg: "content is pending moderation",
+            userMessage: "内容正在安全审核"
+          });
+          return;
+        }
         const uploadedUrl = responseData.data?.[responseField] || "";
         if (!uploadedUrl) {
           reject({
@@ -826,6 +898,7 @@ function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage,
           return;
         }
 
+        onUploaded?.(responseData.data || {});
         resolve(uploadedUrl);
       },
       fail(error) {
@@ -845,7 +918,10 @@ function uploadBackendFile({ filePath, url, name, responseField, timeoutMessage,
   });
 }
 
-function uploadBackendBinaryFile({ bodyBytes, contentType, url, responseField, timeoutMessage, failMessage }) {
+function uploadBackendBinaryFile({
+  bodyBytes, contentType, url, responseField, timeoutMessage, failMessage,
+  extraHeaders = {}, onUploaded = null
+}) {
   if (shouldBlockBusinessRequests()) {
     return Promise.reject({
       statusCode: 0,
@@ -856,6 +932,7 @@ function uploadBackendBinaryFile({ bodyBytes, contentType, url, responseField, t
   }
 
   const headers = {
+    ...extraHeaders,
     "content-type": contentType
   };
   const token = getToken();
@@ -893,6 +970,16 @@ function uploadBackendBinaryFile({ bodyBytes, contentType, url, responseField, t
           return;
         }
 
+        if (responseData.data?.moderationStatus === "pending") {
+          reject({
+            statusCode: 202,
+            code: "CONTENT_MODERATION_REVIEW_PENDING",
+            assetId: Number(responseData.data.assetId),
+            errMsg: "content is pending moderation",
+            userMessage: "内容正在安全审核"
+          });
+          return;
+        }
         const uploadedUrl = responseData.data?.[responseField] || "";
         if (!uploadedUrl) {
           reject({
@@ -902,6 +989,7 @@ function uploadBackendBinaryFile({ bodyBytes, contentType, url, responseField, t
           return;
         }
 
+        onUploaded?.(responseData.data || {});
         resolve(uploadedUrl);
       },
       fail(error) {
@@ -919,42 +1007,496 @@ function uploadBackendBinaryFile({ bodyBytes, contentType, url, responseField, t
   });
 }
 
-async function fallbackUploadUserAvatar(filePath) {
+function backendUserImageOperation(kind, filePath, recovery) {
+  if (!recovery) return "";
+  const pending = pendingUserImageAssets(kind)[recovery.operationKey];
+  const backendOperationId = String(pending?.backendOperationId ||
+    `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`);
+  rememberPendingUserImageOperation(kind, recovery.operationKey, filePath, {
+    backendOperationId
+  }, recovery.scope, recovery.operationSequence);
+  return backendOperationId;
+}
+
+async function fallbackUploadUserAvatar(filePath, recovery) {
+  const backendOperationId = backendUserImageOperation("avatar", filePath, recovery);
   return uploadBackendBinaryFile({
     bodyBytes: await readFileAsArrayBuffer(filePath),
     contentType: imageContentTypeFromPath(filePath),
     url: "/api/users/me/avatar",
     responseField: "avatarUrl",
+    extraHeaders: backendOperationId
+      ? {
+          "x-user-image-operation-id": backendOperationId,
+          "x-user-image-scope-key": recovery.scope.scopeKey
+        }
+      : {},
+    onUploaded: (uploaded) => {
+      if (!recovery) return;
+      rememberPendingUserImageOperation("avatar", recovery.operationKey, filePath, {
+        backendOperationId,
+        assetId: Number(uploaded.assetId),
+        approvedPath: uploaded.avatarUrl
+      }, recovery.scope, recovery.operationSequence);
+    },
     timeoutMessage: "头像上传超时，请确认本地后端已启动。",
     failMessage: "头像上传失败，请稍后重试。"
   });
 }
 
-export async function uploadUserAvatar(filePath) {
-  return uploadCosBackedFile({
-    kind: "avatar",
-    filePath,
-    fallbackUpload: fallbackUploadUserAvatar
-  });
+export function getUserImageAssetStatus(assetId) {
+  return request({
+    url: `/api/uploads/user-image/${encodeURIComponent(assetId)}`,
+    suppressMaintenance: true
+  }).then(dataOf);
 }
 
-function fallbackUploadSessionReviewPhoto(filePath) {
+function getUserImageUploadOperation(kind, pending) {
+  const query = [
+    ["kind", kind],
+    ["operationId", pending.backendOperationId],
+    ["scopeKey", pending.scopeKey]
+  ].map(([key, value]) => `${key}=${encodeURIComponent(String(value || ""))}`).join("&");
+  return request({
+    url: `/api/uploads/user-image/operation?${query}`,
+    suppressMaintenance: true
+  }).then(dataOf);
+}
+
+function userImageUploadScope(kind, options = {}) {
+  const ownerUserId = Number(getCurrentUser().user?.id || 0);
+  if (!Number.isSafeInteger(ownerUserId) || ownerUserId <= 0) {
+    throw new TypeError("user image upload requires an authenticated user");
+  }
+  if (kind === "avatar") {
+    return { ownerUserId, scopeKey: `user:${ownerUserId}:avatar` };
+  }
+  const sessionId = String(options.sessionId || "").trim();
+  const draftId = String(options.draftId || "").trim();
+  if (!sessionId && !draftId) {
+    throw new TypeError("review image upload requires sessionId or draftId");
+  }
+  return {
+    ownerUserId,
+    sessionId,
+    draftId,
+    scopeKey: [
+      `user:${ownerUserId}`,
+      sessionId ? `session:${encodeURIComponent(sessionId)}` : "",
+      draftId ? `draft:${encodeURIComponent(draftId)}` : ""
+    ].filter(Boolean).join(":")
+  };
+}
+
+function userImageUploadOperationKey(kind, filePath, scopeKey) {
+  return `${kind}:${scopeKey}:file:${encodeURIComponent(String(filePath || ""))}`;
+}
+
+function pendingUserImageAssets(kind) {
+  const key = USER_IMAGE_PENDING_KEYS[kind];
+  const stored = key ? uni.getStorageSync(key) : null;
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) return {};
+  return { ...stored };
+}
+
+const userImageScopeStates = new Map();
+
+function userImageScopeStateKey(kind, scopeKey) {
+  return `${kind}:${String(scopeKey || "")}`;
+}
+
+function userImageScopeState(kind, scopeKey) {
+  const key = userImageScopeStateKey(kind, scopeKey);
+  let state = userImageScopeStates.get(key);
+  if (!state) {
+    const lastStarted = Object.values(pendingUserImageAssets(kind))
+      .filter((pending) => pending?.scopeKey === scopeKey)
+      .reduce((maximum, pending) => {
+        const sequence = Number(pending?.operationSequence || 0);
+        return Number.isSafeInteger(sequence) && sequence > maximum ? sequence : maximum;
+      }, 0);
+    state = { lastStarted, supersededThrough: -1 };
+    userImageScopeStates.set(key, state);
+  }
+  return state;
+}
+
+function beginUserImageOperation(kind, scopeKey) {
+  const state = userImageScopeState(kind, scopeKey);
+  state.lastStarted += 1;
+  return state.lastStarted;
+}
+
+function userImageOperationSequence(pending) {
+  const sequence = Number(pending?.operationSequence || 0);
+  return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0;
+}
+
+function userImageOperationIsSuperseded(kind, scopeKey, operationSequence) {
+  return operationSequence <= userImageScopeState(kind, scopeKey).supersededThrough;
+}
+
+function userImageUploadSupersededError() {
+  return {
+    statusCode: 409,
+    code: "USER_IMAGE_UPLOAD_SUPERSEDED",
+    userMessage: "图片已由已保存内容替代，请重新选择。"
+  };
+}
+
+function assertUserImageOperationCurrent(kind, scopeKey, operationSequence) {
+  if (userImageOperationIsSuperseded(kind, scopeKey, operationSequence)) {
+    throw userImageUploadSupersededError();
+  }
+}
+
+function rememberPendingUserImageOperation(
+  kind,
+  operationKey,
+  filePath,
+  operation,
+  scope,
+  operationSequence
+) {
+  if (operationSequence !== undefined &&
+      userImageOperationIsSuperseded(kind, scope.scopeKey, operationSequence)) return false;
+  const key = USER_IMAGE_PENDING_KEYS[kind];
+  const assetId = Number(operation?.assetId || 0);
+  const objectKey = String(operation?.objectKey || "");
+  const backendOperationId = String(operation?.backendOperationId || "");
+  const approvedPath = String(operation?.approvedPath || "");
+  if (!key || (!objectKey && !backendOperationId &&
+      (!Number.isSafeInteger(assetId) || assetId <= 0))) return false;
+  const previous = pendingUserImageAssets(kind)[operationKey];
+  uni.setStorageSync(key, {
+    ...pendingUserImageAssets(kind),
+    [operationKey]: {
+      ...(previous && typeof previous === "object" ? previous : {}),
+      assetId: Number.isSafeInteger(assetId) && assetId > 0
+        ? assetId
+        : Number(previous?.assetId || 0),
+      objectKey: objectKey || String(previous?.objectKey || ""),
+      backendOperationId: backendOperationId || String(previous?.backendOperationId || ""),
+      approvedPath: approvedPath || String(previous?.approvedPath || ""),
+      filePath: String(filePath || ""),
+      ownerUserId: scope.ownerUserId,
+      sessionId: scope.sessionId || "",
+      draftId: scope.draftId || "",
+      scopeKey: scope.scopeKey,
+      operationSequence: operationSequence ?? userImageOperationSequence(previous)
+    }
+  });
+  return true;
+}
+
+function rememberPendingUserImage(
+  kind,
+  operationKey,
+  filePath,
+  assetId,
+  scope,
+  operationSequence
+) {
+  rememberPendingUserImageOperation(
+    kind,
+    operationKey,
+    filePath,
+    { assetId },
+    scope,
+    operationSequence
+  );
+}
+
+function forgetPendingUserImage(kind, operationKey) {
+  const key = USER_IMAGE_PENDING_KEYS[kind];
+  if (!key) return;
+  const pending = pendingUserImageAssets(kind);
+  delete pending[operationKey];
+  if (Object.keys(pending).length > 0) uni.setStorageSync(key, pending);
+  else uni.removeStorageSync(key);
+}
+
+function capturePendingUserImageScopeCutoff(kind, scopeOptions) {
+  const scope = userImageUploadScope(kind, scopeOptions);
+  return {
+    kind,
+    scopeKey: scope.scopeKey,
+    operationSequence: userImageScopeState(kind, scope.scopeKey).lastStarted
+  };
+}
+
+function acknowledgePendingUserImageScope(kind, scopeOptions, cutoff) {
+  const scope = userImageUploadScope(kind, scopeOptions);
+  const state = userImageScopeState(kind, scope.scopeKey);
+  const requestedCutoff = cutoff?.kind === kind && cutoff?.scopeKey === scope.scopeKey
+    ? Number(cutoff.operationSequence)
+    : state.lastStarted;
+  const operationCutoff = Number.isSafeInteger(requestedCutoff) && requestedCutoff >= 0
+    ? requestedCutoff
+    : state.lastStarted;
+  state.supersededThrough = Math.max(state.supersededThrough, operationCutoff);
+  const key = USER_IMAGE_PENDING_KEYS[kind];
+  const pendingAssets = pendingUserImageAssets(kind);
+  for (const [operationKey, pending] of Object.entries(pendingUserImageAssets(kind))) {
+    if (pending?.scopeKey === scope.scopeKey &&
+        userImageOperationSequence(pending) <= operationCutoff) {
+      delete pendingAssets[operationKey];
+    }
+  }
+  if (Object.keys(pendingAssets).length > 0) uni.setStorageSync(key, pendingAssets);
+  else uni.removeStorageSync(key);
+}
+
+export function captureUserAvatarAssociationCutoff() {
+  return capturePendingUserImageScopeCutoff("avatar", {});
+}
+
+export function captureSessionReviewPhotoAssociationCutoff(scope = {}) {
+  return capturePendingUserImageScopeCutoff("sessionReviewPhoto", scope);
+}
+
+export function acknowledgeUserAvatarAssociation(_path, cutoff) {
+  acknowledgePendingUserImageScope("avatar", {}, cutoff);
+}
+
+export function acknowledgeSessionReviewPhotoAssociations(_paths, scope = {}, cutoff) {
+  acknowledgePendingUserImageScope("sessionReviewPhoto", scope, cutoff);
+}
+
+function isTerminalUserImageAsset(asset) {
+  const status = String(asset?.status || "");
+  if (status && status !== "active") return true;
+  const moderationStatus = String(asset?.moderationStatus || "");
+  return (moderationStatus === "approved" || moderationStatus === "approved_legacy") &&
+    !asset?.path;
+}
+
+function isTerminalUserImageReplayError(error) {
+  return Number(error?.statusCode || error?.status || 0) === 404 ||
+    error?.code === "NOT_FOUND" ||
+    error?.code === "CONTENT_MODERATION_CONFIGURATION_ERROR";
+}
+
+async function recoverPendingUserImage(kind, operationKey, expectedOperationSequence) {
+  const pending = pendingUserImageAssets(kind)[operationKey];
+  if (!pending) return "";
+  const operationSequence = expectedOperationSequence ?? userImageOperationSequence(pending);
+  const assertCurrent = () =>
+    assertUserImageOperationCurrent(kind, pending.scopeKey, operationSequence);
+  assertCurrent();
+  const assetId = Number(pending?.assetId || pending || 0);
+  let asset;
+  if (Number.isSafeInteger(assetId) && assetId > 0) {
+    try {
+      asset = await getUserImageAssetStatus(assetId);
+    } catch (error) {
+      assertCurrent();
+      throw error;
+    }
+  } else if (pending?.objectKey) {
+    try {
+      asset = dataOf(await request({
+        url: "/api/uploads/user-image/finalize",
+        method: "POST",
+        data: { key: pending.objectKey },
+        suppressMaintenance: true
+      })) || {};
+    } catch (error) {
+      assertCurrent();
+      if (isTerminalUserImageReplayError(error)) {
+        forgetPendingUserImage(kind, operationKey);
+        return "";
+      }
+      throw error;
+    }
+    if (asset?.assetId) {
+      rememberPendingUserImageOperation(kind, operationKey, pending.filePath, {
+        objectKey: pending.objectKey,
+        assetId: Number(asset.assetId)
+      }, pending, operationSequence);
+    }
+  } else if (pending?.backendOperationId) {
+    try {
+      asset = await getUserImageUploadOperation(kind, pending);
+    } catch (error) {
+      assertCurrent();
+      if (isTerminalUserImageReplayError(error)) {
+        forgetPendingUserImage(kind, operationKey);
+        return "";
+      }
+      throw error;
+    }
+    if (asset?.assetId) {
+      rememberPendingUserImageOperation(kind, operationKey, pending.filePath, {
+        backendOperationId: pending.backendOperationId,
+        assetId: Number(asset.assetId)
+      }, pending, operationSequence);
+    }
+  } else {
+    forgetPendingUserImage(kind, operationKey);
+    return "";
+  }
+  assertCurrent();
+  if (asset?.path) {
+    rememberPendingUserImageOperation(kind, operationKey, pending.filePath, {
+      assetId: Number(asset.assetId || assetId),
+      approvedPath: asset.path
+    }, pending, operationSequence);
+    return asset.path;
+  }
+  if (asset?.moderationStatus === "rejected") {
+    forgetPendingUserImage(kind, operationKey);
+    throw {
+      statusCode: 422,
+      code: "CONTENT_MODERATION_REJECTED",
+      userMessage: "内容未通过安全审核"
+    };
+  }
+  if (isTerminalUserImageAsset(asset)) {
+    forgetPendingUserImage(kind, operationKey);
+    return "";
+  }
+  throw {
+    statusCode: 202,
+    code: "CONTENT_MODERATION_REVIEW_PENDING",
+    assetId: Number(asset?.assetId || assetId),
+    userMessage: "内容正在安全审核"
+  };
+}
+
+async function uploadRecoverableUserImage(kind, filePath, scopeOptions, upload) {
+  const scope = userImageUploadScope(kind, scopeOptions);
+  const operationKey = userImageUploadOperationKey(kind, filePath, scope.scopeKey);
+  const pending = pendingUserImageAssets(kind)[operationKey];
+  const operationSequence = pending
+    ? userImageOperationSequence(pending)
+    : beginUserImageOperation(kind, scope.scopeKey);
+  const assertCurrent = () =>
+    assertUserImageOperationCurrent(kind, scope.scopeKey, operationSequence);
+  const recovered = await recoverPendingUserImage(kind, operationKey, operationSequence);
+  if (recovered) return recovered;
+  assertCurrent();
+  try {
+    const uploaded = await upload({ scope, operationKey, operationSequence });
+    assertCurrent();
+    return uploaded;
+  } catch (error) {
+    assertCurrent();
+    if (error?.code === "CONTENT_MODERATION_REVIEW_PENDING" && error?.assetId) {
+      rememberPendingUserImage(
+        kind,
+        operationKey,
+        filePath,
+        error.assetId,
+        scope,
+        operationSequence
+      );
+    }
+    throw error;
+  }
+}
+
+export async function uploadUserAvatar(filePath) {
+  return uploadRecoverableUserImage("avatar", filePath, {}, (recovery) => uploadCosBackedFile({
+    kind: "avatar",
+    filePath,
+    fallbackUpload: fallbackUploadUserAvatar,
+    recovery
+  }));
+}
+
+export async function recoverPendingUserAvatar() {
+  const kind = "avatar";
+  const scope = userImageUploadScope(kind, {});
+  for (const [operationKey, pending] of Object.entries(pendingUserImageAssets(kind))) {
+    if (pending?.scopeKey !== scope.scopeKey) continue;
+    try {
+      const path = await recoverPendingUserImage(kind, operationKey);
+      if (path) return path;
+    } catch (error) {
+      if (["CONTENT_MODERATION_REJECTED", "USER_IMAGE_UPLOAD_SUPERSEDED"].includes(error?.code)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return "";
+}
+
+function fallbackUploadSessionReviewPhoto(filePath, recovery) {
+  const backendOperationId = backendUserImageOperation("sessionReviewPhoto", filePath, recovery);
   return uploadBackendFile({
     filePath,
     url: "/api/session-reviews/photos",
     name: "photo",
     responseField: "photoUrl",
+    extraHeaders: backendOperationId
+      ? {
+          "x-user-image-operation-id": backendOperationId,
+          "x-user-image-scope-key": recovery.scope.scopeKey
+        }
+      : {},
+    onUploaded: (uploaded) => {
+      if (!recovery) return;
+      rememberPendingUserImageOperation("sessionReviewPhoto", recovery.operationKey, filePath, {
+        backendOperationId,
+        assetId: Number(uploaded.assetId),
+        approvedPath: uploaded.photoUrl
+      }, recovery.scope, recovery.operationSequence);
+    },
     timeoutMessage: "照片上传超时，请确认本地后端已启动。",
     failMessage: "照片上传失败，请稍后重试。"
   });
 }
 
-export async function uploadSessionReviewPhoto(filePath) {
-  return uploadCosBackedFile({
+export async function uploadSessionReviewPhoto(filePath, scope = {}) {
+  return uploadRecoverableUserImage("sessionReviewPhoto", filePath, scope, (recovery) => uploadCosBackedFile({
     kind: "sessionReviewPhoto",
     filePath,
-    fallbackUpload: fallbackUploadSessionReviewPhoto
-  });
+    fallbackUpload: fallbackUploadSessionReviewPhoto,
+    recovery
+  }));
+}
+
+export async function uploadSessionReviewPhotos(filePaths = [], scope = {}) {
+  const approvedPaths = [];
+  let pendingCount = 0;
+  let firstError = null;
+  const uniquePaths = [...new Set(
+    (Array.isArray(filePaths) ? filePaths : [])
+      .map((filePath) => String(filePath || ""))
+      .filter(Boolean)
+  )].slice(0, 9);
+  for (const filePath of uniquePaths) {
+    try {
+      const path = await uploadSessionReviewPhoto(filePath, scope);
+      if (path && !approvedPaths.includes(path)) approvedPaths.push(path);
+    } catch (error) {
+      if (error?.code === "CONTENT_MODERATION_REVIEW_PENDING") pendingCount += 1;
+      else if (!firstError) firstError = error;
+    }
+  }
+  return { approvedPaths, pendingCount, error: firstError };
+}
+
+export async function recoverPendingSessionReviewPhotos(scopeOptions = {}) {
+  const kind = "sessionReviewPhoto";
+  const scope = userImageUploadScope(kind, scopeOptions);
+  const approvedPaths = [];
+  let pendingCount = 0;
+  for (const [operationKey, pending] of Object.entries(pendingUserImageAssets(kind))) {
+    if (pending?.scopeKey !== scope.scopeKey) continue;
+    try {
+      const path = await recoverPendingUserImage(kind, operationKey);
+      if (path && !approvedPaths.includes(path)) approvedPaths.push(path);
+    } catch (error) {
+      if (["CONTENT_MODERATION_REJECTED", "USER_IMAGE_UPLOAD_SUPERSEDED"].includes(error?.code)) {
+        continue;
+      }
+      pendingCount += 1;
+    }
+  }
+  return { approvedPaths, pendingCount };
 }
 
 export function uploadSessionAlbumPhotoLocal(sessionId, filePath, options = {}) {

@@ -1,4 +1,5 @@
 import { withDatabaseConnection, withTransaction } from "../../db/mysql.js";
+import { config } from "../../config/env.js";
 import {
   AppError,
   badRequest,
@@ -40,6 +41,12 @@ import {
 } from "./session-reschedule.js";
 import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
+import {
+  findOwnedUserImageAssetById,
+  findOwnedPublishedUserImageAsset,
+  scheduleUserImageAssetCleanup
+} from "../user-image-assets/repository.js";
+import { cosStorageEnabled } from "../../storage/cos.js";
 import { isModerationPublished } from "@pinche/shared";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
@@ -6938,10 +6945,13 @@ async function reviewPhotos(connection, reviewIds) {
   const placeholders = reviewIds.map(() => "?").join(", ");
   const [rows] = await connection.query(
     `
-      SELECT review_id, photo_url
-      FROM session_review_photos
-      WHERE review_id IN (${placeholders})
-      ORDER BY review_id, sort_order, id
+      SELECT photo.review_id, photo.photo_url
+      FROM session_review_photos AS photo
+      JOIN user_image_assets AS asset ON asset.id = photo.image_asset_id
+      WHERE photo.review_id IN (${placeholders})
+        AND asset.status = 'active'
+        AND asset.moderation_status IN ('approved', 'approved_legacy')
+      ORDER BY photo.review_id, photo.sort_order, photo.id
     `,
     reviewIds
   );
@@ -7023,6 +7033,16 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
   const rating = reviewRating(body.rating);
   const content = reviewContent(body.content);
   const photoUrls = assertSessionReviewPhotoUrls(body.photoUrls);
+  const photoAssetCandidates = [];
+  for (const photoUrl of photoUrls) {
+    const asset = await findOwnedPublishedUserImageAsset(connection, {
+      ownerUserId: user.user.id,
+      kind: "review",
+      path: photoUrl
+    });
+    if (!asset) throw badRequest("photoUrls must reference your approved uploaded review photos");
+    photoAssetCandidates.push(asset);
+  }
 
   const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
   if (!eligibleSignup) {
@@ -7050,21 +7070,64 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
       WHERE session_id = ?
         AND user_id = ?
       LIMIT 1
+      FOR UPDATE
     `,
     [id, user.user.id]
   );
   const review = reviewRows[0];
+  const [oldPhotoRows] = await connection.query(
+    `SELECT image_asset_id FROM session_review_photos
+     WHERE review_id = ? FOR UPDATE`,
+    [review.id]
+  );
+  const requestedPhotoAssetIds = new Set(
+    photoAssetCandidates.map((asset) => Number(asset.id))
+  );
+  const orderedAssetIds = [...new Set([
+    ...requestedPhotoAssetIds,
+    ...oldPhotoRows.map((photo) => Number(photo.image_asset_id || 0)).filter(Boolean)
+  ])].sort((left, right) => left - right);
+  const lockedPhotoAssets = new Map();
+  for (const assetId of orderedAssetIds) {
+    const asset = await findOwnedUserImageAssetById(connection, {
+      ownerUserId: user.user.id,
+      assetId
+    }, { forUpdate: true });
+    if (!requestedPhotoAssetIds.has(assetId)) continue;
+    if (!asset || String(asset.kind) !== "review" || String(asset.status) !== "active" ||
+        !isModerationPublished(asset.moderation_status)) {
+      throw badRequest("photoUrls must reference your approved uploaded review photos");
+    }
+    lockedPhotoAssets.set(Number(asset.id), asset);
+  }
+  const photoAssets = photoAssetCandidates.map((candidate, index) => {
+    const asset = lockedPhotoAssets.get(Number(candidate.id));
+    if (!asset || String(asset.asset_path) !== photoUrls[index]) {
+      throw badRequest("photoUrls must reference your approved uploaded review photos");
+    }
+    return asset;
+  });
   await connection.query("DELETE FROM session_review_photos WHERE review_id = ?", [
     review.id
   ]);
   for (const [index, photoUrl] of photoUrls.entries()) {
     await connection.query(
       `
-        INSERT INTO session_review_photos (review_id, photo_url, sort_order)
-        VALUES (?, ?, ?)
+        INSERT INTO session_review_photos (review_id, photo_url, image_asset_id, sort_order)
+        VALUES (?, ?, ?, ?)
       `,
-      [review.id, photoUrl, index]
+      [review.id, photoUrl, Number(photoAssets[index].id), index]
     );
+  }
+  const nextPhotoAssetIds = new Set(photoAssets.map((asset) => Number(asset.id)));
+  for (const oldPhoto of oldPhotoRows) {
+    const oldAssetId = Number(oldPhoto.image_asset_id || 0);
+    if (oldAssetId > 0 && !nextPhotoAssetIds.has(oldAssetId)) {
+      await scheduleUserImageAssetCleanup(connection, {
+        assetId: oldAssetId,
+        storageKind: cosStorageEnabled(config.cos) ? "cos" : "local"
+      });
+    }
   }
   return {
     ...review,

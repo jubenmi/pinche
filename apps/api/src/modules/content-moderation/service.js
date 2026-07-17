@@ -13,7 +13,11 @@ import {
   textMutationSubjectVersion,
   textOperationSubjectId
 } from "./text-request-identity.js";
-import { MODERATION_ERROR_CODES, MODERATION_RETRY_LEASE_MIN_MS } from "./constants.js";
+import {
+  MODERATION_ERROR_CODES,
+  MODERATION_IMAGE_SUBJECT_TYPES,
+  MODERATION_RETRY_LEASE_MIN_MS
+} from "./constants.js";
 import { moderationStatusForDecision } from "./state-machine.js";
 import { emitModerationSubmissionFailure } from "./telemetry.js";
 
@@ -415,13 +419,15 @@ export function createContentModerationService(dependencies) {
   }
 
   async function createWechatImageModerationJob(connection, input) {
+    const subjectType = exactBoundedString(input?.subjectType || "album_image", 64);
     const mediaId = Number(input?.media?.id);
     const uploaderUserId = Number(
       input?.media?.uploader_user_id ?? input?.media?.uploaderUserId
     );
     const objectKey = exactBoundedString(input?.objectKey, 1024);
     const subjectVersion = exactBoundedString(input?.subjectVersion, 512);
-    if (!Number.isInteger(mediaId) || mediaId <= 0 || !Number.isInteger(uploaderUserId) ||
+    if (!MODERATION_IMAGE_SUBJECT_TYPES.includes(subjectType) ||
+      !Number.isInteger(mediaId) || mediaId <= 0 || !Number.isInteger(uploaderUserId) ||
       uploaderUserId <= 0 || !objectKey || !subjectVersion) {
       throw textModerationError(
         500,
@@ -430,7 +436,7 @@ export function createContentModerationService(dependencies) {
       );
     }
     const job = await deps.repository.createModerationJob(connection, {
-      subjectType: "album_image",
+      subjectType,
       subjectId: String(mediaId),
       subjectVersion,
       provider: "wechat_sec_check",
@@ -449,7 +455,7 @@ export function createContentModerationService(dependencies) {
     };
     deps.emit("moderation_job_created", {
       provider: "wechat_sec_check",
-      subjectType: "album_image",
+      subjectType,
       outcome: "pending"
     });
     return created;
@@ -508,7 +514,7 @@ export function createContentModerationService(dependencies) {
         mediaUrl,
         openid,
         scene: 4,
-        subjectType: "album_image"
+        subjectType: String(job?.subject_type || job?.subjectType || "album_image")
       });
       const traceId = boundedString(response?.traceId, 128);
       if (!traceId) {
@@ -538,7 +544,7 @@ export function createContentModerationService(dependencies) {
       }
       deps.emit("moderation_submission_success", {
         provider: "wechat_sec_check",
-        subjectType: "album_image",
+        subjectType: String(job?.subject_type || job?.subjectType || "album_image"),
         outcome: "processing",
         attempt: Number(job?.attempt_count || 0) + 1
       });
@@ -550,7 +556,7 @@ export function createContentModerationService(dependencies) {
       await recordLeasedSubmissionFailure({
         job,
         leaseToken,
-        subjectType: "album_image",
+        subjectType: String(job?.subject_type || job?.subjectType || "album_image"),
         error
       });
       throw error;
@@ -631,13 +637,17 @@ export function createContentModerationService(dependencies) {
         return staleResult(job);
       }
       const currentObjectKey = String(
-        job.subject_type === "album_image" ? media.object_key : media.source_url
+        MODERATION_IMAGE_SUBJECT_TYPES.includes(job.subject_type) ? media.object_key : media.source_url
       ).replace(/^\//, "");
       if (
         provider === "wechat_sec_check" &&
         (
-          String(job.subject_type) !== "album_image" ||
-          !/^uploads\/session-album\/display\/[A-Za-z0-9._/-]+$/.test(currentObjectKey)
+          !MODERATION_IMAGE_SUBJECT_TYPES.includes(String(job.subject_type)) ||
+          !(String(job.subject_type) === "album_image"
+            ? /^uploads\/session-album\/display\/[A-Za-z0-9._-]+$/.test(currentObjectKey)
+            : String(job.subject_type) === "avatar_image"
+              ? /^uploads\/avatars\/[A-Za-z0-9._-]+$/.test(currentObjectKey)
+              : /^uploads\/session-reviews\/[A-Za-z0-9._-]+$/.test(currentObjectKey))
         )
       ) {
         return staleResult(job);
@@ -661,13 +671,20 @@ export function createContentModerationService(dependencies) {
       });
       if (!changed) return staleResult(job);
       const mediaChanged = await deps.repository.transitionMediaModeration(connection, {
+        ...(["avatar_image", "review_image"].includes(job.subject_type)
+          ? { subjectType: job.subject_type }
+          : {}),
         mediaId: media.id,
         fromStatuses: ["pending", "error"],
         toStatus: nextStatus
       });
       if (!mediaChanged) throw staleCallback("moderation media changed concurrently");
       if (nextStatus === "rejected") {
-        await deps.repository.enqueueRejectedMediaCleanup(connection, media);
+        if (String(job.subject_type).startsWith("album_")) {
+          await deps.repository.enqueueRejectedMediaCleanup(connection, media);
+        } else {
+          await deps.repository.enqueueUserImageAssetCleanup(connection, media);
+        }
       }
       emitModerationDecision(deps.emit, {
         decision: input.result.decision,
@@ -1165,10 +1182,10 @@ export function createContentModerationService(dependencies) {
       }
 
       const nextStatus = action === "approve" ? "approved" : "rejected";
-      const isMedia = ["album_image", "album_video"].includes(job.subject_type);
+      const isMedia = [...MODERATION_IMAGE_SUBJECT_TYPES, "album_video"].includes(job.subject_type);
       if (isMedia) {
         const media = await deps.repository.findModerationMedia(connection, job, { forUpdate: true });
-        const expectedMediaType = job.subject_type === "album_image" ? "image" : "video";
+        const expectedMediaType = MODERATION_IMAGE_SUBJECT_TYPES.includes(job.subject_type) ? "image" : "video";
         const mediaFromStatuses = job.status === "review" ? ["review"] : ["pending", "error"];
         if (
           !media ||
@@ -1181,6 +1198,9 @@ export function createContentModerationService(dependencies) {
           throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "media is stale");
         }
         const mediaChanged = await deps.repository.transitionMediaModeration(connection, {
+          ...(["avatar_image", "review_image"].includes(job.subject_type)
+            ? { subjectType: job.subject_type }
+            : {}),
           mediaId: media.id,
           fromStatuses: mediaFromStatuses,
           toStatus: nextStatus
@@ -1189,7 +1209,11 @@ export function createContentModerationService(dependencies) {
           throw publicModerationError(409, "CONTENT_MODERATION_CALLBACK_STALE", "media changed concurrently");
         }
         if (nextStatus === "rejected") {
-          await deps.repository.enqueueRejectedMediaCleanup(connection, media);
+          if (String(job.subject_type).startsWith("album_")) {
+            await deps.repository.enqueueRejectedMediaCleanup(connection, media);
+          } else {
+            await deps.repository.enqueueUserImageAssetCleanup(connection, media);
+          }
         }
       } else {
         const proposal = await deps.repository.findTextProposalByJobId(

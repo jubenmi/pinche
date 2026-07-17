@@ -3,7 +3,27 @@
 - [x] D46.1 在 D45 审核任务与媒体状态基线之上新增平台设置和审计迁移。
 - [x] D46.2 实现能力优先、默认直发、兜底拦截的统一入口策略。
 - [x] D46.3 实现仅系统管理员可读写的设置 API 与后台“内容安全”页面。
-- [ ] D46.4 接入全部图片入口：头像、相册、评价配图及其读取门禁。
+- [x] D46.4 接入全部图片入口：头像、相册、评价配图及其读取门禁。
+  - 2026-07-17：进行中——补齐头像与评价配图的不可变资产、D45 WeChat 异步审核任务/回调/重试复用、资料与评价关联所有权门禁、原始 `/uploads` 与序列化读取门禁；完成全部定向验证前保持未勾选。
+  - 2026-07-17：规格复审整改中——补本人资产状态/领取与 finalize 幂等、0031 部分 DDL 恢复、持久化清理兜底、本地原子禁止覆盖、历史评价图逐引用显式绑定；五项完成并全套验证前保持未勾选。
+  - 2026-07-17：二次复审整改完成——评价多图按上传操作与本地文件身份逐项提交/恢复并保持顺序、9 图上限与去重；既有 owner/path 资产在 intake 前幂等领取；0031 将所有非空历史头像显式绑定或 fail closed。定向、D45 与构建验证通过；全量 API 仅保留主工作区可复现的 3 项微信 token 基线失败，D46.4 仍留待总复核勾选。
+  - 2026-07-17：三次复审整改完成——finalize 先无锁幂等探测，新资产恢复 settings→owner/path 锁序；未关联资产保持持久化清理计划，头像与评价替换/删除重排旧资产，成功删除后资产置 deleted；评价 pending operation 按登录用户与 session/draft 隔离。聚焦、D45、语法、构建与 diff 验证通过，D46.4 仍留待总复核勾选。
+  - 2026-07-17：四次复审整改完成——清理仅处理安全终态，删除决定在资产锁和引用复查后先持久化，资料/评价关联锁定 active 已发布资产，`deleting` 崩溃与存储失败均可重试；null probe 在 settings 锁后优先重放精确并发资产；历史资产调度原子补建 cleanup anchor。聚焦、D45、静态、语法、构建与 diff 验证通过，D46.4 仍留待总复核勾选。
+  - 2026-07-17：五次复审整改完成——cleanup preparation 使用 claim 得到的不可变定位先锁 asset（未完成 finalize 时锁 owner/path），再锁并校验 leased cleanup job，与 finalize/拒绝回调统一为 asset→cleanup job；SKIP LOCKED lease、终态清理、引用复查、删除决定、崩溃恢复和存储重试语义保持不变。聚焦、D45、静态、语法与 diff 验证通过，D46.4 仍留待总复核勾选。
+  - 2026-07-17：第三轮规格复审整改中——必须修正 user-image finalize 的 `settings → business` 锁顺序；补齐未关联、替换和删除图片的持久化清理及资产 `deleted` 状态；按用户与 `sessionId`/草稿范围隔离评价配图恢复。完成 RED/GREEN、复审和独立验证前保持未勾选。
+  - 2026-07-17：第四轮规格复审整改中——清理不能删除仍供审核重试/后台复核的待审资产；清理判定、对象删除和资料/评价关联须消除竞态；并发空探测须在设置锁后优先重放既有资产；历史 `approved_legacy` 资产必须拥有可调度的清理锚点。完成 RED/GREEN、复审和独立验证前保持未勾选。
+  - 2026-07-17：第五轮规格复审整改中——清理准备必须与上传 finalize 和审核拒绝回调统一为 `asset → cleanup_job` 锁序，消除 `cleanup_job → asset` 的反向死锁。完成 RED/GREEN、复审和独立验证前保持未勾选。
+  - 2026-07-17：代码质量复审整改完成——共享历史物理路径按跨 owner 的 asset_path/object_key 存活性阻止物理删除，raw read 确定选择 active 已发布资产；评价多图先解析去重、按 asset id 升序锁定并按客户端顺序写入；头像与评价图在 finalize 前持久化 owner/scope/object key，可重放事务后上游失败和断网；0031 对既有 asset/cleanup 表补齐或校验全部主键、二级/唯一索引、外键与 CHECK，同名错误结构关闭式失败。聚焦、D45、静态、语法与 diff 验证通过，D46.4 仍留待总复核勾选。
+  - 2026-07-17：第七轮规格复审整改完成——共享物理对象逐资产 tombstone、由最后一个 live 成员回收；同一评价替换先序列化 review，再按序锁定新旧资产并集；客户端清除 deleted/nonactive/已批准无 path 及终态重放错误的恢复记录；0031 补齐并校验 users/review 资产引用索引。四项均完成 RED/GREEN；聚焦 62/62、D45 talk 5/5 与主套件 518/518、静态和语法检查通过；全量 API 628/631，仅保留主工作区已复现的 3 项微信订阅 token 基线失败。D46.4 仍留待总复核勾选。
+  - 2026-07-17：并发共享对象清理复审整改完成——不同 worker 同时观察同组另一资产 active 并各自 tombstone 时，两个 cleanup job 均延后 retry，不再终态 retained；后续 claim 在确认同组无 active 资产后回收物理对象。业务引用 retained、非终态审核 defer、asset→cleanup job 锁序与不提前删除语义保持不变。并发与恢复均完成 RED/GREEN；聚焦 64/64、D45 talk 5/5 与主套件 520/520、静态和语法检查通过。D46.4 仍留待总复核勾选。
+  - 2026-07-17：最终质量复审整改中——raw read 必须区分零资产 legacy 与已知 hidden-only 资产组；客户端批准恢复记录须等业务关联成功后显式确认，fallback 上传须可重放响应丢失；0031 须校验运行时列/表语义；共享物理对象须让永久 live sibling 的非最终 job 终态收敛，同时保留并发全 tombstone 后的 durable 最终回收选举。四项完成 RED/GREEN 与相关回归前保持未勾选。
+  - 2026-07-17：最终质量复审整改完成——raw read 仅在零资产且 WeChat 图片审核关闭时兼容 legacy，任何已知 hidden-only 组保持 404；批准恢复记录在资料/评价关联成功后才按 scope/path 显式确认，直传与本地/backend fallback 均可重放响应丢失；0031 校验并修复主键、自增、默认值、on-update、引擎及运行时约束；共享资产 job 终态 retained，并由 owner-agnostic、`(storage_kind, object_key)` 唯一的对象 job 在 asset→job 锁序下完成最终回收与崩溃重试。四项均完成 RED/GREEN；聚焦 42/42、小程序 8/8、D45 talk 5/5 与主套件 526/526、release matrix 121/121、静态、API 语法、小程序构建与 diff 检查通过；全量 API 634/637，仅保留主工作区已复现的 3 项微信订阅 token 基线失败。D46.4 仍留待总复核勾选。
+  - 2026-07-17：backend fallback 响应丢失恢复整改中——补认证且按 owner、图片 kind 与评价 session/draft scope 隔离的 operation-ID 查询，使普通页面恢复无需再次选择同一文件；deleted/404/终态配置结果须清除客户端 locator，避免 orphan cleanup 后旧 operation 阻塞新上传。完成三类 RED/GREEN 与回归前保持未勾选。
+  - 2026-07-17：backend fallback 响应丢失恢复整改完成——0031 新增无路径的 `user_image_upload_operations`，在资产 finalize 同一事务内绑定 owner、kind、scope、operation ID 与 asset；认证查询按四项精确匹配并复用资产公开投影，hidden/pending 不返回 path。评价页面按 session/draft scope 自动恢复，资料页打开时恢复头像；missing、终态配置和 deleted 结果会清除客户端 locator，使 orphan cleanup 后同一文件可生成新 operation 重传。完成严格 RED/GREEN；user-image 65/65、小程序 11/11、D45 talk 5/5 与主套件 532/532、静态、API 语法、小程序构建与 diff 检查通过。D46.4 仍留待总复核勾选。
+  - 2026-07-17：最终 D46.4 质量复审整改中——authoritative profile/review 关联须按完整 scope 清除并使竞态恢复失效；补齐 `asset_path`/`object_key` 单列前导索引；本地 EEXIST 重放须以磁盘真实字节核对并计算版本；评价对象 key 须纳入规范化 scope。四项完成严格 RED/GREEN 与全套回归前保持未勾选。
+  - 2026-07-17：最终 D46.4 质量复审整改完成——资料/评价成功关联按完整规范化 scope 清除全部 operation，并用 scope epoch 使重叠恢复/上传无效，删除的恢复图与被替换头像不会重现；0031 建表与 reconciler 补齐精确非唯一单列 `asset_path`/`object_key` 查询索引并关闭式拒绝错误同名结构；本地 EEXIST 读取磁盘真实字节、SHA-256 不同则在 finalize 前稳定 409；评价确定性 key 纳入规范化 scope。严格 RED/GREEN；聚焦 80/80、D45 talk 5/5 与主套件 536/536、release matrix 121/121、静态、API 语法、小程序构建与 diff 检查通过。D46.4 仍留待总复核勾选。
+  - 2026-07-17：最终客户端并发复审整改中——scope supersession 必须稳定报错且以关联请求开始时的 operation cutoff 为界，不能清除之后开始的新上传；评价存在待审照片时不得保存或确认清 scope。两项完成严格 RED/GREEN 与全套回归前保持未勾选。
+  - 2026-07-17：最终客户端并发复审整改完成——头像/评价 scope operation 持久化递增序号，关联请求开始前捕获 cutoff，成功 ack 只清除并淘汰 cutoff 及之前的操作；旧上传稳定返回 409 `USER_IMAGE_UPLOAD_SUPERSEDED`，不再产生空 path 或空头像更新，请求后新启动的 stacked 上传保持可恢复。评价 `pendingPhotoCount > 0` 同时禁用保存按钮并在方法入口拦截，不发 PUT、不 ack，最终批准仍可恢复。严格 RED/GREEN；聚焦 82/82、D45 talk 5/5 与主套件 538/538、release matrix 121/121、静态、API/小程序语法、小程序构建与 diff 检查通过。D46.4 仍留待总复核勾选。
 - [ ] D46.5 接入全部视频入口及其读取门禁。
 - [ ] D46.6 接入受约束文本的创建和编辑入口。
   - 2026-07-17：进行中——第一阶段已将持久化设置接入统一异步入口门禁，旧 `*_INTAKE_MODE` 仅保留配置兼容、不参与 D46 发布决策；图片/视频按 `moderationRequired` 写入 `pending` 或 `approved_legacy`，文本不再由 `legacy` 提前绕过。头像与评价配图当前仅完成统一图片策略拦截，D45 尚无其不可变媒体、审核任务和隐藏读取管线，须后续独立补齐。本阶段不宣称完成 D46.4–D46.6。
