@@ -90,6 +90,8 @@ test("content security workspace renders four switches, read-only capabilities, 
   assert.match(workspace, /contentSecurityLoadFailed/);
   assert.match(workspace, /canSaveContentSecurity/);
   assert.match(workspace, /contentSecurityCapabilityLabel/);
+  assert.match(workspace, /启动时配置状态/);
+  assert.match(workspace, /任务创建后发生的权限、额度或网络失败/);
   assert.match(workspace, />总开关</);
   assert.match(workspace, />图片</);
   assert.match(workspace, />视频</);
@@ -132,8 +134,8 @@ test("content security trust follows the latest load result", async () => {
     }
   });
   assert.equal(module.canSaveContentSecurity(state), true);
-  assert.equal(module.contentSecurityCapabilityLabel(state, "image"), "可用");
-  assert.equal(module.contentSecurityCapabilityLabel(state, "video"), "不可用");
+  assert.equal(module.contentSecurityCapabilityLabel(state, "image"), "已配置（启动时）");
+  assert.equal(module.contentSecurityCapabilityLabel(state, "video"), "未配置（启动时）");
 
   state = module.contentSecurityLoadFailed(state);
   assert.equal(state.settings.blockWhenUnavailable, true, "stale values may remain visible");

@@ -4,10 +4,10 @@
       <div>
         <p class="eyebrow">CONTENT SAFETY</p>
         <h2>内容安全</h2>
-        <p>配置自动审核能力不可用时，是否暂停接收对应类型的新内容。</p>
+        <p>配置启动时未启用对应审核能力时，是否暂停接收新内容。</p>
       </div>
       <button class="secondary-action" type="button" :disabled="busy" @click="loadSettings">
-        {{ loading ? "刷新中" : "刷新状态" }}
+        {{ loading ? "刷新中" : "刷新配置状态" }}
       </button>
     </header>
 
@@ -18,7 +18,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">SERVICE STATUS</p>
-          <h3 id="capability-heading">自动审核能力</h3>
+          <h3 id="capability-heading">自动审核启动时配置状态</h3>
         </div>
         <span class="readonly-label">只读状态</span>
       </div>
@@ -48,7 +48,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">FALLBACK POLICY</p>
-          <h3>能力不可用时的发布策略</h3>
+          <h3>启动时未启用能力时的发布策略</h3>
         </div>
       </div>
 
@@ -61,7 +61,7 @@
           v-model="securityState.settings.blockWhenUnavailable"
           type="checkbox"
           :disabled="busy || !canSave"
-          aria-label="能力不可用时拦截总开关"
+          aria-label="启动时能力未配置时拦截总开关"
         />
       </label>
 
@@ -70,40 +70,40 @@
         <label class="security-toggle">
           <span class="toggle-copy">
             <strong>图片</strong>
-            <small>图片自动审核不可用时暂停新图片发布。</small>
+            <small>图片 provider 未启用并重启后暂停新图片发布。</small>
           </span>
           <input
             v-model="securityState.settings.blockImageWhenUnavailable"
             type="checkbox"
-            aria-label="图片能力不可用时拦截"
+            aria-label="启动时图片能力未配置时拦截"
           />
         </label>
         <label class="security-toggle">
           <span class="toggle-copy">
             <strong>视频</strong>
-            <small>视频自动审核不可用时暂停新视频发布。</small>
+            <small>视频 provider 未启用并重启后暂停新视频发布。</small>
           </span>
           <input
             v-model="securityState.settings.blockVideoWhenUnavailable"
             type="checkbox"
-            aria-label="视频能力不可用时拦截"
+            aria-label="启动时视频能力未配置时拦截"
           />
         </label>
         <label class="security-toggle">
           <span class="toggle-copy">
             <strong>文本</strong>
-            <small>文本自动审核不可用时暂停受约束文本发布。</small>
+            <small>文本 provider 未启用并重启后暂停受约束文本发布。</small>
           </span>
           <input
             v-model="securityState.settings.blockTextWhenUnavailable"
             type="checkbox"
-            aria-label="文本能力不可用时拦截"
+            aria-label="启动时文本能力未配置时拦截"
           />
         </label>
       </fieldset>
 
       <div class="settings-footer">
-        <p>自动审核能力可用时始终先审核后发布，不受这些开关影响。</p>
+        <p>任务创建后发生的权限、额度或网络失败会保持隐藏并重试，不会改走直发；状态切换需修改 provider 配置并重启。</p>
         <button class="primary" type="submit" :disabled="busy || !canSave">
           {{ saving ? "保存中..." : "保存设置" }}
         </button>

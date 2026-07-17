@@ -1,4 +1,5 @@
 import { badRequest } from "../../http/errors.js";
+import { assertContentModerationIntake } from "./intake-gate.js";
 
 const KEYS = Object.freeze([
   "blockWhenUnavailable",
@@ -6,6 +7,12 @@ const KEYS = Object.freeze([
   "blockVideoWhenUnavailable",
   "blockTextWhenUnavailable"
 ]);
+
+const TYPE_BLOCK_KEYS = Object.freeze({
+  image: "blockImageWhenUnavailable",
+  video: "blockVideoWhenUnavailable",
+  text: "blockTextWhenUnavailable"
+});
 
 export function defaultContentSecuritySettings() {
   return Object.fromEntries(KEYS.map((key) => [key, false]));
@@ -31,9 +38,30 @@ export function mapContentSecuritySettings(row) {
   };
 }
 
-export async function readContentSecuritySettings(connection) {
-  const [rows] = await connection.query("SELECT * FROM content_security_settings WHERE id = 1 LIMIT 1");
+export async function readContentSecuritySettings(connection, { forUpdate = false } = {}) {
+  const [rows] = await connection.query(
+    `SELECT * FROM content_security_settings WHERE id = 1${forUpdate ? " FOR UPDATE" : " LIMIT 1"}`
+  );
   return mapContentSecuritySettings(rows[0]);
+}
+
+export function createContentSecurityIntakeResolver({
+  moderationConfig,
+  withDatabaseConnection
+}) {
+  return async function resolveContentSecurityIntake(type, { connection } = {}) {
+    const settings = connection
+      ? await readContentSecuritySettings(connection, { forUpdate: true })
+      : await withDatabaseConnection((currentConnection) =>
+          readContentSecuritySettings(currentConnection)
+        );
+    const typeBlockKey = TYPE_BLOCK_KEYS[type];
+    return assertContentModerationIntake(moderationConfig, type, {
+      fallbackBlocking: Boolean(
+        settings.blockWhenUnavailable && typeBlockKey && settings[typeBlockKey]
+      )
+    });
+  };
 }
 
 export async function updateContentSecuritySettings(connection, actorUserId, value) {

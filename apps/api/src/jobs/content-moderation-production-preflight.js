@@ -134,11 +134,6 @@ export async function buildProductionPreflightRuntime({ connection, moderationCo
     testAdminUserId: moderationConfig.productionPreflight.testAdminUserId,
     operatorRole: "system_admin",
     operatorStatus,
-    intakeModes: {
-      text: moderationConfig.textIntakeMode,
-      image: moderationConfig.imageIntakeMode,
-      video: moderationConfig.videoIntakeMode
-    },
     providerConfig: {
       wechatText: Boolean(moderationConfig.wechatTextEnabled && moderationConfig.wechatAppId && moderationConfig.wechatAppSecret),
       wechatImage: Boolean(moderationConfig.wechatImageEnabled && moderationConfig.wechatAppId && moderationConfig.wechatAppSecret),

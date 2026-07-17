@@ -257,8 +257,8 @@ import {
   createTencentVideoModerationClient,
   createTencentVideoModerationTransport
 } from "./modules/content-moderation/tencent-video-client.js";
-import { assertContentModerationIntake } from "./modules/content-moderation/intake-gate.js";
 import {
+  createContentSecurityIntakeResolver,
   readContentSecuritySettings,
   updateContentSecuritySettings
 } from "./modules/content-moderation/content-security-settings.js";
@@ -294,6 +294,10 @@ const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   time: "1",
   format: "jpg"
 };
+const resolveContentSecurityIntake = createContentSecurityIntakeResolver({
+  moderationConfig: config.contentModeration,
+  withDatabaseConnection
+});
 const AVATAR_WEBP_RULE = "imageMogr2/auto-orient/thumbnail/512x512>/format/webp/quality/80";
 const SESSION_ALBUM_DISPLAY_JPG_RULE =
   "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip";
@@ -815,8 +819,37 @@ async function captureTextModerationBase({ action, user, subjectId, body, contex
   }
 }
 
+async function applyDirectCoveredTextMutation(
+  connection,
+  { user, action, subjectId, body, context = {} }
+) {
+  switch (action) {
+    case "update_nickname":
+      return updateUserProfileWithConnection(connection, user.user.id, body);
+    case "create_private_store":
+      return createPrivateStoreWithConnection(connection, user, body);
+    case "create_private_script":
+      return createPrivateScriptWithConnection(connection, user, body);
+    case "create_session":
+      return createSessionWithConnection(connection, user, body);
+    case "update_session":
+      return updateSessionWithConnection(connection, user, Number(subjectId), body);
+    case "create_session_npc_role":
+      return createSessionNpcRoleWithConnection(connection, user, Number(context.sessionId), body);
+    case "update_session_npc_role":
+      return updateSessionNpcRoleWithConnection(connection, user, Number(subjectId), body);
+    case "upsert_session_review":
+      return upsertMySessionReviewWithConnection(connection, user, Number(subjectId), body);
+    case "create_session_message":
+      return createSessionMessageWithConnection(connection, user, Number(subjectId), body);
+    case "update_session_pinned_message":
+      return updateSessionPinnedMessageWithConnection(connection, user, Number(subjectId), body);
+    default:
+      throw badRequest("unsupported text moderation action");
+  }
+}
+
 async function moderateCoveredText({ request, user, action, subjectId, body, context = {} }) {
-  if (config.contentModeration.textIntakeMode === "legacy") return null;
   const cleanBody = moderationBody(body);
   const preflightDescriptor = buildTextModerationDescriptor({
     action,
@@ -824,8 +857,26 @@ async function moderateCoveredText({ request, user, action, subjectId, body, con
     context
   });
   if (!preflightDescriptor) return null;
-  const intake = assertContentModerationIntake(config.contentModeration, "text");
-  if (!intake.moderationRequired) return null;
+  const intake = await resolveContentSecurityIntake("text");
+  if (!intake.moderationRequired) {
+    return withTransaction(async (connection) => {
+      const finalIntake = await resolveContentSecurityIntake("text", { connection });
+      if (finalIntake.moderationRequired) {
+        throw new AppError(
+          500,
+          "CONTENT_MODERATION_CONFIGURATION_ERROR",
+          "Content moderation policy changed before the business write"
+        );
+      }
+      return applyDirectCoveredTextMutation(connection, {
+        user,
+        action,
+        subjectId,
+        body,
+        context
+      });
+    });
+  }
   const resolvedSubjectId = String(subjectId || "");
   const proposalTargetId = textProposalTargetSubjectId({
     action,
@@ -1228,11 +1279,6 @@ async function buildProductionPreflightCallbackRuntime() {
     operatorUserId,
     operatorRole: "system_admin",
     operatorStatus,
-    intakeModes: {
-      text: config.contentModeration.textIntakeMode,
-      image: config.contentModeration.imageIntakeMode,
-      video: config.contentModeration.videoIntakeMode
-    },
     providerConfig: {
       wechatText: Boolean(config.contentModeration.wechatTextEnabled && config.contentModeration.wechatAppId && config.contentModeration.wechatAppSecret),
       wechatImage: Boolean(config.contentModeration.wechatImageEnabled && config.contentModeration.wechatAppId && config.contentModeration.wechatAppSecret),
@@ -1287,7 +1333,10 @@ const adminModerationApi = createAdminModerationApi({
 const albumImageUploads = createAlbumImageUploadService({
   cosConfig: config.cos,
   directUploadRequired: config.albumMedia.directUploadRequired,
-  assertImageIntake: () => assertContentModerationIntake(config.contentModeration, "image"),
+  assertImageIntake: (connection) => resolveContentSecurityIntake(
+    "image",
+    connection ? { connection } : undefined
+  ),
   transaction: withTransaction,
   access: assertSessionAlbumImageUploadAllowed,
   repository: {
@@ -1928,7 +1977,7 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
     requireRole(user, "system_admin");
     normalizeVideoUploadExtension(extension);
     const session = await assertSessionAlbumUploadAllowed(user, sessionId);
-    assertContentModerationIntake(config.contentModeration, "video");
+    await resolveContentSecurityIntake("video");
     const key = `uploads/session-album/videos/source/${uploadFilenameBase(
       `admin-video-${session.id}`,
       uploadUserId
@@ -1949,6 +1998,7 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
 
   const sourceExtension = normalizeUploadExtension(extension);
   if (kind === "avatar") {
+    await resolveContentSecurityIntake("image");
     const key = `uploads/avatars/${uploadFilenameBase("user", uploadUserId)}.webp`;
     return {
       direct: true,
@@ -1964,6 +2014,7 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
   }
 
   if (kind === "sessionReviewPhoto") {
+    await resolveContentSecurityIntake("image");
     const key = `uploads/session-reviews/${uploadFilenameBase("review", uploadUserId)}${sourceExtension}`;
     return {
       direct: true,
@@ -1982,7 +2033,7 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
     const session = isAdminAlbumUpload
       ? await assertAdminOwnSessionAlbumAllowed(user, sessionId)
       : await assertSessionAlbumUploadAllowed(user, sessionId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     const filenamePrefix = isAdminAlbumUpload ? `admin-album-${session.id}` : `album-${session.id}`;
     const key = `uploads/session-album/display/${uploadFilenameBase(
       filenamePrefix,
@@ -2148,16 +2199,19 @@ async function authorizeCosDirectUpload({ body, user }) {
       { user: { id: userId }, roles: [] },
       directUpload.sessionId
     );
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
   }
   if (directUpload.kind === "adminSessionAlbumPhoto") {
     await assertAdminOwnSessionAlbumAllowed(user, directUpload.sessionId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
   }
   if (directUpload.kind === "adminSessionAlbumVideo") {
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, directUpload.sessionId);
-    assertContentModerationIntake(config.contentModeration, "video");
+    await resolveContentSecurityIntake("video");
+  }
+  if (directUpload.kind === "avatar" || directUpload.kind === "sessionReviewPhoto") {
+    await resolveContentSecurityIntake("image");
   }
   return {
     authorization: buildCosAuthorization({
@@ -3685,6 +3739,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/users/me/avatar") {
     const user = await getAuthUser(request);
+    await resolveContentSecurityIntake("image");
     const avatarUrl = await saveUploadedAvatar(request, user.user.id);
     jsonResponse(response, 201, {
       ok: true,
@@ -3695,6 +3750,7 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/session-reviews/photos") {
     const user = await getAuthUser(request);
+    await resolveContentSecurityIntake("image");
     const photoUrl = await saveUploadedSessionReviewPhoto(request, user.user.id);
     jsonResponse(response, 201, {
       ok: true,
@@ -3710,7 +3766,7 @@ async function route(request, response) {
   if (request.method === "POST" && sessionAlbumUploadId) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumUploadId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     if (config.albumMedia.directUploadRequired) {
       throw new AppError(
         409,
@@ -3737,7 +3793,7 @@ async function route(request, response) {
   if (request.method === "POST" && adminSessionAlbumUploadId) {
     const user = await getAuthUser(request);
     const session = await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumUploadId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     if (config.albumMedia.directUploadRequired) {
       throw new AppError(
         409,
@@ -3766,7 +3822,7 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideoUploadId);
-    assertContentModerationIntake(config.contentModeration, "video");
+    await resolveContentSecurityIntake("video");
     const sourceUrl = await saveUploadedSessionAlbumVideo(
       request,
       user.user.id,
@@ -4984,7 +5040,7 @@ async function route(request, response) {
   if (request.method === "POST" && sessionAlbumPhotosId) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumPhotosId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     const photoUrl = body.photoUrl || body.photo_url;
     if (isCosUploadStorageEnabled()) {
       const finalized = attachLegacyFinalizedAlbumImageUrls(
@@ -4999,11 +5055,14 @@ async function route(request, response) {
       return;
     }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
-    const photo = await createSessionAlbumPhoto(user, sessionAlbumPhotosId, {
-      ...body,
-      photoUrl,
-      ...metadata
-    });
+    const photo = await createSessionAlbumPhoto(
+      user,
+      sessionAlbumPhotosId,
+      { ...body, photoUrl, ...metadata },
+      {
+        assertImageIntake: (connection) => resolveContentSecurityIntake("image", { connection })
+      }
+    );
     jsonResponse(response, 201, {
       ok: true,
       data: photo
@@ -5018,7 +5077,7 @@ async function route(request, response) {
   if (request.method === "POST" && adminSessionAlbumPhotosId) {
     const user = await getAuthUser(request);
     await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumPhotosId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     const photoUrl = body.photoUrl || body.photo_url;
     if (isCosUploadStorageEnabled()) {
       const finalized = attachLegacyFinalizedAlbumImageUrls(
@@ -5033,11 +5092,14 @@ async function route(request, response) {
       return;
     }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
-    const photo = await createSessionAlbumPhoto(user, adminSessionAlbumPhotosId, {
-      ...body,
-      photoUrl,
-      ...metadata
-    });
+    const photo = await createSessionAlbumPhoto(
+      user,
+      adminSessionAlbumPhotosId,
+      { ...body, photoUrl, ...metadata },
+      {
+        assertImageIntake: (connection) => resolveContentSecurityIntake("image", { connection })
+      }
+    );
     jsonResponse(response, 201, {
       ok: true,
       data: photo
@@ -5053,14 +5115,17 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideosId);
-    assertContentModerationIntake(config.contentModeration, "video");
+    await resolveContentSecurityIntake("video");
     const storageAdapter = createSessionAlbumVideoStorageAdapter();
     const inspectObject = (sourceUrl) =>
       inspectSessionAlbumVideoObject({ sourceUrl, storageAdapter });
     const video = await createSessionAlbumVideo(user, adminSessionAlbumVideosId, body, {
       inspectObject,
       readyOnCreate: true,
-      assertVideoIntake: () => assertContentModerationIntake(config.contentModeration, "video"),
+      assertVideoIntake: (connection) => resolveContentSecurityIntake(
+        "video",
+        connection ? { connection } : undefined
+      ),
       createVideoModerationJob: (connection, input) =>
         contentModeration.createVideoJob(connection, input),
       submitVideoModeration: (job) => contentModeration.submitVideoJob(job)

@@ -84,7 +84,7 @@ export function contentSecurityCapabilityLabel(state, type) {
   if (state?.loadStatus !== "trusted") {
     return "未知";
   }
-  return state.capabilities?.[type]?.available ? "可用" : "不可用";
+  return state.capabilities?.[type]?.available ? "已配置（启动时）" : "未配置（启动时）";
 }
 
 export function contentSecurityCapabilityClass(state, type) {

@@ -9,6 +9,7 @@ import {
   assertContentModerationIntake,
   resolveContentModerationIntake
 } from "../src/modules/content-moderation/intake-gate.js";
+import * as intakeGate from "../src/modules/content-moderation/intake-gate.js";
 
 function productionEnv(overrides = {}) {
   return {
@@ -80,17 +81,14 @@ test("unavailable providers preserve direct publication unless fallback blocking
   }
 });
 
-test("a closed intake rejects only its own new content and preserves other moderated types", () => {
+test("legacy closed mode cannot disable an available moderation capability", () => {
   const config = buildContentModerationConfig(productionEnv({
     CONTENT_MODERATION_IMAGE_INTAKE_MODE: "closed"
   }));
 
-  assert.doesNotThrow(() => assertContentModerationIntake(config, "text"));
-  assert.throws(() => assertContentModerationIntake(config, "image"), {
-    code: "CONTENT_MODERATION_INTAKE_CLOSED",
-    statusCode: 503
-  });
-  assert.doesNotThrow(() => assertContentModerationIntake(config, "video"));
+  for (const type of ["text", "image", "video"]) {
+    assert.equal(assertContentModerationIntake(config, type).moderationRequired, true);
+  }
 });
 
 test("legacy intake preserves production compatibility when moderation is not configured", () => {
@@ -133,5 +131,17 @@ test("automatic capability takes priority and unavailable capability follows the
   assert.throws(
     () => assertContentModerationIntake(unavailable, "image", { fallbackBlocking: true }),
     { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 }
+  );
+});
+
+test("publication status is pending only when automatic moderation is required", () => {
+  assert.equal(typeof intakeGate.moderationStatusForIntake, "function");
+  assert.equal(
+    intakeGate.moderationStatusForIntake({ moderationRequired: true }),
+    "pending"
+  );
+  assert.equal(
+    intakeGate.moderationStatusForIntake({ moderationRequired: false }),
+    "approved_legacy"
   );
 });

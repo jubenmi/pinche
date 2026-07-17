@@ -63,7 +63,7 @@ test("closed or unready text intake cannot fall back to a direct business write"
   const end = source.indexOf("async function loadTextProposalActor", start);
   const moderate = source.slice(start, end);
 
-  assert.match(moderate, /assertContentModerationIntake\(config\.contentModeration, "text"\)/);
+  assert.match(moderate, /await resolveContentSecurityIntake\("text"\)/);
   assert.doesNotMatch(
     moderate,
     /!config\.contentModeration\.enabled\s*\|\|\s*!config\.contentModeration\.wechatTextEnabled/
@@ -78,11 +78,27 @@ test("the text intake gate leaves profile-only updates outside the D45 text boun
   const end = source.indexOf("async function loadTextProposalActor", start);
   const moderate = source.slice(start, end);
   const preflight = moderate.indexOf("const preflightDescriptor = buildTextModerationDescriptor");
-  const intake = moderate.indexOf("assertContentModerationIntake(config.contentModeration, \"text\")");
+  const intake = moderate.indexOf('await resolveContentSecurityIntake("text")');
 
-  assert.match(moderate, /if \(config\.contentModeration\.textIntakeMode === "legacy"\) return null;/);
+  assert.doesNotMatch(moderate, /textIntakeMode === "legacy"/);
   assert.ok(preflight >= 0 && preflight < intake, "covered text must be identified before intake is closed");
   assert.match(moderate, /if \(!preflightDescriptor\) return null;/);
+});
+
+test("direct covered text locks settings and applies the business write on one transaction connection", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function moderateCoveredText");
+  const end = source.indexOf("async function loadTextProposalActor", start);
+  const moderate = source.slice(start, end);
+
+  assert.match(moderate, /withTransaction\(async \(connection\)/);
+  assert.match(moderate, /resolveContentSecurityIntake\("text", \{ connection \}\)/);
+  assert.match(moderate, /applyDirectCoveredTextMutation\(connection/);
+  assert.ok(
+    moderate.indexOf('resolveContentSecurityIntake("text", { connection })') <
+      moderate.indexOf("applyDirectCoveredTextMutation(connection"),
+    "text must lock settings before any business-row write"
+  );
 });
 
 test("NPC-role proposal application locks its role and parent session before revalidating ownership", async () => {

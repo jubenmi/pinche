@@ -24,18 +24,15 @@ function intakeRule(type) {
 /**
  * Resolve whether a new user submission may enter a D45 moderation flow.
  *
- * Provider flags deliberately do not mean "bypass moderation". In moderated
- * mode they are a readiness prerequisite; disabled providers reject intake so
- * a route can never fall back to an unmoderated business write.
+ * D46 publication policy is capability-first. Legacy intake modes remain
+ * parseable configuration for operational compatibility, but they do not
+ * override an available capability or the persisted fallback policy.
  */
 export function resolveContentModerationIntake(moderationConfig, type, fallback = {}) {
   const rule = intakeRule(type);
   const mode = moderationConfig?.[rule.modeKey];
   if (!new Set(["legacy", "closed", "moderated"]).has(mode)) {
     throw new TypeError(`Unsupported content moderation intake mode: ${mode}`);
-  }
-  if (mode === "closed") {
-    return { accepting: false, mode, moderationRequired: false, reason: "closed" };
   }
   if (moderationConfig?.enabled && moderationConfig?.[rule.providerKey]) {
     return { accepting: true, mode: "moderated", moderationRequired: true, reason: "ready" };
@@ -57,4 +54,8 @@ export function assertContentModerationIntake(moderationConfig, type, fallback) 
     "CONTENT_MODERATION_INTAKE_CLOSED",
     "New content submissions are temporarily unavailable"
   );
+}
+
+export function moderationStatusForIntake(intake) {
+  return intake?.moderationRequired === true ? "pending" : "approved_legacy";
 }
