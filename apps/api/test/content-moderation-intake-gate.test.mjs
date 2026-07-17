@@ -38,11 +38,11 @@ function productionEnv(overrides = {}) {
   };
 }
 
-test("production moderation intake defaults to closed while local compatibility stays explicit", () => {
+test("unconfigured moderation defaults to legacy publication in every environment", () => {
   const production = buildContentModerationConfig({ NODE_ENV: "PrOdUcTiOn" });
   assert.deepEqual(
     [production.textIntakeMode, production.imageIntakeMode, production.videoIntakeMode],
-    ["closed", "closed", "closed"]
+    ["legacy", "legacy", "legacy"]
   );
 
   const development = buildContentModerationConfig({ NODE_ENV: "development" });
@@ -91,7 +91,7 @@ test("a closed intake rejects only its own new content and preserves other moder
   assert.doesNotThrow(() => assertContentModerationIntake(config, "video"));
 });
 
-test("legacy intake is a local-only compatibility mode and invalid modes fail configuration", () => {
+test("legacy intake preserves production compatibility when moderation is not configured", () => {
   const local = buildContentModerationConfig({
     NODE_ENV: "development",
     CONTENT_MODERATION_TEXT_INTAKE_MODE: "legacy"
@@ -99,12 +99,8 @@ test("legacy intake is a local-only compatibility mode and invalid modes fail co
   assert.equal(resolveContentModerationIntake(local, "text").mode, "legacy");
   assert.doesNotThrow(() => assertContentModerationIntake(local, "text"));
 
-  const productionLegacy = buildContentModerationConfig(productionEnv({
-    CONTENT_MODERATION_TEXT_INTAKE_MODE: "legacy"
-  }));
-  assert.throws(() => assertContentModerationConfig(productionLegacy, { nodeEnv: "PRODUCTION" }), {
-    code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
-  });
+  const productionLegacy = buildContentModerationConfig({ NODE_ENV: "production" });
+  assert.doesNotThrow(() => assertContentModerationConfig(productionLegacy, { nodeEnv: "PRODUCTION" }));
   assert.throws(() => buildContentModerationConfig({
     NODE_ENV: "production",
     CONTENT_MODERATION_TEXT_INTAKE_MODE: "accept-anything"

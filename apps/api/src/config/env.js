@@ -235,7 +235,7 @@ function moderationNodeEnv(env) {
 
 function contentModerationIntakeMode(env, name, { nodeEnv = moderationNodeEnv(env) } = {}) {
   const configured = stringValue(env, name).toLowerCase();
-  const mode = configured || (nodeEnv === "production" ? "closed" : "legacy");
+  const mode = configured || "legacy";
   if (!CONTENT_MODERATION_INTAKE_MODES.has(mode)) {
     throw moderationConfigurationError(
       `${name} must be one of legacy, closed, or moderated`
@@ -371,15 +371,6 @@ export function assertContentModerationConfig(
   const wechatModerationEnabled = Boolean(
     moderationConfig.wechatTextEnabled || moderationConfig.wechatImageEnabled
   );
-  if (normalizedNodeEnv === "production") {
-    for (const [name, mode] of [
-      ["CONTENT_MODERATION_TEXT_INTAKE_MODE", moderationConfig.textIntakeMode],
-      ["CONTENT_MODERATION_IMAGE_INTAKE_MODE", moderationConfig.imageIntakeMode],
-      ["CONTENT_MODERATION_VIDEO_INTAKE_MODE", moderationConfig.videoIntakeMode]
-    ]) {
-      if (mode === "legacy") missing.push(`${name} must not be legacy in production`);
-    }
-  }
   if (moderationConfig.orphanCleanupEnabled && !moderationConfig.orphanScanEnabled) {
     missing.push("CONTENT_MODERATION_ORPHAN_SCAN_ENABLED");
   }
