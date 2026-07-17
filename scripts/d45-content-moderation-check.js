@@ -130,6 +130,55 @@ assert.equal(
 );
 assert.match(preflightJob, /parseProductionPreflightCliArgs/);
 assert.doesNotMatch(preflightJob, /server\.js/);
+const preflightRuntimeStart = preflightJob.indexOf(
+  "export async function buildProductionPreflightRuntime"
+);
+const preflightRuntimeEnd = preflightJob.indexOf(
+  "function bindProductionPreflightRepository",
+  preflightRuntimeStart
+);
+assert.notEqual(preflightRuntimeStart, -1, "missing production preflight runtime builder");
+assert.notEqual(preflightRuntimeEnd, -1, "missing production preflight runtime builder boundary");
+const preflightRuntime = preflightJob.slice(preflightRuntimeStart, preflightRuntimeEnd);
+for (const prerequisite of [
+  "redisEnabled",
+  "wechatAppId",
+  "wechatAppSecret",
+  "wechatEventToken",
+  "wechatEventAesKey",
+  "cosEnabled",
+  "secretId",
+  "secretKey",
+  "tencentVideoRegion",
+  "tencentVideoPolicyId",
+  "tencentVideoCallbackUrl",
+  "tencentVideoCallbackToken"
+]) {
+  assert.equal(
+    preflightRuntime.includes(prerequisite),
+    true,
+    `production preflight runtime missing raw prerequisite: ${prerequisite}`
+  );
+}
+for (const businessSwitch of [
+  "wechatTextEnabled",
+  "wechatImageEnabled",
+  "tencentVideoEnabled"
+]) {
+  assert.equal(
+    preflightRuntime.includes(businessSwitch),
+    false,
+    `production preflight runtime must not depend on business switch: ${businessSwitch}`
+  );
+}
+assert.match(
+  moderationEnv,
+  /const wechatConfigurationRequired = Boolean\([\s\S]*?wechatModerationEnabled \|\| productionPreflightEnabled/
+);
+assert.match(
+  moderationEnv,
+  /const tencentVideoConfigurationRequired = Boolean\([\s\S]*?tencentVideoEnabled \|\| productionPreflightEnabled/
+);
 assert.match(preflightTimeoutJob, /runProductionPreflightTimeoutBatch/);
 assert.doesNotMatch(preflightTimeoutJob, /server\.js/);
 assert.match(compose, /content-moderation-retry:[\s\S]*job:content-moderation-retry/);
