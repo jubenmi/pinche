@@ -83,20 +83,21 @@ for (const key of [
 assert.match(moderationEnv, /orphanCleanupEnabled && !moderationConfig\.orphanScanEnabled/);
 assert.doesNotMatch(moderationEnv, /TENCENT_TMS|TENCENT_CI_IMAGE/);
 assert.match(moderationIntakeGate, /CONTENT_MODERATION_INTAKE_CLOSED/);
-assert.match(moderationIntakeGate, /provider_disabled/);
+assert.match(moderationIntakeGate, /fallback_blocked/);
 assert.match(albumImageUploadService, /function assertImageIntake/);
 for (const type of ["text", "image", "video"]) {
   assert.match(
     server,
-    new RegExp(`assertContentModerationIntake\\(config\\.contentModeration, "${type}"\\)`)
+    new RegExp(`resolveContentSecurityIntake\\("${type}"\\)`)
   );
 }
+assert.doesNotMatch(server, /assertContentModerationIntake\(/);
 assert.match(coreService, /const assertVideoIntake = options\.assertVideoIntake/);
 assert.match(productionEnvExample, /CONTENT_MODERATION_ENABLED=true/);
 for (const mode of [
-  "CONTENT_MODERATION_TEXT_INTAKE_MODE=closed",
-  "CONTENT_MODERATION_IMAGE_INTAKE_MODE=closed",
-  "CONTENT_MODERATION_VIDEO_INTAKE_MODE=closed"
+  "CONTENT_MODERATION_TEXT_INTAKE_MODE=legacy",
+  "CONTENT_MODERATION_IMAGE_INTAKE_MODE=legacy",
+  "CONTENT_MODERATION_VIDEO_INTAKE_MODE=legacy"
 ]) {
   assert.equal(productionEnvExample.includes(mode), true, `missing production intake default: ${mode}`);
 }
@@ -129,8 +130,101 @@ assert.equal(
 );
 assert.match(preflightJob, /parseProductionPreflightCliArgs/);
 assert.doesNotMatch(preflightJob, /server\.js/);
+const preflightRuntimeStart = preflightJob.indexOf(
+  "export async function buildProductionPreflightRuntime"
+);
+const preflightRuntimeEnd = preflightJob.indexOf(
+  "function bindProductionPreflightRepository",
+  preflightRuntimeStart
+);
+assert.notEqual(preflightRuntimeStart, -1, "missing production preflight runtime builder");
+assert.notEqual(preflightRuntimeEnd, -1, "missing production preflight runtime builder boundary");
+const preflightRuntime = preflightJob.slice(preflightRuntimeStart, preflightRuntimeEnd);
+for (const prerequisite of [
+  "redisEnabled",
+  "wechatAppId",
+  "wechatAppSecret",
+  "wechatEventToken",
+  "wechatEventAesKey",
+  "cosEnabled",
+  "secretId",
+  "secretKey",
+  "tencentVideoRegion",
+  "tencentVideoPolicyId",
+  "tencentVideoCallbackUrl",
+  "tencentVideoCallbackToken"
+]) {
+  assert.equal(
+    preflightRuntime.includes(prerequisite),
+    true,
+    `production preflight runtime missing raw prerequisite: ${prerequisite}`
+  );
+}
+for (const businessSwitch of [
+  "wechatTextEnabled",
+  "wechatImageEnabled",
+  "tencentVideoEnabled"
+]) {
+  assert.equal(
+    preflightRuntime.includes(businessSwitch),
+    false,
+    `production preflight runtime must not depend on business switch: ${businessSwitch}`
+  );
+}
+const callbackRuntimeStart = server.indexOf(
+  "async function buildProductionPreflightCallbackRuntime"
+);
+const callbackRuntimeEnd = server.indexOf(
+  "async function applyApprovedTextProposal",
+  callbackRuntimeStart
+);
+assert.notEqual(callbackRuntimeStart, -1, "missing production preflight callback runtime builder");
+assert.notEqual(callbackRuntimeEnd, -1, "missing production preflight callback runtime boundary");
+const callbackRuntime = server.slice(callbackRuntimeStart, callbackRuntimeEnd);
+assert.match(callbackRuntime, /buildProductionPreflightRuntime\(/);
+for (const businessSwitch of [
+  "wechatTextEnabled",
+  "wechatImageEnabled",
+  "tencentVideoEnabled"
+]) {
+  assert.equal(
+    callbackRuntime.includes(businessSwitch),
+    false,
+    `production preflight callback runtime must not depend on business switch: ${businessSwitch}`
+  );
+}
+assert.match(
+  moderationEnv,
+  /const wechatConfigurationRequired = Boolean\([\s\S]*?wechatModerationEnabled \|\| productionPreflightEnabled/
+);
+assert.match(
+  moderationEnv,
+  /const tencentVideoConfigurationRequired = Boolean\([\s\S]*?tencentVideoEnabled \|\| productionPreflightEnabled/
+);
 assert.match(preflightTimeoutJob, /runProductionPreflightTimeoutBatch/);
 assert.doesNotMatch(preflightTimeoutJob, /server\.js/);
+const timeoutRuntimeStart = preflightTimeoutJob.indexOf(
+  "async function buildProductionPreflightTimeoutRuntime"
+);
+const timeoutRuntimeEnd = preflightTimeoutJob.indexOf(
+  "async function cleanupPreflightObject",
+  timeoutRuntimeStart
+);
+assert.notEqual(timeoutRuntimeStart, -1, "missing production preflight timeout runtime builder");
+assert.notEqual(timeoutRuntimeEnd, -1, "missing production preflight timeout runtime boundary");
+const timeoutRuntime = preflightTimeoutJob.slice(timeoutRuntimeStart, timeoutRuntimeEnd);
+assert.match(timeoutRuntime, /buildProductionPreflightRuntime\(/);
+for (const businessSwitch of [
+  "wechatTextEnabled",
+  "wechatImageEnabled",
+  "tencentVideoEnabled"
+]) {
+  assert.equal(
+    timeoutRuntime.includes(businessSwitch),
+    false,
+    `production preflight timeout runtime must not depend on business switch: ${businessSwitch}`
+  );
+}
 assert.match(compose, /content-moderation-retry:[\s\S]*job:content-moderation-retry/);
 assert.match(compose, /content-moderation-orphan-scan:[\s\S]*job:content-moderation-orphan-scan/);
 assert.match(
@@ -148,7 +242,9 @@ for (const statement of [
   "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CALLBACK_TIMEOUT_MS",
   "不启用腾讯云 TMS、腾讯云 CI 图片审核、COS 图片自动审核",
   "CONTENT_MODERATION_INTAKE_CLOSED",
-  "审核 provider 开关不是流量开关",
+  "不是维护开关",
+  "不是逐请求动态健康检查",
+  "仅打开 DB 开关并保持 provider enabled 不会动态阻断",
   "回滚"
 ]) {
   assert.equal(runbook.includes(statement), true, `runbook missing: ${statement}`);

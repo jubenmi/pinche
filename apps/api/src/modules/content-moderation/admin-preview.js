@@ -1,4 +1,5 @@
 import { cosStorageEnabled } from "../../storage/cos.js";
+import { MODERATION_IMAGE_SUBJECT_TYPES } from "./constants.js";
 
 export const ADMIN_MODERATION_PREVIEW_SECONDS = 60;
 export const ADMIN_MODERATION_PREVIEW_RESPONSE_CACHE_CONTROL = "no-store, private, max-age=0";
@@ -14,7 +15,9 @@ function isCurrentMedia(row, { provider, mediaType }) {
   const subjectVersion = String(row?.subject_version || "");
   return (
     String(row?.provider || "") === provider &&
-    String(row?.subject_type || "") === `album_${mediaType}` &&
+    (mediaType === "image"
+      ? MODERATION_IMAGE_SUBJECT_TYPES.includes(String(row?.subject_type || ""))
+      : String(row?.subject_type || "") === "album_video") &&
     ["review", "error"].includes(String(row?.status || "")) &&
     String(row?.media_id || "") === String(row?.subject_id || "") &&
     String(row?.media_record_status || "") === "active" &&
@@ -27,7 +30,7 @@ function isCurrentMedia(row, { provider, mediaType }) {
 function isControlledImageKey(value) {
   const key = String(value || "");
   return (
-    /^uploads\/session-album\/display\/[A-Za-z0-9._-]+\.jpg$/.test(key) &&
+    /^(?:uploads\/session-album\/display\/[A-Za-z0-9._-]+\.jpg|uploads\/avatars\/[A-Za-z0-9._-]+|uploads\/session-reviews\/[A-Za-z0-9._-]+)$/.test(key) &&
     !key.includes("..")
   );
 }
@@ -75,7 +78,7 @@ export function createAdminModerationPreviewBuilder({
     ).toISOString();
 
     if (
-      String(row.subject_type || "") === "album_image" &&
+      MODERATION_IMAGE_SUBJECT_TYPES.includes(String(row.subject_type || "")) &&
       isCurrentMedia(row, { provider: "wechat_sec_check", mediaType: "image" }) &&
       isControlledImageKey(row.object_key)
     ) {

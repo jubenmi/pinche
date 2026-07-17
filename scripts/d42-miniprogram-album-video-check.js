@@ -130,7 +130,7 @@ assert.doesNotMatch(uploadCosObject, /Authorization|Bearer/);
 const uploadCosBackedFile = block(api, "async function uploadCosBackedFile", "function uploadBackendFile");
 assert.match(uploadCosBackedFile, /getLocalFileSize\(filePath\)/);
 assert.match(uploadCosBackedFile, /localFileSize\s*>\s*maxBytes/);
-assert.match(uploadCosBackedFile, /if\s*\(!localFileSize\)[\s\S]*fallbackUpload\(filePath\)/);
+assert.match(uploadCosBackedFile, /if\s*\(!localFileSize\)[\s\S]*fallbackUpload\(filePath,\s*recovery\)/);
 assert.ok(
   uploadCosBackedFile.indexOf("requestCosUploadIntent") < uploadCosBackedFile.indexOf("getLocalFileSize(filePath)"),
   "the direct-upload size must be re-read after the server returns its intent"

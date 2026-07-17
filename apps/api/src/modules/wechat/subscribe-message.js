@@ -15,13 +15,6 @@ const sessionTimeFormatter = new Intl.DateTimeFormat("en-CA", {
   hourCycle: "h23"
 });
 
-function boundedFetchOptions(options = {}) {
-  return {
-    ...options,
-    signal: AbortSignal.timeout(config.subscribeMessage.timeoutMs)
-  };
-}
-
 function skipped(scene, reason) {
   return {
     ok: true,
@@ -107,6 +100,9 @@ export async function sendSubscribeMessage(
       const response = await fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(
+          runtimeConfig.subscribeMessage.timeoutMs ?? config.subscribeMessage.timeoutMs
+        ),
         body: JSON.stringify({
           touser,
           template_id: templateId,
@@ -161,7 +157,7 @@ export async function notifySignupReviewed(payload = {}) {
   });
 }
 
-export async function notifySessionRescheduled(payload = {}) {
+export async function notifySessionRescheduled(payload = {}, options = {}) {
   payload = payload || {};
   return sendSubscribeMessage({
     scene: "session_rescheduled",
@@ -169,5 +165,5 @@ export async function notifySessionRescheduled(payload = {}) {
     templateId: config.subscribeMessage.sessionRescheduledTemplateId,
     page: `/pages/session/detail?id=${payload.sessionId}`,
     data: rescheduleMessageData(payload)
-  });
+  }, options);
 }

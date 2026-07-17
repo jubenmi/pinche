@@ -2,7 +2,11 @@ import {
   assertModerationTransition,
   assertTextProposalTransition
 } from "./state-machine.js";
-import { MODERATION_RETRY_LEASE_MIN_MS, MODERATION_RETRY_ROUTES } from "./constants.js";
+import {
+  MODERATION_IMAGE_SUBJECT_TYPES,
+  MODERATION_RETRY_LEASE_MIN_MS,
+  MODERATION_RETRY_ROUTES
+} from "./constants.js";
 import { projectSafeTextAppliedResult } from "./text-applied-result.js";
 
 function lockClause(forUpdate) {
@@ -43,6 +47,8 @@ function safeAppliedResultJson(result) {
 }
 
 const RETRY_IMAGE_OBJECT_KEY = /^uploads\/session-album\/display\/[A-Za-z0-9._-]+$/;
+const RETRY_AVATAR_OBJECT_KEY = /^uploads\/avatars\/[A-Za-z0-9._-]+$/;
+const RETRY_REVIEW_OBJECT_KEY = /^uploads\/session-reviews\/[A-Za-z0-9._-]+$/;
 const RETRY_VIDEO_OBJECT_KEY = /^uploads\/session-album\/videos\/source\/[A-Za-z0-9._-]+\.mp4$/;
 const ORPHAN_SCAN_OBJECT_KEY = /^uploads\/session-album\/(?:display\/[A-Za-z0-9._-]+|videos\/(?:source|display|cover)\/[A-Za-z0-9._-]+)$/;
 const ORPHAN_SCAN_NAMES = new Set([
@@ -114,12 +120,17 @@ function normalizeOrphanScanObjectKey(value) {
 function currentRetryMediaFacts(job, media) {
   const kind = String(job?.subject_type || "");
   const subjectVersion = String(job?.subject_version || "");
-  const expectedMediaType = kind === "album_image" ? "image" : kind === "album_video" ? "video" : "";
-  const objectKey = String(kind === "album_image" ? media?.object_key : media?.source_url || "")
+  const imageSubject = MODERATION_IMAGE_SUBJECT_TYPES.includes(kind);
+  const expectedMediaType = imageSubject ? "image" : kind === "album_video" ? "video" : "";
+  const objectKey = String(imageSubject ? media?.object_key : media?.source_url || "")
     .replace(/^\//, "");
   const validObjectKey = kind === "album_image"
     ? RETRY_IMAGE_OBJECT_KEY.test(objectKey)
-    : RETRY_VIDEO_OBJECT_KEY.test(objectKey);
+    : kind === "avatar_image"
+      ? RETRY_AVATAR_OBJECT_KEY.test(objectKey)
+      : kind === "review_image"
+        ? RETRY_REVIEW_OBJECT_KEY.test(objectKey)
+        : RETRY_VIDEO_OBJECT_KEY.test(objectKey);
   const uploaderUserId = Number(media?.uploader_user_id);
   if (
     !expectedMediaType ||
@@ -722,7 +733,25 @@ export async function findModerationAuditLogByAction(
 }
 
 export async function findModerationMedia(connection, job, { forUpdate = false } = {}) {
-  if (!String(job?.subject_type || "").startsWith("album_")) return null;
+  const subjectType = String(job?.subject_type || "");
+  if (MODERATION_IMAGE_SUBJECT_TYPES.includes(subjectType) && subjectType !== "album_image") {
+    const expectedKind = subjectType === "avatar_image" ? "avatar" : "review";
+    const [rows] = await connection.query(
+      `SELECT asset.*, asset.owner_user_id AS uploader_user_id,
+              'image' AS media_type, asset.object_version AS moderation_object_version
+       FROM user_image_assets asset
+       WHERE asset.id = ? AND asset.kind = ? LIMIT 1${lockClause(forUpdate)}`,
+      [Number(job.subject_id), expectedKind]
+    );
+    const asset = rows[0];
+    return asset ? {
+      ...asset,
+      uploader_user_id: asset.uploader_user_id ?? asset.owner_user_id,
+      media_type: "image",
+      moderation_object_version: asset.moderation_object_version ?? asset.object_version
+    } : null;
+  }
+  if (!subjectType.startsWith("album_")) return null;
   const [rows] = await connection.query(
     `SELECT * FROM session_album_photos WHERE id = ? LIMIT 1${lockClause(forUpdate)}`,
     [Number(job.subject_id)]
@@ -748,12 +777,14 @@ export async function rehydrateModerationRetryJob(connection, { jobId, leaseToke
   if (!job) return null;
   if (!supportedRetryRoute(job)) throw invalidRetryFacts();
 
-  if (String(job.subject_type).startsWith("album_")) {
+  if ([...MODERATION_IMAGE_SUBJECT_TYPES, "album_video"].includes(String(job.subject_type))) {
     const media = await findModerationMedia(connection, job, { forUpdate: true });
     const retryFacts = currentRetryMediaFacts(job, media);
     if (!retryFacts) throw invalidRetryFacts();
     return {
-      kind: retryFacts.kind === "album_image" ? "wechat_image" : "tencent_video",
+      kind: MODERATION_IMAGE_SUBJECT_TYPES.includes(retryFacts.kind)
+        ? "wechat_image"
+        : "tencent_video",
       job,
       objectKey: retryFacts.objectKey,
       uploaderUserId: retryFacts.uploaderUserId,
@@ -788,15 +819,38 @@ export async function rehydrateModerationRetryJob(connection, { jobId, leaseToke
 
 export async function transitionMediaModeration(
   connection,
-  { mediaId, fromStatuses, toStatus }
+  { subjectType = "album_image", mediaId, fromStatuses, toStatus }
 ) {
   const placeholders = fromStatuses.map(() => "?").join(", ");
+  const table = ["avatar_image", "review_image"].includes(String(subjectType))
+    ? "user_image_assets"
+    : "session_album_photos";
   const [result] = await connection.query(
-    `UPDATE session_album_photos SET moderation_status = ?
+    `UPDATE ${table} SET moderation_status = ?
      WHERE id = ? AND status = 'active' AND moderation_status IN (${placeholders})`,
     [toStatus, Number(mediaId), ...fromStatuses]
   );
   return Number(result.affectedRows || 0) === 1;
+}
+
+export async function enqueueUserImageAssetCleanup(connection, media) {
+  const [result] = await connection.query(
+    `INSERT INTO user_image_asset_cleanup_jobs
+      (user_image_asset_id, owner_user_id, asset_path, object_key, storage_kind,
+       status, cleanup_not_before)
+     VALUES (?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), status = 'pending',
+       cleanup_not_before = CURRENT_TIMESTAMP, completed_at = NULL,
+       updated_at = CURRENT_TIMESTAMP`,
+    [
+      Number(media.id),
+      Number(media.owner_user_id ?? media.uploader_user_id),
+      String(media.asset_path),
+      String(media.object_key),
+      media.storage_kind ? String(media.storage_kind) : "cos"
+    ]
+  );
+  return Number(result.insertId);
 }
 
 function normalizeCleanupObjectEntry(entry) {
@@ -1365,9 +1419,13 @@ export async function listAdminModerationJobs(
   values.push(Math.max(1, Math.min(200, Number(limit) || 100)));
   const [rows] = await connection.query(
     `SELECT job.*, proposal.created_by_user_id,
-            media.id AS media_id, media.session_id, media.uploader_user_id,
-            media.media_type, media.status AS media_record_status,
-            media.processing_status, media.moderation_status,
+            COALESCE(media.id, user_media.id) AS media_id,
+            media.session_id,
+            COALESCE(media.uploader_user_id, user_media.owner_user_id) AS uploader_user_id,
+            COALESCE(media.media_type, IF(user_media.id IS NULL, NULL, 'image')) AS media_type,
+            COALESCE(media.status, user_media.status) AS media_record_status,
+            media.processing_status,
+            COALESCE(media.moderation_status, user_media.moderation_status) AS moderation_status,
             media.author_visibility_version
      FROM content_moderation_jobs job
      LEFT JOIN content_moderation_text_proposals proposal
@@ -1375,6 +1433,9 @@ export async function listAdminModerationJobs(
      LEFT JOIN session_album_photos media
        ON job.subject_type IN ('album_image', 'album_video')
       AND media.id = CAST(job.subject_id AS UNSIGNED)
+     LEFT JOIN user_image_assets user_media
+       ON job.subject_type IN ('avatar_image', 'review_image')
+      AND user_media.id = CAST(job.subject_id AS UNSIGNED)
      WHERE ${where.join(" AND ")}
      ORDER BY job.created_at DESC LIMIT ?`,
     values
@@ -1391,15 +1452,35 @@ export async function getAdminModerationJob(connection, jobId) {
             media.media_type, media.status AS media_record_status,
             media.processing_status, media.moderation_status, media.moderation_object_version,
             media.author_visibility_version,
-            media.object_key, media.source_url, media.display_url, media.cover_url
+            media.object_key, media.source_url, media.display_url, media.cover_url,
+            user_media.id AS user_media_id,
+            user_media.owner_user_id AS user_media_owner_user_id,
+            user_media.status AS user_media_record_status,
+            user_media.moderation_status AS user_media_moderation_status,
+            user_media.object_version AS user_media_object_version,
+            user_media.object_key AS user_media_object_key
      FROM content_moderation_jobs job
      LEFT JOIN content_moderation_text_proposals proposal
        ON proposal.moderation_job_id = job.id
      LEFT JOIN session_album_photos media
        ON job.subject_type IN ('album_image', 'album_video')
       AND media.id = CAST(job.subject_id AS UNSIGNED)
+     LEFT JOIN user_image_assets user_media
+       ON job.subject_type IN ('avatar_image', 'review_image')
+      AND user_media.id = CAST(job.subject_id AS UNSIGNED)
      WHERE job.id = ? AND job.status IN ('review', 'error', 'rejected') LIMIT 1`,
     [Number(jobId)]
   );
-  return rows[0] || null;
+  const row = rows[0];
+  if (!row || !row.user_media_id) return row || null;
+  return {
+    ...row,
+    media_id: row.user_media_id,
+    uploader_user_id: row.user_media_owner_user_id,
+    media_type: "image",
+    media_record_status: row.user_media_record_status,
+    moderation_status: row.user_media_moderation_status,
+    moderation_object_version: row.user_media_object_version,
+    object_key: row.user_media_object_key
+  };
 }

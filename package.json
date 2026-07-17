@@ -54,7 +54,7 @@
     "d45:check": "node scripts/d45-content-moderation-check.js",
     "d45:smoke": "node scripts/d45-content-moderation-smoke.js",
     "d46:unit": "node --test apps/api/test/content-moderation-author-*.test.mjs apps/api/test/content-moderation-service.test.mjs apps/api/test/content-moderation-text-service.test.mjs apps/miniprogram/test/authorPrivate*.test.mjs packages/talk/test/miniprogram-author-private.test.mjs packages/talk/test/routes-moderation.test.mjs",
-    "d46:check": "node scripts/d46-author-private-content-check.js",
+    "d46:check": "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js && node scripts/d46-author-private-content-check.js",
     "d46:acceptance:check": "node scripts/d46-isolated-acceptance-check.js",
     "d46:acceptance:api": "node scripts/d46-author-private-content-api-smoke.js",
     "d46:smoke": "node scripts/d46-author-private-content-smoke.js",

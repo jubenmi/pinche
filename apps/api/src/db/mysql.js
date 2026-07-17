@@ -21,7 +21,11 @@ export const requiredSchemaTables = Object.freeze([
   "content_moderation_orphan_scan_state",
   "content_moderation_production_preflight_provider_locks",
   "content_moderation_production_preflight_runs",
-  "content_moderation_production_preflight_attempts"
+  "content_moderation_production_preflight_attempts",
+  "user_image_assets",
+  "user_image_asset_cleanup_jobs",
+  "user_image_object_cleanup_jobs",
+  "user_image_upload_operations"
 ]);
 
 export function serverConnectionOptions() {

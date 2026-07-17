@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  createSessionAlbumPhoto,
   isModerationPublished,
   serializeSessionAlbumImage
 } from "../src/modules/core/service.js";
@@ -15,6 +16,61 @@ test("only approved and approved_legacy media pass the content gate", () => {
     assert.equal(isModerationPublished(status), false);
   }
   assert.equal(isModerationPublished(undefined), false);
+});
+
+test("lower-level local image creation defaults direct and rejects unwired moderation before INSERT", async () => {
+  let inserts = 0;
+  let insertedModerationStatus = null;
+  let insertedAuthorVisibilityVersion = null;
+  const timeline = [];
+  const photo = {
+    id: 31, session_id: 8, uploader_user_id: 3, media_type: "image",
+    moderation_status: "approved_legacy", status: "active"
+  };
+  const connection = {
+    async query(sql, values = []) {
+      if (String(sql).includes("INSERT INTO session_album_photos")) {
+        timeline.push("insert_business");
+        inserts += 1;
+        insertedModerationStatus = values.at(-3);
+        insertedAuthorVisibilityVersion = values.at(-1);
+        return [{ insertId: photo.id }];
+      }
+      if (String(sql).includes("SELECT * FROM session_album_photos WHERE id")) return [[photo]];
+      throw new Error(`unexpected SQL: ${sql}`);
+    }
+  };
+  const baseOptions = {
+    withTransaction: async (run) => run(connection),
+    authorizeSessionAlbumPhotoCreate: async () => timeline.push("authorize")
+  };
+  const body = {
+    photoUrl: "/uploads/session-album/display/album-8-3-1-0123456789abcdef.jpg",
+    imageWidth: 10,
+    imageHeight: 10,
+    imageByteSize: 100,
+    imageContentType: "image/jpeg"
+  };
+  const result = await createSessionAlbumPhoto(
+    { user: { id: 3 }, roles: [] }, 8, body, baseOptions
+  );
+  assert.equal(result.moderation_status, "approved_legacy");
+  assert.equal(insertedModerationStatus, "approved_legacy");
+  assert.equal(insertedAuthorVisibilityVersion, 0);
+
+  timeline.length = 0;
+  await assert.rejects(createSessionAlbumPhoto(
+    { user: { id: 3 }, roles: [] }, 8, body,
+    {
+      ...baseOptions,
+      assertImageIntake: async () => {
+        timeline.push("final_intake");
+        return { moderationRequired: true };
+      }
+    }
+  ), { code: "CONTENT_MODERATION_CONFIGURATION_ERROR", statusCode: 500 });
+  assert.equal(inserts, 1, "the rejected call must fail before its INSERT");
+  assert.deepEqual(timeline, ["final_intake", "authorize"]);
 });
 
 test("album count SQL excludes every non-approved moderation state", () => {

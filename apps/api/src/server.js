@@ -202,6 +202,9 @@ import {
   assertProductionPreflightGuards
 } from "./modules/content-moderation/production-preflight.js";
 import {
+  buildProductionPreflightRuntime
+} from "./jobs/content-moderation-production-preflight.js";
+import {
   hasActiveProductionPreflightWechatImageRun,
   findProductionPreflightAttemptByAssociation,
   findProductionPreflightRun,
@@ -223,6 +226,7 @@ import {
   createModerationJob,
   createTextProposal,
   enqueueRejectedMediaCleanup,
+  enqueueUserImageAssetCleanup as enqueueModerationUserImageAssetCleanup,
   failModerationJob,
   findAuthorTextDraftById,
   findLatestAuthorTextProposal,
@@ -289,11 +293,30 @@ import {
   createTencentVideoModerationClient,
   createTencentVideoModerationTransport
 } from "./modules/content-moderation/tencent-video-client.js";
-import { assertContentModerationIntake } from "./modules/content-moderation/intake-gate.js";
+import {
+  createContentSecurityIntakeResolver,
+  readContentSecuritySettings,
+  updateContentSecuritySettings
+} from "./modules/content-moderation/content-security-settings.js";
 import {
   createSessionMessageWithConnection,
   updateSessionPinnedMessageWithConnection
 } from "@jubenmi/talk/api";
+import {
+  bindUserImageUploadOperation,
+  enqueueUserImageAssetCleanup as enqueueUserImageCleanupJob,
+  enqueueUserImageUploadCleanup,
+  findOwnedUserImageAssetById,
+  findUserImageAssetByUploadOperation,
+  findUserImageAssetByOwnerPath,
+  findUserImageAssetReadStateByPath,
+  insertUserImageAsset,
+  protectUserImageUploadCleanup
+} from "./modules/user-image-assets/repository.js";
+import {
+  createUserImageAssetUploadService,
+  projectUserImageAssetStatus
+} from "./modules/user-image-assets/service.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "..");
@@ -322,6 +345,10 @@ const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   time: "1",
   format: "jpg"
 };
+const resolveContentSecurityIntake = createContentSecurityIntakeResolver({
+  moderationConfig: config.contentModeration,
+  withDatabaseConnection
+});
 const AVATAR_WEBP_RULE = "imageMogr2/auto-orient/thumbnail/512x512>/format/webp/quality/80";
 const SESSION_ALBUM_DISPLAY_JPG_RULE =
   "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip";
@@ -933,8 +960,37 @@ async function captureTextModerationBase({ action, user, subjectId, body, contex
   }
 }
 
+async function applyDirectCoveredTextMutation(
+  connection,
+  { user, action, subjectId, body, context = {} }
+) {
+  switch (action) {
+    case "update_nickname":
+      return updateUserProfileWithConnection(connection, user.user.id, body);
+    case "create_private_store":
+      return createPrivateStoreWithConnection(connection, user, body);
+    case "create_private_script":
+      return createPrivateScriptWithConnection(connection, user, body);
+    case "create_session":
+      return createSessionWithConnection(connection, user, body);
+    case "update_session":
+      return updateSessionWithConnection(connection, user, Number(subjectId), body);
+    case "create_session_npc_role":
+      return createSessionNpcRoleWithConnection(connection, user, Number(context.sessionId), body);
+    case "update_session_npc_role":
+      return updateSessionNpcRoleWithConnection(connection, user, Number(subjectId), body);
+    case "upsert_session_review":
+      return upsertMySessionReviewWithConnection(connection, user, Number(subjectId), body);
+    case "create_session_message":
+      return createSessionMessageWithConnection(connection, user, Number(subjectId), body);
+    case "update_session_pinned_message":
+      return updateSessionPinnedMessageWithConnection(connection, user, Number(subjectId), body);
+    default:
+      throw badRequest("unsupported text moderation action");
+  }
+}
+
 async function moderateCoveredText({ request, user, action, subjectId, body, context = {} }) {
-  if (config.contentModeration.textIntakeMode === "legacy") return null;
   const replacesDraftId = parseTextDraftReplacement(body);
   const cleanBody = moderationBody(body);
   const preflightDescriptor = buildTextModerationDescriptor({
@@ -943,8 +999,26 @@ async function moderateCoveredText({ request, user, action, subjectId, body, con
     context
   });
   if (!preflightDescriptor) return null;
-  const intake = assertContentModerationIntake(config.contentModeration, "text");
-  if (!intake.moderationRequired) return null;
+  const intake = await resolveContentSecurityIntake("text");
+  if (!intake.moderationRequired) {
+    return withTransaction(async (connection) => {
+      const finalIntake = await resolveContentSecurityIntake("text", { connection });
+      if (finalIntake.moderationRequired) {
+        throw new AppError(
+          500,
+          "CONTENT_MODERATION_CONFIGURATION_ERROR",
+          "Content moderation policy changed before the business write"
+        );
+      }
+      return applyDirectCoveredTextMutation(connection, {
+        user,
+        action,
+        subjectId,
+        body,
+        context
+      });
+    });
+  }
   const resolvedSubjectId = String(subjectId || "");
   const proposalTargetId = textProposalTargetSubjectId({
     action,
@@ -1057,6 +1131,7 @@ export const contentModeration = createContentModerationService({
     createModerationJob,
     createTextProposal,
     enqueueRejectedMediaCleanup,
+    enqueueUserImageAssetCleanup: enqueueModerationUserImageAssetCleanup,
     failModerationJob,
     findTextProposalByJobId,
     findCurrentModerationAttempt,
@@ -1102,6 +1177,123 @@ export const contentModeration = createContentModerationService({
   supersedeRejectedDraft: (connection, input) => authorDrafts.supersedeRejected(connection, input),
   emit: emitContentModerationEvent
 });
+
+const userImageAssetUploads = createUserImageAssetUploadService({
+  probeUserImageAssetByOwnerPath: (input) => withDatabaseConnection((connection) =>
+    findUserImageAssetByOwnerPath(connection, input)
+  ),
+  transaction: withTransaction,
+  assertImageIntake: (connection) => resolveContentSecurityIntake("image", { connection }),
+  repository: {
+    bindUserImageUploadOperation,
+    findUserImageAssetByOwnerPath,
+    insertUserImageAsset,
+    protectUserImageUploadCleanup
+  },
+  createWechatImageModerationJob: wechatImageModerationEnabled
+    ? (connection, input) => contentModeration.createWechatImageModerationJob(connection, input)
+    : undefined,
+  submitWechatImageModeration: wechatImageModerationEnabled
+    ? (job) => contentModeration.submitWechatImageModeration(job)
+    : undefined
+});
+
+function normalizedObjectVersion(value) {
+  const version = String(value || "").trim().replace(/^"|"$/g, "");
+  if (!version || version.length > 128) {
+    throw new AppError(
+      500,
+      "CONTENT_MODERATION_CONFIGURATION_ERROR",
+      "uploaded image object version is unavailable"
+    );
+  }
+  return version;
+}
+
+async function uploadedUserImageVersion({ objectKey, file }) {
+  if (!isCosUploadStorageEnabled()) {
+    return `sha256:${crypto.createHash("sha256").update(file).digest("hex")}`;
+  }
+  const response = await headCosObject({ key: objectKey, config: config.cos });
+  return normalizedObjectVersion(response?.headers?.etag);
+}
+
+async function finalizeUploadedUserImage({
+  ownerUserId,
+  kind,
+  path: assetPath,
+  objectKey,
+  objectVersion,
+  file,
+  uploadOperationId = "",
+  uploadScopeKey = ""
+}) {
+  const resolvedObjectVersion = objectVersion || await uploadedUserImageVersion({ objectKey, file });
+  try {
+    return await userImageAssetUploads.finalizeUploadedImage({
+      ownerUserId,
+      kind,
+      path: assetPath,
+      objectKey,
+      objectVersion: resolvedObjectVersion,
+      uploadOperationId,
+      uploadScopeKey
+    });
+  } catch (error) {
+    // The persisted intake resolver locks the setting row again in the asset
+    // transaction. If policy changes after the preflight but before this point,
+    // remove the untracked object so a legacy raw-read fallback cannot expose it.
+    let persistedAsset;
+    try {
+      persistedAsset = await withDatabaseConnection((connection) =>
+        findUserImageAssetByOwnerPath(connection, { ownerUserId, path: assetPath })
+      );
+    } catch {
+      // When persistence cannot be checked, retain the object because the
+      // moderation row/job may already have committed and still needs its source.
+      throw error;
+    }
+    if (!persistedAsset) {
+      await withTransaction((connection) => enqueueUserImageCleanupJob(connection, {
+        ownerUserId,
+        path: assetPath,
+        objectKey,
+        storageKind: isCosUploadStorageEnabled() ? "cos" : "local"
+      }));
+    }
+    throw error;
+  }
+}
+
+async function createUserImageCleanupAnchor({ ownerUserId, assetPath, objectKey, storageKind }) {
+  return withTransaction((connection) => enqueueUserImageUploadCleanup(connection, {
+    ownerUserId,
+    path: assetPath,
+    objectKey,
+    storageKind,
+    cleanupNotBefore: new Date(Date.now() + 60 * 60 * 1000)
+  }));
+}
+
+function unpublishedUserImageNotFound() {
+  const error = notFound("Image not found");
+  error.contentModerationDenied = true;
+  error.contentModerationSubjectType = "user_image";
+  return error;
+}
+
+async function assertPublishedUserImagePath(assetPath) {
+  const state = await withDatabaseConnection((connection) =>
+    findUserImageAssetReadStateByPath(connection, assetPath)
+  );
+  if (state.published) return;
+  // Before D46, uploaded avatar/review files had no database row. Preserve
+  // that exact development/default read behavior only while image automatic
+  // moderation is unavailable. Known hidden assets never regain legacy reads.
+  if (state.known || wechatImageModerationEnabled) {
+    throw unpublishedUserImageNotFound();
+  }
+}
 
 function createProductionPreflightCallbackRepository() {
   return {
@@ -1150,39 +1342,11 @@ async function cleanupProductionPreflightCallbackObject({ objectKey }) {
 }
 
 async function buildProductionPreflightCallbackRuntime() {
-  const operatorUserId = Number(config.contentModeration.productionPreflight?.operatorUserId || 0);
-  const operatorStatus = await withDatabaseConnection(async (connection) => {
-    const [rows] = await connection.query(
-      "SELECT role, status FROM user_roles WHERE user_id = ? AND role = 'system_admin' LIMIT 1",
-      [operatorUserId]
-    );
-    const row = rows[0];
-    return row?.role === "system_admin" && row?.status === "active" ? "active" : "missing";
-  });
-  return {
-    nodeEnv: config.contentModeration.nodeEnv,
-    preflightEnabled: Boolean(config.contentModeration.productionPreflight?.enabled),
-    confirmation: "",
-    expectedConfirmation: config.contentModeration.productionPreflight?.confirmation || "",
-    operatorUserId,
-    operatorRole: "system_admin",
-    operatorStatus,
-    intakeModes: {
-      text: config.contentModeration.textIntakeMode,
-      image: config.contentModeration.imageIntakeMode,
-      video: config.contentModeration.videoIntakeMode
-    },
-    providerConfig: {
-      wechatText: Boolean(config.contentModeration.wechatTextEnabled && config.contentModeration.wechatAppId && config.contentModeration.wechatAppSecret),
-      wechatImage: Boolean(config.contentModeration.wechatImageEnabled && config.contentModeration.wechatAppId && config.contentModeration.wechatAppSecret),
-      tencentVideo: Boolean(config.contentModeration.tencentVideoEnabled && config.contentModeration.tencentVideoPolicyId),
-      cos: Boolean(config.contentModeration.cosEnabled && config.contentModeration.bucket && config.contentModeration.cosRegion),
-      redis: Boolean(config.contentModeration.redisEnabled && (config.contentModeration.redisUrl || config.contentModeration.redisHost)),
-      callback: Boolean(config.contentModeration.tencentVideoCallbackToken || config.contentModeration.wechatEventToken)
-    },
-    releaseFingerprint: config.contentModeration.productionPreflight?.releaseFingerprint,
-    appId: config.contentModeration.wechatAppId
-  };
+  return withDatabaseConnection((connection) => buildProductionPreflightRuntime({
+    connection,
+    moderationConfig: config.contentModeration,
+    env: {}
+  }));
 }
 
 async function applyApprovedTextProposal(connection, { job, proposal }) {
@@ -1239,7 +1403,10 @@ const adminModerationApi = createAdminModerationApi({
 const albumImageUploads = createAlbumImageUploadService({
   cosConfig: config.cos,
   directUploadRequired: config.albumMedia.directUploadRequired,
-  assertImageIntake: () => assertContentModerationIntake(config.contentModeration, "image"),
+  assertImageIntake: (connection) => resolveContentSecurityIntake(
+    "image",
+    connection ? { connection } : undefined
+  ),
   transaction: withTransaction,
   access: assertSessionAlbumImageUploadAllowed,
   repository: {
@@ -1831,7 +1998,50 @@ function isCosUploadStorageEnabled() {
   return cosStorageEnabled(config.cos);
 }
 
-function uploadFilenameBase(prefix, userId) {
+function userImageUploadOperationId(request) {
+  return normalizedUserImageUploadOperationId(
+    request.headers["x-user-image-operation-id"],
+    { optional: true }
+  );
+}
+
+function normalizedUserImageUploadOperationId(value, { optional = false } = {}) {
+  const operationId = String(value || "");
+  if (!operationId && optional) return "";
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(operationId)) {
+    throw badRequest("invalid user image upload operation id");
+  }
+  return operationId;
+}
+
+function userImageUploadScopeKey(ownerUserId, kind, value) {
+  const scopeKey = String(value || "");
+  const ownerPrefix = `user:${Number(ownerUserId)}:`;
+  if (kind === "avatar") {
+    if (scopeKey && scopeKey !== `${ownerPrefix}avatar`) {
+      throw forbidden("user image upload scope does not match owner");
+    }
+    return `${ownerPrefix}avatar`;
+  }
+  const scopePattern = new RegExp(
+    `^user:${Number(ownerUserId)}:(?:session:[^:\\s]{1,128}(?::draft:[^:\\s]{1,128})?|draft:[^:\\s]{1,128})$`
+  );
+  if (kind !== "review" || scopeKey.length > 256 || !scopePattern.test(scopeKey)) {
+    throw badRequest("invalid user image upload scope");
+  }
+  return scopeKey;
+}
+
+export function uploadFilenameBase(prefix, userId, operationId = "", scopeKey = "") {
+  if (operationId) {
+    const digest = crypto.createHash("sha256")
+      .update(scopeKey
+        ? `${prefix}:${userId}:${scopeKey}:${operationId}`
+        : `${prefix}:${userId}:${operationId}`)
+      .digest("hex")
+      .slice(0, 24);
+    return `${prefix}-${userId}-${digest}`;
+  }
   return `${prefix}-${userId}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
 }
 
@@ -1890,7 +2100,7 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
     requireRole(user, "system_admin");
     normalizeVideoUploadExtension(extension);
     const session = await assertSessionAlbumUploadAllowed(user, sessionId);
-    assertContentModerationIntake(config.contentModeration, "video");
+    await resolveContentSecurityIntake("video");
     const key = `uploads/session-album/videos/source/${uploadFilenameBase(
       `admin-video-${session.id}`,
       uploadUserId
@@ -1911,7 +2121,14 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
 
   const sourceExtension = normalizeUploadExtension(extension);
   if (kind === "avatar") {
+    await resolveContentSecurityIntake("image");
     const key = `uploads/avatars/${uploadFilenameBase("user", uploadUserId)}.webp`;
+    await createUserImageCleanupAnchor({
+      ownerUserId: uploadUserId,
+      assetPath: `/${key}`,
+      objectKey: key,
+      storageKind: "cos"
+    });
     return {
       direct: true,
       kind,
@@ -1921,12 +2138,20 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
       uploadPath: `/${key}`,
       maxBytes: AVATAR_UPLOAD_MAX_BYTES,
       contentType: avatarContentType(`source${sourceExtension}`),
-      picOperations: avatarWebpPicOperations(key)
+      picOperations: avatarWebpPicOperations(key),
+      headers: { "x-cos-forbid-overwrite": "true" }
     };
   }
 
   if (kind === "sessionReviewPhoto") {
+    await resolveContentSecurityIntake("image");
     const key = `uploads/session-reviews/${uploadFilenameBase("review", uploadUserId)}${sourceExtension}`;
+    await createUserImageCleanupAnchor({
+      ownerUserId: uploadUserId,
+      assetPath: `/${key}`,
+      objectKey: key,
+      storageKind: "cos"
+    });
     return {
       direct: true,
       kind,
@@ -1935,7 +2160,8 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
       key,
       uploadPath: `/${key}`,
       maxBytes: SESSION_REVIEW_UPLOAD_MAX_BYTES,
-      contentType: avatarContentType(key)
+      contentType: avatarContentType(key),
+      headers: { "x-cos-forbid-overwrite": "true" }
     };
   }
 
@@ -1944,7 +2170,7 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
     const session = isAdminAlbumUpload
       ? await assertAdminOwnSessionAlbumAllowed(user, sessionId)
       : await assertSessionAlbumUploadAllowed(user, sessionId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     const filenamePrefix = isAdminAlbumUpload ? `admin-album-${session.id}` : `album-${session.id}`;
     const key = `uploads/session-album/display/${uploadFilenameBase(
       filenamePrefix,
@@ -2005,6 +2231,9 @@ export function sanitizeCosDirectUploadHeaders({
   if (directUpload?.kind === "adminSessionAlbumVideo") {
     allowed.add("x-cos-forbid-overwrite");
   }
+  if (directUpload?.kind === "avatar" || directUpload?.kind === "sessionReviewPhoto") {
+    allowed.add("x-cos-forbid-overwrite");
+  }
   for (const name of Object.keys(normalized)) {
     if (!allowed.has(name)) {
       throw forbidden(`unsupported COS upload header: ${name}`);
@@ -2023,6 +2252,12 @@ export function sanitizeCosDirectUploadHeaders({
     safeHeaders["pic-operations"] !== avatarWebpPicOperations(key)
   ) {
     throw forbidden("avatar upload must include the server-issued WebP processing rule");
+  }
+  if (
+    (directUpload?.kind === "avatar" || directUpload?.kind === "sessionReviewPhoto") &&
+    safeHeaders["x-cos-forbid-overwrite"] !== "true"
+  ) {
+    throw forbidden("user image uploads must forbid object overwrite");
   }
   if (
     (directUpload?.kind === "sessionAlbumPhoto" ||
@@ -2110,16 +2345,19 @@ async function authorizeCosDirectUpload({ body, user }) {
       { user: { id: userId }, roles: [] },
       directUpload.sessionId
     );
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
   }
   if (directUpload.kind === "adminSessionAlbumPhoto") {
     await assertAdminOwnSessionAlbumAllowed(user, directUpload.sessionId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
   }
   if (directUpload.kind === "adminSessionAlbumVideo") {
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, directUpload.sessionId);
-    assertContentModerationIntake(config.contentModeration, "video");
+    await resolveContentSecurityIntake("video");
+  }
+  if (directUpload.kind === "avatar" || directUpload.kind === "sessionReviewPhoto") {
+    await resolveContentSecurityIntake("image");
   }
   return {
     authorization: buildCosAuthorization({
@@ -2152,12 +2390,47 @@ async function saveUploadedObject({
     return `/${key}`;
   }
 
-  await fs.mkdir(localDir, { recursive: true });
-  await fs.writeFile(path.join(localDir, filename), file);
+  await writeUploadedLocalObject({ localDir, filename, file, forbidOverwrite });
   return `/${key}`;
 }
 
+export async function writeUploadedLocalObject({
+  localDir,
+  filename,
+  file,
+  forbidOverwrite = false
+}) {
+  await fs.mkdir(localDir, { recursive: true });
+  await fs.writeFile(
+    path.join(localDir, filename),
+    file,
+    forbidOverwrite ? { flag: "wx" } : undefined
+  );
+}
+
+export async function readMatchingUploadedLocalObject({
+  localDir,
+  filename,
+  claimedFile
+}) {
+  const storedFile = await fs.readFile(path.join(localDir, filename));
+  const storedDigest = crypto.createHash("sha256").update(storedFile).digest();
+  const claimedDigest = crypto.createHash("sha256").update(claimedFile).digest();
+  if (!crypto.timingSafeEqual(storedDigest, claimedDigest)) {
+    throw new AppError(
+      409,
+      "USER_IMAGE_UPLOAD_OPERATION_CONFLICT",
+      "user image upload operation already contains different bytes"
+    );
+  }
+  return storedFile;
+}
+
 async function saveUploadedAvatar(request, userId) {
+  const operationId = userImageUploadOperationId(request);
+  const uploadScopeKey = operationId
+    ? userImageUploadScopeKey(userId, "avatar", request.headers["x-user-image-scope-key"])
+    : "";
   const contentType = request.headers["content-type"] || "";
   const isMultipart = contentType.includes("multipart/form-data");
   const body = await readRawBody(
@@ -2167,23 +2440,56 @@ async function saveUploadedAvatar(request, userId) {
   const { extension, file, mimeType } = isMultipart
     ? parseMultipartAvatarUpload(contentType, body)
     : parseRawAvatarUpload(contentType, body);
-  const avatarFilenameBase = uploadFilenameBase("user", userId);
+  const avatarFilenameBase = uploadFilenameBase("user", userId, operationId);
   const originalAvatarFilename = `${avatarFilenameBase}${extension}`;
   const avatarFilename = isCosUploadStorageEnabled()
     ? `${avatarFilenameBase}.webp`
     : originalAvatarFilename;
   const key = `uploads/avatars/${avatarFilename}`;
-  return saveUploadedObject({
-    key,
-    filename: avatarFilename,
-    file,
-    contentType: mimeType || avatarContentType(originalAvatarFilename),
-    picOperations: isCosUploadStorageEnabled() ? avatarWebpPicOperations(key) : "",
-    localDir: avatarUploadDir
+  await createUserImageCleanupAnchor({
+    ownerUserId: userId,
+    assetPath: `/${key}`,
+    objectKey: key,
+    storageKind: isCosUploadStorageEnabled() ? "cos" : "local"
+  });
+  const assetPath = `/${key}`;
+  let persistedFile = file;
+  try {
+    await saveUploadedObject({
+      key,
+      filename: avatarFilename,
+      file,
+      contentType: mimeType || avatarContentType(originalAvatarFilename),
+      picOperations: isCosUploadStorageEnabled() ? avatarWebpPicOperations(key) : "",
+      localDir: avatarUploadDir,
+      forbidOverwrite: true
+    });
+  } catch (error) {
+    if (!operationId || !["EEXIST", "COS_PRECONDITION_FAILED"].includes(error?.code)) throw error;
+    if (!isCosUploadStorageEnabled()) {
+      persistedFile = await readMatchingUploadedLocalObject({
+        localDir: avatarUploadDir,
+        filename: avatarFilename,
+        claimedFile: file
+      });
+    }
+  }
+  return finalizeUploadedUserImage({
+    ownerUserId: userId,
+    kind: "avatar",
+    path: assetPath,
+    objectKey: key,
+    file: persistedFile,
+    uploadOperationId: operationId,
+    uploadScopeKey
   });
 }
 
 async function saveUploadedSessionReviewPhoto(request, userId) {
+  const operationId = userImageUploadOperationId(request);
+  const uploadScopeKey = operationId
+    ? userImageUploadScopeKey(userId, "review", request.headers["x-user-image-scope-key"])
+    : "";
   const contentType = request.headers["content-type"] || "";
   if (!contentType.includes("multipart/form-data")) {
     throw badRequest("review photo upload must be multipart/form-data");
@@ -2195,13 +2501,48 @@ async function saveUploadedSessionReviewPhoto(request, userId) {
     maxBytes: SESSION_REVIEW_UPLOAD_MAX_BYTES,
     label: "review photo"
   });
-  const photoFilename = `${uploadFilenameBase("review", userId)}${extension}`;
-  return saveUploadedObject({
-    key: `uploads/session-reviews/${photoFilename}`,
-    filename: photoFilename,
-    file,
-    contentType: mimeType || avatarContentType(photoFilename),
-    localDir: sessionReviewUploadDir
+  const photoFilename = `${uploadFilenameBase(
+    "review",
+    userId,
+    operationId,
+    uploadScopeKey
+  )}${extension}`;
+  const key = `uploads/session-reviews/${photoFilename}`;
+  await createUserImageCleanupAnchor({
+    ownerUserId: userId,
+    assetPath: `/${key}`,
+    objectKey: key,
+    storageKind: isCosUploadStorageEnabled() ? "cos" : "local"
+  });
+  const assetPath = `/${key}`;
+  let persistedFile = file;
+  try {
+    await saveUploadedObject({
+      key,
+      filename: photoFilename,
+      file,
+      contentType: mimeType || avatarContentType(photoFilename),
+      localDir: sessionReviewUploadDir,
+      forbidOverwrite: true
+    });
+  } catch (error) {
+    if (!operationId || !["EEXIST", "COS_PRECONDITION_FAILED"].includes(error?.code)) throw error;
+    if (!isCosUploadStorageEnabled()) {
+      persistedFile = await readMatchingUploadedLocalObject({
+        localDir: sessionReviewUploadDir,
+        filename: photoFilename,
+        claimedFile: file
+      });
+    }
+  }
+  return finalizeUploadedUserImage({
+    ownerUserId: userId,
+    kind: "review",
+    path: assetPath,
+    objectKey: key,
+    file: persistedFile,
+    uploadOperationId: operationId,
+    uploadScopeKey
   });
 }
 
@@ -2568,7 +2909,7 @@ function signedCosAlbumVideoUrl(media, method = "GET", expiresInSeconds, queryEn
     urlParams: entries,
     ...(Number.isSafeInteger(expiresInSeconds) && expiresInSeconds > 0
       ? { expiresInSeconds }
-      : {}),
+       : {}),
     config: config.cos
   });
   const dataQuery = renderCosRequestQuery(entries);
@@ -3256,6 +3597,7 @@ async function cleanupUploadedSessionAlbumMediaObjects(urls = []) {
 
 async function serveUploadedAvatar(url, response) {
   try {
+    await assertPublishedUserImagePath(url.pathname);
     await serveUploadedObject({
       url,
       prefix: "/uploads/avatars/",
@@ -3272,6 +3614,7 @@ async function serveUploadedAvatar(url, response) {
 
 async function serveUploadedSessionReviewPhoto(url, response) {
   try {
+    await assertPublishedUserImagePath(url.pathname);
     await serveUploadedObject({
       url,
       prefix: "/uploads/session-reviews/",
@@ -3512,6 +3855,14 @@ function requireRole(user, role) {
   if (!user.roles.includes(role)) {
     throw forbidden(`${role} role required`);
   }
+}
+
+function contentModerationCapabilities() {
+  return {
+    text: { available: Boolean(config.contentModeration.enabled && config.contentModeration.wechatTextEnabled) },
+    image: { available: Boolean(config.contentModeration.enabled && config.contentModeration.wechatImageEnabled) },
+    video: { available: Boolean(config.contentModeration.enabled && config.contentModeration.tencentVideoEnabled) }
+  };
 }
 
 function d40SmokeDatabaseIsIsolated() {
@@ -3800,20 +4151,26 @@ async function route(request, response) {
 
   if (request.method === "POST" && url.pathname === "/api/users/me/avatar") {
     const user = await getAuthUser(request);
-    const avatarUrl = await saveUploadedAvatar(request, user.user.id);
-    jsonResponse(response, 201, {
+    await resolveContentSecurityIntake("image");
+    const uploaded = await saveUploadedAvatar(request, user.user.id);
+    jsonResponse(response, uploaded.path ? 201 : 202, {
       ok: true,
-      data: { avatarUrl }
+      data: uploaded.path
+        ? { avatarUrl: uploaded.path, assetId: uploaded.assetId, moderationStatus: uploaded.moderationStatus }
+        : { assetId: uploaded.assetId, moderationStatus: uploaded.moderationStatus }
     });
     return;
   }
 
   if (request.method === "POST" && url.pathname === "/api/session-reviews/photos") {
     const user = await getAuthUser(request);
-    const photoUrl = await saveUploadedSessionReviewPhoto(request, user.user.id);
-    jsonResponse(response, 201, {
+    await resolveContentSecurityIntake("image");
+    const uploaded = await saveUploadedSessionReviewPhoto(request, user.user.id);
+    jsonResponse(response, uploaded.path ? 201 : 202, {
       ok: true,
-      data: { photoUrl }
+      data: uploaded.path
+        ? { photoUrl: uploaded.path, assetId: uploaded.assetId, moderationStatus: uploaded.moderationStatus }
+        : { assetId: uploaded.assetId, moderationStatus: uploaded.moderationStatus }
     });
     return;
   }
@@ -3825,7 +4182,7 @@ async function route(request, response) {
   if (request.method === "POST" && sessionAlbumUploadId) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumUploadId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     if (config.albumMedia.directUploadRequired) {
       throw new AppError(
         409,
@@ -3852,7 +4209,7 @@ async function route(request, response) {
   if (request.method === "POST" && adminSessionAlbumUploadId) {
     const user = await getAuthUser(request);
     const session = await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumUploadId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     if (config.albumMedia.directUploadRequired) {
       throw new AppError(
         409,
@@ -3881,7 +4238,7 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideoUploadId);
-    assertContentModerationIntake(config.contentModeration, "video");
+    await resolveContentSecurityIntake("video");
     const sourceUrl = await saveUploadedSessionAlbumVideo(
       request,
       user.user.id,
@@ -4116,6 +4473,80 @@ async function route(request, response) {
       data: adminModerationRoute.data
     }, {
       "cache-control": "private, no-store"
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/uploads/user-image/finalize") {
+    const user = await getAuthUser(request);
+    const key = String(body.key || "");
+    const directUpload = directUploadKindForKey(key, user.user.id);
+    if (!new Set(["avatar", "sessionReviewPhoto"]).has(directUpload.kind)) {
+      throw forbidden("upload object is not a user image");
+    }
+    const head = await headCosObject({ key, config: config.cos });
+    const uploaded = await finalizeUploadedUserImage({
+      ownerUserId: user.user.id,
+      kind: directUpload.kind === "avatar" ? "avatar" : "review",
+      path: `/${key}`,
+      objectKey: key,
+      objectVersion: normalizedObjectVersion(head?.headers?.etag)
+    });
+    jsonResponse(response, uploaded.path ? 201 : 202, {
+      ok: true,
+      data: uploaded
+    });
+    return;
+  }
+
+  const userImageUploadOperationMatch =
+    url.pathname === "/api/uploads/user-image/operation";
+  if (request.method === "GET" && userImageUploadOperationMatch) {
+    const user = await getAuthUser(request);
+    const clientKind = String(url.searchParams.get("kind") || "");
+    const kind = clientKind === "avatar"
+      ? "avatar"
+      : clientKind === "sessionReviewPhoto" ? "review" : "";
+    if (!kind) throw badRequest("invalid user image upload kind");
+    const operationId = normalizedUserImageUploadOperationId(
+      url.searchParams.get("operationId")
+    );
+    const scopeKey = userImageUploadScopeKey(
+      user.user.id,
+      kind,
+      url.searchParams.get("scopeKey")
+    );
+    const asset = await withDatabaseConnection((connection) =>
+      findUserImageAssetByUploadOperation(connection, {
+        ownerUserId: user.user.id,
+        kind,
+        scopeKey,
+        operationId
+      })
+    );
+    if (!asset) throw notFound("Image upload operation not found");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: projectUserImageAssetStatus(asset)
+    }, { "cache-control": "private, no-store" });
+    return;
+  }
+
+  const userImageAssetStatusMatch = url.pathname.match(
+    /^\/api\/uploads\/user-image\/(\d+)$/
+  );
+  if (request.method === "GET" && userImageAssetStatusMatch) {
+    const user = await getAuthUser(request);
+    const asset = await withDatabaseConnection((connection) =>
+      findOwnedUserImageAssetById(connection, {
+        ownerUserId: user.user.id,
+        assetId: Number(userImageAssetStatusMatch[1])
+      })
+    );
+    if (!asset) throw notFound("Image asset not found");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: projectUserImageAssetStatus(asset)
     });
     return;
   }
@@ -4458,6 +4889,32 @@ async function route(request, response) {
       ok: true,
       data: moderated ?? await createPrivateScript(user, body)
     }, moderatedTextHeaders(moderated));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/admin/content-security-settings") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await withDatabaseConnection(async (connection) => ({
+        settings: await readContentSecuritySettings(connection),
+        capabilities: contentModerationCapabilities()
+      }))
+    });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/admin/content-security-settings") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await withTransaction(async (connection) => ({
+        settings: await updateContentSecuritySettings(connection, user.user.id, body),
+        capabilities: contentModerationCapabilities()
+      }))
+    });
     return;
   }
 
@@ -5150,7 +5607,7 @@ async function route(request, response) {
   if (request.method === "POST" && sessionAlbumPhotosId) {
     const user = await getAuthUser(request);
     await assertSessionAlbumUploadAllowed(user, sessionAlbumPhotosId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     const photoUrl = body.photoUrl || body.photo_url;
     if (isCosUploadStorageEnabled()) {
       const finalized = attachLegacyFinalizedAlbumImageUrls(
@@ -5167,11 +5624,15 @@ async function route(request, response) {
       return;
     }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
-    const photo = await createSessionAlbumPhoto(user, sessionAlbumPhotosId, {
-      ...body,
-      photoUrl,
-      ...metadata
-    }, authorPrivateMediaOptions());
+    const photo = await createSessionAlbumPhoto(
+      user,
+      sessionAlbumPhotosId,
+      { ...body, photoUrl, ...metadata },
+      {
+        ...authorPrivateMediaOptions(),
+        assertImageIntake: (connection) => resolveContentSecurityIntake("image", { connection })
+      }
+    );
     emitAuthorPrivateCreated(photo);
     jsonResponse(response, 201, {
       ok: true,
@@ -5187,7 +5648,7 @@ async function route(request, response) {
   if (request.method === "POST" && adminSessionAlbumPhotosId) {
     const user = await getAuthUser(request);
     await assertAdminOwnSessionAlbumAllowed(user, adminSessionAlbumPhotosId);
-    assertContentModerationIntake(config.contentModeration, "image");
+    await resolveContentSecurityIntake("image");
     const photoUrl = body.photoUrl || body.photo_url;
     if (isCosUploadStorageEnabled()) {
       const finalized = attachLegacyFinalizedAlbumImageUrls(
@@ -5204,11 +5665,15 @@ async function route(request, response) {
       return;
     }
     const metadata = await getSessionAlbumDisplayMetadata(photoUrl);
-    const photo = await createSessionAlbumPhoto(user, adminSessionAlbumPhotosId, {
-      ...body,
-      photoUrl,
-      ...metadata
-    }, authorPrivateMediaOptions());
+    const photo = await createSessionAlbumPhoto(
+      user,
+      adminSessionAlbumPhotosId,
+      { ...body, photoUrl, ...metadata },
+      {
+        ...authorPrivateMediaOptions(),
+        assertImageIntake: (connection) => resolveContentSecurityIntake("image", { connection })
+      }
+    );
     emitAuthorPrivateCreated(photo);
     jsonResponse(response, 201, {
       ok: true,
@@ -5225,14 +5690,17 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     requireRole(user, "system_admin");
     await assertSessionAlbumUploadAllowed(user, adminSessionAlbumVideosId);
-    assertContentModerationIntake(config.contentModeration, "video");
+    await resolveContentSecurityIntake("video");
     const storageAdapter = createSessionAlbumVideoStorageAdapter();
     const inspectObject = (sourceUrl) =>
       inspectSessionAlbumVideoObject({ sourceUrl, storageAdapter });
     const video = await createSessionAlbumVideo(user, adminSessionAlbumVideosId, body, {
       inspectObject,
       readyOnCreate: true,
-      assertVideoIntake: () => assertContentModerationIntake(config.contentModeration, "video"),
+      assertVideoIntake: (connection) => resolveContentSecurityIntake(
+        "video",
+        connection ? { connection } : undefined
+      ),
       createVideoModerationJob: (connection, input) =>
         contentModeration.createVideoJob(connection, input),
       submitVideoModeration: (job) => contentModeration.submitVideoJob(job),

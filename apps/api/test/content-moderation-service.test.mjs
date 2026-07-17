@@ -497,6 +497,26 @@ test("stale immutable video result cannot change media", async () => {
   assert.equal(state.mediaUpdates.length, 0);
 });
 
+test("a video callback with a missing persisted media version stays hidden", async () => {
+  const { service, state } = harness({
+    mediaOverrides: { moderation_object_version: null }
+  });
+
+  const result = await service.applyMediaResult({
+    jobId: 7,
+    provider: "tencent_ci_video",
+    providerJobId: "current-video-job",
+    subjectVersion: "etag-1",
+    objectKey: "uploads/session-album/videos/source/a.mp4",
+    result: { decision: "pass" }
+  });
+
+  assert.equal(result.status, "processing");
+  assert.equal(result.stale, true);
+  assert.equal(state.transitions.length, 0);
+  assert.equal(state.mediaUpdates.length, 0);
+});
+
 test("a stale video object key is idempotent and cannot change media", async () => {
   const { service, state } = harness();
   const result = await service.applyMediaResult({

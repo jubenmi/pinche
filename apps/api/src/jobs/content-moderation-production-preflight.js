@@ -172,6 +172,30 @@ export function createProductionPreflightRunnerFromRuntime({
 export async function buildProductionPreflightRuntime({ connection, moderationConfig, env }) {
   const operatorUserId = moderationConfig.productionPreflight.operatorUserId;
   const operatorStatus = await resolveOperatorStatus(connection, operatorUserId);
+  const redisReady = Boolean(
+    moderationConfig.redisEnabled &&
+    (moderationConfig.redisUrl || moderationConfig.redisHost)
+  );
+  const cosReady = Boolean(
+    moderationConfig.cosEnabled &&
+    moderationConfig.secretId &&
+    moderationConfig.secretKey &&
+    moderationConfig.bucket &&
+    moderationConfig.cosRegion
+  );
+  const wechatReady = Boolean(
+    moderationConfig.wechatAppId &&
+    moderationConfig.wechatAppSecret &&
+    redisReady
+  );
+  const wechatCallbackReady = Boolean(
+    moderationConfig.wechatEventToken &&
+    moderationConfig.wechatEventAesKey
+  );
+  const tencentCallbackReady = Boolean(
+    moderationConfig.tencentVideoCallbackUrl &&
+    moderationConfig.tencentVideoCallbackToken
+  );
   return {
     nodeEnv: moderationConfig.nodeEnv,
     preflightEnabled: moderationConfig.productionPreflight.enabled,
@@ -181,18 +205,18 @@ export async function buildProductionPreflightRuntime({ connection, moderationCo
     testAdminUserId: moderationConfig.productionPreflight.testAdminUserId,
     operatorRole: "system_admin",
     operatorStatus,
-    intakeModes: {
-      text: moderationConfig.textIntakeMode,
-      image: moderationConfig.imageIntakeMode,
-      video: moderationConfig.videoIntakeMode
-    },
     providerConfig: {
-      wechatText: Boolean(moderationConfig.wechatTextEnabled && moderationConfig.wechatAppId && moderationConfig.wechatAppSecret),
-      wechatImage: Boolean(moderationConfig.wechatImageEnabled && moderationConfig.wechatAppId && moderationConfig.wechatAppSecret),
-      tencentVideo: Boolean(moderationConfig.tencentVideoEnabled && moderationConfig.tencentVideoPolicyId),
-      cos: Boolean(moderationConfig.cosEnabled && moderationConfig.bucket && moderationConfig.cosRegion),
-      redis: Boolean(moderationConfig.redisEnabled && (moderationConfig.redisUrl || moderationConfig.redisHost)),
-      callback: Boolean(moderationConfig.tencentVideoCallbackToken || moderationConfig.wechatEventToken)
+      wechatText: wechatReady,
+      wechatImage: Boolean(wechatReady && wechatCallbackReady && cosReady),
+      tencentVideo: Boolean(
+        cosReady &&
+        moderationConfig.tencentVideoRegion &&
+        moderationConfig.tencentVideoPolicyId &&
+        tencentCallbackReady
+      ),
+      cos: cosReady,
+      redis: redisReady,
+      callback: Boolean(wechatCallbackReady || tencentCallbackReady)
     },
     releaseFingerprint: moderationConfig.productionPreflight.releaseFingerprint,
     appId: moderationConfig.wechatAppId

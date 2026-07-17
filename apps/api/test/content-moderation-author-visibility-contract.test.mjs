@@ -97,7 +97,10 @@ test("D46 contract locks author-only visibility without weakening public moderat
     'export function isModerationPublished(status) {\n  return status === "approved" || status === "approved_legacy";\n}'
   );
 
-  assert.equal(rootPackage.scripts["d46:check"], "node scripts/d46-author-private-content-check.js");
+  assert.equal(
+    rootPackage.scripts["d46:check"],
+    "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js && node scripts/d46-author-private-content-check.js"
+  );
   assert.match(rootPackage.scripts.precheck, /npm run d46\:check/);
   for (const token of [
     "0030_author_private_content_visibility.sql",
