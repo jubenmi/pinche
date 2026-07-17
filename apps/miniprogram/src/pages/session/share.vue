@@ -81,6 +81,7 @@
 </template>
 
 <script>
+import { formatBeijingDateTime } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -661,7 +662,7 @@ export default {
               this.currentUserId &&
               Number(role.confirmedUserId) === Number(this.currentUserId)
           ) || null;
-        this.startText = String(session.start_at || "").slice(0, 16);
+        this.startText = formatBeijingDateTime(session.start_at);
         this.note = "剧本迷·拼车，一起沉浸好本。";
         writeCreateFlow({
           store: this.store,

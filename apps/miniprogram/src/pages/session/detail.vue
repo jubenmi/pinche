@@ -84,7 +84,7 @@
           查看地图
         </t-button>
       </view>
-      <view class="info-row">时间：{{ session.start_at }}</view>
+      <view class="info-row">时间：{{ sessionStartAtText }}</view>
       <view class="info-row">指定DM：{{ session.dm_name_snapshot || "未指定" }}</view>
       <view class="info-row">指定NPC：{{ session.npc_name_snapshot || "未指定" }}</view>
       <view class="info-row">状态：{{ statusLabel(session.status) }}</view>
@@ -169,6 +169,7 @@
 </template>
 
 <script>
+import { formatBeijingDateTime } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -243,7 +244,10 @@ export default {
       if (this.isPostStart) {
         return "相册、照片标注和车友记录会沉淀在这里。";
       }
-      return `${this.session.store_name_snapshot} / ${this.session.start_at}`;
+      return `${this.session.store_name_snapshot} / ${this.sessionStartAtText}`;
+    },
+    sessionStartAtText() {
+      return formatBeijingDateTime(this.session.start_at);
     },
     focusedSeat() {
       return (this.session.seats || []).find(
