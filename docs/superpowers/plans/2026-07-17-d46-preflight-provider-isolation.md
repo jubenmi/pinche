@@ -375,9 +375,11 @@
 
   Use `superpowers:verification-before-completion` and rerun the focused tests plus D45/D46 checks. Record command exit codes, not claims based on earlier runs.
 
-- [ ] **Step 3: Merge into `develop` without disturbing the dirty main worktree**
+- [x] **Step 3: Merge into `develop` without disturbing the dirty main worktree**
 
   Follow the repository's guarded branch workflow from the isolated worktree. Preserve the main worktree's existing `package-lock.json` and `docs/evidence/` state. Do not use destructive restore/reset commands.
+
+  - [x] Reconciled the isolated branch with the latest `origin/develop`, reran the complete isolated-stack verification, then fast-forwarded local `develop`; the existing `package-lock.json` and `docs/evidence/` changes remained untouched.
 
 - [ ] **Step 4: Publish and verify CI in order**
 
