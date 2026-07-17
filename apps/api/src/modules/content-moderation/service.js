@@ -630,10 +630,13 @@ export function createContentModerationService(dependencies) {
       }
       const media = await deps.repository.findModerationMedia(connection, job, { forUpdate: true });
       if (!media || media.status !== "active") return staleResult(job);
-      if (
-        media.moderation_object_version &&
-        String(media.moderation_object_version) !== String(job.subject_version)
-      ) {
+      const mediaVersion = String(media.moderation_object_version || "");
+      if (provider === "tencent_ci_video" && (
+        !mediaVersion.trim() || mediaVersion !== String(job.subject_version)
+      )) {
+        return staleResult(job);
+      }
+      if (provider !== "tencent_ci_video" && mediaVersion && mediaVersion !== String(job.subject_version)) {
         return staleResult(job);
       }
       const currentObjectKey = String(

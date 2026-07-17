@@ -24,7 +24,9 @@
   - 2026-07-17：最终 D46.4 质量复审整改完成——资料/评价成功关联按完整规范化 scope 清除全部 operation，并用 scope epoch 使重叠恢复/上传无效，删除的恢复图与被替换头像不会重现；0031 建表与 reconciler 补齐精确非唯一单列 `asset_path`/`object_key` 查询索引并关闭式拒绝错误同名结构；本地 EEXIST 读取磁盘真实字节、SHA-256 不同则在 finalize 前稳定 409；评价确定性 key 纳入规范化 scope。严格 RED/GREEN；聚焦 80/80、D45 talk 5/5 与主套件 536/536、release matrix 121/121、静态、API 语法、小程序构建与 diff 检查通过。D46.4 仍留待总复核勾选。
   - 2026-07-17：最终客户端并发复审整改中——scope supersession 必须稳定报错且以关联请求开始时的 operation cutoff 为界，不能清除之后开始的新上传；评价存在待审照片时不得保存或确认清 scope。两项完成严格 RED/GREEN 与全套回归前保持未勾选。
   - 2026-07-17：最终客户端并发复审整改完成——头像/评价 scope operation 持久化递增序号，关联请求开始前捕获 cutoff，成功 ack 只清除并淘汰 cutoff 及之前的操作；旧上传稳定返回 409 `USER_IMAGE_UPLOAD_SUPERSEDED`，不再产生空 path 或空头像更新，请求后新启动的 stacked 上传保持可恢复。评价 `pendingPhotoCount > 0` 同时禁用保存按钮并在方法入口拦截，不发 PUT、不 ack，最终批准仍可恢复。严格 RED/GREEN；聚焦 82/82、D45 talk 5/5 与主套件 538/538、release matrix 121/121、静态、API/小程序语法、小程序构建与 diff 检查通过。D46.4 仍留待总复核勾选。
-- [ ] D46.5 接入全部视频入口及其读取门禁。
+- [x] D46.5 接入全部视频入口及其读取门禁。
+  - 2026-07-17：实现审计完成——相册视频的本地 multipart 上传、COS intent、COS 授权与最终创建均在写入前走独立 video capability；最终创建事务会锁定设置行并重判。能力可用创建 `pending` Tencent CI `album_video` 任务；不可用时默认落为 `approved_legacy`，双开关则在对象检查/媒体写入前以 503 拒绝。成员/公开列表、封面、播放 URL、带签名播放文件和下载等读取路径均只接受 `approved`/`approved_legacy`；D45 回调、不可变 ETag、重复回调和 retry route 已覆盖。定向 70/70、D42 video 78/78、album-image 85/85、D45 静态、语法与 diff 检查通过；等待独立规格与质量复审前保持未勾选。
+  - 2026-07-17：复审整改完成——Tencent 当前回调现在要求已锁定媒体的 `moderation_object_version` 非空且与任务 `subject_version` 完全一致；NULL、空字符串或不同版本均作为 stale 保持隐藏，不能推进为 approved。新增最小 RED/GREEN 回归；等待复审与总验证前保持未勾选。
 - [ ] D46.6 接入受约束文本的创建和编辑入口。
   - 2026-07-17：进行中——第一阶段已将持久化设置接入统一异步入口门禁，旧 `*_INTAKE_MODE` 仅保留配置兼容、不参与 D46 发布决策；图片/视频按 `moderationRequired` 写入 `pending` 或 `approved_legacy`，文本不再由 `legacy` 提前绕过。头像与评价配图当前仅完成统一图片策略拦截，D45 尚无其不可变媒体、审核任务和隐藏读取管线，须后续独立补齐。本阶段不宣称完成 D46.4–D46.6。
   - 2026-07-17：审查修复——最终相册图片、视频和受约束文本直写均在业务写事务内锁定 `content_security_settings` 单例行并重判，和后台设置保存形成同一锁屏障；下层缺少 intake hook 时默认 `approved_legacy`，最终判定需审核却缺 job hook 时在 `INSERT` 前稳定失败。生产 preflight 已移除旧 mode 前置条件，预演依靠独立表、对象前缀与 HMAC 关联隔离，不宣称隔离正常流量。
