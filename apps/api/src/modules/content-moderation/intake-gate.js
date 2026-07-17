@@ -28,29 +28,29 @@ function intakeRule(type) {
  * mode they are a readiness prerequisite; disabled providers reject intake so
  * a route can never fall back to an unmoderated business write.
  */
-export function resolveContentModerationIntake(moderationConfig, type) {
+export function resolveContentModerationIntake(moderationConfig, type, fallback = {}) {
   const rule = intakeRule(type);
   const mode = moderationConfig?.[rule.modeKey];
   if (!new Set(["legacy", "closed", "moderated"]).has(mode)) {
     throw new TypeError(`Unsupported content moderation intake mode: ${mode}`);
   }
-  if (mode === "legacy") {
-    return { accepting: true, mode, moderationRequired: false, reason: "legacy" };
-  }
   if (mode === "closed") {
     return { accepting: false, mode, moderationRequired: false, reason: "closed" };
   }
-  if (!moderationConfig?.enabled) {
-    return { accepting: false, mode, moderationRequired: true, reason: "moderation_disabled" };
+  if (moderationConfig?.enabled && moderationConfig?.[rule.providerKey]) {
+    return { accepting: true, mode: "moderated", moderationRequired: true, reason: "ready" };
   }
-  if (!moderationConfig?.[rule.providerKey]) {
-    return { accepting: false, mode, moderationRequired: true, reason: "provider_disabled" };
+  const fallbackBlocking = Boolean(
+    fallback.fallbackBlocking || fallback?.types?.[type] || fallback?.[`${type}Blocking`]
+  );
+  if (fallbackBlocking) {
+    return { accepting: false, mode: "closed", moderationRequired: false, reason: "fallback_blocked" };
   }
-  return { accepting: true, mode, moderationRequired: true, reason: "ready" };
+  return { accepting: true, mode: "legacy", moderationRequired: false, reason: "legacy" };
 }
 
-export function assertContentModerationIntake(moderationConfig, type) {
-  const intake = resolveContentModerationIntake(moderationConfig, type);
+export function assertContentModerationIntake(moderationConfig, type, fallback) {
+  const intake = resolveContentModerationIntake(moderationConfig, type, fallback);
   if (intake.accepting) return intake;
   throw new AppError(
     503,

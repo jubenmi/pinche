@@ -52,7 +52,7 @@ test("unconfigured moderation defaults to legacy publication in every environmen
   );
 });
 
-test("each moderated intake requires the global switch and its own provider", () => {
+test("unavailable providers preserve direct publication unless fallback blocking is enabled", () => {
   for (const [type, provider] of [
     ["text", "CONTENT_MODERATION_WECHAT_TEXT_ENABLED"],
     ["image", "CONTENT_MODERATION_WECHAT_IMAGE_ENABLED"],
@@ -63,7 +63,8 @@ test("each moderated intake requires the global switch and its own provider", ()
     assert.doesNotThrow(() => assertContentModerationIntake(open, type));
 
     const providerDisabled = buildContentModerationConfig(productionEnv({ [provider]: "false" }));
-    assert.throws(() => assertContentModerationIntake(providerDisabled, type), {
+    assert.doesNotThrow(() => assertContentModerationIntake(providerDisabled, type));
+    assert.throws(() => assertContentModerationIntake(providerDisabled, type, { fallbackBlocking: true }), {
       code: "CONTENT_MODERATION_INTAKE_CLOSED",
       statusCode: 503
     });
@@ -71,7 +72,8 @@ test("each moderated intake requires the global switch and its own provider", ()
     const globallyDisabled = buildContentModerationConfig(productionEnv({
       CONTENT_MODERATION_ENABLED: "false"
     }));
-    assert.throws(() => assertContentModerationIntake(globallyDisabled, type), {
+    assert.doesNotThrow(() => assertContentModerationIntake(globallyDisabled, type));
+    assert.throws(() => assertContentModerationIntake(globallyDisabled, type, { fallbackBlocking: true }), {
       code: "CONTENT_MODERATION_INTAKE_CLOSED",
       statusCode: 503
     });
@@ -108,4 +110,28 @@ test("legacy intake preserves production compatibility when moderation is not co
     code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
   });
   assert.throws(() => resolveContentModerationIntake(local, "document"), /Unsupported content moderation intake type/);
+});
+
+test("automatic capability takes priority and unavailable capability follows the fallback switch", () => {
+  const capable = buildContentModerationConfig(productionEnv({
+    CONTENT_MODERATION_TEXT_INTAKE_MODE: "legacy"
+  }));
+  assert.deepEqual(resolveContentModerationIntake(capable, "text"), {
+    accepting: true,
+    mode: "moderated",
+    moderationRequired: true,
+    reason: "ready"
+  });
+
+  const unavailable = buildContentModerationConfig({ NODE_ENV: "production" });
+  assert.deepEqual(resolveContentModerationIntake(unavailable, "image"), {
+    accepting: true,
+    mode: "legacy",
+    moderationRequired: false,
+    reason: "legacy"
+  });
+  assert.throws(
+    () => assertContentModerationIntake(unavailable, "image", { fallbackBlocking: true }),
+    { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 }
+  );
 });
