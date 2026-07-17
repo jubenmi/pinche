@@ -38,6 +38,7 @@
   - 2026-07-17：最终规格与质量复审通过——全部客户端审核提示严格收敛为三条允许文案，审核错误绝不回退服务端原始 message；D46 检查器对图片/视频/文本写入、用户图片与相册读取、认证回调、不可变 attempt/version、retry dispatcher 和每个 COS 图片/视频分支使用可执行 token 流断言。负向覆盖文案 Unicode/Vue 实体/注释/正则，以及门禁删除、改名、注释和字符串伪调用；规格和质量复审均无 Critical/Important。
 - [ ] D46.8 执行定向测试、全量检查和非生产真实腾讯云联调。
   - 2026-07-17：本地完整验证完成——在隔离的 MySQL/Redis/API 环境中运行 `WECHAT_SUBSCRIBE_MESSAGE_ENABLED=false npm run check`，退出码 0；包含 D46 静态检查、API、D45/D42 回归和小程序构建。0031 在空测试库完成实际迁移。真实 Tencent/WeChat/COS 非生产联调仍待具备隔离凭据、回调地址与执行授权的环境，不能由本地模拟替代。
+  - 2026-07-17：真实预检能力隔离本地实现完成——预检就绪条件已与三个正式 provider 开关解耦，预检启用时独立关闭式校验 Redis、WeChat、COS 与 Tencent CI 原始依赖；同一配置下普通内容仍按 D46 默认直发或双开关阻断。严格 RED/GREEN 后聚焦 44/44、D45/D46 静态检查通过，运行手册已明确常驻 API/异步回调窗口与正式开关隔离。三类真实 provider 均为 `passed` 且图片/视频清理为 `deleted` 前保持未勾选。
 
 ## 完成标准
 

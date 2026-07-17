@@ -183,7 +183,7 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 
 1. **数据结构与门禁**：执行迁移，部署 API、后台、两个 Worker；确认内容安全 DB 开关默认关闭，未启用审核能力时新内容以 `approved_legacy` 兼容发布。验证未批准媒体仍无法通过列表、预览、下载、range、封面或公开分享读取；若本次变更不允许兼容直发，在后台同时开启全局与对应类型的不可用阻断开关。
 2. **后台、指标与扫描**：确认管理员队列、审计、上述指标和告警可见。先开启孤儿扫描的 report-only，保持 cleanup 为 `false`。
-3. **生产受控预演（D45.18A）**：运行一次性预演 Job；它使用隔离的预演表、对象前缀和回调关联，不依赖 `*_INTAKE_MODE` 隔离正常流量。该步骤只验证 harmless pass、鉴权、私有 COS 读取、回调、标准化结果和清理。
+3. **生产受控预演（D45.18A）**：部署常驻 API 与预演超时 Worker 时设置 `CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true`，再运行一次性预演 Job；三个正式 provider 开关必须全程保持 `false`。预演使用隔离的预演表、对象前缀和回调关联，不依赖 `*_INTAKE_MODE`，也不会改变普通流量的 D46 直发/阻断决策。该步骤只验证 harmless pass、鉴权、私有 COS 读取、回调、标准化结果和清理。
 4. **微信文本**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_TEXT_ENABLED=true`；启用后自动进入审核，观察至少一个业务高峰窗口。
 5. **微信图片**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_IMAGE_ENABLED=true`；启用后自动进入审核。
 6. **腾讯视频**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=true`；启用后自动进入审核。
@@ -208,8 +208,14 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 前置条件：
 
 - `CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true`
+- 常驻 API、一次性预演 Job 和预演超时 Worker 使用同一组预演配置；图片/视频等待异步回调期间，常驻 API 必须保持预演开关开启
+- `CONTENT_MODERATION_WECHAT_TEXT_ENABLED=false`
+- `CONTENT_MODERATION_WECHAT_IMAGE_ENABLED=false`
+- `CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=false`
 - 操作人是仍然 active 的 `system_admin`
 - `D45_PREFLIGHT_CONFIRMATION` 由当次人工确认提供，不写入仓库、日志或截图
+
+预演开关启用后会独立校验 Redis、微信凭据、私有 COS、微信安全回调和腾讯 CI 视频策略/回调配置，但不把普通业务能力标记为 available。三个 case 均为 `passed`、图片和视频对象均确认删除并完成人工复核前，不得开启任何正式 provider 开关；完成后也必须按文本、图片、视频顺序逐项启用并分别观察。
 
 手动执行：
 
@@ -239,12 +245,12 @@ PINCHE_API_IMAGE="<当前 API 已验证的不可变镜像引用（repo@sha256:..
   npm run job:content-moderation-production-preflight -- --case=tencent-video-v1
 ```
 
-`PINCHE_API_IMAGE` 必须替换为当前 API 已核验的 **同一不可变 digest**，不得使用 `latest`。`--pull never` 使本机未缓存该 digest 时关闭式失败，而不是拉取新镜像。`-e D45_PREFLIGHT_CONFIRMATION` 显式把仅本次有效的宿主机变量传入一次性容器；不得将该值写入 `.env.production`、Compose 文件、日志或截图。预演显式 `-e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true` 只作用于该 `--rm` 容器，不改变常驻 API/Worker 或正常用户流量策略。
+`PINCHE_API_IMAGE` 必须替换为当前 API 已核验的 **同一不可变 digest**，不得使用 `latest`。`--pull never` 使本机未缓存该 digest 时关闭式失败，而不是拉取新镜像。`-e D45_PREFLIGHT_CONFIRMATION` 显式把仅本次有效的宿主机变量传入一次性容器；不得将该值写入 `.env.production`、Compose 文件、日志或截图。一次性容器上的 `-e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true` 只负责允许本次提交；等待图片/视频异步结果时，常驻 API 也必须用同一预演开关、HMAC 和回调配置完成认证与收口。普通用户流量仍由三个保持为 `false` 的正式 provider 开关和 D46 DB 兜底设置决定，不会因预演开关而进入审核。
 
 文本预演是同步结果，成功时应记录为 `passed`。图片与视频预演是异步结果：一次性 Job 提交成功后可能先返回 `awaiting_callback`，此时必须继续等待微信安全事件或腾讯云 CI Detail 回调命中预演 HMAC。只有对应 preflight run 最终变为 `passed`，且 `cleanup_status=deleted`，才算该 case 完成。若回调返回 `review`、`block`、`error`、超时或清理失败，均视为预演失败；查看脱敏 preflight run 状态，先处理清理失败、鉴权失败或回调失败，再重试。是否暂停正常流量由独立变更决定，不得依赖旧 intake mode。不要上传危险样本做真实生产验证。
 
 `content-moderation-production-preflight-timeout` 是与普通重试队列隔离的常驻 Worker。它默认每分钟检查一次已超过 15 分钟的 `started`、`submitting` 或 `awaiting_callback` 预演；文本只写失败并释放锁，图片/视频删除并核验对应私有对象后再原子写失败和释放 provider 锁。可通过上述三个有界配置调整超时、轮询和批量；该 Worker 即使预演功能当前关闭也应保持运行，以便清理之前遗留的预演对象。清理失败同样记录 `cleanup_failed` 并发出高优先级告警，不得开启任何 intake。
 
-若需暂停或回滚预演，先将 `CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=false`，但在所有既有 run 终态且对象清理完成前保留 `REFERENCE_HMAC_KEY`、两个认证回调路由和该超时 Worker。回调命中旧预演关联后仍会按关闭后的 guard 将其失败收口并清理；未命中的普通用户回调继续走原链，不因旧预演而被延迟。
+若需暂停或回滚预演，先将 `CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=false`，但在所有既有 run 终态且对象清理完成前保留 `REFERENCE_HMAC_KEY`、两个认证回调路由和该超时 Worker。回调命中旧预演关联后仍会按关闭后的 guard 将其失败收口并清理；未命中的普通用户回调继续走原链，不因旧预演而被延迟。正常完成时同样必须等全部既有 run 终态、图片/视频 `cleanup_status=deleted` 后，才可移除 HMAC/回调清理配置或停止相应 Worker。
 
 记录仅保存 case、服务商、结果类别、耗时、配置/镜像指纹和清理结论；不保存完整敏感文本、违规媒体、原始 trace/job/DataId、对象 key、callback body、token 或可复用 URL。

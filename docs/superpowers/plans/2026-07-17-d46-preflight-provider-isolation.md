@@ -29,11 +29,11 @@
 - Modify: `apps/api/test/content-moderation-production-preflight.test.mjs`
 - Modify: `apps/api/test/content-moderation-intake-gate.test.mjs`
 
-- [ ] **Step 1: Add a complete preflight-only environment fixture**
+- [x] **Step 1: Add a complete preflight-only environment fixture**
 
   Add a helper in `content-moderation-production-preflight.test.mjs` whose business provider switches are explicitly `false`, but which supplies production preflight confirmation/admin/fingerprint settings and all raw WeChat, Redis, COS, and Tencent CI callback prerequisites. Use only synthetic test values.
 
-- [ ] **Step 2: Specify production configuration validation**
+- [x] **Step 2: Specify production configuration validation**
 
   Extend `production preflight config defaults disabled and validates only when enabled` or split it into focused tests proving:
 
@@ -51,7 +51,7 @@
   - Tencent region/policy/HTTPS callback/token and COS fail video readiness.
   - With preflight disabled and all business providers disabled, the same missing prerequisites remain valid legacy configuration.
 
-- [ ] **Step 3: Specify runtime readiness independent of business switches**
+- [x] **Step 3: Specify runtime readiness independent of business switches**
 
   Update the runtime construction test so `wechatTextEnabled`, `wechatImageEnabled`, and `tencentVideoEnabled` are all `false`. Supply the raw prerequisites and assert:
 
@@ -68,7 +68,7 @@
 
   Add negative assertions that a missing WeChat event credential makes `wechatImage` false without incorrectly disabling Tencent video, and a missing Tencent callback credential makes `tencentVideo` false without incorrectly disabling WeChat image.
 
-- [ ] **Step 4: Specify ordinary intake isolation**
+- [x] **Step 4: Specify ordinary intake isolation**
 
   In `content-moderation-intake-gate.test.mjs`, build a production config with preflight enabled, complete raw provider prerequisites, and all three normal provider switches false. Assert for `text`, `image`, and `video`:
 
@@ -85,7 +85,7 @@
   );
   ```
 
-- [ ] **Step 5: Run the focused tests and confirm RED**
+- [x] **Step 5: Run the focused tests and confirm RED**
 
   Run:
 
@@ -102,7 +102,7 @@
 - Modify: `apps/api/src/jobs/content-moderation-production-preflight.js`
 - Test: `apps/api/test/content-moderation-production-preflight.test.mjs`
 
-- [ ] **Step 1: Derive reusable raw prerequisite booleans**
+- [x] **Step 1: Derive reusable raw prerequisite booleans**
 
   At the start of `buildProductionPreflightRuntime`, derive readiness without reading `wechatTextEnabled`, `wechatImageEnabled`, or `tencentVideoEnabled`:
 
@@ -135,7 +135,7 @@
 
   Do not log any of these source values.
 
-- [ ] **Step 2: Populate the existing guard contract**
+- [x] **Step 2: Populate the existing guard contract**
 
   Preserve `runtime.providerConfig` and assign:
 
@@ -157,7 +157,7 @@
 
   Keep `assertProductionPreflightGuards` and its per-case requirements intact. Case-specific booleans must be authoritative so the generic `callback` compatibility flag cannot make the wrong provider appear ready.
 
-- [ ] **Step 3: Run the runtime tests and confirm partial GREEN**
+- [x] **Step 3: Run the runtime tests and confirm partial GREEN**
 
   Run:
 
@@ -175,7 +175,7 @@
 - Test: `apps/api/test/content-moderation-production-preflight.test.mjs`
 - Test: `apps/api/test/content-moderation-intake-gate.test.mjs`
 
-- [ ] **Step 1: Name the configuration conditions once**
+- [x] **Step 1: Name the configuration conditions once**
 
   In `assertContentModerationConfig`, derive:
 
@@ -194,19 +194,19 @@
   );
   ```
 
-- [ ] **Step 2: Reuse existing WeChat/Redis/COS validation**
+- [x] **Step 2: Reuse existing WeChat/Redis/COS validation**
 
   In production, validate Redis, AppID, AppSecret, event token, and AES key when `wechatConfigurationRequired`. Validate COS credentials/bucket/region when `wechatImageConfigurationRequired`. Preserve the existing validators and error wording; do not create a second validation path with different rules.
 
-- [ ] **Step 3: Reuse existing Tencent validation**
+- [x] **Step 3: Reuse existing Tencent validation**
 
   Replace the repeated `moderationConfig.tencentVideoEnabled` conditions with `tencentVideoConfigurationRequired` for region, COS credentials, policy, callback URL/token, previous-token length, and production HTTPS enforcement.
 
-- [ ] **Step 4: Preserve the legacy fast path**
+- [x] **Step 4: Preserve the legacy fast path**
 
   Keep the early return only when moderation, all normal provider switches, and production preflight are disabled. Verify that the default production configuration still validates and publishes directly exactly as before D45/D46.
 
-- [ ] **Step 5: Run both focused test files and confirm GREEN**
+- [x] **Step 5: Run both focused test files and confirm GREEN**
 
   Run:
 
@@ -216,7 +216,7 @@
 
   Expected: all tests pass, including the preflight-only configuration and ordinary intake isolation matrix.
 
-- [ ] **Step 6: Commit the code and tests**
+- [x] **Step 6: Commit the code and tests**
 
   ```bash
   git add apps/api/src/config/env.js \
@@ -232,11 +232,11 @@
 
 - Modify: `scripts/d45-content-moderation-check.js`
 
-- [ ] **Step 1: Extract the runtime builder source**
+- [x] **Step 1: Extract the runtime builder source**
 
   Reuse a bounded source slice from `preflightJob`, starting at `export async function buildProductionPreflightRuntime` and ending before `function bindProductionPreflightRepository`.
 
-- [ ] **Step 2: Assert the forbidden coupling is absent**
+- [x] **Step 2: Assert the forbidden coupling is absent**
 
   Add checks that the runtime builder contains the raw prerequisite fields and does not contain these three business switches:
 
@@ -248,7 +248,7 @@
 
   Also assert that `moderationEnv` makes production preflight participate in WeChat and Tencent prerequisite validation. Keep this structural guard narrow so unrelated formatting does not break it.
 
-- [ ] **Step 3: Run static and focused verification**
+- [x] **Step 3: Run static and focused verification**
 
   Run:
 
@@ -260,7 +260,7 @@
 
   Expected: all commands exit 0.
 
-- [ ] **Step 4: Commit the static guard**
+- [x] **Step 4: Commit the static guard**
 
   ```bash
   git add scripts/d45-content-moderation-check.js
@@ -274,7 +274,7 @@
 - Modify: `docs/runbooks/hybrid-content-moderation-release.md`
 - Modify: `specs/d46-automatic-content-moderation-fallback/tasks.md`
 
-- [ ] **Step 1: Make the rollout order unambiguous**
+- [x] **Step 1: Make the rollout order unambiguous**
 
   Update sections 6 and 8 of the runbook to state:
 
@@ -284,15 +284,15 @@
   4. Only after all three cases pass and both private media objects are deleted may providers be enabled one at a time with observation windows.
   5. Disabling preflight after completion must retain callback/HMAC cleanup support until all existing runs are terminal.
 
-- [ ] **Step 2: Correct the one-shot container note**
+- [x] **Step 2: Correct the one-shot container note**
 
   Replace the sentence implying the preflight flag only affects the `--rm` container. Explain that the one-shot override enables submission, while the resident API must use the same preflight configuration to authenticate and finalize asynchronous callbacks. Normal business switches still remain false.
 
-- [ ] **Step 3: Record implementation verification without closing D46.8**
+- [x] **Step 3: Record implementation verification without closing D46.8**
 
   Add a dated D46.8 note describing the isolated preflight readiness fix and its local verification. Leave `D46.8` unchecked until the three real cases and cleanup evidence succeed.
 
-- [ ] **Step 4: Run documentation/static checks**
+- [x] **Step 4: Run documentation/static checks**
 
   Run:
 
@@ -498,4 +498,3 @@
 - [ ] Image and video preflight objects are confirmed deleted.
 - [ ] Focused, D45, D46, API, and full repository checks all pass.
 - [ ] The verified change and final D46.8 evidence are published through guarded CI.
-
