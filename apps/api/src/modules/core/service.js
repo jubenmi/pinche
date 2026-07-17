@@ -19,6 +19,7 @@ import {
 } from "./npc-role-normalization.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
 import {
+  notifySessionRescheduled,
   notifySignupCreated,
   notifySignupReviewed
 } from "../wechat/subscribe-message.js";
@@ -27,6 +28,16 @@ import {
   albumMediaCountSql,
   visibleSignupAlbumMediaCount
 } from "./session-album-media-count.js";
+import {
+  USER_NOTIFICATION_TYPES,
+  insertUserNotification,
+  listMyNotifications as listMyNotificationsFromConnection,
+  markMyNotificationRead as markMyNotificationReadFromConnection
+} from "./user-notifications.js";
+import {
+  createSessionRescheduleDedupeKey,
+  normalizeSessionRescheduleStartAt
+} from "./session-reschedule.js";
 import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
 import { isModerationPublished } from "@pinche/shared";
 
@@ -4163,7 +4174,19 @@ export async function relinkMySessionMembership(user, sessionId) {
   });
 }
 
+export function assertSessionPatchDoesNotReschedule(body = {}) {
+  if (
+    Object.prototype.hasOwnProperty.call(body, "startAt") ||
+    Object.prototype.hasOwnProperty.call(body, "start_at")
+  ) {
+    throw badRequest(
+      "Session time changes must use POST /api/sessions/:id/reschedule"
+    );
+  }
+}
+
 export async function updateSessionWithConnection(connection, user, id, body) {
+  assertSessionPatchDoesNotReschedule(body);
   await requireSessionOwner(connection, id, user);
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
@@ -4191,7 +4214,6 @@ export async function updateSessionWithConnection(connection, user, id, body) {
           : 0
   };
   return updateAllowed(connection, "sessions", id, normalized, [
-    ["startAt", "start_at"],
     ["dmUserId", "dm_user_id"],
     ["dmNameSnapshot", "dm_name_snapshot"],
     ["npcUserId", "npc_user_id"],
@@ -4210,6 +4232,186 @@ export async function updateSession(user, id, body) {
   return withDatabaseConnection((connection) =>
     updateSessionWithConnection(connection, user, id, body)
   );
+}
+
+export async function rescheduleSession(user, sessionId, body = {}) {
+  const id = positiveId(sessionId, "sessionId");
+  const result = await withTransaction((connection) =>
+    rescheduleSessionInTransaction(connection, user, id, body)
+  );
+  const settledResults = await Promise.allSettled(
+    result.recipients.map((recipient) =>
+      notifySessionRescheduled({
+        recipientOpenId: recipient.openid,
+        sessionId: id,
+        scriptName: result.notificationPayload.scriptName,
+        oldStartAt: result.notificationPayload.oldStartAt,
+        newStartAt: result.notificationPayload.newStartAt
+      })
+    )
+  );
+  const notificationDelivery = summarizeSessionRescheduleDeliveries(
+    result.recipients,
+    settledResults
+  );
+  if (notificationDelivery.failed > 0) {
+    for (const diagnostic of sessionRescheduleDeliveryDiagnostics(settledResults)) {
+      console.warn("notifySessionRescheduled failed", diagnostic);
+    }
+  }
+  return { ...result, notificationDelivery };
+}
+
+function safeDeliveryErrorCode(value) {
+  const text = String(value ?? "");
+  return /^[A-Za-z0-9_-]{1,40}$/.test(text) ? value : undefined;
+}
+
+export function sessionRescheduleDeliveryDiagnostics(settledResults) {
+  const diagnostics = [];
+  settledResults.forEach((settled, index) => {
+    if (settled.status === "rejected") {
+      diagnostics.push({
+        index,
+        scene: "session_rescheduled",
+        ...(safeDeliveryErrorCode(settled.reason?.code) === undefined
+          ? {}
+          : { errorCode: safeDeliveryErrorCode(settled.reason.code) }),
+        message:
+          settled.reason?.name === "AbortError"
+            ? "notification request timed out"
+            : "notification request failed",
+        reason: "rejected"
+      });
+    } else if (!settled.value?.ok) {
+      diagnostics.push({
+        index,
+        scene: settled.value?.scene || "session_rescheduled",
+        ...(safeDeliveryErrorCode(settled.value?.errorCode) === undefined
+          ? {}
+          : { errorCode: safeDeliveryErrorCode(settled.value.errorCode) }),
+        message: "WeChat API request failed",
+        reason: "api_error"
+      });
+    }
+  });
+  return diagnostics;
+}
+
+export function summarizeSessionRescheduleDeliveries(recipients, settledResults) {
+  const summary = { recipients: recipients.length, sent: 0, skipped: 0, failed: 0 };
+  for (const settled of settledResults) {
+    if (settled.status === "rejected" || !settled.value?.ok) {
+      summary.failed += 1;
+    } else if (settled.value.skipped) {
+      summary.skipped += 1;
+    } else {
+      summary.sent += 1;
+    }
+  }
+  return summary;
+}
+
+export async function rescheduleSessionInTransaction(connection, user, id, body = {}) {
+    const [sessionRows] = await connection.query(
+      `SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started
+       FROM sessions WHERE id = ? FOR UPDATE`,
+      [id]
+    );
+    const session = sessionRows[0];
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+      throw forbidden("Only the session organizer can reschedule this session");
+    }
+    if (Number(session.session_started) === 1) {
+      throw conflict("Past or started sessions cannot be rescheduled");
+    }
+    const now = Date.now();
+
+    let normalizedStart;
+    try {
+      normalizedStart = normalizeSessionRescheduleStartAt(body.startAt, session.start_at, now);
+    } catch (error) {
+      if (["INVALID_START_AT", "PAST_START_AT", "UNCHANGED_START_AT"].includes(error.code)) {
+        throw badRequest(error.message);
+      }
+      throw error;
+    }
+
+    // Lock order is parent session, indexed seat range, then indexed NPC-role range.
+    // Existing child updates wait on these locks; FK-validating child inserts also wait
+    // on the already-exclusive parent lock, keeping this membership snapshot stable.
+    await connection.query("SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE", [id]);
+    await connection.query("SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE", [id]);
+
+    const [recipientRows] = await connection.query(
+      `
+        SELECT DISTINCT member.user_id, user.open_id
+        FROM (
+          SELECT confirmed_user_id AS user_id
+          FROM session_seats
+          WHERE session_id = ?
+            AND status IN ('confirmed', 'locked')
+            AND confirmed_user_id IS NOT NULL
+          UNION
+          SELECT bound_user_id AS user_id
+          FROM session_npc_roles
+          WHERE session_id = ?
+            AND status = 'active'
+            AND bound_user_id IS NOT NULL
+        ) member
+        JOIN users user ON user.id = member.user_id
+        WHERE member.user_id <> ?
+      `,
+      [id, id, session.organizer_user_id]
+    );
+    const recipientsByUserId = new Map();
+    for (const recipient of recipientRows) {
+      const userId = Number(recipient.user_id);
+      if (userId && !recipientsByUserId.has(userId)) {
+        recipientsByUserId.set(userId, { userId, openid: recipient.open_id || null });
+      }
+    }
+    const recipients = [...recipientsByUserId.values()];
+    if (recipients.length > 0 && body.membersConfirmed !== true) {
+      throw conflict("Member confirmation is required before rescheduling");
+    }
+
+    const normalizedStartAt = normalizedStart.canonical;
+    // Bind the normalized Date through mysql2, matching existing timestamp write paths.
+    await connection.query("UPDATE sessions SET start_at = ? WHERE id = ?", [
+      normalizedStart.date,
+      id
+    ]);
+
+    const payload = {
+      script_name: session.script_name_snapshot,
+      old_start_at: new Date(session.start_at).toISOString(),
+      new_start_at: normalizedStartAt
+    };
+    const dedupeKey = createSessionRescheduleDedupeKey(id);
+    for (const recipient of recipients) {
+      await insertUserNotification(connection, {
+        userId: recipient.userId,
+        type: USER_NOTIFICATION_TYPES.SESSION_RESCHEDULED,
+        sessionId: id,
+        title: "活动时间已调整",
+        payload,
+        dedupeKey
+      });
+    }
+
+    return {
+      session: await findById(connection, "sessions", id),
+      recipients,
+      notificationPayload: {
+        scriptName: payload.script_name,
+        oldStartAt: payload.old_start_at,
+        newStartAt: payload.new_start_at
+      }
+    };
 }
 
 async function requireSessionNpcRoleOwner(connection, npcRoleId, user) {
@@ -4450,6 +4652,7 @@ async function signupNotificationPayload(connection, signupId) {
         signup.session_id,
         signup.status,
         session.script_name_snapshot,
+        session.store_name_snapshot,
         session.start_at,
         seat.name AS seat_name,
         seat.role_name,
@@ -4477,12 +4680,50 @@ async function signupNotificationPayload(connection, signupId) {
     sessionId: Number(row.session_id),
     status: row.status,
     scriptName: row.script_name_snapshot,
+    storeName: row.store_name_snapshot,
     seatName: row.role_name || row.seat_name || row.npc_role_name || "NPC角色",
     startAt: row.start_at,
     organizerOpenId: row.organizer_open_id,
     applicantOpenId: row.applicant_open_id,
     actorName: row.applicant_nickname || "新申请"
   };
+}
+
+async function insertSignupReviewedNotification(connection, signup, notification, result) {
+  const signupId = signup.id;
+  await insertUserNotification(connection, {
+    userId: signup.user_id,
+    type: USER_NOTIFICATION_TYPES.SIGNUP_REVIEWED,
+    sessionId: signup.session_id,
+    title: result === "approved" ? "报名审核已通过" : "报名审核未通过",
+    payload: {
+      result,
+      target_label: notification.seatName,
+      session: {
+        id: notification.sessionId,
+        script_name_snapshot: notification.scriptName,
+        store_name_snapshot: notification.storeName,
+        start_at: notification.startAt
+      }
+    },
+    dedupeKey:
+      result === "approved"
+        ? `signup-reviewed:${signupId}:approved`
+        : `signup-reviewed:${signupId}:rejected`
+  });
+}
+
+export async function listMyNotifications(user, filters = {}) {
+  return withDatabaseConnection((connection) =>
+    listMyNotificationsFromConnection(connection, user.user.id, filters)
+  );
+}
+
+export async function markMyNotificationRead(user, notificationId) {
+  const id = positiveId(notificationId, "notificationId");
+  return withDatabaseConnection((connection) =>
+    markMyNotificationReadFromConnection(connection, user.user.id, id)
+  );
 }
 
 async function tryNotify(label, sendNotification) {
@@ -5155,12 +5396,19 @@ export async function approveSignup(user, signupId) {
       ]);
       await markSignupReviewEligible(connection, signupId);
       const approvedSignup = await findById(connection, "signups", signupId);
+      const notification = {
+        ...(await signupNotificationPayload(connection, signupId)),
+        resultText: "已通过"
+      };
+      await insertSignupReviewedNotification(
+        connection,
+        approvedSignup,
+        notification,
+        "approved"
+      );
       return {
         signup: approvedSignup,
-        notification: {
-          ...(await signupNotificationPayload(connection, signupId)),
-          resultText: "已通过"
-        }
+        notification
       };
     }
 
@@ -5219,12 +5467,19 @@ export async function approveSignup(user, signupId) {
     );
 
     const approvedSignup = await findById(connection, "signups", signupId);
+    const notification = {
+      ...(await signupNotificationPayload(connection, signupId)),
+      resultText: "已通过"
+    };
+    await insertSignupReviewedNotification(
+      connection,
+      approvedSignup,
+      notification,
+      "approved"
+    );
     return {
       signup: approvedSignup,
-      notification: {
-        ...(await signupNotificationPayload(connection, signupId)),
-        resultText: "已通过"
-      }
+      notification
     };
   });
   await tryNotify("notifySignupReviewed", () => notifySignupReviewed(notification));
@@ -5234,18 +5489,28 @@ export async function approveSignup(user, signupId) {
 export async function rejectSignup(user, signupId) {
   const { signup, notification } = await withTransaction(async (connection) => {
     const signup = await requireSignupOwner(connection, signupId, user);
+    if (signup.status !== "pending") {
+      throw badRequest("Only pending signup can be rejected");
+    }
     await connection.query("UPDATE signups SET status = 'rejected' WHERE id = ?", [
       signupId
     ]);
 
     if ((signup.signup_type || "seat") === "session_npc_role") {
       const rejectedSignup = await findById(connection, "signups", signupId);
+      const notification = {
+        ...(await signupNotificationPayload(connection, signupId)),
+        resultText: "已拒绝"
+      };
+      await insertSignupReviewedNotification(
+        connection,
+        rejectedSignup,
+        notification,
+        "rejected"
+      );
       return {
         signup: rejectedSignup,
-        notification: {
-          ...(await signupNotificationPayload(connection, signupId)),
-          resultText: "已拒绝"
-        }
+        notification
       };
     }
 
@@ -5269,12 +5534,19 @@ export async function rejectSignup(user, signupId) {
     }
 
     const rejectedSignup = await findById(connection, "signups", signupId);
+    const notification = {
+      ...(await signupNotificationPayload(connection, signupId)),
+      resultText: "已拒绝"
+    };
+    await insertSignupReviewedNotification(
+      connection,
+      rejectedSignup,
+      notification,
+      "rejected"
+    );
     return {
       signup: rejectedSignup,
-      notification: {
-        ...(await signupNotificationPayload(connection, signupId)),
-        resultText: "已拒绝"
-      }
+      notification
     };
   });
   await tryNotify("notifySignupReviewed", () => notifySignupReviewed(notification));

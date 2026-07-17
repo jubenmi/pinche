@@ -115,6 +115,7 @@ import {
   listActiveStores,
   listCatalogRequests,
   listMyCatalogReviewItems,
+  listMyNotifications,
   listDiscoverableSessions,
   listPublicUpcomingSessions,
   listPublicSessionAlbumShare,
@@ -127,12 +128,14 @@ import {
   listSessionSignups,
   listStoreScripts,
   lockSeat,
+  markMyNotificationRead,
   markCatalogReviewItemNeedsChanges,
   mergeCatalogReviewItem,
   publishSession,
   rejectSignup,
   rejectCatalogReviewItem,
   relinkMySessionMembership,
+  rescheduleSession,
   replaceStoreScripts,
   reviewCatalogRequest,
   transferSessionOrganizer,
@@ -156,6 +159,7 @@ import {
   serializeSessionAlbumImage
 } from "./modules/core/service.js";
 import { isAlbumImageKind } from "./modules/album-image/constants.js";
+import { sessionRescheduleResponse } from "./modules/core/session-reschedule.js";
 import {
   bindLegacyIntentByteSize,
   findAlbumImageIntent,
@@ -2585,7 +2589,7 @@ function signedCosAlbumVideoUrl(media, method = "GET", expiresInSeconds, queryEn
     urlParams: entries,
     ...(Number.isSafeInteger(expiresInSeconds) && expiresInSeconds > 0
       ? { expiresInSeconds }
-      : {}),
+       : {}),
     config: config.cos
   });
   const dataQuery = renderCosRequestQuery(entries);
@@ -3514,6 +3518,18 @@ function d40SmokeDatabaseIsIsolated() {
   );
 }
 
+function d45SmokeDatabaseIsIsolated() {
+  const host = String(config.mysql.host || "").trim().toLowerCase();
+  const localHost = ["127.0.0.1", "localhost", "::1"].includes(host);
+  return (
+    config.nodeEnv !== "production" &&
+    config.wechat.mockLogin === true &&
+    process.env.D45_SMOKE_ISOLATED === "1" &&
+    localHost &&
+    config.mysql.database === "pinche_d45_test"
+  );
+}
+
 async function route(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
@@ -4084,6 +4100,26 @@ async function route(request, response) {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/testing/d45-smoke-target") {
+    if (!d45SmokeDatabaseIsIsolated()) {
+      throw new AppError(
+        409,
+        "SMOKE_DATABASE_NOT_ISOLATED",
+        "D45 smoke requires a dedicated local pinche_d45_test database and mock login"
+      );
+    }
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        marker: "d45-session-reschedule-notifications",
+        isolated: true,
+        database: config.mysql.database,
+        wechat_mock_login: true
+      }
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/auth/wechat/login") {
     const result = await loginWithWechatCode(body.code);
     jsonResponse(response, 200, {
@@ -4149,6 +4185,28 @@ async function route(request, response) {
   if (request.method === "GET" && url.pathname === "/api/users/me") {
     const user = await getAuthUser(request);
     jsonResponse(response, 200, { ok: true, data: user });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/users/me/notifications") {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await listMyNotifications(user, Object.fromEntries(url.searchParams))
+    });
+    return;
+  }
+
+  const notificationReadId = idMatch(
+    url.pathname,
+    /^\/api\/users\/me\/notifications\/(\d+)\/read$/
+  );
+  if (request.method === "POST" && notificationReadId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await markMyNotificationRead(user, notificationReadId)
+    });
     return;
   }
 
@@ -4578,6 +4636,14 @@ async function route(request, response) {
       body
     });
     jsonResponse(response, 201, { ok: true, data: moderated ?? await createSession(user, body) });
+    return;
+  }
+
+  const sessionRescheduleId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/reschedule$/);
+  if (request.method === "POST" && sessionRescheduleId) {
+    const user = await getAuthUser(request);
+    const result = await rescheduleSession(user, sessionRescheduleId, body);
+    jsonResponse(response, 200, { ok: true, data: sessionRescheduleResponse(result) });
     return;
   }
 

@@ -4,6 +4,17 @@ import {
   requestWithWechatAccessTokenRetry
 } from "./access-token.js";
 
+const sessionTimeFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23"
+});
+
 function skipped(scene, reason) {
   return {
     ok: true,
@@ -34,6 +45,10 @@ function valueOrFallback(value, fallback) {
   return text || fallback;
 }
 
+function truncateCodePoints(value, maxLength) {
+  return Array.from(String(value)).slice(0, maxLength).join("");
+}
+
 function messageData(payload, resultText = "待审核") {
   return {
     thing1: { value: valueOrFallback(payload.scriptName, "拼车车局").slice(0, 20) },
@@ -41,6 +56,26 @@ function messageData(payload, resultText = "待审核") {
     phrase3: { value: resultText.slice(0, 5) },
     date4: { value: valueOrFallback(payload.startAt, "时间待定").slice(0, 20) },
     thing5: { value: valueOrFallback(payload.actorName, "新申请").slice(0, 20) }
+  };
+}
+
+export function formatSessionRescheduleTime(value, fallback = "时间待定") {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return fallback;
+  }
+  const parts = Object.fromEntries(
+    sessionTimeFormatter.formatToParts(date).map(({ type, value: partValue }) => [type, partValue])
+  );
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function rescheduleMessageData(payload) {
+  return {
+    thing1: { value: truncateCodePoints(valueOrFallback(payload.scriptName, "拼车车局"), 20) },
+    date2: { value: formatSessionRescheduleTime(payload.oldStartAt, "原时间待定") },
+    date3: { value: formatSessionRescheduleTime(payload.newStartAt, "新时间待定") },
+    phrase4: { value: "车局已改期" }
   };
 }
 
@@ -65,6 +100,9 @@ export async function sendSubscribeMessage(
       const response = await fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(
+          runtimeConfig.subscribeMessage.timeoutMs ?? config.subscribeMessage.timeoutMs
+        ),
         body: JSON.stringify({
           touser,
           template_id: templateId,
@@ -84,7 +122,7 @@ export async function sendSubscribeMessage(
       skipped: false,
       scene,
       error: payload.errmsg || "subscribe message send failed",
-      details: payload
+      errorCode: payload.errcode || response.status || "WECHAT_API_ERROR"
     };
   }
   return {
@@ -116,5 +154,16 @@ export async function notifySignupReviewed(payload = {}) {
     templateId,
     page: `/pages/session/detail?id=${payload.sessionId}`,
     data: messageData(payload, payload.resultText || "已审核")
+  });
+}
+
+export async function notifySessionRescheduled(payload = {}) {
+  payload = payload || {};
+  return sendSubscribeMessage({
+    scene: "session_rescheduled",
+    touser: payload.recipientOpenId,
+    templateId: config.subscribeMessage.sessionRescheduledTemplateId,
+    page: `/pages/session/detail?id=${payload.sessionId}`,
+    data: rescheduleMessageData(payload)
   });
 }

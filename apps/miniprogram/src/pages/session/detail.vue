@@ -35,6 +35,13 @@
         :content="copyStatusText"
       />
       <t-notice-bar
+        v-if="rescheduleReminderStatusText"
+        class="notice"
+        theme="info"
+        :visible="true"
+        :content="rescheduleReminderStatusText"
+      />
+      <t-notice-bar
         v-if="isCityPreview"
         class="notice"
         theme="warning"
@@ -50,6 +57,13 @@
         <t-button v-else class="button secondary" open-type="share">分享</t-button>
         <t-button class="button secondary" @tap="goManage">车头管理</t-button>
         <t-button v-if="!isPostStart" class="button secondary" @tap="goAlbum">{{ albumButtonText }}</t-button>
+        <t-button
+          v-if="canRequestRescheduleReminder"
+          class="button secondary"
+          @tap="requestRescheduleReminder"
+        >
+          改期提醒
+        </t-button>
         <t-button
           v-if="isPostStart && myReviewState.can_review"
           class="button secondary"
@@ -170,6 +184,8 @@ import {
 } from "../../utils/api";
 import { contentModerationErrorText } from "../../utils/contentModeration";
 import { showToast } from "../../utils/tdesignFeedback";
+import { canRequestRescheduleReminder } from "../../utils/sessionMembership";
+import { requestSessionRescheduledSubscription } from "../../utils/subscribeMessages";
 
 function coordinateNumber(value, min, max) {
   if (value === "" || value === null || value === undefined) {
@@ -194,6 +210,7 @@ export default {
       sessionDetailExtensions,
       loadStatusText: "",
       copyStatusText: "",
+      rescheduleReminderStatusText: "",
       currentUserId: "",
       focusChatOnLoad: false,
       sessionDetailExtensionRefs: [],
@@ -211,6 +228,12 @@ export default {
     },
     guestNeedsLogin() {
       return this.isGuestPreview && !this.currentUserId;
+    },
+    canRequestRescheduleReminder() {
+      return (
+        !this.isCityPreview &&
+        canRequestRescheduleReminder(this.session, this.currentUserId)
+      );
     },
     summaryText() {
       if (!this.session.id) {
@@ -625,6 +648,24 @@ export default {
       if (auth) {
         showToast({ title: "已登录，请再次点击分享", icon: "none" });
       }
+    },
+    async requestRescheduleReminder() {
+      if (!this.canRequestRescheduleReminder) {
+        return;
+      }
+      const result = await requestSessionRescheduledSubscription().catch(() => ({
+        status: "unavailable"
+      }));
+      const acceptedStatuses = ["accept", "acceptWithAudio", "acceptWithAlert"];
+      if (acceptedStatuses.includes(result?.status)) {
+        this.rescheduleReminderStatusText = "已开启改期提醒。";
+        return;
+      }
+      if (["reject", "ban"].includes(result?.status)) {
+        this.rescheduleReminderStatusText = "暂未开启提醒，你可以稍后再试。";
+        return;
+      }
+      this.rescheduleReminderStatusText = "当前暂无法开启提醒，请稍后再试。";
     },
     openStoreMap() {
       if (!this.hasStoreLocation || typeof uni.openLocation !== "function") {
