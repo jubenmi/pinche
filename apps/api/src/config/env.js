@@ -371,6 +371,18 @@ export function assertContentModerationConfig(
   const wechatModerationEnabled = Boolean(
     moderationConfig.wechatTextEnabled || moderationConfig.wechatImageEnabled
   );
+  const productionPreflightEnabled = Boolean(
+    moderationConfig.productionPreflight?.enabled
+  );
+  const wechatConfigurationRequired = Boolean(
+    wechatModerationEnabled || productionPreflightEnabled
+  );
+  const wechatImageConfigurationRequired = Boolean(
+    moderationConfig.wechatImageEnabled || productionPreflightEnabled
+  );
+  const tencentVideoConfigurationRequired = Boolean(
+    moderationConfig.tencentVideoEnabled || productionPreflightEnabled
+  );
   if (moderationConfig.orphanCleanupEnabled && !moderationConfig.orphanScanEnabled) {
     missing.push("CONTENT_MODERATION_ORPHAN_SCAN_ENABLED");
   }
@@ -381,7 +393,7 @@ export function assertContentModerationConfig(
     if (!moderationConfig.bucket) missing.push("COS_BUCKET");
     if (!moderationConfig.cosRegion) missing.push("COS_REGION");
   }
-  if (normalizedNodeEnv === "production" && wechatModerationEnabled) {
+  if (normalizedNodeEnv === "production" && wechatConfigurationRequired) {
     if (!moderationConfig.redisEnabled) missing.push("REDIS_ENABLED");
     if (moderationConfig.redisUrl) {
       if (!validRedisUrl(moderationConfig.redisUrl)) missing.push("valid REDIS_URL");
@@ -399,7 +411,7 @@ export function assertContentModerationConfig(
     } else if (!validWechatEventAesKey(moderationConfig.wechatEventAesKey)) {
       missing.push("valid WECHAT_CONTENT_SECURITY_EVENT_AES_KEY");
     }
-    if (moderationConfig.wechatImageEnabled) {
+    if (wechatImageConfigurationRequired) {
       if (!moderationConfig.cosEnabled) missing.push("COS_ENABLED");
       if (!moderationConfig.secretId) missing.push("COS_SECRET_ID");
       if (!moderationConfig.secretKey) missing.push("COS_SECRET_KEY");
@@ -436,23 +448,23 @@ export function assertContentModerationConfig(
     !moderationConfig.enabled &&
     !wechatModerationEnabled &&
     !moderationConfig.tencentVideoEnabled &&
-    !moderationConfig.productionPreflight?.enabled
+    !productionPreflightEnabled
   ) {
     if (missing.length > 0) {
       throw moderationConfigurationError(`content moderation configuration is missing: ${missing.join(", ")}`);
     }
     return moderationConfig;
   }
-  if (moderationConfig.tencentVideoEnabled && !moderationConfig.tencentVideoRegion) {
+  if (tencentVideoConfigurationRequired && !moderationConfig.tencentVideoRegion) {
     missing.push("TENCENT_CI_VIDEO_REGION");
   }
-  if (moderationConfig.tencentVideoEnabled && !moderationConfig.secretId) missing.push("COS_SECRET_ID");
-  if (moderationConfig.tencentVideoEnabled && !moderationConfig.secretKey) missing.push("COS_SECRET_KEY");
-  if (moderationConfig.tencentVideoEnabled && !moderationConfig.bucket) missing.push("COS_BUCKET");
-  if (moderationConfig.tencentVideoEnabled && !moderationConfig.tencentVideoPolicyId) {
+  if (tencentVideoConfigurationRequired && !moderationConfig.secretId) missing.push("COS_SECRET_ID");
+  if (tencentVideoConfigurationRequired && !moderationConfig.secretKey) missing.push("COS_SECRET_KEY");
+  if (tencentVideoConfigurationRequired && !moderationConfig.bucket) missing.push("COS_BUCKET");
+  if (tencentVideoConfigurationRequired && !moderationConfig.tencentVideoPolicyId) {
     missing.push("TENCENT_CI_VIDEO_BIZ_TYPE");
   }
-  if (moderationConfig.tencentVideoEnabled) {
+  if (tencentVideoConfigurationRequired) {
     if (!moderationConfig.tencentVideoCallbackUrl) missing.push("TENCENT_CI_VIDEO_CALLBACK_URL");
     if (!moderationConfig.tencentVideoCallbackToken || moderationConfig.tencentVideoCallbackToken.length < 32) {
       missing.push("TENCENT_CI_VIDEO_CALLBACK_TOKEN");
@@ -463,7 +475,11 @@ export function assertContentModerationConfig(
     ) {
       missing.push("valid TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN");
     }
-    if (normalizedNodeEnv === "production" && !/^https:\/\//i.test(moderationConfig.tencentVideoCallbackUrl)) {
+    if (
+      normalizedNodeEnv === "production" &&
+      moderationConfig.tencentVideoCallbackUrl &&
+      !/^https:\/\//i.test(moderationConfig.tencentVideoCallbackUrl)
+    ) {
       throw moderationConfigurationError("moderation callback URL must use HTTPS in production");
     }
   }

@@ -35,6 +35,7 @@ function productionEnv(overrides = {}) {
     COS_SECRET_ID: "secret-id",
     COS_SECRET_KEY: "secret-key",
     COS_BUCKET: "bucket-123",
+    COS_REGION: "ap-nanjing",
     ...overrides
   };
 }
@@ -132,6 +133,36 @@ test("automatic capability takes priority and unavailable capability follows the
     () => assertContentModerationIntake(unavailable, "image", { fallbackBlocking: true }),
     { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 }
   );
+});
+
+test("production preflight readiness does not enable moderation for ordinary content", () => {
+  const config = buildContentModerationConfig(productionEnv({
+    CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "false",
+    CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "false",
+    CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED: "true",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CONFIRMATION: "confirm-012345678901234567890123",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_OPERATOR_USER_ID: "42",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TEST_ADMIN_USER_ID: "42",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_REFERENCE_HMAC_KEY: "h".repeat(32),
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_IMAGE_FINGERPRINT: "image-v1",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_VIDEO_FINGERPRINT: "video-v1",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_RELEASE_FINGERPRINT: "release-v1"
+  }));
+
+  assert.doesNotThrow(() => assertContentModerationConfig(config, { nodeEnv: "production" }));
+  for (const type of ["text", "image", "video"]) {
+    assert.deepEqual(resolveContentModerationIntake(config, type), {
+      accepting: true,
+      mode: "legacy",
+      moderationRequired: false,
+      reason: "legacy"
+    });
+    assert.throws(
+      () => assertContentModerationIntake(config, type, { fallbackBlocking: true }),
+      { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 }
+    );
+  }
 });
 
 test("publication status is pending only when automatic moderation is required", () => {
