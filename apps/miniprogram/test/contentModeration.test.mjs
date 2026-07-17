@@ -94,6 +94,11 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
     "both waterfall columns must show the mapped media status"
   );
   assert.match(album, /contentModerationStatusText/);
+  assert.match(album, /contentModerationErrorText/);
+  assert.match(
+    album,
+    /const moderationMessage = contentModerationErrorText\(error\);[\s\S]*if \(moderationMessage\) \{[\s\S]*return moderationMessage;/
+  );
   assert.match(album, /this\.timelineMode \|\| !photo\?\.is_mine/);
   assert.match(album, /videoStateText\(photo\)[\s\S]*mediaModerationStatusText\(photo\)/);
   assert.doesNotMatch(album, /moderation_message|photo\.(?:provider|provider_job_id|score|suggestion|hit_words)/);

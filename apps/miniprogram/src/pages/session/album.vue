@@ -613,6 +613,7 @@ import { classifyAlbumMediaSelection } from "../../utils/albumMediaSelection";
 import { runExclusiveAlbumMediaTask } from "../../utils/albumMediaOperation";
 import {
   authorPrivateContentModerationStatusText,
+  contentModerationErrorText,
   contentModerationStatusText
 } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
@@ -1707,7 +1708,11 @@ export default {
       return normalized;
     },
     formatAlbumMediaError(error, fallback = "图片加载失败") {
-      const message = error?.message || error?.userMessage || fallback;
+      const moderationMessage = contentModerationErrorText(error);
+      if (moderationMessage) {
+        return moderationMessage;
+      }
+      const message = error?.userMessage || error?.message || fallback;
       return error?.code ? `${message} [${error.code}]` : message;
     },
     albumMediaProgressKey(photoId, variant = "preview") {
