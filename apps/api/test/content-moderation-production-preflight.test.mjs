@@ -45,6 +45,40 @@ function validRuntime(overrides = {}) {
   };
 }
 
+function completePreflightOnlyEnv(overrides = {}) {
+  return {
+    NODE_ENV: "production",
+    CONTENT_MODERATION_ENABLED: "true",
+    CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "false",
+    CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "false",
+    CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+    REDIS_ENABLED: "true",
+    REDIS_URL: "redis://redis.example.test:6379",
+    WECHAT_APP_ID: "wx-d45-test",
+    WECHAT_APP_SECRET: "wechat-app-secret",
+    WECHAT_CONTENT_SECURITY_EVENT_TOKEN: "wechat-content-security-event-token",
+    WECHAT_CONTENT_SECURITY_EVENT_AES_KEY: "A".repeat(43),
+    COS_ENABLED: "true",
+    COS_SECRET_ID: "secret-id",
+    COS_SECRET_KEY: "secret-key",
+    COS_BUCKET: "bucket-123",
+    COS_REGION: "ap-nanjing",
+    TENCENT_CI_VIDEO_REGION: "ap-nanjing",
+    TENCENT_CI_VIDEO_BIZ_TYPE: "video-policy",
+    TENCENT_CI_VIDEO_CALLBACK_URL: "https://api.example.test/api/internal/content-moderation/tencent-video/callback",
+    TENCENT_CI_VIDEO_CALLBACK_TOKEN: "t".repeat(32),
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED: "true",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CONFIRMATION: "confirm-012345678901234567890123",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_OPERATOR_USER_ID: "42",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TEST_ADMIN_USER_ID: "42",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_REFERENCE_HMAC_KEY: "h".repeat(32),
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_IMAGE_FINGERPRINT: "image-v1",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_VIDEO_FINGERPRINT: "video-v1",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_RELEASE_FINGERPRINT: "release-v1",
+    ...overrides
+  };
+}
+
 function createPreflightCallbackFinalizer(calls) {
   return async ({ cleanupObject, ...input }) => {
     const cleanupStatus = await cleanupObject();
@@ -99,6 +133,50 @@ test("production preflight config defaults disabled and validates only when enab
     () => assertContentModerationConfig(enabledMissing, { nodeEnv: "production" }),
     /CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CONFIRMATION/
   );
+
+  assert.doesNotThrow(() => assertContentModerationConfig(
+    buildContentModerationConfig(completePreflightOnlyEnv()),
+    { nodeEnv: "production" }
+  ));
+
+  for (const [overrides, expectedError] of [
+    [{ REDIS_URL: "", REDIS_ENABLED: "false" }, /REDIS_ENABLED/],
+    [{ WECHAT_APP_ID: "" }, /WECHAT_APP_ID/],
+    [{ WECHAT_CONTENT_SECURITY_EVENT_TOKEN: "" }, /WECHAT_CONTENT_SECURITY_EVENT_TOKEN/],
+    [{ WECHAT_CONTENT_SECURITY_EVENT_AES_KEY: "short" }, /valid WECHAT_CONTENT_SECURITY_EVENT_AES_KEY/],
+    [{ COS_SECRET_ID: "" }, /COS_SECRET_ID/],
+    [{ TENCENT_CI_VIDEO_REGION: "", COS_REGION: "" }, /TENCENT_CI_VIDEO_REGION/],
+    [{ TENCENT_CI_VIDEO_BIZ_TYPE: "" }, /TENCENT_CI_VIDEO_BIZ_TYPE/],
+    [{ TENCENT_CI_VIDEO_CALLBACK_URL: "http://api.example.test/callback" }, /HTTPS/],
+    [{ TENCENT_CI_VIDEO_CALLBACK_TOKEN: "short" }, /TENCENT_CI_VIDEO_CALLBACK_TOKEN/]
+  ]) {
+    const config = buildContentModerationConfig(completePreflightOnlyEnv(overrides));
+    assert.throws(
+      () => assertContentModerationConfig(config, { nodeEnv: "production" }),
+      expectedError
+    );
+  }
+
+  const disabledLegacy = buildContentModerationConfig(completePreflightOnlyEnv({
+    CONTENT_MODERATION_ENABLED: "false",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED: "false",
+    REDIS_ENABLED: "false",
+    REDIS_URL: "",
+    WECHAT_APP_ID: "",
+    WECHAT_APP_SECRET: "",
+    WECHAT_CONTENT_SECURITY_EVENT_TOKEN: "",
+    WECHAT_CONTENT_SECURITY_EVENT_AES_KEY: "",
+    COS_ENABLED: "false",
+    COS_SECRET_ID: "",
+    COS_SECRET_KEY: "",
+    COS_BUCKET: "",
+    COS_REGION: "",
+    TENCENT_CI_VIDEO_REGION: "",
+    TENCENT_CI_VIDEO_BIZ_TYPE: "",
+    TENCENT_CI_VIDEO_CALLBACK_URL: "",
+    TENCENT_CI_VIDEO_CALLBACK_TOKEN: ""
+  }));
+  assert.doesNotThrow(() => assertContentModerationConfig(disabledLegacy, { nodeEnv: "production" }));
 });
 
 test("PRODUCTION_PREFLIGHT_CASES exposes exactly approved case ids", () => {
@@ -128,7 +206,7 @@ test("parseProductionPreflightCliArgs accepts only one case argument", () => {
   assert.throws(() => parseProductionPreflightCliArgs(["--content=x"]), /exactly one --case/);
 });
 
-test("assertProductionPreflightGuards requires production confirmation admin closed intake and provider config", () => {
+test("assertProductionPreflightGuards requires production confirmation admin and provider config independent of deprecated intake modes", () => {
   assert.doesNotThrow(() => assertProductionPreflightGuards(validRuntime(), "wechat-text-v1"));
   assert.throws(
     () => assertProductionPreflightGuards(validRuntime({ nodeEnv: "test" }), "wechat-text-v1"),
@@ -146,13 +224,12 @@ test("assertProductionPreflightGuards requires production confirmation admin clo
     () => assertProductionPreflightGuards(validRuntime({ operatorStatus: "disabled" }), "wechat-text-v1"),
     /system_admin/
   );
-  assert.throws(
-    () => assertProductionPreflightGuards(
-      validRuntime({ intakeModes: { text: "moderated", image: "closed", video: "closed" } }),
+  for (const mode of ["closed", "moderated", "legacy"]) {
+    assert.doesNotThrow(() => assertProductionPreflightGuards(
+      validRuntime({ intakeModes: { text: mode, image: mode, video: mode } }),
       "wechat-text-v1"
-    ),
-    /closed/
-  );
+    ));
+  }
   assert.throws(
     () => assertProductionPreflightGuards(
       validRuntime({ providerConfig: { ...validRuntime().providerConfig, wechatText: false } }),
@@ -777,8 +854,11 @@ test("runtime preflight runner sends its private video through the dedicated str
   assert.match(calls[0].body, /<Object>system\/content-moderation-preflight\//);
 });
 
-test("runtime preflight runner refreshes the current admin guard with the one-time CLI confirmation", async () => {
-  const { createProductionPreflightRunnerFromRuntime } = await import(
+test("runtime preflight readiness uses raw prerequisites while normal providers are disabled", async () => {
+  const {
+    buildProductionPreflightRuntime,
+    createProductionPreflightRunnerFromRuntime
+  } = await import(
     "../src/jobs/content-moderation-production-preflight.js"
   );
   const moderationConfig = {
@@ -786,17 +866,21 @@ test("runtime preflight runner refreshes the current admin guard with the one-ti
     textIntakeMode: "closed",
     imageIntakeMode: "closed",
     videoIntakeMode: "closed",
-    wechatTextEnabled: true,
-    wechatImageEnabled: true,
+    wechatTextEnabled: false,
+    wechatImageEnabled: false,
     wechatAppId: "wx-d45-test",
     wechatAppSecret: "secret",
-    tencentVideoEnabled: true,
+    wechatEventToken: "wechat-content-security-event-token",
+    wechatEventAesKey: "A".repeat(43),
+    tencentVideoEnabled: false,
     tencentVideoPolicyId: "video-policy",
     tencentVideoRegion: "ap-nanjing",
     tencentVideoCallbackUrl: "https://api.example.test/callback",
     tencentVideoCallbackToken: "x".repeat(32),
     bucket: "bucket-123",
     cosEnabled: true,
+    secretId: "secret-id",
+    secretKey: "secret-key",
     cosRegion: "ap-nanjing",
     redisEnabled: true,
     redisUrl: "redis://redis.example.test:6379",
@@ -809,12 +893,14 @@ test("runtime preflight runner refreshes the current admin guard with the one-ti
       releaseFingerprint: "release"
     }
   };
+  const connection = {
+    query: async () => [[{ role: "system_admin", status: "active" }]]
+  };
+  const env = { D45_PREFLIGHT_CONFIRMATION: "confirm-012345678901234567890123" };
   const runner = createProductionPreflightRunnerFromRuntime({
-    connection: {
-      query: async () => [[{ role: "system_admin", status: "active" }]]
-    },
+    connection,
     moderationConfig,
-    env: { D45_PREFLIGHT_CONFIRMATION: "confirm-012345678901234567890123" },
+    env,
     wechatClient: {}
   });
 
@@ -822,6 +908,31 @@ test("runtime preflight runner refreshes the current admin guard with the one-ti
 
   assert.equal(runtime.operatorStatus, "active");
   assert.equal(runtime.confirmation, "confirm-012345678901234567890123");
+  assert.deepEqual(runtime.providerConfig, {
+    wechatText: true,
+    wechatImage: true,
+    tencentVideo: true,
+    cos: true,
+    redis: true,
+    callback: true
+  });
+
+  const missingWechatCallback = await buildProductionPreflightRuntime({
+    connection,
+    moderationConfig: { ...moderationConfig, wechatEventToken: "" },
+    env
+  });
+  assert.equal(missingWechatCallback.providerConfig.wechatText, true);
+  assert.equal(missingWechatCallback.providerConfig.wechatImage, false);
+  assert.equal(missingWechatCallback.providerConfig.tencentVideo, true);
+
+  const missingTencentCallback = await buildProductionPreflightRuntime({
+    connection,
+    moderationConfig: { ...moderationConfig, tencentVideoCallbackToken: "" },
+    env
+  });
+  assert.equal(missingTencentCallback.providerConfig.wechatImage, true);
+  assert.equal(missingTencentCallback.providerConfig.tencentVideo, false);
 });
 
 test("Tencent preflight callback matched by data id updates preflight only", async () => {
@@ -1068,7 +1179,7 @@ test("preflight callback closes and cleans its run when the callback guard fails
     runtime: validRuntime(),
     hmacKey: "01234567890123456789012345678901",
     guards: () => {
-      throw new Error("intake mode changed");
+      throw new Error("operator authorization changed");
     },
     repository: {
       findAttemptByAssociation: async () => ({ runId: "11111111-1111-4111-8111-111111111111" }),

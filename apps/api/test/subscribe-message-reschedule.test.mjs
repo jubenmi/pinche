@@ -6,6 +6,7 @@ import {
   formatSessionRescheduleTime,
   notifySessionRescheduled
 } from "../src/modules/wechat/subscribe-message.js";
+import { createWechatAccessTokenProvider } from "../src/modules/wechat/access-token.js";
 
 test("formats canonical and offset times in Asia/Shanghai with day rollover", () => {
   assert.equal(formatSessionRescheduleTime("2026-07-13T10:00:00.000Z"), "2026-07-13 18:00:00");
@@ -53,7 +54,7 @@ test("missing openid skips before network access", async () => {
   }
 });
 
-test("access-token requests use a bounded abort signal and timeout rejections propagate", async () => {
+test("access-token requests use a bounded abort signal and are isolated from the default provider", async () => {
   const originals = {
     enabled: config.subscribeMessage.enabled,
     templateId: config.subscribeMessage.sessionRescheduledTemplateId,
@@ -65,15 +66,32 @@ test("access-token requests use a bounded abort signal and timeout rejections pr
   config.subscribeMessage.sessionRescheduledTemplateId = "timeout-template";
   config.wechat.appId = "timeout-app";
   config.wechat.appSecret = "timeout-secret";
-  globalThis.fetch = async (_url, options) => {
-    assert.equal(options.signal instanceof AbortSignal, true);
-    throw new DOMException("request timed out", "AbortError");
+  let defaultFetchCalls = 0;
+  let providerFetchCalls = 0;
+  globalThis.fetch = async () => {
+    defaultFetchCalls += 1;
+    throw new Error("the default provider must not be used by this isolated test");
   };
+  const tokenProvider = createWechatAccessTokenProvider({
+    appId: config.wechat.appId,
+    appSecret: config.wechat.appSecret,
+    redis: null,
+    fetchImpl: async (_url, options) => {
+      providerFetchCalls += 1;
+      assert.equal(options.signal instanceof AbortSignal, true);
+      throw new DOMException("request timed out", "AbortError");
+    }
+  });
   try {
     await assert.rejects(
-      notifySessionRescheduled({ recipientOpenId: "openid-timeout", sessionId: 42 }),
-      { name: "AbortError" }
+      notifySessionRescheduled(
+        { recipientOpenId: "openid-timeout", sessionId: 42 },
+        { tokenProvider, fetchImpl: globalThis.fetch }
+      ),
+      { code: "WECHAT_ACCESS_TOKEN_REQUEST_FAILED" }
     );
+    assert.equal(providerFetchCalls, 1);
+    assert.equal(defaultFetchCalls, 0);
   } finally {
     config.subscribeMessage.enabled = originals.enabled;
     config.subscribeMessage.sessionRescheduledTemplateId = originals.templateId;
@@ -98,23 +116,23 @@ test("reschedule messaging uses its dedicated template fields and detail page", 
   config.wechat.appSecret = "app-secret";
   globalThis.fetch = async (url, options) => {
     requests.push({ url: String(url), options });
-    if (requests.length === 1) {
-      return { ok: true, json: async () => ({ access_token: "token", expires_in: 7200 }) };
-    }
     return { ok: true, json: async () => ({ errcode: 0, msgid: "message-id" }) };
   };
+  const tokenProvider = { getAccessToken: async () => "token" };
   try {
-    const result = await notifySessionRescheduled({
-      recipientOpenId: "openid-8",
-      sessionId: 42,
-      scriptName: "1234567890123456789🚗尾",
-      oldStartAt: "2026-07-13T10:00:00.000Z",
-      newStartAt: "2026-07-13T14:00:00.000Z"
-    });
+    const result = await notifySessionRescheduled(
+      {
+        recipientOpenId: "openid-8",
+        sessionId: 42,
+        scriptName: "1234567890123456789🚗尾",
+        oldStartAt: "2026-07-13T10:00:00.000Z",
+        newStartAt: "2026-07-13T14:00:00.000Z"
+      },
+      { tokenProvider, fetchImpl: globalThis.fetch }
+    );
     assert.equal(result.scene, "session_rescheduled");
-    const body = JSON.parse(requests[1].options.body);
+    const body = JSON.parse(requests[0].options.body);
     assert.equal(requests[0].options.signal instanceof AbortSignal, true);
-    assert.equal(requests[1].options.signal instanceof AbortSignal, true);
     assert.equal(body.template_id, "reschedule-template");
     assert.equal(body.page, "/pages/session/detail?id=42");
     assert.deepEqual(body.data, {
@@ -145,13 +163,15 @@ test("WeChat API errcode returns a failed result without exposing request config
   config.wechat.appId = "api-error-app";
   config.wechat.appSecret = "api-error-secret";
   globalThis.fetch = async (_url, options) => {
-    if (!options?.method) {
-      return { ok: true, json: async () => ({ access_token: "api-error-token", expires_in: 7200 }) };
-    }
+    assert.equal(options?.method, "POST");
     return { ok: true, json: async () => ({ errcode: 43101, errmsg: "user refuse" }) };
   };
+  const tokenProvider = { getAccessToken: async () => "api-error-token" };
   try {
-    const result = await notifySessionRescheduled({ recipientOpenId: "openid-error", sessionId: 42 });
+    const result = await notifySessionRescheduled(
+      { recipientOpenId: "openid-error", sessionId: 42 },
+      { tokenProvider, fetchImpl: globalThis.fetch }
+    );
     assert.deepEqual(result, {
       ok: false,
       skipped: false,

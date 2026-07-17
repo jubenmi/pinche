@@ -28,9 +28,20 @@ function forbidden(message) {
   return serviceError(403, "ALBUM_UPLOAD_FORBIDDEN", message);
 }
 
-function assertImageIntake(deps) {
+async function assertImageIntake(deps, connection) {
   if (typeof deps.assertImageIntake === "function") {
-    deps.assertImageIntake();
+    return deps.assertImageIntake(connection);
+  }
+  return { moderationRequired: false };
+}
+
+function assertModerationJobWiring(moderationRequired, createJob) {
+  if (moderationRequired && typeof createJob !== "function") {
+    throw serviceError(
+      500,
+      "CONTENT_MODERATION_CONFIGURATION_ERROR",
+      "Content moderation job wiring is incomplete"
+    );
   }
 }
 
@@ -104,7 +115,7 @@ async function checkedAccess(deps, connection, user, intent) {
 }
 
 async function createIntent(deps, { user, body = {} }) {
-  assertImageIntake(deps);
+  await assertImageIntake(deps);
   if (!isAlbumImageKind(body.kind)) {
     throw serviceError(400, "BAD_REQUEST", "Unsupported album image kind");
   }
@@ -182,7 +193,7 @@ async function createIntent(deps, { user, body = {} }) {
 }
 
 async function authorize(deps, { user, body = {} }) {
-  assertImageIntake(deps);
+  await assertImageIntake(deps);
   if (!cosStorageEnabled(deps.cosConfig)) {
     throw serviceError(503, "COS_CONFIGURATION_ERROR", "COS storage is unavailable");
   }
@@ -362,7 +373,7 @@ async function finalizedPhoto(deps, connection, intent, user) {
 }
 
 async function finalize(deps, { user, uploadId }) {
-  assertImageIntake(deps);
+  await assertImageIntake(deps);
   const inspected = await inspectUpload(deps, { user, uploadId });
   const { validation } = inspected;
   if (validation?.validationState === "invalid") {
@@ -375,6 +386,7 @@ async function finalize(deps, { user, uploadId }) {
   let newlyFinalized = false;
   let moderationJob = null;
   const result = await deps.transaction(async (connection) => {
+    const intake = await assertImageIntake(deps, connection);
     const intent = await deps.repository.find(connection, uploadId, { forUpdate: true });
     if (!intent || Number(intent.user_id) !== Number(user.user.id)) throw uploadNotFound();
     await checkedAccess(deps, connection, user, intent);
@@ -389,8 +401,14 @@ async function finalize(deps, { user, uploadId }) {
     ) {
       throw serviceError(409, "UPLOAD_INTENT_NOT_FINALIZABLE", "Upload intent cannot be finalized");
     }
-    const photoRow = await deps.insertFinalizedImage(connection, { intent, metadata: validation });
-    if (typeof deps.createWechatImageModerationJob === "function") {
+    const moderationRequired = intake?.moderationRequired === true;
+    assertModerationJobWiring(moderationRequired, deps.createWechatImageModerationJob);
+    const photoRow = await deps.insertFinalizedImage(connection, {
+      intent,
+      metadata: validation,
+      moderationRequired
+    });
+    if (moderationRequired) {
       moderationJob = await deps.createWechatImageModerationJob(connection, {
         media: photoRow,
         objectKey: validation.objectKey,

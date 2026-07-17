@@ -9,6 +9,7 @@ import {
 import { runProductionPreflightTimeoutBatch } from "../modules/content-moderation/production-preflight-timeout.js";
 import { emitContentModerationEvent } from "../modules/content-moderation/telemetry.js";
 import { deleteCosObject, headCosObject } from "../storage/cos.js";
+import { buildProductionPreflightRuntime } from "./content-moderation-production-preflight.js";
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -133,40 +134,14 @@ export async function run({ signal, isStopping } = {}) {
 }
 
 async function buildProductionPreflightTimeoutRuntime({ moderationConfig, withDatabaseConnectionFn }) {
-  const operatorUserId = Number(moderationConfig?.productionPreflight?.operatorUserId || 0);
-  const operatorStatus = await withDatabaseConnectionFn(async (connection) => {
-    const [rows] = await connection.query(
-      "SELECT role, status FROM user_roles WHERE user_id = ? AND role = 'system_admin' LIMIT 1",
-      [operatorUserId]
-    );
-    const row = rows[0];
-    return row?.role === "system_admin" && row?.status === "active" ? "active" : "missing";
-  });
-  return {
-    nodeEnv: moderationConfig?.nodeEnv,
-    preflightEnabled: Boolean(moderationConfig?.productionPreflight?.enabled),
-    confirmation: "",
-    expectedConfirmation: moderationConfig?.productionPreflight?.confirmation || "",
-    operatorUserId,
-    operatorRole: "system_admin",
-    operatorStatus,
-    intakeModes: {
-      text: moderationConfig?.textIntakeMode,
-      image: moderationConfig?.imageIntakeMode,
-      video: moderationConfig?.videoIntakeMode
-    },
-    providerConfig: {
-      wechatText: Boolean(moderationConfig?.wechatTextEnabled && moderationConfig?.wechatAppId && moderationConfig?.wechatAppSecret),
-      wechatImage: Boolean(moderationConfig?.wechatImageEnabled && moderationConfig?.wechatAppId && moderationConfig?.wechatAppSecret),
-      tencentVideo: Boolean(moderationConfig?.tencentVideoEnabled && moderationConfig?.tencentVideoPolicyId),
-      cos: Boolean(moderationConfig?.cosEnabled && moderationConfig?.bucket && moderationConfig?.cosRegion),
-      redis: Boolean(moderationConfig?.redisEnabled && (moderationConfig?.redisUrl || moderationConfig?.redisHost)),
-      callback: Boolean(moderationConfig?.tencentVideoCallbackToken || moderationConfig?.wechatEventToken)
-    },
-    referenceHmacKey: moderationConfig?.productionPreflight?.referenceHmacKey,
-    releaseFingerprint: moderationConfig?.productionPreflight?.releaseFingerprint,
-    appId: moderationConfig?.wechatAppId
-  };
+  return withDatabaseConnectionFn(async (connection) => ({
+    ...await buildProductionPreflightRuntime({
+      connection,
+      moderationConfig,
+      env: {}
+    }),
+    referenceHmacKey: moderationConfig?.productionPreflight?.referenceHmacKey
+  }));
 }
 
 async function cleanupPreflightObject(storage, objectKey) {

@@ -1,3 +1,5 @@
+import { prepareUserImageAssetsMigration } from "../user-image-assets/migration.js";
+
 export const SESSION_ALBUM_VIDEO_HARDENING_MIGRATION =
   "0022_session_album_video_hardening.sql";
 export const SESSION_ALBUM_VIDEO_SOURCE_INDEX =
@@ -976,6 +978,8 @@ export async function reconcileContentModerationProviderAttempts(connection) {
 }
 
 export async function prepareMigration(connection, filename) {
+  const userImageAssets = await prepareUserImageAssetsMigration(connection, filename);
+  if (userImageAssets) return userImageAssets;
   if (filename === CONTENT_MODERATION_PROVIDER_ATTEMPTS_MIGRATION) {
     await reconcileContentModerationProviderAttempts(connection);
     return { skipStatements: true, reconciledContentModeration: true };

@@ -37,8 +37,16 @@ export const MODERATION_RETRY_ROUTES = Object.freeze([
   subjectType
 })).concat(Object.freeze([
   Object.freeze({ provider: "wechat_sec_check", subjectType: "album_image" }),
+  Object.freeze({ provider: "wechat_sec_check", subjectType: "avatar_image" }),
+  Object.freeze({ provider: "wechat_sec_check", subjectType: "review_image" }),
   Object.freeze({ provider: "tencent_ci_video", subjectType: "album_video" })
 ])));
+
+export const MODERATION_IMAGE_SUBJECT_TYPES = Object.freeze([
+  "album_image",
+  "avatar_image",
+  "review_image"
+]);
 
 export const MODERATION_MEDIA_VISIBLE_STATUSES = Object.freeze([
   "approved",

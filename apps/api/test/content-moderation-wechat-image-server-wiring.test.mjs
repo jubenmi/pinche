@@ -15,7 +15,7 @@ test("enabled WeChat image moderation wires post-commit finalize hooks to verifi
   assert.match(uploads, /contentModeration\.createWechatImageModerationJob/);
   assert.match(uploads, /submitWechatImageModeration:/);
   assert.match(uploads, /contentModeration\.submitWechatImageModeration/);
-  assert.match(uploads, /assertImageIntake:\s*\(\) => assertContentModerationIntake\(config\.contentModeration, "image"\)/);
+  assert.match(uploads, /assertImageIntake:\s*\(connection\) => resolveContentSecurityIntake\(/);
   assert.match(server, /SELECT open_id FROM users WHERE id = \? LIMIT 1/);
   assert.match(server, /buildWechatImageModerationUrl\(/);
   assert.equal(uploads.includes("mediaUrl:"), false, "the signed URL must not enter an API response");
@@ -26,7 +26,7 @@ test("image intake is checked before legacy, multipart, and direct COS paths acc
   for (const marker of ["async function createCosDirectUploadIntent", "async function authorizeCosDirectUpload"]) {
     const start = server.indexOf(marker);
     const segment = server.slice(start, start + 5_000);
-    assert.match(segment, /assertContentModerationIntake\(config\.contentModeration, "image"\)/, marker);
+    assert.match(segment, /await resolveContentSecurityIntake\("image"\)/, marker);
   }
   for (const marker of [
     "const sessionAlbumPhotosId",
@@ -38,6 +38,28 @@ test("image intake is checked before legacy, multipart, and direct COS paths acc
     const routeStart = server.indexOf("if (request.method", start);
     const nextRoute = server.indexOf("\n  const ", routeStart + 1);
     const segment = server.slice(routeStart, nextRoute === -1 ? routeStart + 2_000 : nextRoute);
-    assert.match(segment, /assertContentModerationIntake\(config\.contentModeration, "image"\)/, marker);
+    assert.match(segment, /await resolveContentSecurityIntake\("image"\)/, marker);
   }
+});
+
+test("avatar and review-photo upload intents and multipart writes use the persisted image policy", async () => {
+  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const directIntent = server.slice(
+    server.indexOf("async function createCosDirectUploadIntent"),
+    server.indexOf("function normalizeCosHeaders")
+  );
+  for (const kind of ["avatar", "sessionReviewPhoto"]) {
+    const start = directIntent.indexOf(`if (kind === "${kind}")`);
+    const next = directIntent.indexOf("\n  if (kind ===", start + 1);
+    assert.match(directIntent.slice(start, next), /await resolveContentSecurityIntake\("image"\)/, kind);
+  }
+  for (const marker of [
+    'url.pathname === "/api/users/me/avatar"',
+    'url.pathname === "/api/session-reviews/photos"'
+  ]) {
+    const start = server.indexOf(marker);
+    const segment = server.slice(start, start + 700);
+    assert.match(segment, /await resolveContentSecurityIntake\("image"\)/, marker);
+  }
+  assert.doesNotMatch(server, /assertContentModerationIntake\(/);
 });

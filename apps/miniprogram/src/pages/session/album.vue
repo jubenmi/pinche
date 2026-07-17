@@ -1775,7 +1775,7 @@ export default {
     async downloadAlbumImage(photo, variant = "preview", options = {}) {
       let targetPhoto = this.latestPreviewPhoto(photo);
       if (!this.isCurrentPreviewableAlbumMedia(targetPhoto)) {
-        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", contentModerationStatusText("review"));
       }
       if (this.isAuthorPrivateAlbumMedia(targetPhoto) && variant === "download") {
         throw albumMediaError("MEDIA_DOWNLOAD_FORBIDDEN", "仅自己可见内容不能下载");
@@ -1787,7 +1787,7 @@ export default {
         }
       }
       if (!this.isCurrentPreviewableAlbumMedia(targetPhoto)) {
-        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", contentModerationStatusText("review"));
       }
       if (this.isAuthorPrivateAlbumMedia(targetPhoto)) {
         const previewUrl = this.mediaUrlForPhoto(targetPhoto, variant);
@@ -1821,7 +1821,7 @@ export default {
       }
       const current = this.latestPreviewPhoto(photo);
       if (!this.isCurrentPreviewableAlbumMedia(current)) {
-        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", contentModerationStatusText("review"));
       }
       if (this.isAuthorPrivateAlbumMedia(current)) {
         const previewUrl = this.mediaUrlForPhoto(current, variant);
@@ -3606,7 +3606,7 @@ export default {
           this.downloadProgressText = `正在保存 ${index + 1}/${photos.length} 张照片...`;
           try {
             if (!this.isCurrentPublishedAlbumMedia(photo)) {
-              throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+              throw albumMediaError("MEDIA_NOT_PUBLISHED", contentModerationStatusText("review"));
             }
             const cachedPreview = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
             const filePath = cachedPreview || (await this.downloadAlbumImage(photo, "download"));

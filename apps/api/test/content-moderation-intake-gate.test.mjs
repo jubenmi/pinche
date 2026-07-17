@@ -9,6 +9,7 @@ import {
   assertContentModerationIntake,
   resolveContentModerationIntake
 } from "../src/modules/content-moderation/intake-gate.js";
+import * as intakeGate from "../src/modules/content-moderation/intake-gate.js";
 
 function productionEnv(overrides = {}) {
   return {
@@ -34,15 +35,16 @@ function productionEnv(overrides = {}) {
     COS_SECRET_ID: "secret-id",
     COS_SECRET_KEY: "secret-key",
     COS_BUCKET: "bucket-123",
+    COS_REGION: "ap-nanjing",
     ...overrides
   };
 }
 
-test("production moderation intake defaults to closed while local compatibility stays explicit", () => {
+test("unconfigured moderation defaults to legacy publication in every environment", () => {
   const production = buildContentModerationConfig({ NODE_ENV: "PrOdUcTiOn" });
   assert.deepEqual(
     [production.textIntakeMode, production.imageIntakeMode, production.videoIntakeMode],
-    ["closed", "closed", "closed"]
+    ["legacy", "legacy", "legacy"]
   );
 
   const development = buildContentModerationConfig({ NODE_ENV: "development" });
@@ -52,7 +54,7 @@ test("production moderation intake defaults to closed while local compatibility 
   );
 });
 
-test("each moderated intake requires the global switch and its own provider", () => {
+test("unavailable providers preserve direct publication unless fallback blocking is enabled", () => {
   for (const [type, provider] of [
     ["text", "CONTENT_MODERATION_WECHAT_TEXT_ENABLED"],
     ["image", "CONTENT_MODERATION_WECHAT_IMAGE_ENABLED"],
@@ -63,7 +65,8 @@ test("each moderated intake requires the global switch and its own provider", ()
     assert.doesNotThrow(() => assertContentModerationIntake(open, type));
 
     const providerDisabled = buildContentModerationConfig(productionEnv({ [provider]: "false" }));
-    assert.throws(() => assertContentModerationIntake(providerDisabled, type), {
+    assert.doesNotThrow(() => assertContentModerationIntake(providerDisabled, type));
+    assert.throws(() => assertContentModerationIntake(providerDisabled, type, { fallbackBlocking: true }), {
       code: "CONTENT_MODERATION_INTAKE_CLOSED",
       statusCode: 503
     });
@@ -71,27 +74,25 @@ test("each moderated intake requires the global switch and its own provider", ()
     const globallyDisabled = buildContentModerationConfig(productionEnv({
       CONTENT_MODERATION_ENABLED: "false"
     }));
-    assert.throws(() => assertContentModerationIntake(globallyDisabled, type), {
+    assert.doesNotThrow(() => assertContentModerationIntake(globallyDisabled, type));
+    assert.throws(() => assertContentModerationIntake(globallyDisabled, type, { fallbackBlocking: true }), {
       code: "CONTENT_MODERATION_INTAKE_CLOSED",
       statusCode: 503
     });
   }
 });
 
-test("a closed intake rejects only its own new content and preserves other moderated types", () => {
+test("legacy closed mode cannot disable an available moderation capability", () => {
   const config = buildContentModerationConfig(productionEnv({
     CONTENT_MODERATION_IMAGE_INTAKE_MODE: "closed"
   }));
 
-  assert.doesNotThrow(() => assertContentModerationIntake(config, "text"));
-  assert.throws(() => assertContentModerationIntake(config, "image"), {
-    code: "CONTENT_MODERATION_INTAKE_CLOSED",
-    statusCode: 503
-  });
-  assert.doesNotThrow(() => assertContentModerationIntake(config, "video"));
+  for (const type of ["text", "image", "video"]) {
+    assert.equal(assertContentModerationIntake(config, type).moderationRequired, true);
+  }
 });
 
-test("legacy intake is a local-only compatibility mode and invalid modes fail configuration", () => {
+test("legacy intake preserves production compatibility when moderation is not configured", () => {
   const local = buildContentModerationConfig({
     NODE_ENV: "development",
     CONTENT_MODERATION_TEXT_INTAKE_MODE: "legacy"
@@ -99,12 +100,8 @@ test("legacy intake is a local-only compatibility mode and invalid modes fail co
   assert.equal(resolveContentModerationIntake(local, "text").mode, "legacy");
   assert.doesNotThrow(() => assertContentModerationIntake(local, "text"));
 
-  const productionLegacy = buildContentModerationConfig(productionEnv({
-    CONTENT_MODERATION_TEXT_INTAKE_MODE: "legacy"
-  }));
-  assert.throws(() => assertContentModerationConfig(productionLegacy, { nodeEnv: "PRODUCTION" }), {
-    code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
-  });
+  const productionLegacy = buildContentModerationConfig({ NODE_ENV: "production" });
+  assert.doesNotThrow(() => assertContentModerationConfig(productionLegacy, { nodeEnv: "PRODUCTION" }));
   assert.throws(() => buildContentModerationConfig({
     NODE_ENV: "production",
     CONTENT_MODERATION_TEXT_INTAKE_MODE: "accept-anything"
@@ -112,4 +109,70 @@ test("legacy intake is a local-only compatibility mode and invalid modes fail co
     code: "CONTENT_MODERATION_CONFIGURATION_ERROR"
   });
   assert.throws(() => resolveContentModerationIntake(local, "document"), /Unsupported content moderation intake type/);
+});
+
+test("automatic capability takes priority and unavailable capability follows the fallback switch", () => {
+  const capable = buildContentModerationConfig(productionEnv({
+    CONTENT_MODERATION_TEXT_INTAKE_MODE: "legacy"
+  }));
+  assert.deepEqual(resolveContentModerationIntake(capable, "text"), {
+    accepting: true,
+    mode: "moderated",
+    moderationRequired: true,
+    reason: "ready"
+  });
+
+  const unavailable = buildContentModerationConfig({ NODE_ENV: "production" });
+  assert.deepEqual(resolveContentModerationIntake(unavailable, "image"), {
+    accepting: true,
+    mode: "legacy",
+    moderationRequired: false,
+    reason: "legacy"
+  });
+  assert.throws(
+    () => assertContentModerationIntake(unavailable, "image", { fallbackBlocking: true }),
+    { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 }
+  );
+});
+
+test("production preflight readiness does not enable moderation for ordinary content", () => {
+  const config = buildContentModerationConfig(productionEnv({
+    CONTENT_MODERATION_WECHAT_TEXT_ENABLED: "false",
+    CONTENT_MODERATION_WECHAT_IMAGE_ENABLED: "false",
+    CONTENT_MODERATION_TENCENT_VIDEO_ENABLED: "false",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED: "true",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CONFIRMATION: "confirm-012345678901234567890123",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_OPERATOR_USER_ID: "42",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TEST_ADMIN_USER_ID: "42",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_REFERENCE_HMAC_KEY: "h".repeat(32),
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_IMAGE_FINGERPRINT: "image-v1",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_VIDEO_FINGERPRINT: "video-v1",
+    CONTENT_MODERATION_PRODUCTION_PREFLIGHT_RELEASE_FINGERPRINT: "release-v1"
+  }));
+
+  assert.doesNotThrow(() => assertContentModerationConfig(config, { nodeEnv: "production" }));
+  for (const type of ["text", "image", "video"]) {
+    assert.deepEqual(resolveContentModerationIntake(config, type), {
+      accepting: true,
+      mode: "legacy",
+      moderationRequired: false,
+      reason: "legacy"
+    });
+    assert.throws(
+      () => assertContentModerationIntake(config, type, { fallbackBlocking: true }),
+      { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 }
+    );
+  }
+});
+
+test("publication status is pending only when automatic moderation is required", () => {
+  assert.equal(typeof intakeGate.moderationStatusForIntake, "function");
+  assert.equal(
+    intakeGate.moderationStatusForIntake({ moderationRequired: true }),
+    "pending"
+  );
+  assert.equal(
+    intakeGate.moderationStatusForIntake({ moderationRequired: false }),
+    "approved_legacy"
+  );
 });

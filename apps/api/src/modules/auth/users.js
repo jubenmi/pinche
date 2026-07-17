@@ -1,5 +1,11 @@
-import { withDatabaseConnection } from "../../db/mysql.js";
+import { withDatabaseConnection, withTransaction } from "../../db/mysql.js";
+import { config } from "../../config/env.js";
 import { badRequest } from "../../http/errors.js";
+import {
+  findOwnedPublishedUserImageAsset,
+  scheduleUserImageAssetCleanup
+} from "../user-image-assets/repository.js";
+import { cosStorageEnabled } from "../../storage/cos.js";
 
 const AVATAR_UPLOAD_PREFIX = "/uploads/avatars/";
 
@@ -214,6 +220,8 @@ export async function updateUserPhone(userId, phoneEncrypted) {
 export async function updateUserProfileWithConnection(connection, userId, patch = {}) {
   const assignments = [];
   const values = [];
+  let displacedAvatarAssetId = null;
+  let nextAvatarAssetId = null;
 
   if (hasOwn(patch, "nickname")) {
     assignments.push("nickname = ?");
@@ -221,8 +229,27 @@ export async function updateUserProfileWithConnection(connection, userId, patch 
   }
 
   if (hasOwn(patch, "avatarUrl")) {
+    const [currentAvatarRows] = await connection.query(
+      `SELECT avatar_image_asset_id FROM users WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [Number(userId)]
+    );
+    displacedAvatarAssetId = currentAvatarRows[0]?.avatar_image_asset_id
+      ? Number(currentAvatarRows[0].avatar_image_asset_id)
+      : null;
+    const avatarUrl = normalizeUserAvatarUrl(patch.avatarUrl);
+    if (avatarUrl) {
+      const asset = await findOwnedPublishedUserImageAsset(connection, {
+        ownerUserId: userId,
+        kind: "avatar",
+        path: avatarUrl
+      }, { forUpdate: true });
+      if (!asset) throw badRequest("avatarUrl must reference your approved uploaded avatar");
+      nextAvatarAssetId = Number(asset.id);
+    }
     assignments.push("avatar_url = ?");
-    values.push(normalizeUserAvatarUrl(patch.avatarUrl));
+    values.push(avatarUrl);
+    assignments.push("avatar_image_asset_id = ?");
+    values.push(nextAvatarAssetId);
   }
 
   if (hasOwn(patch, "gender")) {
@@ -243,12 +270,19 @@ export async function updateUserProfileWithConnection(connection, userId, patch 
     [...values, userId]
   );
 
+  if (displacedAvatarAssetId && displacedAvatarAssetId !== Number(nextAvatarAssetId || 0)) {
+    await scheduleUserImageAssetCleanup(connection, {
+      assetId: displacedAvatarAssetId,
+      storageKind: cosStorageEnabled(config.cos) ? "cos" : "local"
+    });
+  }
+
   const [rows] = await connection.query("SELECT * FROM users WHERE id = ?", [userId]);
   return publicUser(rows[0]);
 }
 
 export async function updateUserProfile(userId, patch = {}) {
-  return withDatabaseConnection((connection) =>
+  return withTransaction((connection) =>
     updateUserProfileWithConnection(connection, userId, patch)
   );
 }

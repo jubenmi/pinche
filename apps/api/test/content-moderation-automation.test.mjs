@@ -39,7 +39,7 @@ test("D45 automation commands keep unit, release matrix, static checks, and fake
     "CONTENT_MODERATION_IMAGE_INTAKE_MODE",
     "CONTENT_MODERATION_VIDEO_INTAKE_MODE",
     "CONTENT_MODERATION_INTAKE_CLOSED",
-    "审核 provider 开关不是流量开关",
+    "不是维护开关",
     "isModerationPublished",
     "hybrid-content-moderation-release.md",
     "TMS",
