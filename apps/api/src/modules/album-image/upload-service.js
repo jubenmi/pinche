@@ -28,6 +28,12 @@ function forbidden(message) {
   return serviceError(403, "ALBUM_UPLOAD_FORBIDDEN", message);
 }
 
+function assertImageIntake(deps) {
+  if (typeof deps.assertImageIntake === "function") {
+    deps.assertImageIntake();
+  }
+}
+
 function normalizeExtension(value) {
   const extension = String(value || "").trim().toLowerCase();
   if (["jpg", "jpeg", "png"].includes(extension)) return `.${extension}`;
@@ -98,6 +104,7 @@ async function checkedAccess(deps, connection, user, intent) {
 }
 
 async function createIntent(deps, { user, body = {} }) {
+  assertImageIntake(deps);
   if (!isAlbumImageKind(body.kind)) {
     throw serviceError(400, "BAD_REQUEST", "Unsupported album image kind");
   }
@@ -175,6 +182,7 @@ async function createIntent(deps, { user, body = {} }) {
 }
 
 async function authorize(deps, { user, body = {} }) {
+  assertImageIntake(deps);
   if (!cosStorageEnabled(deps.cosConfig)) {
     throw serviceError(503, "COS_CONFIGURATION_ERROR", "COS storage is unavailable");
   }
@@ -354,6 +362,7 @@ async function finalizedPhoto(deps, connection, intent, user) {
 }
 
 async function finalize(deps, { user, uploadId }) {
+  assertImageIntake(deps);
   const inspected = await inspectUpload(deps, { user, uploadId });
   const { validation } = inspected;
   if (validation?.validationState === "invalid") {
@@ -364,6 +373,7 @@ async function finalize(deps, { user, uploadId }) {
   }
 
   let newlyFinalized = false;
+  let moderationJob = null;
   const result = await deps.transaction(async (connection) => {
     const intent = await deps.repository.find(connection, uploadId, { forUpdate: true });
     if (!intent || Number(intent.user_id) !== Number(user.user.id)) throw uploadNotFound();
@@ -380,6 +390,13 @@ async function finalize(deps, { user, uploadId }) {
       throw serviceError(409, "UPLOAD_INTENT_NOT_FINALIZABLE", "Upload intent cannot be finalized");
     }
     const photoRow = await deps.insertFinalizedImage(connection, { intent, metadata: validation });
+    if (typeof deps.createWechatImageModerationJob === "function") {
+      moderationJob = await deps.createWechatImageModerationJob(connection, {
+        media: photoRow,
+        objectKey: validation.objectKey,
+        subjectVersion: validation.etag
+      });
+    }
     const [updated] = await connection.query(
       `UPDATE session_album_upload_intents
        SET status = 'finalized', media_id = ?, stored_content_type = ?,
@@ -410,6 +427,18 @@ async function finalize(deps, { user, uploadId }) {
     mediaId: Number(result.photo.id),
     outcome: "finalized"
   });
+  if (newlyFinalized && moderationJob && typeof deps.submitWechatImageModeration === "function") {
+    try {
+      await deps.submitWechatImageModeration(moderationJob);
+    } catch (error) {
+      deps.emit?.("moderation_submission_failure", {
+        sessionId: Number(inspected.intent.session_id),
+        mediaId: Number(result.photo.id),
+        outcome: "hidden_retryable",
+        errorCode: error?.code || "CONTENT_MODERATION_UNAVAILABLE"
+      });
+    }
+  }
   return result;
 }
 

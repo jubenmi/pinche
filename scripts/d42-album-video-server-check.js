@@ -157,7 +157,11 @@ check("COS inspection binds the 12-byte Range read to the authoritative HEAD ETa
     }
   });
   const result = await inspectSessionAlbumVideoObject({ sourceUrl: SOURCE_URL, storageAdapter: adapter });
-  assert.deepEqual(result, { byteSize: VIDEO_BYTES.length, contentType: "video/mp4" });
+  assert.deepEqual(result, {
+    byteSize: VIDEO_BYTES.length,
+    contentType: "video/mp4",
+    etag: '"d42-object-version"'
+  });
   assert.equal(calls[0].operation, "HEAD");
   assert.deepEqual(
     {

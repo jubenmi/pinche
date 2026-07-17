@@ -127,6 +127,7 @@ if (scope === "all") {
     photos: [{
       id: 7,
       media_type: "image",
+      moderation_status: "approved_legacy",
       storage_object_key: null,
       storage_object_etag: "private"
     }]

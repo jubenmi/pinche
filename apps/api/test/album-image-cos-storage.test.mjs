@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   getCosImageInfo,
   isTrustedCosStorageError,
+  listCosObjects,
+  parseCosListObjectsResponse,
   putCosObject
 } from "../src/storage/cos.js";
 
@@ -88,6 +90,63 @@ test("unsupported conditional ImageInfo retries once without If-Match", async ()
   assert.equal(fake.calls[0].options.headers["if-match"], "etag");
   assert.equal(fake.calls[1].options.headers["if-match"], undefined);
   assert.equal(fake.calls[1].options.path.endsWith("?imageInfo"), true);
+});
+
+test("COS List Objects decodes a bounded session-album page and advances with NextMarker", async () => {
+  const body = [
+    "<ListBucketResult>",
+    "<IsTruncated>true</IsTruncated>",
+    "<NextMarker>uploads%2Fsession-album%2Fdisplay%2Fb.jpg</NextMarker>",
+    "<Contents><Key>uploads%2Fsession-album%2Fdisplay%2Fa.jpg</Key><LastModified>2026-07-10T00:00:00.000Z</LastModified><Size>12</Size></Contents>",
+    "<Contents><Key>uploads%2Fsession-album%2Fdisplay%2Fb.jpg</Key><LastModified>2026-07-11T00:00:00.000Z</LastModified><Size>13</Size></Contents>",
+    "</ListBucketResult>"
+  ].join("");
+  const fake = createSequencedRequest([{
+    statusCode: 200,
+    headers: { "content-length": String(Buffer.byteLength(body)) },
+    body
+  }]);
+
+  const listed = await listCosObjects({
+    prefix: "uploads/session-album/",
+    marker: "uploads/session-album/display/a.jpg",
+    maxKeys: 2,
+    config,
+    request: fake.request
+  });
+
+  assert.deepEqual(listed, {
+    objects: [
+      {
+        key: "uploads/session-album/display/a.jpg",
+        lastModified: "2026-07-10T00:00:00.000Z",
+        byteSize: 12
+      },
+      {
+        key: "uploads/session-album/display/b.jpg",
+        lastModified: "2026-07-11T00:00:00.000Z",
+        byteSize: 13
+      }
+    ],
+    nextMarker: "uploads/session-album/display/b.jpg"
+  });
+  assert.equal(fake.calls[0].options.path.includes("prefix=uploads%2Fsession-album%2F"), true);
+  assert.equal(fake.calls[0].options.path.includes("marker=uploads%2Fsession-album%2Fdisplay%2Fa.jpg"), true);
+  assert.equal(fake.calls[0].options.path.includes("max-keys=2"), true);
+  assert.match(fake.calls[0].options.headers.authorization, /q-url-param-list=encoding-type;marker;max-keys;prefix/);
+});
+
+test("COS List Objects rejects malformed pages and keys that escape the requested prefix", () => {
+  assert.throws(() => parseCosListObjectsResponse(Buffer.from("<not-xml>"), {
+    prefix: "uploads/session-album/"
+  }), { code: "COS_INVALID_LIST_RESPONSE" });
+  assert.throws(() => parseCosListObjectsResponse(Buffer.from([
+    "<ListBucketResult><IsTruncated>false</IsTruncated>",
+    "<Contents><Key>uploads%2Favatars%2Fnot-album.jpg</Key><LastModified>2026-07-10T00:00:00.000Z</LastModified><Size>1</Size></Contents>",
+    "</ListBucketResult>"
+  ].join("")), {
+    prefix: "uploads/session-album/"
+  }), { code: "COS_INVALID_LIST_RESPONSE" });
 });
 
 for (const statusCode of [409, 412]) {

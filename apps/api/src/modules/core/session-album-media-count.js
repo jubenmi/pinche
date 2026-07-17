@@ -7,6 +7,7 @@ export function albumMediaCountSql(alias) {
   }
   return (
     `COUNT(DISTINCT CASE WHEN ${tableAlias}.status = 'active' ` +
+    `AND ${tableAlias}.moderation_status IN ('approved', 'approved_legacy') ` +
     `AND (${tableAlias}.media_type = 'image' OR ` +
     `(${tableAlias}.media_type = 'video' AND ${tableAlias}.processing_status <> 'failed')) ` +
     `THEN ${tableAlias}.id END)`

@@ -182,6 +182,7 @@ import {
   queryString,
   request
 } from "../../utils/api";
+import { contentModerationErrorText } from "../../utils/contentModeration";
 import { showToast } from "../../utils/tdesignFeedback";
 import { canRequestRescheduleReminder } from "../../utils/sessionMembership";
 import { requestSessionRescheduledSubscription } from "../../utils/subscribeMessages";
@@ -249,7 +250,7 @@ export default {
       );
     },
     authTools() {
-      return { dataOf, ensureLoggedIn, request };
+      return { dataOf, ensureLoggedIn, request, contentModerationErrorText };
     },
     albumButtonText() {
       return this.isAlbumOpen() ? "车局相册" : "相册·发车后";

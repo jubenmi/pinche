@@ -145,33 +145,42 @@ assert(
 );
 
 const createSessionBody = functionBody(service, "createSession");
+const createSessionWithConnectionBody = functionBody(service, "createSessionWithConnection");
 assert(
-  createSessionBody.includes("assertCatalogUsableForSession(store") &&
-    createSessionBody.includes("assertCatalogUsableForSession(script"),
-  "createSession must validate public/private catalog usability before creating a session"
+  createSessionBody.includes("withTransaction") &&
+    createSessionBody.includes("createSessionWithConnection") &&
+    createSessionWithConnectionBody.includes("assertCatalogUsableForSession(store") &&
+    createSessionWithConnectionBody.includes("assertCatalogUsableForSession(script"),
+  "createSession must delegate catalog validation to its transaction-bound creation helper"
 );
 
 const createPrivateStoreBody = functionBody(service, "createPrivateStore");
+const createPrivateStoreWithConnectionBody = functionBody(service, "createPrivateStoreWithConnection");
 assert(
-  createPrivateStoreBody.includes("visibility") &&
-    createPrivateStoreBody.includes("private") &&
-    createPrivateStoreBody.includes("review_status") &&
-    createPrivateStoreBody.includes("pending") &&
-    createPrivateStoreBody.includes("created_by_user_id") &&
-    createPrivateStoreBody.includes("assertPublicTextSafe"),
-  "createPrivateStore must create private pending active stores owned by current user"
+  createPrivateStoreBody.includes("withDatabaseConnection") &&
+    createPrivateStoreBody.includes("createPrivateStoreWithConnection") &&
+    createPrivateStoreWithConnectionBody.includes("visibility") &&
+    createPrivateStoreWithConnectionBody.includes("private") &&
+    createPrivateStoreWithConnectionBody.includes("review_status") &&
+    createPrivateStoreWithConnectionBody.includes("pending") &&
+    createPrivateStoreWithConnectionBody.includes("created_by_user_id") &&
+    createPrivateStoreWithConnectionBody.includes("assertPublicTextSafe"),
+  "createPrivateStore must delegate private pending store creation to its connection-bound helper"
 );
 
 const createPrivateScriptBody = functionBody(service, "createPrivateScript");
+const createPrivateScriptWithConnectionBody = functionBody(service, "createPrivateScriptWithConnection");
 assert(
-  createPrivateScriptBody.includes("visibility") &&
-    createPrivateScriptBody.includes("private") &&
-    createPrivateScriptBody.includes("review_status") &&
-    createPrivateScriptBody.includes("pending") &&
-    createPrivateScriptBody.includes("created_by_user_id") &&
-    createPrivateScriptBody.includes("privateRoleTemplateJson") &&
-    createPrivateScriptBody.includes("assertPublicTextSafe"),
-  "createPrivateScript must create private pending active scripts with generated roles"
+  createPrivateScriptBody.includes("withTransaction") &&
+    createPrivateScriptBody.includes("createPrivateScriptWithConnection") &&
+    createPrivateScriptWithConnectionBody.includes("visibility") &&
+    createPrivateScriptWithConnectionBody.includes("private") &&
+    createPrivateScriptWithConnectionBody.includes("review_status") &&
+    createPrivateScriptWithConnectionBody.includes("pending") &&
+    createPrivateScriptWithConnectionBody.includes("created_by_user_id") &&
+    createPrivateScriptWithConnectionBody.includes("privateRoleTemplateJson") &&
+    createPrivateScriptWithConnectionBody.includes("assertPublicTextSafe"),
+  "createPrivateScript must delegate private pending script creation to its connection-bound helper"
 );
 
 const listMyCatalogReviewItemsBody = functionBody(service, "listMyCatalogReviewItems");

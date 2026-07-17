@@ -690,7 +690,10 @@ function runAlbumPageMediaWindowCheck(component) {
   );
   const ensurePreviewMediaAround = methodFromSource(albumSource, "ensurePreviewMediaAround");
 
-  const photos = makePhotos(7);
+  const photos = makePhotos(7).map((photo) => ({
+    ...photo,
+    moderation_status: "approved"
+  }));
   photos[3] = {
     ...photos[3],
     media_type: "video",
@@ -708,10 +711,23 @@ function runAlbumPageMediaWindowCheck(component) {
 
   const requests = [];
   const state = reactive({
+    photos,
     previewPhotos: photos,
     previewCurrentIndex: 3,
     mediaProgressById,
     visiblePhotoMedia: {},
+    isPublishedAlbumMedia(photo) {
+      return photo?.moderation_status === "approved";
+    },
+    isCurrentPublishedAlbumMedia(photo) {
+      return (
+        this.isPublishedAlbumMedia(photo) &&
+        this.photos.some(
+          (row) =>
+            String(row.id) === String(photo?.id) && this.isPublishedAlbumMedia(row)
+        )
+      );
+    },
     albumMediaProgressKey(photoId, variant = "preview") {
       return String(photoId) + ":" + variant;
     },

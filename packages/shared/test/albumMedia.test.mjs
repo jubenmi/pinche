@@ -7,6 +7,44 @@ import {
   mergeAlbumMediaUrls,
   shouldRefreshAlbumMedia
 } from "../src/albumMedia.js";
+import * as albumMediaModule from "../src/albumMedia.js";
+
+test("publication and image-download gates require an explicit approved state", () => {
+  assert.equal(typeof albumMediaModule.isModerationPublished, "function");
+  assert.equal(typeof albumMediaModule.isApprovedAlbumImageDownloadCandidate, "function");
+
+  const { isModerationPublished, isApprovedAlbumImageDownloadCandidate } = albumMediaModule;
+  assert.equal(isModerationPublished("approved"), true);
+  assert.equal(isModerationPublished("approved_legacy"), true);
+  for (const status of [undefined, "", "pending", "processing", "review", "rejected", "error"]) {
+    assert.equal(isModerationPublished(status), false);
+  }
+
+  assert.equal(
+    isApprovedAlbumImageDownloadCandidate(
+      { media_type: "image", moderation_status: "approved" },
+      "https://media.example/approved.jpg"
+    ),
+    true
+  );
+  assert.equal(
+    isApprovedAlbumImageDownloadCandidate(
+      { media_type: "image", moderation_status: "approved_legacy" },
+      "https://media.example/legacy.jpg"
+    ),
+    true
+  );
+  for (const photo of [
+    { media_type: "image", moderation_status: "pending" },
+    { media_type: "video", moderation_status: "approved" },
+    { media_type: "image" }
+  ]) {
+    assert.equal(
+      isApprovedAlbumImageDownloadCandidate(photo, "https://media.example/old-cache.jpg"),
+      false
+    );
+  }
+});
 
 test("network and 5xx retry, overwrite conflicts reconcile, ordinary 4xx fail", () => {
   assert.equal(classifyAlbumCosError({ code: "COS_NETWORK_ERROR" }).action, "retry-put");
@@ -129,8 +167,13 @@ test("expiry, authoritative URL merge, and single flight preserve page state", a
   );
   const current = {
     photos: [
-      { id: 1, preview_display_url: "old", local_preview_path: "wxfile://cached" },
-      { id: 2, preview_display_url: "now-hidden" }
+      {
+        id: 1,
+        moderation_status: "approved",
+        preview_display_url: "old",
+        local_preview_path: "wxfile://cached"
+      },
+      { id: 2, moderation_status: "approved", preview_display_url: "now-hidden" }
     ],
     selected_ids: [1]
   };
@@ -138,21 +181,23 @@ test("expiry, authoritative URL merge, and single flight preserve page state", a
     photos: [
       {
         id: 1,
+        moderation_status: "approved",
         preview_display_url: "new",
         media_url_expires_at: "2026-07-11T01:10:00.000Z"
       },
-      { id: 3, preview_display_url: "new-photo" }
+      { id: 3, moderation_status: "approved", preview_display_url: "new-photo" }
     ]
   };
   assert.deepEqual(mergeAlbumMediaUrls(current, refreshed), {
     photos: [
       {
         id: 1,
+        moderation_status: "approved",
         preview_display_url: "new",
         local_preview_path: "wxfile://cached",
         media_url_expires_at: "2026-07-11T01:10:00.000Z"
       },
-      { id: 3, preview_display_url: "new-photo" }
+      { id: 3, moderation_status: "approved", preview_display_url: "new-photo" }
     ],
     selected_ids: [1]
   });
@@ -170,4 +215,29 @@ test("expiry, authoritative URL merge, and single flight preserve page state", a
   assert.equal(await first, 9);
   assert.equal(await second, 9);
   assert.equal(runs, 1);
+});
+
+test("authoritative refresh drops stale media fields when publication is revoked", () => {
+  const merged = mergeAlbumMediaUrls(
+    {
+      photos: [{
+        id: 1,
+        moderation_status: "approved",
+        image_url: "https://old.example/image.jpg",
+        preview_display_url: "https://old.example/preview.jpg",
+        display_url: "wxfile://old-preview",
+        video_display_url: "https://old.example/video.mp4",
+        local_preview_path: "wxfile://local"
+      }]
+    },
+    {
+      photos: [{ id: 1, moderation_status: "rejected", tags: [] }]
+    }
+  );
+
+  assert.deepEqual(merged.photos, [{
+    id: 1,
+    moderation_status: "rejected",
+    tags: []
+  }]);
 });

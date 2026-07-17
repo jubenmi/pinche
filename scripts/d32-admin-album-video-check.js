@@ -108,11 +108,17 @@ assert(
   ),
   "video file route should pass the request method and Range header to the video file responder"
 );
+const videoFileResponderStart = server.indexOf("export async function serveUploadedSessionAlbumVideoFile");
+const videoFileResponderEnd = server.indexOf(
+  "async function getSessionAlbumDisplayMetadata",
+  videoFileResponderStart
+);
+const videoFileResponder = server.slice(videoFileResponderStart, videoFileResponderEnd);
 assert(
-  server.includes('function signedCosAlbumVideoUrl(media, method = "GET", range = "")') &&
-    server.includes("location: signedCosAlbumVideoUrl(media, method, range)") &&
-    server.includes("response.writeHead(302"),
-  "COS-backed video HEAD and GET requests should redirect to freshly signed method-specific COS URLs instead of proxying video bytes"
+  /if \(method === "HEAD"\) \{[\s\S]*?headCosObject[\s\S]*?response\.writeHead\(200, \{[\s\S]*?return;\s*\}[\s\S]*?response\.writeHead\(302, \{[\s\S]*?location: signedCosAlbumVideoUrl\(media, method\)/.test(
+    videoFileResponder
+  ),
+  "COS-backed video HEAD must stay on the authenticated API URL while GET redirects to a fresh signed COS URL without proxying video bytes"
 );
 assert(!videoRouteSnippet.includes("getCosObject"), "video route must not proxy COS video bytes");
 

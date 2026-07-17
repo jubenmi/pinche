@@ -222,6 +222,7 @@ import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinnedMessage.vue";
 import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
+import { contentModerationErrorText } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import {
   buildRescheduleConfirmation,
@@ -310,7 +311,7 @@ export default {
       };
     },
     authTools() {
-      return { dataOf, request };
+      return { dataOf, request, contentModerationErrorText };
     },
     hasOtherOnboardMembers() {
       return this.otherOnboardMemberCount > 0;
@@ -1015,6 +1016,10 @@ export default {
       }
     },
     actionErrorText(error) {
+      const moderationMessage = contentModerationErrorText(error);
+      if (moderationMessage) {
+        return moderationMessage;
+      }
       if (error?.statusCode === 403) {
         return "只有车头可以执行这个操作。";
       }

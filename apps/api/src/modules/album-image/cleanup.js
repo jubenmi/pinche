@@ -2,6 +2,18 @@ import crypto from "node:crypto";
 
 import { emitAlbumImageEvent } from "./telemetry.js";
 
+const LOCAL_ALBUM_CLEANUP_PATH = /^\/uploads\/session-album\/(?:display\/[A-Za-z0-9._-]+|videos\/(?:source|display|cover)\/[A-Za-z0-9._-]+)$/;
+
+export function assertLocalAlbumCleanupPath(localPath) {
+  const normalized = String(localPath || "");
+  if (!LOCAL_ALBUM_CLEANUP_PATH.test(normalized)) {
+    throw Object.assign(new Error("invalid cleanup local path"), {
+      code: "ALBUM_IMAGE_LOCAL_PATH_INVALID"
+    });
+  }
+  return normalized;
+}
+
 function retryAt(nowMs, attempts) {
   const delaySeconds = Math.min(6 * 60 * 60, 30 * (2 ** Math.min(attempts, 10)));
   return new Date(nowMs + delaySeconds * 1000);
@@ -47,28 +59,64 @@ async function cleanupMedia({
   row, leaseToken, repository, storage, unlinkFile, withTransaction, now, emit
 }) {
   try {
-    if (row.storage_kind === "cos") {
-      try {
-        await storage.delete(row.object_key);
-      } catch (error) {
-        if (error?.code !== "COS_OBJECT_NOT_FOUND") throw error;
+    const cleanupOne = async ({ storageKind, objectKey, localPath }) => {
+      if (storageKind === "cos") {
+        try {
+          await storage.delete(objectKey);
+        } catch (error) {
+          if (error?.code !== "COS_OBJECT_NOT_FOUND") throw error;
+        }
+        return;
       }
-    } else if (row.storage_kind === "local") {
-      try {
-        await unlinkFile(row.local_path);
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
+      if (storageKind === "local") {
+        try {
+          await unlinkFile(localPath);
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
+        return;
       }
-    } else {
       throw Object.assign(new Error("invalid storage kind"), {
         code: "ALBUM_IMAGE_STORAGE_KIND_INVALID"
       });
+    };
+    if (row.storage_kind === "multi") {
+      let entries;
+      try {
+        entries = typeof row.object_urls_json === "string"
+          ? JSON.parse(row.object_urls_json)
+          : row.object_urls_json;
+      } catch {
+        entries = null;
+      }
+      if (!Array.isArray(entries) || entries.length === 0) {
+        throw Object.assign(new Error("invalid multi-object cleanup payload"), {
+          code: "ALBUM_IMAGE_STORAGE_KIND_INVALID"
+        });
+      }
+      const unique = new Map();
+      for (const entry of entries) {
+        const normalized = {
+          storageKind: String(entry?.storageKind || ""),
+          objectKey: entry?.objectKey ? String(entry.objectKey) : null,
+          localPath: entry?.localPath ? String(entry.localPath) : null
+        };
+        unique.set(JSON.stringify(normalized), normalized);
+      }
+      for (const entry of unique.values()) await cleanupOne(entry);
+    } else {
+      await cleanupOne({
+        storageKind: row.storage_kind,
+        objectKey: row.object_key,
+        localPath: row.local_path
+      });
     }
-    await withTransaction((connection) => repository.completeMediaCleanup(connection, {
+    const completed = await withTransaction((connection) => repository.completeMediaCleanup(connection, {
       jobId: row.id,
       mediaId: row.media_id,
       leaseToken
     }));
+    if (!completed) return;
     emit("media_deleted", { sessionId: Number(row.session_id), mediaId: Number(row.media_id), outcome: "cleaned" });
   } catch (error) {
     const attempts = Number(row.attempts || 0) + 1;

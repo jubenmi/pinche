@@ -46,6 +46,26 @@ const URL_FIELDS = Object.freeze([
   "video_url"
 ]);
 
+const LOCAL_MEDIA_FIELDS = Object.freeze([
+  "display_url",
+  "video_display_url",
+  "video_url_expires_at",
+  "video_load_failed",
+  "local_preview_path"
+]);
+
+export function isModerationPublished(status) {
+  return status === "approved" || status === "approved_legacy";
+}
+
+export function isApprovedAlbumImageDownloadCandidate(photo = {}, normalizedDownloadUrl = "") {
+  return (
+    photo?.media_type === "image" &&
+    isModerationPublished(photo.moderation_status) &&
+    Boolean(String(normalizedDownloadUrl || "").trim())
+  );
+}
+
 function normalizedCode(error) {
   return String(
     error?.code || error?.error?.Code || error?.originalError?.error?.Code || ""
@@ -204,10 +224,10 @@ function mergeMediaCollection(currentItems = [], refreshedItems = []) {
     if (!current) {
       return refreshed;
     }
-    const next = { ...current };
-    for (const field of URL_FIELDS) {
-      if (Object.hasOwn(refreshed, field)) {
-        next[field] = refreshed[field];
+    const next = { ...current, ...refreshed };
+    if (!isModerationPublished(refreshed.moderation_status)) {
+      for (const field of [...URL_FIELDS, ...LOCAL_MEDIA_FIELDS]) {
+        delete next[field];
       }
     }
     return next;

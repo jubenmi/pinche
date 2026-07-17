@@ -26,7 +26,12 @@ test("member/admin attachment signs only rows already retained by privacy filter
   const events = [];
   const filteredAlbum = {
     session_id: 8,
-    photos: [{ id: 1, media_type: "image", storage_object_key: "visible.jpg" }]
+    photos: [{
+      id: 1,
+      media_type: "image",
+      moderation_status: "approved",
+      storage_object_key: "visible.jpg"
+    }]
   };
   const result = attachSessionAlbumMediaUrls(filteredAlbum, 9, {
     directMediaUrls: true, nowSeconds: 1000, cosConfig, buildUrls: fakeSignedUrls(calls),
@@ -44,7 +49,13 @@ test("public-share attachment signs only its filtered rows and strips internal f
   const calls = [];
   const result = attachPublicSessionAlbumMediaUrls({
     session_id: 8,
-    photos: [{ id: 5, media_type: "image", storage_object_key: "public-visible.jpg", storage_object_etag: "e" }]
+    photos: [{
+      id: 5,
+      media_type: "image",
+      moderation_status: "approved",
+      storage_object_key: "public-visible.jpg",
+      storage_object_etag: "e"
+    }]
   }, { sessionId: 8, sharerUserId: 9, seatId: 2 }, "share-token", {
     directMediaUrls: true, nowSeconds: 1000, cosConfig, buildUrls: fakeSignedUrls(calls),
     emit: () => {}

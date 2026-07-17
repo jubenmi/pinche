@@ -1,8 +1,72 @@
 import {
   createSingleFlight,
+  isModerationPublished,
   mergeAlbumMediaUrls,
   shouldRefreshAlbumMedia
 } from "@pinche/shared";
+
+export function pruneUnpublishedAlbumMediaCache(cache = {}, photos = []) {
+  const publishedIds = new Set(
+    (photos || [])
+      .filter((photo) => isModerationPublished(photo?.moderation_status))
+      .map((photo) => String(photo.id))
+  );
+  return Object.fromEntries(
+    Object.entries(cache || {}).filter(([photoId]) => publishedIds.has(String(photoId)))
+  );
+}
+
+export function isCurrentPublishedAlbumMedia(photos = [], requestedPhoto = {}) {
+  if (!isModerationPublished(requestedPhoto?.moderation_status)) {
+    return false;
+  }
+  return (photos || []).some(
+    (photo) =>
+      String(photo?.id) === String(requestedPhoto?.id) &&
+      isModerationPublished(photo?.moderation_status)
+  );
+}
+
+export function createAlbumListRequestAuthority() {
+  let currentRequest = null;
+  return {
+    begin() {
+      const request = Symbol("album-list-request");
+      currentRequest = request;
+      return request;
+    },
+    isCurrent(request) {
+      return request === currentRequest;
+    }
+  };
+}
+
+export function createAlbumWaterfallRenderAuthority() {
+  let currentRender = null;
+  return {
+    begin() {
+      const render = Symbol("album-waterfall-render");
+      currentRender = render;
+      return render;
+    },
+    isCurrent(render) {
+      return render === currentRender;
+    }
+  };
+}
+
+export function findCurrentAlbumMediaRow(photos = [], candidate = {}) {
+  if (candidate?.id === undefined || candidate?.id === null) return null;
+  return (photos || []).find(
+    (photo) => String(photo?.id) === String(candidate.id)
+  ) || null;
+}
+
+export function clearAlbumMediaRequestIfCurrent(requests = {}, requestKey, request) {
+  const next = { ...(requests || {}) };
+  if (next[requestKey] === request) delete next[requestKey];
+  return next;
+}
 
 export function normalizeAlbumImageUrls(photo = {}) {
   return {
@@ -54,6 +118,13 @@ export function createAlbumMediaRefreshController({
   };
   const refresh = () => flight.run(async () => {
     const refreshed = await reloadAlbum();
+    if (
+      refreshed === null ||
+      (typeof refreshed?.isCurrent === "function" && !refreshed.isCurrent())
+    ) {
+      schedule();
+      return readAlbum();
+    }
     writeAlbum(mergeAlbumMediaUrls(readAlbum(), refreshed));
     schedule();
     return readAlbum();

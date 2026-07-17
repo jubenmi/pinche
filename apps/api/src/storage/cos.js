@@ -8,6 +8,7 @@ const DEFAULT_COS_TRANSFER_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_COS_DELETE_TIMEOUT_MS = 30_000;
 const DEFAULT_COS_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
 const DEFAULT_COS_ERROR_RESPONSE_MAX_BYTES = 64 * 1024;
+const DEFAULT_COS_LIST_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 const TRUSTED_COS_ERROR_CODES = new Set([
   "COS_OBJECT_NOT_FOUND",
@@ -19,7 +20,8 @@ const TRUSTED_COS_ERROR_CODES = new Set([
   "COS_RESPONSE_TOO_LARGE",
   "COS_INVALID_IMAGE_INFO",
   "COS_INVALID_CONTENT_LENGTH",
-  "COS_INVALID_RANGE_RESPONSE"
+  "COS_INVALID_RANGE_RESPONSE",
+  "COS_INVALID_LIST_RESPONSE"
 ]);
 const trustedCosStorageErrors = new WeakSet();
 
@@ -56,6 +58,10 @@ function cosHttpError(statusCode) {
 
 function cosNetworkError() {
   return cosStorageError(502, "COS_NETWORK_ERROR", "COS storage network request failed");
+}
+
+function invalidCosListResponse() {
+  return cosStorageError(502, "COS_INVALID_LIST_RESPONSE", "COS object list response was invalid");
 }
 
 export function isTrustedCosStorageError(error) {
@@ -167,6 +173,111 @@ export function cosUploadPathForKey(key) {
     throw new Error("invalid COS object key");
   }
   return `/${keyText}`;
+}
+
+function normalizeCosListPrefix(value) {
+  const prefix = String(value || "");
+  if (
+    !prefix ||
+    !prefix.endsWith("/") ||
+    prefix.startsWith("/") ||
+    prefix.includes("\\") ||
+    prefix.split("/").includes("..") ||
+    !/^[A-Za-z0-9._/-]{1,512}$/.test(prefix)
+  ) {
+    throw new TypeError("invalid COS list prefix");
+  }
+  return prefix;
+}
+
+function normalizeCosListMarker(value, prefix) {
+  if (value === undefined || value === null || value === "") return null;
+  const marker = String(value);
+  if (
+    !marker.startsWith(prefix) ||
+    marker.includes("\\") ||
+    marker.split("/").includes("..") ||
+    !/^[A-Za-z0-9._/-]{1,1024}$/.test(marker)
+  ) {
+    throw new TypeError("invalid COS list marker");
+  }
+  return marker;
+}
+
+function unescapeXml(value) {
+  return String(value || "")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'");
+}
+
+function decodeCosListedKey(value, prefix) {
+  let key;
+  try {
+    key = decodeURIComponent(unescapeXml(value));
+  } catch {
+    throw invalidCosListResponse();
+  }
+  if (
+    !key ||
+    !key.startsWith(prefix) ||
+    key.includes("\\") ||
+    key.split("/").includes("..") ||
+    !/^[A-Za-z0-9._/-]{1,1024}$/.test(key)
+  ) {
+    throw invalidCosListResponse();
+  }
+  return key;
+}
+
+function xmlListValue(source, name) {
+  const match = new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`, "i").exec(source);
+  return match ? match[1] : null;
+}
+
+export function parseCosListObjectsResponse(body, { prefix } = {}) {
+  const normalizedPrefix = normalizeCosListPrefix(prefix);
+  const source = Buffer.isBuffer(body) ? body.toString("utf8") : String(body || "");
+  if (!source.startsWith("<") || !/<ListBucketResult(?:\s|>)/i.test(source)) {
+    throw invalidCosListResponse();
+  }
+  const truncated = String(xmlListValue(source, "IsTruncated") || "").trim().toLowerCase();
+  if (truncated !== "true" && truncated !== "false") throw invalidCosListResponse();
+
+  const objects = [];
+  for (const match of source.matchAll(/<Contents>([\s\S]*?)<\/Contents>/gi)) {
+    const contents = match[1];
+    const keyValue = xmlListValue(contents, "Key");
+    const modifiedValue = xmlListValue(contents, "LastModified");
+    const sizeValue = xmlListValue(contents, "Size");
+    if (keyValue === null || modifiedValue === null || sizeValue === null) {
+      throw invalidCosListResponse();
+    }
+    const lastModified = new Date(unescapeXml(modifiedValue).trim());
+    const byteSize = Number(unescapeXml(sizeValue).trim());
+    if (
+      Number.isNaN(lastModified.getTime()) ||
+      !Number.isSafeInteger(byteSize) ||
+      byteSize < 0
+    ) {
+      throw invalidCosListResponse();
+    }
+    objects.push({
+      key: decodeCosListedKey(keyValue, normalizedPrefix),
+      lastModified: lastModified.toISOString(),
+      byteSize
+    });
+  }
+
+  let nextMarker = null;
+  if (truncated === "true") {
+    const rawNextMarker = xmlListValue(source, "NextMarker");
+    if (rawNextMarker === null) throw invalidCosListResponse();
+    nextMarker = decodeCosListedKey(rawNextMarker, normalizedPrefix);
+  }
+  return { objects, nextMarker };
 }
 
 export function buildCosAuthorization({
@@ -486,6 +597,41 @@ export async function getCosObject({
     clearTimeoutFn,
     config
   });
+}
+
+export async function listCosObjects({
+  prefix,
+  marker,
+  maxKeys = 100,
+  config,
+  request,
+  timeoutMs = DEFAULT_COS_INSPECTION_TIMEOUT_MS,
+  setTimeoutFn,
+  clearTimeoutFn
+}) {
+  const normalizedPrefix = normalizeCosListPrefix(prefix);
+  const normalizedMarker = normalizeCosListMarker(marker, normalizedPrefix);
+  const normalizedMaxKeys = Number(maxKeys);
+  if (!Number.isSafeInteger(normalizedMaxKeys) || normalizedMaxKeys < 1 || normalizedMaxKeys > 1000) {
+    throw new TypeError("COS list maxKeys must be an integer from 1 to 1000");
+  }
+  const response = await cosRequest({
+    method: "GET",
+    key: "",
+    urlParams: [
+      { name: "prefix", value: normalizedPrefix },
+      { name: "max-keys", value: String(normalizedMaxKeys) },
+      { name: "encoding-type", value: "url" },
+      ...(normalizedMarker ? [{ name: "marker", value: normalizedMarker }] : [])
+    ],
+    maxResponseBytes: DEFAULT_COS_LIST_RESPONSE_MAX_BYTES,
+    timeoutMs,
+    setTimeoutFn,
+    clearTimeoutFn,
+    request,
+    config
+  });
+  return parseCosListObjectsResponse(response.body, { prefix: normalizedPrefix });
 }
 
 export async function headCosObject({

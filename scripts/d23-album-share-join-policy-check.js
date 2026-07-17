@@ -63,17 +63,22 @@ assert(
   "normalizeJoinPolicy must allow direct/review_required and reject invalid values"
 );
 
-const createSessionBody = functionBody(service, "createSession");
+const createSessionEntryBody = functionBody(service, "createSession");
+const createSessionBody = functionBody(service, "createSessionWithConnection");
 assert(
-  createSessionBody.includes("join_policy") &&
+  createSessionEntryBody.includes("createSessionWithConnection") &&
+    createSessionBody.includes("join_policy") &&
     createSessionBody.includes("normalizeJoinPolicy(body.joinPolicy"),
-  "createSession must persist normalized joinPolicy"
+  "createSession must delegate normalized joinPolicy persistence to its connection-bound helper"
 );
 
-const updateSessionBody = functionBody(service, "updateSession");
+const updateSessionEntryBody = functionBody(service, "updateSession");
+const updateSessionBody = functionBody(service, "updateSessionWithConnection");
 assert(
-  updateSessionBody.includes("joinPolicy") && updateSessionBody.includes("join_policy"),
-  "updateSession must allow organizer/admin joinPolicy updates"
+  updateSessionEntryBody.includes("updateSessionWithConnection") &&
+    updateSessionBody.includes("joinPolicy") &&
+    updateSessionBody.includes("join_policy"),
+  "updateSession must delegate joinPolicy updates to its connection-bound helper"
 );
 
 const getSessionBody = functionBody(service, "getSession");

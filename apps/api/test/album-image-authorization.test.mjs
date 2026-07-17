@@ -24,7 +24,11 @@ function validAuthorizationBody() {
   };
 }
 
-function buildService({ legacy = false, expiresAt = nowMs + 600_000 } = {}) {
+function buildService({
+  legacy = false,
+  expiresAt = nowMs + 600_000,
+  assertImageIntake = () => {}
+} = {}) {
   const state = { boundByteSize: null, recorded: null, findByKeyCalls: 0 };
   const intent = {
     id: "upload-1", user_id: 9, session_id: 8, kind: "sessionAlbumPhoto", object_key: key,
@@ -36,6 +40,7 @@ function buildService({ legacy = false, expiresAt = nowMs + 600_000 } = {}) {
     now: () => nowMs,
     cosConfig: { enabled: true, secretId: "id", secretKey: "secret", bucket: "bucket", region: "region" },
     directUploadRequired: false,
+    assertImageIntake,
     transaction: async (run) => run({}),
     access: async () => ({ id: 8 }),
     repository: {
@@ -52,6 +57,23 @@ function buildService({ legacy = false, expiresAt = nowMs + 600_000 } = {}) {
   });
   return { service, state, intent };
 }
+
+test("a closed intake does not issue an authorization for a pending image intent", async () => {
+  const { service, state } = buildService({
+    assertImageIntake: () => {
+      throw Object.assign(new Error("closed"), {
+        code: "CONTENT_MODERATION_INTAKE_CLOSED",
+        statusCode: 503
+      });
+    }
+  });
+
+  await assert.rejects(
+    service.authorize({ user, body: validAuthorizationBody() }),
+    { code: "CONTENT_MODERATION_INTAKE_CLOSED", statusCode: 503 }
+  );
+  assert.equal(state.recorded, null);
+});
 
 test("strict authorization accepts only the persisted exact request", async () => {
   const { service, state } = buildService();

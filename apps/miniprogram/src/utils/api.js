@@ -1,4 +1,5 @@
 import COS from "cos-wx-sdk-v5/index.js";
+import { contentModerationErrorText } from "./contentModeration.js";
 import { showActionSheet, showModal, showToast } from "./tdesignFeedback.js";
 
 const TOKEN_KEY = "pinche_token";
@@ -298,7 +299,7 @@ function normalizedApiError({ status = 0, payload = {}, fallbackMessage }) {
   error.statusCode = error.status;
   error.code = details.code || payload.code || "API_REQUEST_FAILED";
   error.details = details.details ?? payload.details;
-  error.userMessage = error.message;
+  error.userMessage = contentModerationErrorText(error) || error.message;
   return error;
 }
 

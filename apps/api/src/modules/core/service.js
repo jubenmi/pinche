@@ -9,6 +9,14 @@ import {
 } from "../../http/errors.js";
 import { ensureRole } from "../auth/users.js";
 import { isAdmin, requireSessionOwner } from "./session-access.js";
+import {
+  defaultPrivateRoleTemplate,
+  normalizeNpcRoleSource,
+  normalizeNpcRoles,
+  normalizeRoleGender,
+  normalizeRoleTemplateItem,
+  parseRoleTemplate
+} from "./npc-role-normalization.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
 import {
   notifySessionRescheduled,
@@ -30,6 +38,8 @@ import {
   createSessionRescheduleDedupeKey,
   normalizeSessionRescheduleStartAt
 } from "./session-reschedule.js";
+import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
+import { isModerationPublished } from "@pinche/shared";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
@@ -266,14 +276,6 @@ function catalogResponse(row = {}) {
   };
 }
 
-function normalizeRoleGender(value) {
-  const roleGender = String(value || "unlimited").trim();
-  if (!["male", "female", "unlimited"].includes(roleGender)) {
-    throw badRequest("roleGender must be male, female, or unlimited");
-  }
-  return roleGender;
-}
-
 function normalizeJoinPolicy(value) {
   const policy = String(value || "review_required").trim();
   if (!["direct", "review_required"].includes(policy)) {
@@ -361,64 +363,12 @@ function positiveIntValue(value, label) {
   return parsed;
 }
 
-function parseRoleTemplate(value) {
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
-
-  if (Array.isArray(value)) {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    } catch (error) {
-      throw badRequest("defaultSeatTemplate must be a valid JSON array");
-    }
-  }
-
-  throw badRequest("defaultSeatTemplate must be an array");
-}
-
-function normalizeRoleTemplateItem(role = {}, index = 0) {
-  const name = String(
-    role.name || role.roleName || role.role_name || `角色${index + 1}`
-  ).trim();
-  const description = String(
-    role.description ||
-      role.roleDescription ||
-      role.role_description ||
-      role.roleName ||
-      role.role_name ||
-      ""
-  ).trim();
-
-  return {
-    ...(role.id ? { id: String(role.id) } : {}),
-    name: name || `角色${index + 1}`,
-    description,
-    roleGender: normalizeRoleGender(role.roleGender || role.role_gender)
-  };
-}
-
 function roleTemplateJson(value) {
   const parsed = parseRoleTemplate(value);
   if (parsed === null) {
     return null;
   }
   return JSON.stringify(parsed.map(normalizeRoleTemplateItem));
-}
-
-function defaultPrivateRoleTemplate(playerCount) {
-  return Array.from({ length: playerCount }, (_, index) => ({
-    name: `角色${index + 1}`,
-    description: "",
-    roleGender: "unlimited"
-  }));
 }
 
 function privateRoleTemplateJson(value, playerCount) {
@@ -429,78 +379,6 @@ function privateRoleTemplateJson(value, playerCount) {
     assertPublicTextSafe("roleDescription", role.description);
   }
   return JSON.stringify(normalized);
-}
-
-function parseNpcRoles(value) {
-  if (value === undefined || value === null || value === "") {
-    return [];
-  }
-  if (Array.isArray(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    } catch (error) {
-      return String(value)
-        .split(/\r?\n|[，,]/)
-        .map((name) => ({ name }));
-    }
-  }
-  throw badRequest("npcRoles must be an array");
-}
-
-function normalizeNpcRoleSource(value, fallback = "session") {
-  const source = String(value || fallback).trim();
-  if (!["script", "session"].includes(source)) {
-    throw badRequest("npc role source must be script or session");
-  }
-  return source;
-}
-
-function normalizeNpcRole(role = {}, index = 0, options = {}) {
-  const sourceRole = typeof role === "string" ? { name: role } : role || {};
-  const name = String(
-    sourceRole.name || sourceRole.roleName || sourceRole.role_name || sourceRole.label || ""
-  ).trim();
-  if (!name) {
-    return null;
-  }
-  const boundUserValue =
-    sourceRole.boundUserId ?? sourceRole.bound_user_id ?? sourceRole.userId ?? sourceRole.user_id;
-  return {
-    ...(sourceRole.id ? { id: Number(sourceRole.id) } : {}),
-    ...(sourceRole.scriptNpcRoleId || sourceRole.script_npc_role_id
-      ? {
-          scriptNpcRoleId: positiveId(
-            sourceRole.scriptNpcRoleId || sourceRole.script_npc_role_id,
-            "scriptNpcRoleId"
-          )
-        }
-      : {}),
-    name,
-    description: optionalText(
-      sourceRole.description || sourceRole.note || sourceRole.roleDescription || ""
-    ),
-    roleGender: normalizeRoleGender(
-      sourceRole.roleGender || sourceRole.role_gender || sourceRole.gender
-    ),
-    source: normalizeNpcRoleSource(sourceRole.source, options.source || "session"),
-    boundUserId:
-      boundUserValue === undefined || boundUserValue === null || boundUserValue === ""
-        ? null
-        : positiveId(boundUserValue, "boundUserId"),
-    sortOrder: nonNegativeIntValue(sourceRole.sortOrder ?? sourceRole.sort_order ?? index, "sortOrder")
-  };
-}
-
-function normalizeNpcRoles(value, options = {}) {
-  return parseNpcRoles(value)
-    .map((role, index) => normalizeNpcRole(role, index, options))
-    .filter(Boolean);
 }
 
 function assertPayable(basePrice, adjustment) {
@@ -648,6 +526,34 @@ function sessionAlbumVideoSourceUrl(sessionId, userId, value) {
   return text;
 }
 
+export { isModerationPublished };
+
+function moderationUnpublishedNotFound(subjectType) {
+  const type = subjectType === "album_video" ? "album_video" : "album_image";
+  const error = notFound(type === "album_video" ? "Album video not found" : "Album photo not found");
+  Object.defineProperties(error, {
+    contentModerationDenied: {
+      configurable: false,
+      enumerable: false,
+      value: true,
+      writable: false
+    },
+    contentModerationProvider: {
+      configurable: false,
+      enumerable: false,
+      value: type === "album_video" ? "tencent_ci_video" : "wechat_sec_check",
+      writable: false
+    },
+    contentModerationSubjectType: {
+      configurable: false,
+      enumerable: false,
+      value: type,
+      writable: false
+    }
+  });
+  return error;
+}
+
 function albumMediaType(row = {}) {
   return row.media_type === "video" ? "video" : "image";
 }
@@ -764,9 +670,12 @@ function albumVideoProcessingError(value) {
   return text ? text.slice(0, 255) : null;
 }
 
-async function findSessionAlbumVideoForProcessing(connection, { mediaId, sourceUrl, ciJobId }) {
+async function findSessionAlbumVideoForProcessing(
+  connection,
+  { mediaId, sourceUrl, ciJobId, forUpdate = false }
+) {
   if (mediaId) {
-    const media = await findById(connection, "session_album_photos", mediaId);
+    const media = await findById(connection, "session_album_photos", mediaId, { forUpdate });
     if (media && media.status === "active" && albumMediaType(media) === "video") {
       return media;
     }
@@ -780,7 +689,7 @@ async function findSessionAlbumVideoForProcessing(connection, { mediaId, sourceU
         WHERE media_type = 'video'
           AND status = 'active'
           AND source_url = ?
-        LIMIT 1
+        LIMIT 1${forUpdate ? " FOR UPDATE" : ""}
       `,
       [sourceUrl]
     );
@@ -802,7 +711,7 @@ async function findSessionAlbumVideoForProcessing(connection, { mediaId, sourceU
             OR ci_job_id LIKE ?
             OR ci_job_id LIKE ?
           )
-        LIMIT 1
+        LIMIT 1${forUpdate ? " FOR UPDATE" : ""}
       `,
       [ciJobId, `${ciJobId},%`, `%,${ciJobId}`, `%,${ciJobId},%`]
     );
@@ -823,16 +732,27 @@ function canViewAlbumVideoProcessingState(user, session, media) {
 
 function albumMediaResponse(media, tags = [], options = {}) {
   const mediaType = albumMediaType(media);
+  const moderationStatus = String(media.moderation_status || "");
+  const published = isModerationPublished(moderationStatus);
   const base = {
     id: Number(media.id),
     session_id: Number(media.session_id),
     media_type: mediaType,
     processing_status: mediaType === "video" ? albumMediaProcessingStatus(media) : "ready",
+    moderation_status: moderationStatus,
     created_at: media.created_at,
     tags
   };
 
   if (options.publicShare) {
+    if (!published) {
+      return {
+        ...base,
+        tags: [],
+        has_cover: false,
+        video_cover_source_url: null
+      };
+    }
     if (mediaType === "video") {
       const snapshotSourceUrl =
         albumMediaProcessingStatus(media) === "ready" ? albumVideoSnapshotSourceUrl(media) : null;
@@ -864,8 +784,22 @@ function albumMediaResponse(media, tags = [], options = {}) {
     uploader_name: media.uploader_nickname || media.uploader_open_id || "车友",
     is_mine: Number(media.uploader_user_id) === Number(options.userId),
     can_delete: Number(media.uploader_user_id) === Number(options.userId),
-    can_tag: Number(media.uploader_user_id) === Number(options.userId)
+    can_tag: published && Number(media.uploader_user_id) === Number(options.userId)
   };
+
+  if (!published) {
+    return {
+      ...common,
+      tags: [],
+      moderation_message: moderationStatus === "review"
+        ? "内容需要进一步审核"
+        : moderationStatus === "rejected"
+          ? "内容未通过安全审核，如有疑问请联系客服"
+          : "内容正在审核",
+      has_cover: false,
+      video_cover_source_url: null
+    };
+  }
 
   if (mediaType === "video") {
     const snapshotSourceUrl =
@@ -2506,35 +2440,39 @@ export async function replaceStoreScripts(storeId, body = {}) {
   });
 }
 
+export async function createPrivateStoreWithConnection(connection, user, body) {
+  const name = requireValue(body, "name");
+  const city = requireValue(body, "city");
+  const district = optionalText(body.district);
+  const address = optionalText(body.address);
+  const latitude = optionalLatitude(body.latitude);
+  const longitude = optionalLongitude(body.longitude);
+  const contactNote = optionalText(body.contactNote);
+
+  assertPublicTextSafe("name", name);
+  assertPublicTextSafe("city", city);
+  assertPublicTextSafe("district", district);
+  assertPublicTextSafe("address", address);
+  assertPublicTextSafe("contactNote", contactNote);
+
+  const [result] = await connection.query(
+    `
+      INSERT INTO stores
+        (
+          name, city, district, address, latitude, longitude, contact_note, status,
+          visibility, review_status, created_by_user_id
+        )
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
+    `,
+    [name, city, district, address, latitude, longitude, contactNote, user.user.id]
+  );
+  return catalogResponse(await selectInserted(connection, "stores", result));
+}
+
 export async function createPrivateStore(user, body) {
-  return withDatabaseConnection(async (connection) => {
-    const name = requireValue(body, "name");
-    const city = requireValue(body, "city");
-    const district = optionalText(body.district);
-    const address = optionalText(body.address);
-    const latitude = optionalLatitude(body.latitude);
-    const longitude = optionalLongitude(body.longitude);
-    const contactNote = optionalText(body.contactNote);
-
-    assertPublicTextSafe("name", name);
-    assertPublicTextSafe("city", city);
-    assertPublicTextSafe("district", district);
-    assertPublicTextSafe("address", address);
-    assertPublicTextSafe("contactNote", contactNote);
-
-    const [result] = await connection.query(
-      `
-        INSERT INTO stores
-          (
-            name, city, district, address, latitude, longitude, contact_note, status,
-            visibility, review_status, created_by_user_id
-          )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
-      `,
-      [name, city, district, address, latitude, longitude, contactNote, user.user.id]
-    );
-    return catalogResponse(await selectInserted(connection, "stores", result));
-  });
+  return withDatabaseConnection((connection) =>
+    createPrivateStoreWithConnection(connection, user, body)
+  );
 }
 
 export async function createStore(user, body) {
@@ -2646,7 +2584,7 @@ export async function deleteStore(id) {
   );
 }
 
-export async function createPrivateScript(user, body) {
+export async function createPrivateScriptWithConnection(connection, user, body) {
   const name = requireValue(body, "name");
   const playerCount = positiveIntValue(requireValue(body, "playerCount"), "playerCount");
   const typeTags = body.typeTags;
@@ -2663,29 +2601,33 @@ export async function createPrivateScript(user, body) {
   );
   assertPublicTextSafe("summaryNoSpoiler", summaryNoSpoiler);
 
-  return withTransaction(async (connection) => {
-    const [result] = await connection.query(
-      `
-        INSERT INTO scripts
-          (
-            name, type_tags, player_count, summary_no_spoiler,
-            default_seat_template_json, status, visibility, review_status,
-            created_by_user_id
-          )
-        VALUES (?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
-      `,
-      [
-        name,
-        jsonText(typeTags),
-        playerCount,
-        summaryNoSpoiler,
-        defaultSeatTemplateJson,
-        user.user.id
-      ]
-    );
-    const script = await selectInserted(connection, "scripts", result);
-    return scriptWithNpcRoles(connection, catalogResponse(publicScriptRow(script)));
-  });
+  const [result] = await connection.query(
+    `
+      INSERT INTO scripts
+        (
+          name, type_tags, player_count, summary_no_spoiler,
+          default_seat_template_json, status, visibility, review_status,
+          created_by_user_id
+        )
+      VALUES (?, ?, ?, ?, ?, 'active', 'private', 'pending', ?)
+    `,
+    [
+      name,
+      jsonText(typeTags),
+      playerCount,
+      summaryNoSpoiler,
+      defaultSeatTemplateJson,
+      user.user.id
+    ]
+  );
+  const script = await selectInserted(connection, "scripts", result);
+  return scriptWithNpcRoles(connection, catalogResponse(publicScriptRow(script)));
+}
+
+export async function createPrivateScript(user, body) {
+  return withTransaction((connection) =>
+    createPrivateScriptWithConnection(connection, user, body)
+  );
 }
 
 export async function createScript(user, body) {
@@ -3343,66 +3285,68 @@ export async function createEntityClaim(user, body) {
   });
 }
 
-export async function createSession(user, body) {
+export async function createSessionWithConnection(connection, user, body) {
   requireVerifiedPhone(user);
 
-  return withTransaction(async (connection) => {
-    assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
-    assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
+  assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
+  assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
 
-    const store = await findById(connection, "stores", requireValue(body, "storeId"));
-    const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
-    assertCatalogUsableForSession(store, user, "Store");
-    assertCatalogUsableForSession(script, user, "Script");
+  const store = await findById(connection, "stores", requireValue(body, "storeId"));
+  const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
+  assertCatalogUsableForSession(store, user, "Store");
+  assertCatalogUsableForSession(script, user, "Script");
 
-    await ensureRole(connection, user.user.id, "organizer");
+  await ensureRole(connection, user.user.id, "organizer");
 
-    const [result] = await connection.query(
-      `
-        INSERT INTO sessions
-          (
-            organizer_user_id, script_id, script_name_snapshot, store_id,
-            store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
-            npc_user_id, npc_name_snapshot, deposit_amount, visibility,
-            join_policy, join_phone_required, npc_join_enabled, note
-          )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        user.user.id,
-        script.id,
-        script.name,
-        store.id,
-        store.name,
-        requireValue(body, "startAt"),
-        body.dmUserId || null,
-        optionalText(body.dmNameSnapshot),
-        body.npcUserId || null,
-        optionalText(body.npcNameSnapshot),
-        intValue(body.depositAmount, 0),
-        normalizeSessionVisibility(body.visibility),
-        normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
-        normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
-        normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
-        optionalText(body.note)
-      ]
-    );
+  const [result] = await connection.query(
+    `
+      INSERT INTO sessions
+        (
+          organizer_user_id, script_id, script_name_snapshot, store_id,
+          store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
+          npc_user_id, npc_name_snapshot, deposit_amount, visibility,
+          join_policy, join_phone_required, npc_join_enabled, note
+        )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      user.user.id,
+      script.id,
+      script.name,
+      store.id,
+      store.name,
+      requireValue(body, "startAt"),
+      body.dmUserId || null,
+      optionalText(body.dmNameSnapshot),
+      body.npcUserId || null,
+      optionalText(body.npcNameSnapshot),
+      intValue(body.depositAmount, 0),
+      normalizeSessionVisibility(body.visibility),
+      normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+      normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
+      normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
+      optionalText(body.note)
+    ]
+  );
 
-    const session = await findById(connection, "sessions", result.insertId);
-    await cloneScriptNpcRolesForSession(connection, session.id, script.id);
-    await insertSessionNpcRoles(
-      connection,
-      session.id,
-      normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, { source: "session" }),
-      { source: "session" }
-    );
-    await runSessionExtensionHook("afterSessionCreated", {
-      connection,
-      session,
-      pinnedMessageText: body.pinnedMessageText
-    });
-    return session;
+  const session = await findById(connection, "sessions", result.insertId);
+  await cloneScriptNpcRolesForSession(connection, session.id, script.id);
+  await insertSessionNpcRoles(
+    connection,
+    session.id,
+    normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, { source: "session" }),
+    { source: "session" }
+  );
+  await runSessionExtensionHook("afterSessionCreated", {
+    connection,
+    session,
+    pinnedMessageText: body.pinnedMessageText
   });
+  return session;
+}
+
+export async function createSession(user, body) {
+  return withTransaction((connection) => createSessionWithConnection(connection, user, body));
 }
 
 function publicSessionAvailable(session) {
@@ -3696,8 +3640,8 @@ export async function listMySessions(user, filters = {}) {
               AND seat.confirmed_user_id <> session.organizer_user_id
             THEN seat.confirmed_user_id
           END) AS other_onboard_member_count,
-          COUNT(DISTINCT album_photo.id) AS active_album_photo_count,
-          COUNT(DISTINCT album_photo.id) AS photo_count,
+          COUNT(DISTINCT CASE WHEN album_photo.moderation_status IN ('approved', 'approved_legacy') THEN album_photo.id END) AS active_album_photo_count,
+          COUNT(DISTINCT CASE WHEN album_photo.moderation_status IN ('approved', 'approved_legacy') THEN album_photo.id END) AS photo_count,
           ${albumMediaCountSql("album_photo")} AS album_media_count
         FROM sessions session
         LEFT JOIN session_seats seat ON seat.session_id = session.id
@@ -4241,49 +4185,53 @@ export function assertSessionPatchDoesNotReschedule(body = {}) {
   }
 }
 
-export async function updateSession(user, id, body) {
+export async function updateSessionWithConnection(connection, user, id, body) {
   assertSessionPatchDoesNotReschedule(body);
-  return withDatabaseConnection(async (connection) => {
-    await requireSessionOwner(connection, id, user);
-    assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
-    assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
-    const normalized = {
-      ...body,
-      visibility:
-        body.visibility === undefined
-          ? undefined
-          : normalizeSessionVisibility(body.visibility),
-      joinPolicy:
-        body.joinPolicy === undefined && body.join_policy === undefined
-          ? undefined
-          : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
-      joinPhoneRequired:
-        body.joinPhoneRequired === undefined && body.join_phone_required === undefined
-          ? undefined
-          : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required)
-            ? 1
-            : 0,
-      npcJoinEnabled:
-        body.npcJoinEnabled === undefined && body.npc_join_enabled === undefined
-          ? undefined
-          : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled)
-            ? 1
-            : 0
-    };
-    return updateAllowed(connection, "sessions", id, normalized, [
-      ["dmUserId", "dm_user_id"],
-      ["dmNameSnapshot", "dm_name_snapshot"],
-      ["npcUserId", "npc_user_id"],
-      ["npcNameSnapshot", "npc_name_snapshot"],
-      ["depositAmount", "deposit_amount"],
-      ["visibility", "visibility"],
-      ["joinPolicy", "join_policy"],
-      ["joinPhoneRequired", "join_phone_required"],
-      ["npcJoinEnabled", "npc_join_enabled"],
-      ["note", "note"],
-      ["status", "status"]
-    ]);
-  });
+  await requireSessionOwner(connection, id, user);
+  assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
+  assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
+  const normalized = {
+    ...body,
+    visibility:
+      body.visibility === undefined
+        ? undefined
+        : normalizeSessionVisibility(body.visibility),
+    joinPolicy:
+      body.joinPolicy === undefined && body.join_policy === undefined
+        ? undefined
+        : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+    joinPhoneRequired:
+      body.joinPhoneRequired === undefined && body.join_phone_required === undefined
+        ? undefined
+        : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required)
+          ? 1
+          : 0,
+    npcJoinEnabled:
+      body.npcJoinEnabled === undefined && body.npc_join_enabled === undefined
+        ? undefined
+        : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled)
+          ? 1
+          : 0
+  };
+  return updateAllowed(connection, "sessions", id, normalized, [
+    ["dmUserId", "dm_user_id"],
+    ["dmNameSnapshot", "dm_name_snapshot"],
+    ["npcUserId", "npc_user_id"],
+    ["npcNameSnapshot", "npc_name_snapshot"],
+    ["depositAmount", "deposit_amount"],
+    ["visibility", "visibility"],
+    ["joinPolicy", "join_policy"],
+    ["joinPhoneRequired", "join_phone_required"],
+    ["npcJoinEnabled", "npc_join_enabled"],
+    ["note", "note"],
+    ["status", "status"]
+  ]);
+}
+
+export async function updateSession(user, id, body) {
+  return withDatabaseConnection((connection) =>
+    updateSessionWithConnection(connection, user, id, body)
+  );
 }
 
 export async function rescheduleSession(user, sessionId, body = {}) {
@@ -4524,69 +4472,77 @@ export async function listSessionNpcRoles(user, sessionId) {
   });
 }
 
-export async function createSessionNpcRole(user, sessionId, body = {}) {
+export async function createSessionNpcRoleWithConnection(connection, user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
-  return withTransaction(async (connection) => {
-    await requireSessionOwner(connection, id, user);
-    const [role] = normalizeNpcRoles([body], { source: "session" });
-    if (!role) {
-      throw badRequest("npc role name is required");
-    }
-    await insertSessionNpcRoles(connection, id, [role], { source: "session" });
-    const roles = await sessionNpcRolesForSession(connection, id);
-    return roles[roles.length - 1] || null;
-  });
+  await requireSessionOwner(connection, id, user);
+  const [role] = normalizeNpcRoles([body], { source: "session" });
+  if (!role) {
+    throw badRequest("npc role name is required");
+  }
+  await insertSessionNpcRoles(connection, id, [role], { source: "session" });
+  const roles = await sessionNpcRolesForSession(connection, id);
+  return roles[roles.length - 1] || null;
+}
+
+export async function createSessionNpcRole(user, sessionId, body = {}) {
+  return withTransaction((connection) =>
+    createSessionNpcRoleWithConnection(connection, user, sessionId, body)
+  );
+}
+
+export async function updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body = {}) {
+  const id = positiveId(npcRoleId, "npcRoleId");
+  const current = await requireSessionNpcRoleOwner(connection, id, user);
+  assertPublicTextSafe("npcRoleName", body.name);
+  assertPublicTextSafe("npcRoleDescription", body.description || body.note);
+  const normalized = {
+    ...body,
+    description:
+      body.description === undefined && body.note === undefined
+        ? undefined
+        : optionalText(body.description ?? body.note),
+    source: body.source === undefined ? undefined : normalizeNpcRoleSource(body.source),
+    roleGender:
+      body.roleGender === undefined && body.role_gender === undefined && body.gender === undefined
+        ? undefined
+        : normalizeRoleGender(body.roleGender ?? body.role_gender ?? body.gender),
+    boundUserId: nullableBoundUserId(body),
+    sortOrder:
+      body.sortOrder === undefined && body.sort_order === undefined
+        ? undefined
+        : nonNegativeIntValue(body.sortOrder ?? body.sort_order, "sortOrder"),
+    status: normalizeNpcRoleStatus(body.status)
+  };
+  const updated = await updateAllowed(connection, "session_npc_roles", id, normalized, [
+    ["name", "name"],
+    ["description", "description"],
+    ["roleGender", "role_gender"],
+    ["source", "source"],
+    ["boundUserId", "bound_user_id"],
+    ["sortOrder", "sort_order"],
+    ["status", "status"]
+  ]);
+  const [withUserRows] = await connection.query(
+    `
+      SELECT
+        role.*,
+        user.nickname AS bound_user_nickname,
+        user.open_id AS bound_user_open_id,
+        user.avatar_url AS bound_user_avatar_url,
+        user.gender AS bound_user_gender
+      FROM session_npc_roles role
+      LEFT JOIN users user ON user.id = role.bound_user_id
+      WHERE role.id = ?
+    `,
+    [updated.id || current.id]
+  );
+  return sessionNpcRoleResponse(withUserRows[0] || updated);
 }
 
 export async function updateSessionNpcRole(user, npcRoleId, body = {}) {
-  const id = positiveId(npcRoleId, "npcRoleId");
-  return withDatabaseConnection(async (connection) => {
-    const current = await requireSessionNpcRoleOwner(connection, id, user);
-    assertPublicTextSafe("npcRoleName", body.name);
-    assertPublicTextSafe("npcRoleDescription", body.description || body.note);
-    const normalized = {
-      ...body,
-      description:
-        body.description === undefined && body.note === undefined
-          ? undefined
-          : optionalText(body.description ?? body.note),
-      source: body.source === undefined ? undefined : normalizeNpcRoleSource(body.source),
-      roleGender:
-        body.roleGender === undefined && body.role_gender === undefined && body.gender === undefined
-          ? undefined
-          : normalizeRoleGender(body.roleGender ?? body.role_gender ?? body.gender),
-      boundUserId: nullableBoundUserId(body),
-      sortOrder:
-        body.sortOrder === undefined && body.sort_order === undefined
-          ? undefined
-          : nonNegativeIntValue(body.sortOrder ?? body.sort_order, "sortOrder"),
-      status: normalizeNpcRoleStatus(body.status)
-    };
-    const updated = await updateAllowed(connection, "session_npc_roles", id, normalized, [
-      ["name", "name"],
-      ["description", "description"],
-      ["roleGender", "role_gender"],
-      ["source", "source"],
-      ["boundUserId", "bound_user_id"],
-      ["sortOrder", "sort_order"],
-      ["status", "status"]
-    ]);
-    const [withUserRows] = await connection.query(
-      `
-        SELECT
-          role.*,
-          user.nickname AS bound_user_nickname,
-          user.open_id AS bound_user_open_id,
-          user.avatar_url AS bound_user_avatar_url,
-          user.gender AS bound_user_gender
-        FROM session_npc_roles role
-        LEFT JOIN users user ON user.id = role.bound_user_id
-        WHERE role.id = ?
-      `,
-      [updated.id || current.id]
-    );
-    return sessionNpcRoleResponse(withUserRows[0] || updated);
-  });
+  return withDatabaseConnection((connection) =>
+    updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body)
+  );
 }
 
 export async function createSeat(user, sessionId, body) {
@@ -5812,7 +5768,9 @@ async function deleteAndCount(connection, key, sql, values) {
 async function activeSessionAlbumPhotoCount(connection, sessionId) {
   return countRows(
     connection,
-    "SELECT COUNT(*) AS count FROM session_album_photos WHERE session_id = ? AND status = 'active'",
+    `SELECT COUNT(*) AS count FROM session_album_photos
+     WHERE session_id = ? AND status = 'active'
+       AND moderation_status IN ('approved', 'approved_legacy')`,
     [sessionId]
   );
 }
@@ -5931,8 +5889,8 @@ export async function insertFinalizedSessionAlbumImage(connection, { intent, met
     `INSERT INTO session_album_photos
       (session_id, uploader_user_id, media_type, photo_url, object_key, object_etag,
        image_width, image_height, image_byte_size, image_content_type,
-       processing_status, status)
-     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'active')`,
+       processing_status, moderation_status, moderation_object_version, status)
+     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'pending', ?, 'active')`,
     [
       Number(intent.session_id),
       Number(intent.user_id),
@@ -5941,7 +5899,8 @@ export async function insertFinalizedSessionAlbumImage(connection, { intent, met
       metadata.etag,
       metadata.width,
       metadata.height,
-      metadata.byteSize
+      metadata.byteSize,
+      metadata.etag
     ]
   );
   return findById(connection, "session_album_photos", result.insertId);
@@ -6069,9 +6028,13 @@ export async function listSessionAlbum(user, sessionId) {
         JOIN users user ON user.id = photo.uploader_user_id
         WHERE photo.session_id = ?
           AND photo.status = 'active'
+          AND (
+            photo.moderation_status IN ('approved', 'approved_legacy')
+            OR photo.uploader_user_id = ?
+          )
         ORDER BY photo.created_at DESC, photo.id DESC
       `,
-      [id]
+      [id, user.user.id]
     );
     const photoIds = photoRows.map((photo) => Number(photo.id));
     const tagsMap = await albumTagsForPhotos(connection, photoIds);
@@ -6092,6 +6055,11 @@ export async function listSessionAlbum(user, sessionId) {
       const tags = tagsMap.get(Number(photo.id)) || [];
       const mediaType = albumMediaType(photo);
       const processingStatus = albumMediaProcessingStatus(photo);
+      if (!isModerationPublished(photo.moderation_status)) {
+        if (Number(photo.uploader_user_id) !== Number(user.user.id)) continue;
+        photos.push(albumMediaResponse(photo, [], { userId: user.user.id }));
+        continue;
+      }
       if (
         mediaType === "video" &&
         processingStatus !== "ready" &&
@@ -6130,7 +6098,7 @@ export async function listSessionAlbum(user, sessionId) {
       start_at: session.start_at,
       can_upload: true,
       privacy,
-      visible_count: photos.length,
+      visible_count: photos.filter((photo) => isModerationPublished(photo.moderation_status)).length,
       hidden_count: hiddenCount,
       untagged_count: untaggedCount,
       photos,
@@ -6150,6 +6118,7 @@ export async function listPublicSessionAlbumShare(claims) {
         FROM session_album_photos photo
         WHERE photo.session_id = ?
           AND photo.status = 'active'
+          AND photo.moderation_status IN ('approved', 'approved_legacy')
         ORDER BY photo.created_at DESC, photo.id DESC
       `,
       [normalizedClaims.sessionId]
@@ -6232,9 +6201,11 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
             image_byte_size,
             image_content_type,
             processing_status,
+            moderation_status,
+            moderation_object_version,
             status
           )
-        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', 'active')
+        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', 'pending', ?, 'active')
       `,
       [
         id,
@@ -6243,26 +6214,12 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
         imageWidth,
         imageHeight,
         imageByteSize,
-        imageContentType
+        imageContentType,
+        `local:${photoUrl}:${imageByteSize}`
       ]
     );
     const photo = await findById(connection, "session_album_photos", result.insertId);
-    return {
-      id: Number(photo.id),
-      session_id: Number(photo.session_id),
-      media_type: "image",
-      processing_status: "ready",
-      uploader_user_id: Number(photo.uploader_user_id),
-      is_mine: true,
-      can_delete: true,
-      can_tag: true,
-      image_width: photo.image_width ? Number(photo.image_width) : null,
-      image_height: photo.image_height ? Number(photo.image_height) : null,
-      image_byte_size: photo.image_byte_size ? Number(photo.image_byte_size) : null,
-      image_content_type: photo.image_content_type || "image/jpeg",
-      created_at: photo.created_at,
-      tags: []
-    };
+    return albumMediaResponse(photo, [], { userId: user.user.id });
   });
 }
 
@@ -6301,7 +6258,8 @@ function inspectedAlbumVideoMetadata(value) {
   }
   return {
     byteSize,
-    contentType: albumVideoContentType(value.contentType)
+    contentType: albumVideoContentType(value.contentType),
+    etag: String(value?.etag || "").replace(/^\"|\"$/g, "")
   };
 }
 
@@ -6312,10 +6270,12 @@ function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId
     session_id: Number(media.session_id),
     media_type: "video",
     processing_status: media.processing_status || fallbackProcessingStatus,
+    moderation_status: media.moderation_status || "pending",
+    moderation_message: "内容正在审核",
     uploader_user_id: Number(media.uploader_user_id),
     is_mine: isMine,
     can_delete: isMine,
-    can_tag: isMine,
+    can_tag: false,
     duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
     video_width: media.video_width ? Number(media.video_width) : null,
     video_height: media.video_height ? Number(media.video_height) : null,
@@ -6356,6 +6316,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   const runWithTransaction = options.withTransaction || withTransaction;
   const authorize =
     options.authorizeSessionAlbumVideoCreate || requireSessionAlbumVideoCreateAllowed;
+  const assertVideoIntake = options.assertVideoIntake;
 
   // Authorize before any storage I/O, while deliberately releasing the read
   // connection before HEAD/Range inspection. The insert transaction repeats
@@ -6363,8 +6324,14 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   await runWithDatabaseConnection((connection) =>
     authorize(connection, id, user, { forUpdate: false })
   );
-  const { byteSize: videoByteSize, contentType: videoContentType } =
+  assertVideoIntake?.();
+  const {
+    byteSize: videoByteSize,
+    contentType: videoContentType,
+    etag: inspectedVideoEtag
+  } =
     inspectedAlbumVideoMetadata(await inspectObject(sourceUrl));
+  const videoObjectVersion = inspectedVideoEtag || `local:${sourceUrl}:${videoByteSize}`;
 
   const readyOnCreate = options.readyOnCreate === true || options.localFallbackReady === true;
   const processingStatus = readyOnCreate ? "ready" : "processing";
@@ -6372,17 +6339,20 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   const coverUrl = options.coverUrl || null;
   const ciJobId = options.ciJobId || null;
 
+  let moderationJob = null;
   const media = await createIdempotentAlbumVideo({
     sourceUrl,
     findExisting: (candidateSourceUrl) =>
       runWithTransaction(async (connection) => {
         await authorize(connection, id, user, { forUpdate: true });
+        assertVideoIntake?.();
         return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
           forUpdate: true
         });
       }),
     insert: (candidateSourceUrl) => runWithTransaction(async (connection) => {
       await authorize(connection, id, user, { forUpdate: true });
+      assertVideoIntake?.();
       const [result] = await connection.query(
         `
           INSERT INTO session_album_photos
@@ -6401,9 +6371,11 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
               video_content_type,
               ci_job_id,
               processing_status,
+              moderation_status,
+              moderation_object_version,
               status
             )
-          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'active')
         `,
         [
           id,
@@ -6417,10 +6389,19 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
           videoByteSize,
           videoContentType,
           ciJobId,
-          processingStatus
+          processingStatus,
+          videoObjectVersion
         ]
       );
-      return findById(connection, "session_album_photos", result.insertId);
+      const insertedMedia = await findById(connection, "session_album_photos", result.insertId);
+      if (typeof options.createVideoModerationJob === "function") {
+        moderationJob = await options.createVideoModerationJob(connection, {
+          media: insertedMedia,
+          objectKey: candidateSourceUrl.replace(/^\//, ""),
+          subjectVersion: videoObjectVersion
+        });
+      }
+      return insertedMedia;
     }),
     // This is intentionally a different callback from findExisting. The
     // lifecycle helper invokes it only after the insert transaction wrapper
@@ -6429,16 +6410,31 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
     findAfterDuplicateOnFreshConnection: (candidateSourceUrl) =>
       runWithTransaction(async (connection) => {
         await authorize(connection, id, user, { forUpdate: true });
+        assertVideoIntake?.();
         return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
           forUpdate: true
         });
       })
   });
 
+  if (moderationJob && typeof options.submitVideoModeration === "function") {
+    try {
+      await options.submitVideoModeration(moderationJob);
+    } catch {
+      // The moderation service persists error/retry state. Media remains hidden.
+    }
+  }
+
   return sessionAlbumVideoCreateResponse(media, processingStatus, user.user.id);
 }
 
-export async function updateSessionAlbumVideoProcessingResult(body = {}) {
+export async function updateSessionAlbumVideoProcessingResult(
+  body = {},
+  {
+    withTransaction: runWithTransaction = withTransaction,
+    enqueueRejectedMediaCleanup: enqueueRejectedCleanup = enqueueRejectedMediaCleanup
+  } = {}
+) {
   const mediaId = optionalPositiveInteger(body.mediaId ?? body.media_id, "mediaId");
   const ciJobId = normalizeCiJobId(body.ciJobId || body.ci_job_id || body.jobId || body.job_id);
   const status = albumVideoProcessingCallbackStatus(
@@ -6481,14 +6477,31 @@ export async function updateSessionAlbumVideoProcessingResult(body = {}) {
     throw badRequest("video processing callback must include mediaId, sourceUrl, or ciJobId");
   }
 
-  return withTransaction(async (connection) => {
+  return runWithTransaction(async (connection) => {
     const media = await findSessionAlbumVideoForProcessing(connection, {
       mediaId,
       sourceUrl,
-      ciJobId
+      ciJobId,
+      forUpdate: true
     });
     if (!media) {
       throw notFound("Album video not found for processing callback");
+    }
+    if (media.moderation_status === "rejected") {
+      const lateOutputEvent = Boolean(displayUrl || coverUrl);
+      await enqueueRejectedCleanup(connection, {
+        ...media,
+        source_url: media.source_url,
+        display_url: displayUrl || media.display_url || null,
+        cover_url: coverUrl || media.cover_url || null
+      }, lateOutputEvent ? { lateOutputEvent: true } : undefined);
+      return {
+        id: Number(media.id),
+        session_id: Number(media.session_id),
+        media_type: "video",
+        processing_status: albumMediaProcessingStatus(media),
+        ignored: "moderation_rejected"
+      };
     }
 
     const nextCiJobId = mergeCiJobIds(media.ci_job_id, ciJobId);
@@ -6560,6 +6573,9 @@ export async function updateSessionAlbumPhotoTags(user, photoId, body = {}) {
     const photo = await findById(connection, "session_album_photos", id);
     if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
+    }
+    if (!isModerationPublished(photo.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_image");
     }
     if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the photo uploader can tag this photo");
@@ -6747,6 +6763,9 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
     if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
     }
+    if (!isModerationPublished(photo.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_image");
+    }
     if (albumMediaType(photo) !== "image") {
       throw notFound("Album photo not found");
     }
@@ -6780,6 +6799,9 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
     if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
     }
+    if (!isModerationPublished(photo.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_image");
+    }
     if (albumMediaType(photo) !== "image") {
       throw notFound("Album photo not found");
     }
@@ -6811,6 +6833,9 @@ export async function getVisibleSessionAlbumVideoForPlayback(user, mediaId) {
     const media = await findById(connection, "session_album_photos", id);
     if (!media || media.status !== "active" || albumMediaType(media) !== "video") {
       throw notFound("Album video not found");
+    }
+    if (!isModerationPublished(media.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_video");
     }
     if (albumMediaProcessingStatus(media) !== "ready" || !media.display_url) {
       throw forbidden("Album video is not ready");
@@ -6844,6 +6869,9 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
     const media = await findById(connection, "session_album_photos", id);
     if (!media || media.status !== "active" || albumMediaType(media) !== "video") {
       throw notFound("Album video not found");
+    }
+    if (!isModerationPublished(media.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_video");
     }
     if (albumMediaProcessingStatus(media) !== "ready" || !media.cover_url) {
       throw notFound("Album video cover not found");
@@ -6957,62 +6985,66 @@ export async function getMySessionReview(user, sessionId) {
   });
 }
 
-export async function upsertMySessionReview(user, sessionId, body = {}) {
+export async function upsertMySessionReviewWithConnection(connection, user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
   const rating = reviewRating(body.rating);
   const content = reviewContent(body.content);
   const photoUrls = assertSessionReviewPhotoUrls(body.photoUrls);
 
-  return withTransaction(async (connection) => {
-    const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
-    if (!eligibleSignup) {
-      throw forbidden("Only eligible session participants can write a review after start time");
-    }
+  const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
+  if (!eligibleSignup) {
+    throw forbidden("Only eligible session participants can write a review after start time");
+  }
 
+  await connection.query(
+    `
+      INSERT INTO session_reviews
+        (session_id, user_id, seat_id, rating, content, status)
+      VALUES (?, ?, ?, ?, ?, 'active')
+      ON DUPLICATE KEY UPDATE
+        seat_id = VALUES(seat_id),
+        rating = VALUES(rating),
+        content = VALUES(content),
+        status = 'active'
+    `,
+    [id, user.user.id, eligibleSignup.seat_id || null, rating, content]
+  );
+
+  const [reviewRows] = await connection.query(
+    `
+      SELECT *
+      FROM session_reviews
+      WHERE session_id = ?
+        AND user_id = ?
+      LIMIT 1
+    `,
+    [id, user.user.id]
+  );
+  const review = reviewRows[0];
+  await connection.query("DELETE FROM session_review_photos WHERE review_id = ?", [
+    review.id
+  ]);
+  for (const [index, photoUrl] of photoUrls.entries()) {
     await connection.query(
       `
-        INSERT INTO session_reviews
-          (session_id, user_id, seat_id, rating, content, status)
-        VALUES (?, ?, ?, ?, ?, 'active')
-        ON DUPLICATE KEY UPDATE
-          seat_id = VALUES(seat_id),
-          rating = VALUES(rating),
-          content = VALUES(content),
-          status = 'active'
+        INSERT INTO session_review_photos (review_id, photo_url, sort_order)
+        VALUES (?, ?, ?)
       `,
-      [id, user.user.id, eligibleSignup.seat_id || null, rating, content]
+      [review.id, photoUrl, index]
     );
+  }
+  return {
+    ...review,
+    rating,
+    content,
+    photos: photoUrls
+  };
+}
 
-    const [reviewRows] = await connection.query(
-      `
-        SELECT *
-        FROM session_reviews
-        WHERE session_id = ?
-          AND user_id = ?
-        LIMIT 1
-      `,
-      [id, user.user.id]
-    );
-    const review = reviewRows[0];
-    await connection.query("DELETE FROM session_review_photos WHERE review_id = ?", [
-      review.id
-    ]);
-    for (const [index, photoUrl] of photoUrls.entries()) {
-      await connection.query(
-        `
-          INSERT INTO session_review_photos (review_id, photo_url, sort_order)
-          VALUES (?, ?, ?)
-        `,
-        [review.id, photoUrl, index]
-      );
-    }
-    return {
-      ...review,
-      rating,
-      content,
-      photos: photoUrls
-    };
-  });
+export async function upsertMySessionReview(user, sessionId, body = {}) {
+  return withTransaction((connection) =>
+    upsertMySessionReviewWithConnection(connection, user, sessionId, body)
+  );
 }
 
 export async function createShareEvent(eventType, body) {

@@ -244,22 +244,20 @@ for (const token of [
 assertIncludes(smokeSafety, "verifyD45SmokePreflight");
 assertIncludes(smoke, "await verifyD45SmokePreflight");
 assert.equal(
-  packageJson.scripts["d45:check"],
+  packageJson.scripts["d45:reschedule-check"],
   "node scripts/d45-session-reschedule-notifications-safety-check.js && node scripts/d45-session-reschedule-notifications-check.js"
 );
 assert.equal(
-  packageJson.scripts["d45:smoke"],
+  packageJson.scripts["d45:reschedule-smoke"],
   "node scripts/d45-session-reschedule-notifications-smoke.js"
 );
 for (const command of [
-  "node --check scripts/d45-session-reschedule-notifications-smoke.js",
-  "npm run d45:check",
-  "node --test apps/miniprogram/test/sessionReschedule.test.mjs apps/miniprogram/test/authMessages.test.mjs",
-  "npm --workspace apps/api run test:session-reschedule"
+  "npm run d45:reschedule-check",
+  "npm run d45:reschedule-smoke"
 ]) {
   assert(
-    packageJson.scripts.check.includes(command),
-    `root check must include D45 verification command: ${command}`
+    packageJson.scripts.precheck.includes(command),
+    `root precheck must include D45 verification command: ${command}`
   );
 }
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
