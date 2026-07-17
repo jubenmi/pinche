@@ -475,7 +475,7 @@
 
   Update the task checklist with date, release commit/digest fingerprint, three case IDs, terminal categories, elapsed-time summaries, and media cleanup conclusions. Do not include secrets or provider identifiers that the runbook prohibits. Mark D46.8 complete only now.
 
-- [ ] **Step 7: Commit and publish the final task record**
+- [x] **Step 7: Commit and publish the final task record**
 
   ```bash
   git add specs/d46-automatic-content-moderation-fallback/tasks.md
@@ -483,6 +483,8 @@
   ```
 
   Run the guarded CI release flow once more for this documentation-only completion commit.
+
+  - [x] Final evidence commit `e40f93f` passed develop Actions `29620687943`, main merge `d43c6c9` passed Actions `29620949139`, and publish merge `e093fef` passed Actions `29621045728`.
 
 ## Task 11: Enable business providers only after a separate go/no-go decision
 
@@ -504,4 +506,4 @@
 - [x] WeChat text, WeChat image, and Tencent video each reach `passed`.
 - [x] Image and video preflight objects are confirmed deleted.
 - [x] Focused, D45, D46, API, and full repository checks all pass.
-- [ ] The verified change and final D46.8 evidence are published through guarded CI.
+- [x] The verified change and final D46.8 evidence are published through guarded CI.
