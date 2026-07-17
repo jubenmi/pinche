@@ -371,7 +371,7 @@
   - [x] Review remediation: add the same RED/static guard for the preflight timeout Worker and reuse the shared runtime builder while retaining its HMAC fingerprint input.
   - [x] Review remediation: rerun focused callback/preflight tests, D45/D46 static checks, and the complete isolated-stack verification before marking review complete.
 
-- [ ] **Step 2: Verify immediately before integration**
+- [x] **Step 2: Verify immediately before integration**
 
   Use `superpowers:verification-before-completion` and rerun the focused tests plus D45/D46 checks. Record command exit codes, not claims based on earlier runs.
 
