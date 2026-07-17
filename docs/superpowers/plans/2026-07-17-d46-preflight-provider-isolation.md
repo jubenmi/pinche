@@ -303,7 +303,7 @@
 
   Expected: both commands exit 0 and the static runbook requirements remain present.
 
-- [ ] **Step 5: Commit documentation**
+- [x] **Step 5: Commit documentation**
 
   ```bash
   git add docs/runbooks/hybrid-content-moderation-release.md \
@@ -317,7 +317,7 @@
 
 - Verify only; update `specs/d46-automatic-content-moderation-fallback/tasks.md` if the evidence statement needs correction.
 
-- [ ] **Step 1: Run the moderation suites**
+- [x] **Step 1: Run the moderation suites**
 
   ```bash
   npm run d45:unit
@@ -327,7 +327,7 @@
 
   Expected: all commands exit 0.
 
-- [ ] **Step 2: Run API syntax/config checks**
+- [x] **Step 2: Run API syntax/config checks**
 
   ```bash
   npm --workspace apps/api run check
@@ -336,7 +336,7 @@
 
   Expected: both commands exit 0.
 
-- [ ] **Step 3: Run the full repository check in the isolated local stack**
+- [x] **Step 3: Run the full repository check in the isolated local stack**
 
   Start or reuse the project-approved isolated MySQL/Redis/API test environment, then run:
 
@@ -346,7 +346,7 @@
 
   Expected: exit 0. If anything fails, use `superpowers:systematic-debugging`; do not classify a failure as baseline without reproducing it against unmodified `develop` under the same environment.
 
-- [ ] **Step 4: Review the complete branch diff**
+- [x] **Step 4: Review the complete branch diff**
 
   ```bash
   git diff --check develop...HEAD
