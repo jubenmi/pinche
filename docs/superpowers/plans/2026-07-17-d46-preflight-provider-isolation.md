@@ -381,7 +381,7 @@
 
   - [x] Reconciled the isolated branch with the latest `origin/develop`, reran the complete isolated-stack verification, then fast-forwarded local `develop`; the existing `package-lock.json` and `docs/evidence/` changes remained untouched.
 
-- [ ] **Step 4: Publish and verify CI in order**
+- [x] **Step 4: Publish and verify CI in order**
 
   Invoke the `ci-release` skill. Push `develop`, wait for its required GitHub Actions checks and immutable image digest, then promote only the verified commit/digest through the repository's normal `main` and `publish` stages. Stop on any failed or ambiguous check.
 
@@ -392,7 +392,7 @@
 - Modify locally only: `/Users/dirui/Documents/pinche/.env.production` (gitignored)
 - Do not modify: `.env.production.example` unless a newly required key is absent from the example.
 
-- [ ] **Step 1: Populate the non-secret provider coordinates**
+- [x] **Step 1: Populate the non-secret provider coordinates**
 
   Set the existing production AppID/COS bucket/region and:
 
@@ -402,11 +402,11 @@
   TENCENT_CI_VIDEO_CALLBACK_URL=https://api.pinche.jubenmi.com/api/internal/content-moderation/tencent-video/callback
   ```
 
-- [ ] **Step 2: Generate and store credentials locally**
+- [x] **Step 2: Generate and store credentials locally**
 
   Generate at least 32 random bytes for the production preflight confirmation, HMAC key, WeChat event token, and Tencent callback token; generate a valid 43-character WeChat event AES key. Copy existing AppSecret/COS credentials from the approved local source directly into `.env.production` without emitting values to terminal output or chat.
 
-- [ ] **Step 3: Keep ordinary business moderation disabled**
+- [x] **Step 3: Keep ordinary business moderation disabled**
 
   Set:
 
@@ -419,7 +419,7 @@
 
   Configure the preflight operator/test administrator IDs and fixed sample/release fingerprints. Confirm the test administrator has a valid production WeChat openid without printing it.
 
-- [ ] **Step 4: Validate the rendered configuration safely**
+- [x] **Step 4: Validate the rendered configuration safely**
 
   Run a validation command that prints only missing key names and a success/failure result, never values. Expected: production API configuration loads successfully with all three normal provider switches false.
 
@@ -427,7 +427,7 @@
 
 **External checkpoint:** The WeChat public-platform site is blocked from automated browser control by policy. The user must perform this console step; no alternate-browser workaround is allowed.
 
-- [ ] **Step 1: Enter the message-push settings in WeChat**
+- [x] **Step 1: Enter the message-push settings in WeChat**
 
   In the production mini-program/public-platform console, configure:
 
@@ -439,7 +439,7 @@
   EncodingAESKey: the locally stored 43-character WECHAT_CONTENT_SECURITY_EVENT_AES_KEY
   ```
 
-- [ ] **Step 2: Complete WeChat's URL verification**
+- [x] **Step 2: Complete WeChat's URL verification**
 
   The callback API must already be deployed with preflight enabled and the matching token/AES key. Confirm verification succeeds; if it fails, inspect only redacted API logs and signed handshake behavior.
 
@@ -451,27 +451,27 @@
 - Private COS prefix: `system/content-moderation-preflight/`
 - Update: `specs/d46-automatic-content-moderation-fallback/tasks.md`
 
-- [ ] **Step 1: Verify resident services and isolation**
+- [x] **Step 1: Verify resident services and isolation**
 
   Confirm the API and preflight-timeout worker run the verified immutable digest, preflight is enabled, all three normal provider switches are false, normal new content still resolves to `approved_legacy` unless its D46 fallback switch is on, and no ordinary moderation-job volume begins.
 
-- [ ] **Step 2: Run WeChat text**
+- [x] **Step 2: Run WeChat text**
 
   Execute the runbook's immutable-image command for `wechat-text-v1` with the one-time confirmation supplied only to the process. Expected terminal state: `passed`, normalized result `pass`, no ordinary moderation row, no user notification.
 
-- [ ] **Step 3: Run WeChat image**
+- [x] **Step 3: Run WeChat image**
 
   Execute `wechat-image-v1`. Accept an initial `awaiting_callback`, then wait for its HMAC-associated WeChat callback. Expected terminal state: `passed`, normalized result `pass`, `cleanup_status=deleted`, and HEAD confirms the private preflight object is gone.
 
-- [ ] **Step 4: Run Tencent video**
+- [x] **Step 4: Run Tencent video**
 
   Execute `tencent-video-v1` against policy `449c2c20e6ba65eddcae07853ac2f313`. Accept an initial `awaiting_callback`, then wait for the HMAC-associated Detail callback. Expected terminal state: `passed`, normalized result `pass`, `cleanup_status=deleted`, and HEAD confirms the private preflight object is gone.
 
-- [ ] **Step 5: Check failure and leakage signals**
+- [x] **Step 5: Check failure and leakage signals**
 
   Verify no normal content, ordinary moderation tasks, notifications, reusable URLs, raw trace/job/DataId, object keys, callback bodies, tokens, openids, or fixed sample contents were written to logs/evidence. Confirm no preflight run remains nonterminal and the timeout worker has no cleanup alert.
 
-- [ ] **Step 6: Close D46.8 with redacted evidence**
+- [x] **Step 6: Close D46.8 with redacted evidence**
 
   Update the task checklist with date, release commit/digest fingerprint, three case IDs, terminal categories, elapsed-time summaries, and media cleanup conclusions. Do not include secrets or provider identifiers that the runbook prohibits. Mark D46.8 complete only now.
 
@@ -486,7 +486,7 @@
 
 ## Task 11: Enable business providers only after a separate go/no-go decision
 
-- [ ] **Step 1: Hold at the verified safe state**
+- [x] **Step 1: Hold at the verified safe state**
 
   Completion of D46.8 proves provider plumbing; it does not itself authorize normal content moderation. Keep all normal provider switches false until the user approves staged activation.
 
@@ -496,12 +496,12 @@
 
 ## Final acceptance checklist
 
-- [ ] Preflight starts and finishes with all ordinary provider switches false.
-- [ ] Preflight-enabled production config rejects every missing real-provider prerequisite.
-- [ ] Preflight-disabled default production config remains backward-compatible.
-- [ ] Ordinary content follows D46 direct-or-block fallback during all preflight runs.
-- [ ] No preflight sample reaches ordinary moderation tables, user notifications, or public media reads.
-- [ ] WeChat text, WeChat image, and Tencent video each reach `passed`.
-- [ ] Image and video preflight objects are confirmed deleted.
-- [ ] Focused, D45, D46, API, and full repository checks all pass.
+- [x] Preflight starts and finishes with all ordinary provider switches false.
+- [x] Preflight-enabled production config rejects every missing real-provider prerequisite.
+- [x] Preflight-disabled default production config remains backward-compatible.
+- [x] Ordinary content follows D46 direct-or-block fallback during all preflight runs.
+- [x] No preflight sample reaches ordinary moderation tables, user notifications, or public media reads.
+- [x] WeChat text, WeChat image, and Tencent video each reach `passed`.
+- [x] Image and video preflight objects are confirmed deleted.
+- [x] Focused, D45, D46, API, and full repository checks all pass.
 - [ ] The verified change and final D46.8 evidence are published through guarded CI.
