@@ -128,7 +128,7 @@ test("parseProductionPreflightCliArgs accepts only one case argument", () => {
   assert.throws(() => parseProductionPreflightCliArgs(["--content=x"]), /exactly one --case/);
 });
 
-test("assertProductionPreflightGuards requires production confirmation admin closed intake and provider config", () => {
+test("assertProductionPreflightGuards requires production confirmation admin and provider config independent of deprecated intake modes", () => {
   assert.doesNotThrow(() => assertProductionPreflightGuards(validRuntime(), "wechat-text-v1"));
   assert.throws(
     () => assertProductionPreflightGuards(validRuntime({ nodeEnv: "test" }), "wechat-text-v1"),
@@ -146,13 +146,12 @@ test("assertProductionPreflightGuards requires production confirmation admin clo
     () => assertProductionPreflightGuards(validRuntime({ operatorStatus: "disabled" }), "wechat-text-v1"),
     /system_admin/
   );
-  assert.throws(
-    () => assertProductionPreflightGuards(
-      validRuntime({ intakeModes: { text: "moderated", image: "closed", video: "closed" } }),
+  for (const mode of ["closed", "moderated", "legacy"]) {
+    assert.doesNotThrow(() => assertProductionPreflightGuards(
+      validRuntime({ intakeModes: { text: mode, image: mode, video: mode } }),
       "wechat-text-v1"
-    ),
-    /closed/
-  );
+    ));
+  }
   assert.throws(
     () => assertProductionPreflightGuards(
       validRuntime({ providerConfig: { ...validRuntime().providerConfig, wechatText: false } }),
@@ -1068,7 +1067,7 @@ test("preflight callback closes and cleans its run when the callback guard fails
     runtime: validRuntime(),
     hmacKey: "01234567890123456789012345678901",
     guards: () => {
-      throw new Error("intake mode changed");
+      throw new Error("operator authorization changed");
     },
     repository: {
       findAttemptByAssociation: async () => ({ runId: "11111111-1111-4111-8111-111111111111" }),

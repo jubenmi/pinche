@@ -23,13 +23,9 @@
 
 ### 1.1 新内容接收门禁与开关语义
 
-每个 D45 内容类型都有独立的接收模式：`CONTENT_MODERATION_TEXT_INTAKE_MODE`、`CONTENT_MODERATION_IMAGE_INTAKE_MODE`、`CONTENT_MODERATION_VIDEO_INTAKE_MODE`。
+D46 的新内容策略只由两类状态共同决定：进程启动时的审核配置能力快照，以及后台“内容安全”页面持久化的四个 DB 开关。能力快照由全局开关和对应 provider enabled 配置决定；生产预演是发布前对凭证、权限、回调和网络链路的确认，不是逐请求动态健康检查。快照为可用时始终进入自动审核；快照为不可用时，只有“全局不可用时阻断”和对应内容类型开关同时开启才拒绝提交并返回 `503 CONTENT_MODERATION_INTAKE_CLOSED`，否则按 `approved_legacy` 兼容直发。后台保存与最终业务写共享设置行锁，避免策略切换与发布竞态。
 
-- `closed`：拒绝该类型的所有新提交，稳定返回 `503 CONTENT_MODERATION_INTAKE_CLOSED`；不会关闭读取门禁、回调、管理员队列或已有任务的 Worker。
-- `moderated`：只有全局审核能力和该类型 provider 都已就绪时才接收；任何一个未就绪都会拒绝，而不会退化成未审核直写、上传或媒体关联。
-- `legacy`：仅用于本地开发/兼容路径；生产配置拒绝该模式，不能用于生产上线或回滚。
-
-审核 provider 开关不是流量开关。`CONTENT_MODERATION_ENABLED` 和各 `*_ENABLED` 只表达审核能力是否已配置；在接受 D45 用户写入的生产环境中，不得用它们暂停新提交。暂停或回滚只切换相应 `*_INTAKE_MODE=closed`，并保持已启用 provider、Worker 与回调继续处理已有任务。
+`CONTENT_MODERATION_TEXT_INTAKE_MODE`、`CONTENT_MODERATION_IMAGE_INTAKE_MODE`、`CONTENT_MODERATION_VIDEO_INTAKE_MODE` 仅为旧配置兼容字段，D46 不再把 `closed`、`moderated` 或 `legacy` 当作发布或隔离开关。provider enabled 配置也不是维护开关，变更后必须重启/滚动发布才形成新的能力快照。任务创建后发生的权限、额度、网络或 provider 错误不会动态翻转能力，必须保持内容隐藏并按既有任务重试/人工处置。若真实事故需要让后续新提交进入 unavailable fallback，能力必须先通过关闭对应 provider enabled 配置并重启/滚动发布变为 unavailable；之后 DB 双开关才决定直发或阻断（需要阻断时可在发布前预置双开关）。若必须立即停止某类或全部正常流量，应使用经审批的网关/部署维护机制。不得只开 DB 开关却继续保持 provider enabled 并期待动态阻断。
 
 ## 2. 微信文本与图片审核
 
@@ -60,11 +56,11 @@
 ```text
 CONTENT_MODERATION_ENABLED=true
 CONTENT_MODERATION_WECHAT_TEXT_ENABLED=false
-CONTENT_MODERATION_TEXT_INTAKE_MODE=closed
+CONTENT_MODERATION_TEXT_INTAKE_MODE=legacy  # 兼容字段，不控制 D46 流量
 CONTENT_MODERATION_WECHAT_IMAGE_ENABLED=false
-CONTENT_MODERATION_IMAGE_INTAKE_MODE=closed
+CONTENT_MODERATION_IMAGE_INTAKE_MODE=legacy # 兼容字段，不控制 D46 流量
 CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=false
-CONTENT_MODERATION_VIDEO_INTAKE_MODE=closed
+CONTENT_MODERATION_VIDEO_INTAKE_MODE=legacy # 兼容字段，不控制 D46 流量
 CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=false
 CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CALLBACK_TIMEOUT_MS=900000
 CONTENT_MODERATION_PRODUCTION_PREFLIGHT_TIMEOUT_POLL_MS=60000
@@ -77,12 +73,12 @@ WECHAT_CONTENT_SECURITY_EVENT_TOKEN=...
 WECHAT_CONTENT_SECURITY_EVENT_AES_KEY=...  # 精确 43 位
 ```
 
-首次发布前保持三个接收模式为 `closed`。provider 开关可以在没有历史任务的初始阶段保持未启用；在某类型准备好后，先完成其凭证、权限和非生产验证，再启用 provider 并把该类型接收模式改为 `moderated`。不要一次性全开。
+provider 开关可以在没有历史任务的初始阶段保持未启用；此时默认 DB 开关为关闭，内容按 `approved_legacy` 兼容直发。某类型完成凭证、权限和非生产验证后再启用 provider，启用后该类型自动进入审核。若发布期间不允许能力缺失时直发，先在后台开启全局与对应类型的不可用阻断开关。不要一次性全开。
 
 ### 2.2 微信故障处置
 
 - `WECHAT_CONTENT_SECURITY_TOKEN_*`：检查 Redis、AppID/AppSecret、时钟和微信后台权限；共享模块只会强制刷新并重试一次。
-- `WECHAT_CONTENT_SECURITY_PERMISSION_DENIED` 或 `WECHAT_CONTENT_SECURITY_QUOTA_EXHAUSTED`：立即把对应的文本或图片接收模式改为 `closed`，保留读取门禁与已有任务；保持 provider、Worker 和回调可用，核对后台权限/额度后再恢复为 `moderated`。
+- `WECHAT_CONTENT_SECURITY_PERMISSION_DENIED` 或 `WECHAT_CONTENT_SECURITY_QUOTA_EXHAUSTED`：已经创建的任务保持隐藏并由重试/人工队列处置，不能走 fallback。若后续新提交需要进入 unavailable fallback，关闭对应微信 provider enabled 配置并重启/滚动发布，使能力快照先变为 unavailable；DB 双开关随后决定直发或阻断，所需阻断值可在发布前预置。仅修改 DB 开关而保持 provider enabled 不会生效。恢复前重新完成生产预演并按审批重新启用 provider。
 - GET 保存验证失败：检查 Token、API 版本、HTTPS/路由，以及反向代理是否改写 `signature`、timestamp、nonce 或 `echostr`；GET 不应读取 `msg_signature`、AESKey、AppID 或 body。
 - 安全模式 POST 回调鉴权或结构失败：检查 Token、AESKey、AppID、反向代理是否改写 query/body；不要在日志中打印密文、签名、`echostr` 或原始 body。
 - 文本 `review`/`error` 和图片 `review`/`error` 均必须保持隐藏，交给管理员队列或重试 Worker，不能人工改数据库为 `approved` 绕过流程。
@@ -97,7 +93,7 @@ WECHAT_CONTENT_SECURITY_EVENT_AES_KEY=...  # 精确 43 位
 
 ```text
 CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=false
-CONTENT_MODERATION_VIDEO_INTAKE_MODE=closed
+CONTENT_MODERATION_VIDEO_INTAKE_MODE=legacy # 兼容字段，不控制 D46 流量
 TENCENT_CI_VIDEO_REGION=ap-nanjing
 TENCENT_CI_VIDEO_BIZ_TYPE=...
 TENCENT_CI_VIDEO_CALLBACK_URL=https://api.pinche.jubenmi.com/api/internal/content-moderation/tencent-video/callback
@@ -119,7 +115,7 @@ TENCENT_CI_VIDEO_CALLBACK_PREVIOUS_TOKEN=
 - `tencent_video_billing`：`FailedOperation.BalanceNotEnough`；
 - `retry_exhausted`：达到应用重试上限。
 
-这些故障必须让视频维持 `error`/隐藏状态。先修复权限、策略、余额或额度，再由管理员重试；不得因回调延迟、转码成功或人工“看起来正常”直接发布。
+这些故障必须让已创建的视频任务维持 `error`/隐藏状态。先修复权限、策略、余额或额度，再由管理员重试；不得因回调延迟、转码成功或人工“看起来正常”直接发布。若后续新视频需要进入 unavailable fallback，关闭 `CONTENT_MODERATION_TENCENT_VIDEO_ENABLED` 并重启/滚动发布，使能力快照先变为 unavailable；DB 双开关随后决定直发或阻断，所需阻断值可在发布前预置。不能把运行中 provider 调用失败伪装成动态 capability health。
 
 ## 4. COS 私有存储、签名 URL 与孤儿扫描
 
@@ -185,19 +181,19 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 
 每一步必须记录部署版本、开关、观察开始/结束时间、指标摘要和回滚决定；记录不得包含敏感样本或 URL。
 
-1. **数据结构与门禁**：执行迁移，部署 API、后台、两个 Worker；保持 `CONTENT_MODERATION_ENABLED=true`，并将三个 `*_INTAKE_MODE` 都设为 `closed`。验证新提交返回 `CONTENT_MODERATION_INTAKE_CLOSED`，且未批准媒体仍无法通过列表、预览、下载、range、封面或公开分享读取。
+1. **数据结构与门禁**：执行迁移，部署 API、后台、两个 Worker；确认内容安全 DB 开关默认关闭，未启用审核能力时新内容以 `approved_legacy` 兼容发布。验证未批准媒体仍无法通过列表、预览、下载、range、封面或公开分享读取；若本次变更不允许兼容直发，在后台同时开启全局与对应类型的不可用阻断开关。
 2. **后台、指标与扫描**：确认管理员队列、审计、上述指标和告警可见。先开启孤儿扫描的 report-only，保持 cleanup 为 `false`。
-3. **生产受控预演（D45.18A）**：只在三个 `*_INTAKE_MODE` 均为 `closed` 时运行一次性预演 Job。该步骤只验证 harmless pass、鉴权、私有 COS 读取、回调、标准化结果和清理，不表示可以把任何正常用户入口切到 `moderated`。
-4. **微信文本**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_TEXT_ENABLED=true` 并另行讨论 `CONTENT_MODERATION_TEXT_INTAKE_MODE=moderated`；观察至少一个业务高峰窗口。
-5. **微信图片**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_IMAGE_ENABLED=true` 并另行讨论 `CONTENT_MODERATION_IMAGE_INTAKE_MODE=moderated`。
-6. **腾讯视频**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=true` 并另行讨论 `CONTENT_MODERATION_VIDEO_INTAKE_MODE=moderated`。
+3. **生产受控预演（D45.18A）**：运行一次性预演 Job；它使用隔离的预演表、对象前缀和回调关联，不依赖 `*_INTAKE_MODE` 隔离正常流量。该步骤只验证 harmless pass、鉴权、私有 COS 读取、回调、标准化结果和清理。
+4. **微信文本**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_TEXT_ENABLED=true`；启用后自动进入审核，观察至少一个业务高峰窗口。
+5. **微信图片**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_WECHAT_IMAGE_ENABLED=true`；启用后自动进入审核。
+6. **腾讯视频**：D45.18A 与 D45.18B 均完成并人工复核后，才可设置 `CONTENT_MODERATION_TENCENT_VIDEO_ENABLED=true`；启用后自动进入审核。
 
 每个阶段只在前一阶段的错误率、队列年龄、回调认证失败和人工队列容量满足预设阈值后继续；任何不确定状态均停止推进而不是放宽门禁。
 
 ## 7. 回滚与事件处置
 
-- 单一服务商异常：把对应的 `CONTENT_MODERATION_TEXT_INTAKE_MODE`、`CONTENT_MODERATION_IMAGE_INTAKE_MODE` 或 `CONTENT_MODERATION_VIDEO_INTAKE_MODE` 设为 `closed`，保留私有 COS、读取门禁、现有任务、管理员队列和审计。不要用 provider 开关代替该动作；只要存在已有任务，就保持相应 provider、Worker 和回调运行。
-- 全局提交异常：把三个 `*_INTAKE_MODE` 全部设为 `closed`，仍不得把 `pending`/`processing`/`review`/`error` 批量改成 `approved`；先评估已有隐藏内容并修复服务商配置。不得在接受用户写入的环境中关闭 `CONTENT_MODERATION_ENABLED` 作为回滚手段。
+- 单一服务商异常：已有任务保持隐藏、重试和审计。若后续新提交需要进入 unavailable fallback，关闭对应 provider enabled 配置并重启/滚动发布，使能力快照先变为 unavailable；DB 双开关随后决定直发或阻断，所需阻断值可在发布前预置。此时暂停的 provider 任务要等配置恢复后继续处理。若不能等待配置发布，使用平台级维护。仅打开 DB 开关并保持 provider enabled 不会动态阻断。
+- 全局提交异常：已有任务仍保持隐藏。若要让全部后续提交进入 unavailable fallback，关闭对应 provider enabled 配置并重启/滚动发布，使能力快照先变为 unavailable；全局与三个类型 DB 开关随后决定直发或阻断，所需阻断值可在发布前预置。若必须立即停止流量，使用经审批的网关/部署维护机制。不得把 `pending`/`processing`/`review`/`error` 批量改成 `approved`，也不得依赖旧 `*_INTAKE_MODE`。
 - 重试 Worker 异常：优先修复后恢复 Worker，让租约和重试状态自行接管；不要手工清空任务或伪造 provider attempt。
 - 回调异常：保留事件入口和门禁，修复 token/AES key/反向代理/CAM 配置后用无害样本重试；不要关闭签名校验以换取可用性。
 - 孤儿清理异常：立即把 `CONTENT_MODERATION_ORPHAN_CLEANUP_ENABLED=false`，保留 report-only 扫描，核对引用、历史回填和 CAM 范围。
@@ -207,11 +203,10 @@ CONTENT_MODERATION_QUEUE_ALERT_AGE_SECONDS=900
 
 此步骤只使用代码白名单无害样本和专用测试管理员身份。它不接收调用方正文、openid、对象 Key、URL、回调地址或 provider 参数，不写普通审核任务、提案、相册媒体、普通重试队列、通知或用户 URL。
 
+预演使用独立的数据表、私有对象前缀与 HMAC 回调关联，不写普通业务内容，因此不读取或要求任何 `*_INTAKE_MODE`。它也不会暂停、隔离或证明正常用户流量已停止；如变更流程要求维护窗口，必须另行启用经审批的网关/部署维护机制。
+
 前置条件：
 
-- `CONTENT_MODERATION_TEXT_INTAKE_MODE=closed`
-- `CONTENT_MODERATION_IMAGE_INTAKE_MODE=closed`
-- `CONTENT_MODERATION_VIDEO_INTAKE_MODE=closed`
 - `CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true`
 - 操作人是仍然 active 的 `system_admin`
 - `D45_PREFLIGHT_CONFIRMATION` 由当次人工确认提供，不写入仓库、日志或截图
@@ -244,9 +239,9 @@ PINCHE_API_IMAGE="<当前 API 已验证的不可变镜像引用（repo@sha256:..
   npm run job:content-moderation-production-preflight -- --case=tencent-video-v1
 ```
 
-`PINCHE_API_IMAGE` 必须替换为当前 API 已核验的 **同一不可变 digest**，不得使用 `latest`。`--pull never` 使本机未缓存该 digest 时关闭式失败，而不是拉取新镜像。`-e D45_PREFLIGHT_CONFIRMATION` 显式把仅本次有效的宿主机变量传入一次性容器；不得将该值写入 `.env.production`、Compose 文件、日志或截图。预演显式 `-e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true` 只作用于该 `--rm` 容器，不改变常驻 API/Worker 或任何 intake 门禁。
+`PINCHE_API_IMAGE` 必须替换为当前 API 已核验的 **同一不可变 digest**，不得使用 `latest`。`--pull never` 使本机未缓存该 digest 时关闭式失败，而不是拉取新镜像。`-e D45_PREFLIGHT_CONFIRMATION` 显式把仅本次有效的宿主机变量传入一次性容器；不得将该值写入 `.env.production`、Compose 文件、日志或截图。预演显式 `-e CONTENT_MODERATION_PRODUCTION_PREFLIGHT_ENABLED=true` 只作用于该 `--rm` 容器，不改变常驻 API/Worker 或正常用户流量策略。
 
-文本预演是同步结果，成功时应记录为 `passed`。图片与视频预演是异步结果：一次性 Job 提交成功后可能先返回 `awaiting_callback`，此时必须继续等待微信安全事件或腾讯云 CI Detail 回调命中预演 HMAC。只有对应 preflight run 最终变为 `passed`，且 `cleanup_status=deleted`，才算该 case 完成。若回调返回 `review`、`block`、`error`、超时或清理失败，均视为预演失败；保持三个入口 `closed`，查看脱敏 preflight run 状态，先处理清理失败、鉴权失败或回调失败，再重试。不要上传危险样本做真实生产验证。
+文本预演是同步结果，成功时应记录为 `passed`。图片与视频预演是异步结果：一次性 Job 提交成功后可能先返回 `awaiting_callback`，此时必须继续等待微信安全事件或腾讯云 CI Detail 回调命中预演 HMAC。只有对应 preflight run 最终变为 `passed`，且 `cleanup_status=deleted`，才算该 case 完成。若回调返回 `review`、`block`、`error`、超时或清理失败，均视为预演失败；查看脱敏 preflight run 状态，先处理清理失败、鉴权失败或回调失败，再重试。是否暂停正常流量由独立变更决定，不得依赖旧 intake mode。不要上传危险样本做真实生产验证。
 
 `content-moderation-production-preflight-timeout` 是与普通重试队列隔离的常驻 Worker。它默认每分钟检查一次已超过 15 分钟的 `started`、`submitting` 或 `awaiting_callback` 预演；文本只写失败并释放锁，图片/视频删除并核验对应私有对象后再原子写失败和释放 provider 锁。可通过上述三个有界配置调整超时、轮询和批量；该 Worker 即使预演功能当前关闭也应保持运行，以便清理之前遗留的预演对象。清理失败同样记录 `cleanup_failed` 并发出高优先级告警，不得开启任何 intake。
 

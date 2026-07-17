@@ -46,7 +46,11 @@
     <view class="section">
       <view class="section-head">
         <view class="section-title">照片</view>
-        <t-button class="photo-add" :disabled="photos.length >= 9 || saving" @tap="choosePhotos">
+        <t-button
+          class="photo-add"
+          :disabled="photos.length + pendingPhotoCount >= 9 || saving"
+          @tap="choosePhotos"
+        >
           添加
         </t-button>
       </view>
@@ -70,11 +74,14 @@
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import {
+  acknowledgeSessionReviewPhotoAssociations,
   assetUrl,
+  captureSessionReviewPhotoAssociationCutoff,
   dataOf,
   ensureLoggedIn,
+  recoverPendingSessionReviewPhotos,
   request,
-  uploadSessionReviewPhoto
+  uploadSessionReviewPhotos
 } from "../../utils/api";
 import { contentModerationErrorText } from "../../utils/contentModeration";
 import { showToast } from "../../utils/tdesignFeedback";
@@ -88,13 +95,15 @@ export default {
       rating: 5,
       content: "",
       photos: [],
+      pendingPhotoCount: 0,
       statusText: "",
       saving: false
     };
   },
   computed: {
     canSave() {
-      return this.canReview && this.rating >= 1 && this.rating <= 5;
+      return this.canReview && this.rating >= 1 && this.rating <= 5 &&
+        this.pendingPhotoCount === 0;
     }
   },
   async onLoad(options) {
@@ -129,17 +138,24 @@ export default {
           this.content = data.review.content || "";
           this.photos = data.review.photos || [];
         }
+        const recovered = await recoverPendingSessionReviewPhotos({ sessionId: this.sessionId });
+        this.photos = [...new Set([...this.photos, ...recovered.approvedPaths])].slice(0, 9);
+        this.pendingPhotoCount = Math.min(recovered.pendingCount, 9 - this.photos.length);
+        if (this.pendingPhotoCount > 0) {
+          this.statusText = "内容正在安全审核";
+        }
       } catch (error) {
         this.statusText = "记录加载失败，请稍后重试。";
       }
     },
     choosePhotos() {
-      if (this.photos.length >= 9) {
+      const remaining = 9 - this.photos.length - this.pendingPhotoCount;
+      if (remaining <= 0) {
         showToast({ title: "最多上传9张照片", icon: "none" });
         return;
       }
       uni.chooseImage({
-        count: 9 - this.photos.length,
+        count: remaining,
         sizeType: ["compressed"],
         sourceType: ["album", "camera"],
         success: async (result) => {
@@ -154,11 +170,16 @@ export default {
       this.saving = true;
       this.statusText = "正在上传照片...";
       try {
-        for (const filePath of paths) {
-          const photoUrl = await uploadSessionReviewPhoto(filePath);
-          this.photos.push(photoUrl);
-        }
-        this.statusText = "";
+        const batch = await uploadSessionReviewPhotos(
+          paths.slice(0, 9 - this.photos.length - this.pendingPhotoCount),
+          { sessionId: this.sessionId }
+        );
+        const recovered = await recoverPendingSessionReviewPhotos({ sessionId: this.sessionId });
+        const approvedPaths = [...batch.approvedPaths, ...recovered.approvedPaths];
+        this.photos = [...new Set([...this.photos, ...approvedPaths])].slice(0, 9);
+        this.pendingPhotoCount = Math.min(recovered.pendingCount, 9 - this.photos.length);
+        if (batch.error) throw batch.error;
+        this.statusText = this.pendingPhotoCount > 0 ? "内容正在安全审核" : "";
       } catch (error) {
         this.statusText = error?.userMessage || "照片上传失败，请稍后重试。";
       } finally {
@@ -169,12 +190,19 @@ export default {
       this.photos.splice(index, 1);
     },
     async saveReview() {
+      if (this.pendingPhotoCount > 0) {
+        this.statusText = "内容正在安全审核";
+        return;
+      }
       if (!this.canSave || this.saving) {
         return;
       }
       this.saving = true;
       this.statusText = "正在保存记录...";
       try {
+        const reviewAssociationCutoff = captureSessionReviewPhotoAssociationCutoff({
+          sessionId: this.sessionId
+        });
         await request({
           url: `/api/sessions/${this.sessionId}/review`,
           method: "PUT",
@@ -184,6 +212,10 @@ export default {
             photoUrls: this.photos
           }
         });
+        acknowledgeSessionReviewPhotoAssociations(this.photos,
+          { sessionId: this.sessionId },
+          reviewAssociationCutoff
+        );
         showToast({ title: "记录已保存", icon: "none" });
         setTimeout(() => {
           uni.navigateBack();

@@ -60,7 +60,7 @@ test("D45 orphan scanner persists only bounded cursors and opaque leases", async
   assert.doesNotMatch(sql, /object_key|signed_url|access_token|normalized_payload_json/i);
 });
 
-test("every new album image and video path explicitly starts moderation pending", async () => {
+test("new album image and video paths derive pending versus approved legacy from intake", async () => {
   const service = await readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8");
   const insertStatements = [...service.matchAll(/INSERT INTO session_album_photos[\s\S]*?VALUES\s*\([\s\S]*?\)/g)]
     .map((match) => match[0]);
@@ -68,8 +68,12 @@ test("every new album image and video path explicitly starts moderation pending"
   assert.equal(insertStatements.length, 3);
   for (const statement of insertStatements) {
     assert.match(statement, /moderation_status/);
-    assert.match(statement, /'pending'/);
+    assert.doesNotMatch(statement, /'pending'/);
   }
+  assert.equal(
+    [...service.matchAll(/moderationStatusForIntake\(/g)].length >= 3,
+    true
+  );
 });
 
 function moderationMigrationConnection({

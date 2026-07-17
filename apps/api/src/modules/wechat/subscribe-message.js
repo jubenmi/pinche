@@ -157,7 +157,7 @@ export async function notifySignupReviewed(payload = {}) {
   });
 }
 
-export async function notifySessionRescheduled(payload = {}) {
+export async function notifySessionRescheduled(payload = {}, options = {}) {
   payload = payload || {};
   return sendSubscribeMessage({
     scene: "session_rescheduled",
@@ -165,5 +165,5 @@ export async function notifySessionRescheduled(payload = {}) {
     templateId: config.subscribeMessage.sessionRescheduledTemplateId,
     page: `/pages/session/detail?id=${payload.sessionId}`,
     data: rescheduleMessageData(payload)
-  });
+  }, options);
 }

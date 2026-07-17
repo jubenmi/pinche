@@ -1,5 +1,9 @@
 import { badRequest, notFound } from "../../http/errors.js";
-import { MODERATION_PROVIDERS, MODERATION_RETRY_ROUTES } from "./constants.js";
+import {
+  MODERATION_IMAGE_SUBJECT_TYPES,
+  MODERATION_PROVIDERS,
+  MODERATION_RETRY_ROUTES
+} from "./constants.js";
 import { buildTextModerationDescriptor } from "./text-boundaries.js";
 
 const DEFAULT_LIST_LIMIT = 100;
@@ -211,7 +215,7 @@ function nullableTimestamp(value) {
 }
 
 function isMediaSubject(subjectType) {
-  return subjectType === "album_image" || subjectType === "album_video";
+  return MODERATION_IMAGE_SUBJECT_TYPES.includes(subjectType) || subjectType === "album_video";
 }
 
 function mediaMetadata(row, { previewUrl = null, previewExpiresAt = null } = {}) {

@@ -1722,7 +1722,7 @@ export default {
     async downloadAlbumImage(photo, variant = "preview", options = {}) {
       let targetPhoto = this.latestPreviewPhoto(photo);
       if (!this.isCurrentPublishedAlbumMedia(targetPhoto)) {
-        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", contentModerationStatusText("review"));
       }
       if (!options.skipRefresh && this.shouldRefreshAlbumMediaBeforeDownload(targetPhoto, variant)) {
         const refreshed = await this.refreshAlbumMediaUrlsForPreview();
@@ -1731,7 +1731,7 @@ export default {
         }
       }
       if (!this.isCurrentPublishedAlbumMedia(targetPhoto)) {
-        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", contentModerationStatusText("review"));
       }
       try {
         return await this.downloadAlbumImageOnce(targetPhoto, variant);
@@ -1758,7 +1758,7 @@ export default {
       }
       const current = this.latestPreviewPhoto(photo);
       if (!this.isCurrentPublishedAlbumMedia(current)) {
-        throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+        throw albumMediaError("MEDIA_NOT_PUBLISHED", contentModerationStatusText("review"));
       }
       try {
         return await this.downloadAlbumImageOnce(current, variant);
@@ -3487,7 +3487,7 @@ export default {
           this.downloadProgressText = `正在保存 ${index + 1}/${photos.length} 张照片...`;
           try {
             if (!this.isCurrentPublishedAlbumMedia(photo)) {
-              throw albumMediaError("MEDIA_NOT_PUBLISHED", "相册媒体尚未通过审核");
+              throw albumMediaError("MEDIA_NOT_PUBLISHED", contentModerationStatusText("review"));
             }
             const cachedPreview = this.visiblePhotoMedia[photo.id]?.preview || photo.display_url;
             const filePath = cachedPreview || (await this.downloadAlbumImage(photo, "download"));

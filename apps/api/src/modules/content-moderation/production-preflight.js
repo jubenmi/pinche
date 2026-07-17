@@ -68,13 +68,6 @@ export function assertProductionPreflightGuards(runtime, caseId, options = {}) {
   if (runtime.operatorRole !== "system_admin" || runtime.operatorStatus !== "active") {
     throw new Error("production preflight requires an active system_admin operator");
   }
-  if (
-    runtime.intakeModes?.text !== "closed" ||
-    runtime.intakeModes?.image !== "closed" ||
-    runtime.intakeModes?.video !== "closed"
-  ) {
-    throw new Error("production preflight intake modes must remain closed");
-  }
   const requiredFlags = PROVIDER_FLAGS_BY_CASE[caseId];
   if (requiredFlags.some((flag) => !runtime.providerConfig?.[flag])) {
     throw new Error("production preflight target provider config is incomplete");

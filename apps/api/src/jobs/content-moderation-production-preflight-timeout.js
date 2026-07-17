@@ -149,11 +149,6 @@ async function buildProductionPreflightTimeoutRuntime({ moderationConfig, withDa
     operatorUserId,
     operatorRole: "system_admin",
     operatorStatus,
-    intakeModes: {
-      text: moderationConfig?.textIntakeMode,
-      image: moderationConfig?.imageIntakeMode,
-      video: moderationConfig?.videoIntakeMode
-    },
     providerConfig: {
       wechatText: Boolean(moderationConfig?.wechatTextEnabled && moderationConfig?.wechatAppId && moderationConfig?.wechatAppSecret),
       wechatImage: Boolean(moderationConfig?.wechatImageEnabled && moderationConfig?.wechatAppId && moderationConfig?.wechatAppSecret),

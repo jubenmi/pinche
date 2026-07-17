@@ -284,13 +284,16 @@ import {
   AUTH_PROFILE_ACK_EVENT,
   AUTH_PROFILE_REQUEST_EVENT,
   AUTH_PROFILE_RESPONSE_EVENT,
+  acknowledgeUserAvatarAssociation,
   assetUrl,
+  captureUserAvatarAssociationCutoff,
   clearAuth,
   clearCurrentUserAvatarUrl,
   goHomeAfterLogout,
   getCurrentUser,
   getToken,
   refreshCurrentAuth,
+  recoverPendingUserAvatar,
   uploadUserAvatar,
   updateUserPhoneFromWechatPhoneCode,
   updateUserGender,
@@ -897,6 +900,14 @@ export default {
       this.messagePanelVisible = false;
       this.profileVisible = true;
       this.syncProfileDrafts();
+      try {
+        const recoveredAvatarUrl = await recoverPendingUserAvatar();
+        if (recoveredAvatarUrl) {
+          this.draftAvatarUrl = recoveredAvatarUrl;
+        }
+      } catch {
+        // Pending or temporarily unavailable recovery must not block profile editing.
+      }
     },
     openPhoneModal(required = false) {
       if (!this.user) {
@@ -1082,10 +1093,12 @@ export default {
           patch.gender = this.draftGender;
         }
 
+        const avatarAssociationCutoff = captureUserAvatarAssociationCutoff();
         const auth = await updateUserProfile(patch);
         if (!auth?.user) {
           throw new Error("Missing updated user");
         }
+        acknowledgeUserAvatarAssociation(avatarUrl, avatarAssociationCutoff);
         this.user = auth.user;
         this.roles = auth.roles || [];
         this.syncProfileDrafts();

@@ -83,20 +83,21 @@ for (const key of [
 assert.match(moderationEnv, /orphanCleanupEnabled && !moderationConfig\.orphanScanEnabled/);
 assert.doesNotMatch(moderationEnv, /TENCENT_TMS|TENCENT_CI_IMAGE/);
 assert.match(moderationIntakeGate, /CONTENT_MODERATION_INTAKE_CLOSED/);
-assert.match(moderationIntakeGate, /provider_disabled/);
+assert.match(moderationIntakeGate, /fallback_blocked/);
 assert.match(albumImageUploadService, /function assertImageIntake/);
 for (const type of ["text", "image", "video"]) {
   assert.match(
     server,
-    new RegExp(`assertContentModerationIntake\\(config\\.contentModeration, "${type}"\\)`)
+    new RegExp(`resolveContentSecurityIntake\\("${type}"\\)`)
   );
 }
+assert.doesNotMatch(server, /assertContentModerationIntake\(/);
 assert.match(coreService, /const assertVideoIntake = options\.assertVideoIntake/);
 assert.match(productionEnvExample, /CONTENT_MODERATION_ENABLED=true/);
 for (const mode of [
-  "CONTENT_MODERATION_TEXT_INTAKE_MODE=closed",
-  "CONTENT_MODERATION_IMAGE_INTAKE_MODE=closed",
-  "CONTENT_MODERATION_VIDEO_INTAKE_MODE=closed"
+  "CONTENT_MODERATION_TEXT_INTAKE_MODE=legacy",
+  "CONTENT_MODERATION_IMAGE_INTAKE_MODE=legacy",
+  "CONTENT_MODERATION_VIDEO_INTAKE_MODE=legacy"
 ]) {
   assert.equal(productionEnvExample.includes(mode), true, `missing production intake default: ${mode}`);
 }
@@ -148,7 +149,9 @@ for (const statement of [
   "CONTENT_MODERATION_PRODUCTION_PREFLIGHT_CALLBACK_TIMEOUT_MS",
   "不启用腾讯云 TMS、腾讯云 CI 图片审核、COS 图片自动审核",
   "CONTENT_MODERATION_INTAKE_CLOSED",
-  "审核 provider 开关不是流量开关",
+  "不是维护开关",
+  "不是逐请求动态健康检查",
+  "仅打开 DB 开关并保持 provider enabled 不会动态阻断",
   "回滚"
 ]) {
   assert.equal(runbook.includes(statement), true, `runbook missing: ${statement}`);

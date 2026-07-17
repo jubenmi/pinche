@@ -8,7 +8,7 @@ const nowMs = Date.parse("2026-07-11T01:00:00.000Z");
 const user = { user: { id: 3 }, roles: [] };
 const objectKey = "uploads/session-album/display/album-8-3-1-a.jpg";
 
-function harness() {
+function harness({ includeIntake = true, includeModerationJob = true } = {}) {
   const intent = {
     id: "00000000-0000-4000-8000-000000000043",
     user_id: 3,
@@ -34,16 +34,21 @@ function harness() {
     validationCalls: 0,
     intakeOpen: true,
     beforeTransaction: null,
+    intakeWait: null,
+    intakeResult: { moderationRequired: true },
+    insertInput: null,
     mediaMissing: false
     ,moderationCreated: 0
     ,moderationSubmitted: 0
+    ,intakeConnections: []
+    ,transactionConnection: null
   };
   let transactionTail = Promise.resolve();
   const transaction = (run) => {
     const next = transactionTail.then(async () => {
       state.beforeTransaction?.(intent);
       state.timeline.push("transaction_begin");
-      const result = await run({
+      const connection = {
         async query(sql, values) {
           assert.match(String(sql), /UPDATE session_album_upload_intents/);
           if (!["pending", "processing"].includes(intent.status)) return [{ affectedRows: 0 }];
@@ -52,7 +57,9 @@ function harness() {
           intent.object_etag = String(values[5]);
           return [{ affectedRows: 1 }];
         }
-      });
+      };
+      state.transactionConnection = connection;
+      const result = await run(connection);
       state.timeline.push("transaction_commit");
       return result;
     });
@@ -60,7 +67,10 @@ function harness() {
     return next;
   };
   const repository = {
-    find: async () => intent,
+    find: async (connection) => {
+      if (connection === state.transactionConnection) state.timeline.push("find_intent");
+      return intent;
+    },
     findByObjectKey: async (_connection, input) =>
       input.userId === 3 && input.objectKey === objectKey ? intent : null,
     markState: async (_connection, input) => {
@@ -78,16 +88,21 @@ function harness() {
     object_key: objectKey, object_etag: "etag-43", image_width: 1600,
     image_height: 1200, image_byte_size: 1234, image_content_type: "image/jpeg"
   };
-  const service = createAlbumImageUploadService({
+  const dependencies = {
     now: () => nowMs,
     withDatabaseConnection: async (run) => run({}),
     transaction,
-    assertImageIntake: () => {
+    assertImageIntake: (connection) => {
+      state.intakeConnections.push(connection);
+      state.timeline.push(connection ? "final_intake" : "preflight_intake");
       if (!state.intakeOpen) {
         throw new AppError(503, "CONTENT_MODERATION_INTAKE_CLOSED", "closed");
       }
+      if (state.intakeWait && !connection) return state.intakeWait();
+      return state.intakeResult;
     },
-    access: async () => {
+    access: async (connection) => {
+      if (connection === state.transactionConnection) state.timeline.push("authorize");
       if (!state.allowed) throw new AppError(403, "FORBIDDEN", "revoked");
       return { id: 8 };
     },
@@ -96,7 +111,12 @@ function harness() {
       state.validationCalls += 1;
       return state.validation;
     },
-    insertFinalizedImage: async () => {
+    insertFinalizedImage: async (_connection, input) => {
+      state.timeline.push("insert_media");
+      state.insertInput = input;
+      photoRow.moderation_status = input.moderationRequired === false
+        ? "approved_legacy"
+        : "pending";
       state.insertedMedia.push(photoRow);
       return photoRow;
     },
@@ -120,7 +140,10 @@ function harness() {
     },
     emit: (event, fields) => state.events.push({ event, fields }),
     cosConfig: { enabled: true, secretId: "id", secretKey: "secret", bucket: "b", region: "r" }
-  });
+  };
+  if (!includeIntake) delete dependencies.assertImageIntake;
+  if (!includeModerationJob) delete dependencies.createWechatImageModerationJob;
+  const service = createAlbumImageUploadService(dependencies);
   return { service, state, intent, repository };
 }
 
@@ -133,6 +156,65 @@ test("a closed intake rejects image finalize before storage inspection or media 
     statusCode: 503
   });
   assert.equal(state.validationCalls, 0);
+  assert.equal(state.insertedMedia.length, 0);
+});
+
+test("an asynchronous image intake decision settles before finalize inspects storage", async () => {
+  const { service, state, intent } = harness();
+  let releaseIntake;
+  state.intakeWait = () => new Promise((resolve) => { releaseIntake = resolve; });
+  const pending = service.finalize({ user, uploadId: intent.id });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.validationCalls, 0);
+  assert.equal(state.insertedMedia.length, 0);
+  releaseIntake();
+  await pending;
+  assert.equal(state.validationCalls, 1);
+});
+
+test("direct fallback finalizes as approved legacy and creates no moderation job", async () => {
+  const { service, state, intent } = harness();
+  state.intakeResult = { moderationRequired: false };
+
+  const result = await service.finalize({ user, uploadId: intent.id });
+
+  assert.equal(state.insertInput.moderationRequired, false);
+  assert.equal(result.photo.moderation_status, "approved_legacy");
+  assert.equal(state.moderationCreated, 0);
+  assert.equal(state.moderationSubmitted, 0);
+});
+
+test("finalize repeats intake under the business transaction lock before inserting media", async () => {
+  const { service, state, intent } = harness();
+  await service.finalize({ user, uploadId: intent.id });
+
+  assert.equal(state.intakeConnections.length, 2);
+  assert.equal(state.intakeConnections[0], undefined);
+  assert.ok(state.intakeConnections[1]);
+  const transactionStart = state.timeline.indexOf("transaction_begin");
+  assert.deepEqual(state.timeline.slice(transactionStart, transactionStart + 5), [
+    "transaction_begin",
+    "final_intake",
+    "find_intent",
+    "authorize",
+    "insert_media"
+  ]);
+});
+
+test("missing lower-level image intake wiring defaults to approved legacy", async () => {
+  const { service, state, intent } = harness({ includeIntake: false });
+  const result = await service.finalize({ user, uploadId: intent.id });
+  assert.equal(result.photo.moderation_status, "approved_legacy");
+  assert.equal(state.moderationCreated, 0);
+});
+
+test("required image moderation without a job hook fails before media insertion", async () => {
+  const { service, state, intent } = harness({ includeModerationJob: false });
+  await assert.rejects(service.finalize({ user, uploadId: intent.id }), {
+    code: "CONTENT_MODERATION_CONFIGURATION_ERROR",
+    statusCode: 500
+  });
   assert.equal(state.insertedMedia.length, 0);
 });
 
@@ -170,7 +252,12 @@ test("finalize creates the WeChat task inside its transaction and submits after 
   await service.finalize({ user, uploadId: "00000000-0000-4000-8000-000000000043" });
 
   assert.deepEqual(state.timeline, [
+    "preflight_intake",
     "transaction_begin",
+    "final_intake",
+    "find_intent",
+    "authorize",
+    "insert_media",
     "create_moderation_job",
     "transaction_commit",
     "submit_moderation"

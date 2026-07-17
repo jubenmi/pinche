@@ -3,6 +3,7 @@ const USER_KEY = "pinche_admin_web_user";
 const ROLES_KEY = "pinche_admin_web_roles";
 import { shouldAttachAdminAuthorization } from "./albumMedia";
 import { buildModerationListFilters } from "./contentModeration";
+import { createContentSecuritySettingsClient } from "./contentSecurity";
 let cosClient = null;
 let cosSdkConstructor = null;
 const albumUploadsByKey = new Map();
@@ -62,6 +63,8 @@ export async function apiRequest(path, options = {}) {
   });
   return parseResponse(response);
 }
+
+const contentSecuritySettingsClient = createContentSecuritySettingsClient(apiRequest);
 
 export function assetUrl(path) {
   if (!path) {
@@ -389,6 +392,14 @@ export function retryContentModerationJob(jobId) {
     method: "POST",
     body: {}
   });
+}
+
+export function getContentSecuritySettings() {
+  return contentSecuritySettingsClient.get();
+}
+
+export function updateContentSecuritySettings(settings) {
+  return contentSecuritySettingsClient.update(settings);
 }
 
 export function listStores(filters) {

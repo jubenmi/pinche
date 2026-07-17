@@ -35,6 +35,16 @@
           <span class="nav-icon">审</span>
           <span class="nav-text">内容审核</span>
         </button>
+        <button
+          v-if="canManageContentSecurity"
+          class="nav-item"
+          :class="{ active: activeView === 'content-security' }"
+          type="button"
+          @click="switchActiveView('content-security')"
+        >
+          <span class="nav-icon">安</span>
+          <span class="nav-text">内容安全</span>
+        </button>
       </nav>
       <button class="sidebar-collapse" type="button" @click="sidebarCollapsed = !sidebarCollapsed">
         {{ sidebarCollapsed ? "展开" : "收起" }}
@@ -103,6 +113,15 @@
         <p>内容审核仅限系统管理员使用。</p>
         <button class="secondary-action" type="button" @click="switchActiveView('catalog')">返回管理界面</button>
       </section>
+      <ContentSecurityWorkspace
+        v-else-if="activeView === 'content-security' && canManageContentSecurity"
+      />
+      <section v-else-if="activeView === 'content-security'" class="moderation-access-denied">
+        <p class="eyebrow">ACCESS RESTRICTED</p>
+        <h2>无内容安全设置权限</h2>
+        <p>内容安全仅限系统管理员使用。</p>
+        <button class="secondary-action" type="button" @click="switchActiveView('catalog')">返回管理界面</button>
+      </section>
       <MiniProgramWorkspace
         v-else
         :initial-screen="initialRoute.miniScreen"
@@ -122,6 +141,7 @@ import { assetUrl, clearStoredAuth, getStoredAuth } from "./api";
 import { parseAdminRouteQuery, writeAdminRoute } from "./adminRoute";
 import CatalogWorkspace from "./components/CatalogWorkspace.vue";
 import ContentModerationWorkspace from "./components/ContentModerationWorkspace.vue";
+import ContentSecurityWorkspace from "./components/ContentSecurityWorkspace.vue";
 import LoginPanel from "./components/LoginPanel.vue";
 import MiniProgramWorkspace from "./components/MiniProgramWorkspace.vue";
 
@@ -135,6 +155,7 @@ const buildVersion = `版本号 ${__PINCHE_BUILD_TIME__}`;
 const user = computed(() => auth.value.user || {});
 const roles = computed(() => auth.value.roles || []);
 const canReviewContent = computed(() => roles.value.includes("system_admin"));
+const canManageContentSecurity = computed(() => roles.value.includes("system_admin"));
 const rolesText = computed(() => (roles.value.length > 0 ? roles.value.join(" / ") : "无"));
 const avatarUrl = computed(() => user.value.avatarUrl || user.value.avatar_url || "");
 const displayName = computed(() => {
@@ -194,6 +215,9 @@ const fullProfileRows = computed(() => [
   { label: "角色", value: rolesText.value }
 ]);
 const pageTitle = computed(() => {
+  if (activeView.value === "content-security") {
+    return "内容安全";
+  }
   if (activeView.value === "moderation") {
     return "内容审核";
   }

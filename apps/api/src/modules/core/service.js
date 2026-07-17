@@ -1,4 +1,5 @@
 import { withDatabaseConnection, withTransaction } from "../../db/mysql.js";
+import { config } from "../../config/env.js";
 import {
   AppError,
   badRequest,
@@ -39,6 +40,13 @@ import {
   normalizeSessionRescheduleStartAt
 } from "./session-reschedule.js";
 import { enqueueRejectedMediaCleanup } from "../content-moderation/repository.js";
+import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
+import {
+  findOwnedUserImageAssetById,
+  findOwnedPublishedUserImageAsset,
+  scheduleUserImageAssetCleanup
+} from "../user-image-assets/repository.js";
+import { cosStorageEnabled } from "../../storage/cos.js";
 import { isModerationPublished } from "@pinche/shared";
 
 const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
@@ -5884,13 +5892,17 @@ export async function assertSessionAlbumImageUploadAllowed(
   return session;
 }
 
-export async function insertFinalizedSessionAlbumImage(connection, { intent, metadata }) {
+export async function insertFinalizedSessionAlbumImage(
+  connection,
+  { intent, metadata, moderationRequired = false }
+) {
+  const moderationStatus = moderationStatusForIntake({ moderationRequired });
   const [result] = await connection.query(
     `INSERT INTO session_album_photos
       (session_id, uploader_user_id, media_type, photo_url, object_key, object_etag,
        image_width, image_height, image_byte_size, image_content_type,
        processing_status, moderation_status, moderation_object_version, status)
-     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', 'pending', ?, 'active')`,
+     VALUES (?, ?, 'image', ?, ?, ?, ?, ?, ?, 'image/jpeg', 'ready', ?, ?, 'active')`,
     [
       Number(intent.session_id),
       Number(intent.user_id),
@@ -5900,6 +5912,7 @@ export async function insertFinalizedSessionAlbumImage(connection, { intent, met
       metadata.width,
       metadata.height,
       metadata.byteSize,
+      moderationStatus,
       metadata.etag
     ]
   );
@@ -6170,7 +6183,7 @@ export async function listPublicSessionAlbumShare(claims) {
   });
 }
 
-export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
+export async function createSessionAlbumPhoto(user, sessionId, body = {}, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   const photoUrl = sessionAlbumPhotoUrl(id, user.user.id, body.photoUrl || body.photo_url);
   const imageWidth = requiredPositiveInteger(body.imageWidth ?? body.image_width, "imageWidth");
@@ -6185,9 +6198,23 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
   if (imageContentType !== "image/jpeg") {
     throw badRequest("imageContentType must be image/jpeg");
   }
-  return withTransaction(async (connection) => {
+  const runWithTransaction = options.withTransaction || withTransaction;
+  const authorize = options.authorizeSessionAlbumPhotoCreate || (async (connection) => {
     const session = await requireSessionAlbumOpen(connection, id);
     await requireSessionAlbumMember(connection, session, user);
+  });
+  return runWithTransaction(async (connection) => {
+    const intake = await options.assertImageIntake?.(connection);
+    await authorize(connection, id, user);
+    const moderationRequired = intake?.moderationRequired === true;
+    if (moderationRequired) {
+      throw new AppError(
+        500,
+        "CONTENT_MODERATION_CONFIGURATION_ERROR",
+        "Local album image moderation job wiring is unavailable"
+      );
+    }
+    const moderationStatus = moderationStatusForIntake({ moderationRequired });
     const [result] = await connection.query(
       `
         INSERT INTO session_album_photos
@@ -6205,7 +6232,7 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
             moderation_object_version,
             status
           )
-        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', 'pending', ?, 'active')
+        VALUES (?, ?, 'image', ?, ?, ?, ?, ?, 'ready', ?, ?, 'active')
       `,
       [
         id,
@@ -6215,6 +6242,7 @@ export async function createSessionAlbumPhoto(user, sessionId, body = {}) {
         imageHeight,
         imageByteSize,
         imageContentType,
+        moderationStatus,
         `local:${photoUrl}:${imageByteSize}`
       ]
     );
@@ -6265,17 +6293,19 @@ function inspectedAlbumVideoMetadata(value) {
 
 function sessionAlbumVideoCreateResponse(media, fallbackProcessingStatus, userId) {
   const isMine = Number(media.uploader_user_id) === Number(userId);
+  const moderationStatus = media.moderation_status || "pending";
+  const published = isModerationPublished(moderationStatus);
   return {
     id: Number(media.id),
     session_id: Number(media.session_id),
     media_type: "video",
     processing_status: media.processing_status || fallbackProcessingStatus,
-    moderation_status: media.moderation_status || "pending",
-    moderation_message: "内容正在审核",
+    moderation_status: moderationStatus,
+    moderation_message: published ? null : "内容正在审核",
     uploader_user_id: Number(media.uploader_user_id),
     is_mine: isMine,
     can_delete: isMine,
-    can_tag: false,
+    can_tag: published,
     duration_seconds: media.duration_seconds ? Number(media.duration_seconds) : null,
     video_width: media.video_width ? Number(media.video_width) : null,
     video_height: media.video_height ? Number(media.video_height) : null,
@@ -6324,7 +6354,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
   await runWithDatabaseConnection((connection) =>
     authorize(connection, id, user, { forUpdate: false })
   );
-  assertVideoIntake?.();
+  await assertVideoIntake?.();
   const {
     byteSize: videoByteSize,
     contentType: videoContentType,
@@ -6344,15 +6374,24 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
     sourceUrl,
     findExisting: (candidateSourceUrl) =>
       runWithTransaction(async (connection) => {
+        await assertVideoIntake?.(connection);
         await authorize(connection, id, user, { forUpdate: true });
-        assertVideoIntake?.();
         return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
           forUpdate: true
         });
       }),
     insert: (candidateSourceUrl) => runWithTransaction(async (connection) => {
+      const intake = await assertVideoIntake?.(connection);
       await authorize(connection, id, user, { forUpdate: true });
-      assertVideoIntake?.();
+      const moderationRequired = intake?.moderationRequired === true;
+      if (moderationRequired && typeof options.createVideoModerationJob !== "function") {
+        throw new AppError(
+          500,
+          "CONTENT_MODERATION_CONFIGURATION_ERROR",
+          "Content moderation job wiring is incomplete"
+        );
+      }
+      const moderationStatus = moderationStatusForIntake({ moderationRequired });
       const [result] = await connection.query(
         `
           INSERT INTO session_album_photos
@@ -6375,7 +6414,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
               moderation_object_version,
               status
             )
-          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'active')
+          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
         `,
         [
           id,
@@ -6390,11 +6429,12 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
           videoContentType,
           ciJobId,
           processingStatus,
+          moderationStatus,
           videoObjectVersion
         ]
       );
       const insertedMedia = await findById(connection, "session_album_photos", result.insertId);
-      if (typeof options.createVideoModerationJob === "function") {
+      if (moderationRequired) {
         moderationJob = await options.createVideoModerationJob(connection, {
           media: insertedMedia,
           objectKey: candidateSourceUrl.replace(/^\//, ""),
@@ -6409,8 +6449,8 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
     // performs locked current-read authorization and reads the winner.
     findAfterDuplicateOnFreshConnection: (candidateSourceUrl) =>
       runWithTransaction(async (connection) => {
+        await assertVideoIntake?.(connection);
         await authorize(connection, id, user, { forUpdate: true });
-        assertVideoIntake?.();
         return findActiveSessionAlbumVideoBySource(connection, id, candidateSourceUrl, {
           forUpdate: true
         });
@@ -6905,10 +6945,13 @@ async function reviewPhotos(connection, reviewIds) {
   const placeholders = reviewIds.map(() => "?").join(", ");
   const [rows] = await connection.query(
     `
-      SELECT review_id, photo_url
-      FROM session_review_photos
-      WHERE review_id IN (${placeholders})
-      ORDER BY review_id, sort_order, id
+      SELECT photo.review_id, photo.photo_url
+      FROM session_review_photos AS photo
+      JOIN user_image_assets AS asset ON asset.id = photo.image_asset_id
+      WHERE photo.review_id IN (${placeholders})
+        AND asset.status = 'active'
+        AND asset.moderation_status IN ('approved', 'approved_legacy')
+      ORDER BY photo.review_id, photo.sort_order, photo.id
     `,
     reviewIds
   );
@@ -6990,6 +7033,16 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
   const rating = reviewRating(body.rating);
   const content = reviewContent(body.content);
   const photoUrls = assertSessionReviewPhotoUrls(body.photoUrls);
+  const photoAssetCandidates = [];
+  for (const photoUrl of photoUrls) {
+    const asset = await findOwnedPublishedUserImageAsset(connection, {
+      ownerUserId: user.user.id,
+      kind: "review",
+      path: photoUrl
+    });
+    if (!asset) throw badRequest("photoUrls must reference your approved uploaded review photos");
+    photoAssetCandidates.push(asset);
+  }
 
   const eligibleSignup = await currentEligibleSignup(connection, id, user.user.id);
   if (!eligibleSignup) {
@@ -7017,21 +7070,64 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
       WHERE session_id = ?
         AND user_id = ?
       LIMIT 1
+      FOR UPDATE
     `,
     [id, user.user.id]
   );
   const review = reviewRows[0];
+  const [oldPhotoRows] = await connection.query(
+    `SELECT image_asset_id FROM session_review_photos
+     WHERE review_id = ? FOR UPDATE`,
+    [review.id]
+  );
+  const requestedPhotoAssetIds = new Set(
+    photoAssetCandidates.map((asset) => Number(asset.id))
+  );
+  const orderedAssetIds = [...new Set([
+    ...requestedPhotoAssetIds,
+    ...oldPhotoRows.map((photo) => Number(photo.image_asset_id || 0)).filter(Boolean)
+  ])].sort((left, right) => left - right);
+  const lockedPhotoAssets = new Map();
+  for (const assetId of orderedAssetIds) {
+    const asset = await findOwnedUserImageAssetById(connection, {
+      ownerUserId: user.user.id,
+      assetId
+    }, { forUpdate: true });
+    if (!requestedPhotoAssetIds.has(assetId)) continue;
+    if (!asset || String(asset.kind) !== "review" || String(asset.status) !== "active" ||
+        !isModerationPublished(asset.moderation_status)) {
+      throw badRequest("photoUrls must reference your approved uploaded review photos");
+    }
+    lockedPhotoAssets.set(Number(asset.id), asset);
+  }
+  const photoAssets = photoAssetCandidates.map((candidate, index) => {
+    const asset = lockedPhotoAssets.get(Number(candidate.id));
+    if (!asset || String(asset.asset_path) !== photoUrls[index]) {
+      throw badRequest("photoUrls must reference your approved uploaded review photos");
+    }
+    return asset;
+  });
   await connection.query("DELETE FROM session_review_photos WHERE review_id = ?", [
     review.id
   ]);
   for (const [index, photoUrl] of photoUrls.entries()) {
     await connection.query(
       `
-        INSERT INTO session_review_photos (review_id, photo_url, sort_order)
-        VALUES (?, ?, ?)
+        INSERT INTO session_review_photos (review_id, photo_url, image_asset_id, sort_order)
+        VALUES (?, ?, ?, ?)
       `,
-      [review.id, photoUrl, index]
+      [review.id, photoUrl, Number(photoAssets[index].id), index]
     );
+  }
+  const nextPhotoAssetIds = new Set(photoAssets.map((asset) => Number(asset.id)));
+  for (const oldPhoto of oldPhotoRows) {
+    const oldAssetId = Number(oldPhoto.image_asset_id || 0);
+    if (oldAssetId > 0 && !nextPhotoAssetIds.has(oldAssetId)) {
+      await scheduleUserImageAssetCleanup(connection, {
+        assetId: oldAssetId,
+        storageKind: cosStorageEnabled(config.cos) ? "cos" : "local"
+      });
+    }
   }
   return {
     ...review,

@@ -8,13 +8,13 @@
 | 不可用 | 关闭 | publish_directly：沿用旧逻辑 |
 | 不可用 | 开启 | block_unavailable：拒绝发布 |
 
-能力可用要求腾讯云凭证、地域、对应策略、回调配置和健康检查均完整。已选定 auto_moderate 的内容必须保持隐藏到终态，不再走降级直发。
+“能力可用”是进程启动时根据全局开关、对应 provider enabled 配置及已校验必需配置得到的静态快照；生产预演用于发布前确认凭证、权限、回调和网络链路，但不是逐请求动态健康检查。权限、额度或网络在任务创建后失败时，内容必须保持隐藏并进入重试/人工处置，不得改走降级直发。若运营决定让后续新提交进入 unavailable fallback，必须先按变更流程关闭对应 provider enabled 配置并重启/滚动发布（或启用平台级维护），之后才由 DB 双开关决定直发或阻断。
 
 ## 模块
 
 新增 API 内容审核模块：
 
-- getModerationCapability(type)：返回能力是否可用及脱敏原因。
+- getModerationCapability(type)：返回启动时配置能力快照及脱敏原因，不表示实时 provider health。
 - resolvePublicationPolicy(type, settings, capability)：返回三种发布策略之一。
 - submitModerationJob(subject)：为不可变媒体或文本版本创建任务并调用腾讯云。
 - applyModerationOutcome(job, outcome)：执行合法状态迁移。
@@ -40,4 +40,3 @@
 ## 验证
 
 腾讯云客户端可注入假实现，稳定覆盖 Pass、Block、超时和重复回调。非生产环境执行真实腾讯云三类型联调。
-

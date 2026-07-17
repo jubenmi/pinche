@@ -62,6 +62,29 @@ test("a closed intake rejects v2 image intent before creating a persisted upload
   assert.equal(state.inserted, null);
 });
 
+test("an asynchronous image intake decision settles before an intent is persisted", async () => {
+  let releaseIntake;
+  const { service, state } = buildService({
+    assertImageIntake: () => new Promise((resolve) => { releaseIntake = resolve; })
+  });
+  const pending = service.createIntent({
+    user,
+    body: {
+      kind: "sessionAlbumPhoto",
+      sessionId: 8,
+      extension: ".jpg",
+      contentType: "image/jpeg",
+      byteSize: 1
+    }
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.inserted, null);
+  releaseIntake();
+  await pending;
+  assert.notEqual(state.inserted, null);
+});
+
 test("v2 intent fixes key, timing, source facts, processing, and no fallback", async () => {
   const { service, state } = buildService();
   const upload = await service.createIntent({

@@ -75,6 +75,20 @@ test("a closed intake does not issue an authorization for a pending image intent
   assert.equal(state.recorded, null);
 });
 
+test("an asynchronous image intake decision settles before authorization is recorded or signed", async () => {
+  let releaseIntake;
+  const { service, state } = buildService({
+    assertImageIntake: () => new Promise((resolve) => { releaseIntake = resolve; })
+  });
+  const pending = service.authorize({ user, body: validAuthorizationBody() });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.recorded, null);
+  releaseIntake();
+  const result = await pending;
+  assert.match(result.authorization, /^q-sign-algorithm=sha1/);
+});
+
 test("strict authorization accepts only the persisted exact request", async () => {
   const { service, state } = buildService();
   const result = await service.authorize({ user, body: validAuthorizationBody() });
