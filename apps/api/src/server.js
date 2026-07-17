@@ -190,6 +190,9 @@ import {
   assertProductionPreflightGuards
 } from "./modules/content-moderation/production-preflight.js";
 import {
+  buildProductionPreflightRuntime
+} from "./jobs/content-moderation-production-preflight.js";
+import {
   hasActiveProductionPreflightWechatImageRun,
   findProductionPreflightAttemptByAssociation,
   findProductionPreflightRun,
@@ -1396,34 +1399,11 @@ async function cleanupProductionPreflightCallbackObject({ objectKey }) {
 }
 
 async function buildProductionPreflightCallbackRuntime() {
-  const operatorUserId = Number(config.contentModeration.productionPreflight?.operatorUserId || 0);
-  const operatorStatus = await withDatabaseConnection(async (connection) => {
-    const [rows] = await connection.query(
-      "SELECT role, status FROM user_roles WHERE user_id = ? AND role = 'system_admin' LIMIT 1",
-      [operatorUserId]
-    );
-    const row = rows[0];
-    return row?.role === "system_admin" && row?.status === "active" ? "active" : "missing";
-  });
-  return {
-    nodeEnv: config.contentModeration.nodeEnv,
-    preflightEnabled: Boolean(config.contentModeration.productionPreflight?.enabled),
-    confirmation: "",
-    expectedConfirmation: config.contentModeration.productionPreflight?.confirmation || "",
-    operatorUserId,
-    operatorRole: "system_admin",
-    operatorStatus,
-    providerConfig: {
-      wechatText: Boolean(config.contentModeration.wechatTextEnabled && config.contentModeration.wechatAppId && config.contentModeration.wechatAppSecret),
-      wechatImage: Boolean(config.contentModeration.wechatImageEnabled && config.contentModeration.wechatAppId && config.contentModeration.wechatAppSecret),
-      tencentVideo: Boolean(config.contentModeration.tencentVideoEnabled && config.contentModeration.tencentVideoPolicyId),
-      cos: Boolean(config.contentModeration.cosEnabled && config.contentModeration.bucket && config.contentModeration.cosRegion),
-      redis: Boolean(config.contentModeration.redisEnabled && (config.contentModeration.redisUrl || config.contentModeration.redisHost)),
-      callback: Boolean(config.contentModeration.tencentVideoCallbackToken || config.contentModeration.wechatEventToken)
-    },
-    releaseFingerprint: config.contentModeration.productionPreflight?.releaseFingerprint,
-    appId: config.contentModeration.wechatAppId
-  };
+  return withDatabaseConnection((connection) => buildProductionPreflightRuntime({
+    connection,
+    moderationConfig: config.contentModeration,
+    env: {}
+  }));
 }
 
 async function applyApprovedTextProposal(connection, { job, proposal }) {

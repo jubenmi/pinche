@@ -171,6 +171,28 @@ for (const businessSwitch of [
     `production preflight runtime must not depend on business switch: ${businessSwitch}`
   );
 }
+const callbackRuntimeStart = server.indexOf(
+  "async function buildProductionPreflightCallbackRuntime"
+);
+const callbackRuntimeEnd = server.indexOf(
+  "async function applyApprovedTextProposal",
+  callbackRuntimeStart
+);
+assert.notEqual(callbackRuntimeStart, -1, "missing production preflight callback runtime builder");
+assert.notEqual(callbackRuntimeEnd, -1, "missing production preflight callback runtime boundary");
+const callbackRuntime = server.slice(callbackRuntimeStart, callbackRuntimeEnd);
+assert.match(callbackRuntime, /buildProductionPreflightRuntime\(/);
+for (const businessSwitch of [
+  "wechatTextEnabled",
+  "wechatImageEnabled",
+  "tencentVideoEnabled"
+]) {
+  assert.equal(
+    callbackRuntime.includes(businessSwitch),
+    false,
+    `production preflight callback runtime must not depend on business switch: ${businessSwitch}`
+  );
+}
 assert.match(
   moderationEnv,
   /const wechatConfigurationRequired = Boolean\([\s\S]*?wechatModerationEnabled \|\| productionPreflightEnabled/
@@ -181,6 +203,28 @@ assert.match(
 );
 assert.match(preflightTimeoutJob, /runProductionPreflightTimeoutBatch/);
 assert.doesNotMatch(preflightTimeoutJob, /server\.js/);
+const timeoutRuntimeStart = preflightTimeoutJob.indexOf(
+  "async function buildProductionPreflightTimeoutRuntime"
+);
+const timeoutRuntimeEnd = preflightTimeoutJob.indexOf(
+  "async function cleanupPreflightObject",
+  timeoutRuntimeStart
+);
+assert.notEqual(timeoutRuntimeStart, -1, "missing production preflight timeout runtime builder");
+assert.notEqual(timeoutRuntimeEnd, -1, "missing production preflight timeout runtime boundary");
+const timeoutRuntime = preflightTimeoutJob.slice(timeoutRuntimeStart, timeoutRuntimeEnd);
+assert.match(timeoutRuntime, /buildProductionPreflightRuntime\(/);
+for (const businessSwitch of [
+  "wechatTextEnabled",
+  "wechatImageEnabled",
+  "tencentVideoEnabled"
+]) {
+  assert.equal(
+    timeoutRuntime.includes(businessSwitch),
+    false,
+    `production preflight timeout runtime must not depend on business switch: ${businessSwitch}`
+  );
+}
 assert.match(compose, /content-moderation-retry:[\s\S]*job:content-moderation-retry/);
 assert.match(compose, /content-moderation-orphan-scan:[\s\S]*job:content-moderation-orphan-scan/);
 assert.match(

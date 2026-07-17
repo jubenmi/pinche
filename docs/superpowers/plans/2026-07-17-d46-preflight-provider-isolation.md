@@ -362,9 +362,14 @@
 
 - Git branches and GitHub Actions only; do not modify user-owned dirty files in `/Users/dirui/Documents/pinche`.
 
-- [ ] **Step 1: Perform final code review**
+- [x] **Step 1: Perform final code review**
 
   Use `superpowers:requesting-code-review` against `develop...codex/d46-preflight-isolation`. Resolve only findings that are within this approved design; request confirmation before changing architecture or scope.
+
+  - [x] Review remediation: add a failing static assertion proving the resident API callback runtime does not read `wechatTextEnabled`, `wechatImageEnabled`, or `tencentVideoEnabled`.
+  - [x] Review remediation: make the resident API callback runtime reuse `buildProductionPreflightRuntime` so submission and asynchronous callback guards derive identical raw-provider readiness.
+  - [x] Review remediation: add the same RED/static guard for the preflight timeout Worker and reuse the shared runtime builder while retaining its HMAC fingerprint input.
+  - [x] Review remediation: rerun focused callback/preflight tests, D45/D46 static checks, and the complete isolated-stack verification before marking review complete.
 
 - [ ] **Step 2: Verify immediately before integration**
 
