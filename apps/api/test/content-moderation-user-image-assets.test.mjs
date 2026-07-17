@@ -36,6 +36,7 @@ test("D46 avatar and review image migration creates immutable assets and backfil
   assert.match(sql, /ADD COLUMN image_asset_id BIGINT UNSIGNED NULL/i);
   assert.match(sql, /INSERT INTO user_image_assets[\s\S]*'avatar'[\s\S]*'approved_legacy'/i);
   assert.match(sql, /INSERT INTO user_image_assets[\s\S]*'review'[\s\S]*'approved_legacy'/i);
+  assert.match(sql, /ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID\(user_image_assets\.id\)/i);
   assert.match(sql, /GROUP BY review\.user_id, photo\.photo_url/i);
   assert.match(sql, /MODIFY COLUMN image_asset_id BIGINT UNSIGNED NOT NULL/i);
   assert.match(sql, /cleanup_not_before DATETIME NOT NULL/i);
@@ -589,10 +590,13 @@ function overrideColumns(columns, overrides = {}) {
 
 function partialMigrationConnection() {
   const ddl = [];
+  const queries = [];
   return {
     ddl,
+    queries,
     async query(sql, params = []) {
       const text = String(sql);
+      queries.push(text);
       if (/information_schema\.tables/.test(text)) {
         return [[params[0] === "user_image_assets" ? { table_name: params[0], engine: "InnoDB" } : undefined].filter(Boolean)];
       }
@@ -630,6 +634,12 @@ test("0031 reconciliation resumes after a partial MySQL DDL application", async 
   assert.equal(connection.ddl.some((sql) => sql.includes("ADD UNIQUE KEY uniq_user_image_asset_owner_path")), true);
   assert.equal(connection.ddl.some((sql) => sql.includes("CREATE TABLE user_image_asset_cleanup_jobs")), true);
   assert.equal(connection.ddl.some((sql) => sql.includes("MODIFY COLUMN image_asset_id BIGINT UNSIGNED NOT NULL")), true);
+  assert.equal(
+    connection.queries.filter((sql) => /INSERT INTO user_image_assets/.test(sql)).every((sql) =>
+      /LAST_INSERT_ID\(user_image_assets\.id\)/.test(sql)
+    ),
+    true
+  );
 });
 
 test("0031 reconciliation refuses to record an incomplete historical review binding", async () => {
@@ -746,6 +756,22 @@ test("0031 reconciles every missing runtime index, foreign key, and check on exi
   ]) {
     assert.match(ddl, new RegExp(invariant));
   }
+});
+
+test("0031 accepts MySQL's UTF-8 escaped check-constraint representation", async () => {
+  const connection = existingInvariantMigrationConnection({
+    checks: {
+      "user_image_assets.chk_user_image_asset_kind": {
+        check_clause: "(`kind` in (_utf8mb4\\'avatar\\',_utf8mb4\\'review\\'))"
+      }
+    }
+  });
+
+  await reconcileUserImageAssetsMigration(connection);
+  assert.equal(
+    connection.ddl.some((sql) => sql.includes("ADD CONSTRAINT chk_user_image_asset_kind")),
+    false
+  );
 });
 
 test("0031 rejects wrong existing avatar and review binding index shapes", async () => {

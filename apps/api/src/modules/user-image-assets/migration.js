@@ -294,6 +294,7 @@ function normalizeCheckClause(value) {
     .toLowerCase()
     .replace(/`/g, "")
     .replace(/_(?:utf8mb4|utf8mb3|latin1)/g, "")
+    .replace(/\\'/g, "'")
     .replace(/[\s()]/g, "");
 }
 
@@ -415,7 +416,7 @@ const BACKFILL_AVATARS = `INSERT INTO user_image_assets
         CONCAT('legacy:', SHA2(user.avatar_url, 256)), 'approved_legacy', 'active'
  FROM users AS user
  WHERE user.avatar_url REGEXP '^/uploads/avatars/[A-Za-z0-9._-]+$'
- ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`;
+ ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(user_image_assets.id)`;
 
 const BACKFILL_REVIEWS = `INSERT INTO user_image_assets
   (owner_user_id, kind, asset_path, object_key, object_version, moderation_status, status)
@@ -426,7 +427,7 @@ const BACKFILL_REVIEWS = `INSERT INTO user_image_assets
  JOIN session_reviews AS review ON review.id = photo.review_id
  WHERE photo.photo_url REGEXP '^/uploads/session-reviews/[A-Za-z0-9._-]+$'
  GROUP BY review.user_id, photo.photo_url
- ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`;
+ ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(user_image_assets.id)`;
 
 export async function reconcileUserImageAssetsMigration(connection) {
   const assetTable = await inspectTable(connection, "user_image_assets");

@@ -36,7 +36,7 @@ SELECT user.id, 'avatar', user.avatar_url, TRIM(LEADING '/' FROM user.avatar_url
        CONCAT('legacy:', SHA2(user.avatar_url, 256)), 'approved_legacy', 'active'
 FROM users AS user
 WHERE user.avatar_url REGEXP '^/uploads/avatars/[A-Za-z0-9._-]+$'
-ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id);
+ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(user_image_assets.id);
 
 UPDATE users AS user
 JOIN user_image_assets AS asset
@@ -60,7 +60,7 @@ FROM session_review_photos AS photo
 JOIN session_reviews AS review ON review.id = photo.review_id
 WHERE photo.photo_url REGEXP '^/uploads/session-reviews/[A-Za-z0-9._-]+$'
 GROUP BY review.user_id, photo.photo_url
-ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id);
+ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(user_image_assets.id);
 
 UPDATE session_review_photos AS photo
 JOIN session_reviews AS review ON review.id = photo.review_id

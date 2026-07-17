@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -7,10 +8,9 @@ import {
   contentModerationStatusText
 } from "../src/utils/contentModeration.js";
 
-const PENDING_TEXT = "内容正在审核";
-const REVIEW_TEXT = "内容需要进一步审核";
-const REJECTED_TEXT = "内容未通过安全审核，如有疑问请联系客服";
-const INTAKE_CLOSED_TEXT = "当前暂无法提交内容，请稍后再试";
+const PENDING_TEXT = "内容正在安全审核";
+const REJECTED_TEXT = "内容未通过安全审核";
+const INTAKE_CLOSED_TEXT = "内容安全服务暂未就绪，暂时无法发布，请稍后再试";
 
 function assertSuccessfulUpdateFollowsRequest(source, requestMarker, successMarker) {
   const requestAt = source.indexOf(requestMarker);
@@ -33,10 +33,9 @@ function extractMethodBody(source, marker) {
 }
 
 test("content moderation status presentation only exposes the three approved user messages", () => {
-  for (const status of ["pending", "processing", "error"]) {
+  for (const status of ["pending", "processing", "error", "review"]) {
     assert.equal(contentModerationStatusText(status), PENDING_TEXT);
   }
-  assert.equal(contentModerationStatusText("review"), REVIEW_TEXT);
   assert.equal(contentModerationStatusText("rejected"), REJECTED_TEXT);
   assert.equal(contentModerationStatusText("approved"), "");
   assert.equal(contentModerationStatusText("approved_legacy"), "");
@@ -49,7 +48,7 @@ test("provider failures are reduced to safe user messages without provider detai
       code: "CONTENT_MODERATION_REVIEW_PENDING",
       message: "WeChat review label: political-person"
     }),
-    REVIEW_TEXT
+    PENDING_TEXT
   );
   assert.equal(
     contentModerationErrorText({
@@ -71,6 +70,13 @@ test("provider failures are reduced to safe user messages without provider detai
       message: "provider configuration details must not be shown"
     }),
     INTAKE_CLOSED_TEXT
+  );
+  assert.equal(
+    contentModerationErrorText({
+      code: "CONTENT_MODERATION_CONFIGURATION_ERROR",
+      message: "Tencent score=99 and provider token must not be shown"
+    }),
+    PENDING_TEXT
   );
   assert.equal(contentModerationErrorText({ code: "UNRELATED", message: "other" }), "");
 });
@@ -98,7 +104,11 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
   const reviewCatch = review.slice(reviewCatchStart, reviewFinallyStart);
 
   assert.match(api, /contentModerationErrorText/);
-  assert.match(api, /error\.userMessage\s*=\s*contentModerationErrorText\(error\)\s*\|\|\s*error\.message/);
+  assert.match(api, /const moderationMessage = contentModerationErrorText\(error\);/);
+  assert.match(api, /error\.userMessage\s*=\s*moderationMessage;/);
+  assert.match(api, /if \(!moderationMessage && !isContentModerationError\(error\)\)/);
+  assert.doesNotMatch(api, /error\.userMessage\s*=\s*moderationMessage\s*\|\|\s*error\.message/);
+  assert.doesNotMatch(api, /contentModerationErrorText\(error\)\s*\|\|\s*error\.message/);
   assert.match(api, /responseData\.ok === false/);
 
   assert.equal(
@@ -110,6 +120,11 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
   assert.match(album, /this\.timelineMode \|\| !photo\?\.is_mine/);
   assert.match(album, /videoStateText\(photo\)[\s\S]*mediaModerationStatusText\(photo\)/);
   assert.doesNotMatch(album, /moderation_message|photo\.(?:provider|provider_job_id|score|suggestion|hit_words)/);
+  assert.doesNotMatch(album, /相册媒体尚未通过审核/);
+  assert.match(
+    album,
+    /albumMediaError\("MEDIA_NOT_PUBLISHED", contentModerationStatusText\("review"\)\)/
+  );
 
   assert.match(reviewCatch, /const moderationMessage = contentModerationErrorText\(error\);/);
   assert.match(reviewCatch, /if \(moderationMessage\) \{\s*this\.statusText = moderationMessage;\s*return;/);
@@ -160,6 +175,21 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
     pinned,
     "const result = await this.api.updatePinnedMessage(",
     "this.pinnedMessage = result.pinnedMessage || null;"
+  );
+});
+
+test("the D46 static moderation checker passes and is wired into root check", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8"));
+  const result = spawnSync(process.execPath, ["scripts/d46-content-moderation-check.js"], {
+    cwd: new URL("../../..", import.meta.url),
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(packageJson.scripts.precheck, /d46:check/);
+  assert.equal(
+    packageJson.scripts["d46:check"],
+    "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js"
   );
 });
 
@@ -863,7 +893,7 @@ test("review save blocks pending photos without PUT or acknowledgement and keeps
   );
   assert.equal(requestCount, 0);
   assert.equal(acknowledgementCount, 0);
-  assert.equal(vm.statusText, "内容正在安全审核，通过后再保存记录。");
+  assert.equal(vm.statusText, PENDING_TEXT);
 
   const storage = new Map([["pinche_pending_review_image_asset_id", {
     pendingPhoto: {

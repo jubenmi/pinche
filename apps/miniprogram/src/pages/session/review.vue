@@ -191,7 +191,7 @@ export default {
     },
     async saveReview() {
       if (this.pendingPhotoCount > 0) {
-        this.statusText = "内容正在安全审核，通过后再保存记录。";
+        this.statusText = "内容正在安全审核";
         return;
       }
       if (!this.canSave || this.saving) {
