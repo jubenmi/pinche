@@ -259,6 +259,10 @@ import {
 } from "./modules/content-moderation/tencent-video-client.js";
 import { assertContentModerationIntake } from "./modules/content-moderation/intake-gate.js";
 import {
+  readContentSecuritySettings,
+  updateContentSecuritySettings
+} from "./modules/content-moderation/content-security-settings.js";
+import {
   createSessionMessageWithConnection,
   updateSessionPinnedMessageWithConnection
 } from "@jubenmi/talk/api";
@@ -3506,6 +3510,14 @@ function requireRole(user, role) {
   }
 }
 
+function contentModerationCapabilities() {
+  return {
+    text: { available: Boolean(config.contentModeration.enabled && config.contentModeration.wechatTextEnabled) },
+    image: { available: Boolean(config.contentModeration.enabled && config.contentModeration.wechatImageEnabled) },
+    video: { available: Boolean(config.contentModeration.enabled && config.contentModeration.tencentVideoEnabled) }
+  };
+}
+
 function d40SmokeDatabaseIsIsolated() {
   const host = String(config.mysql.host || "").trim().toLowerCase();
   const localHost = ["127.0.0.1", "localhost", "::1"].includes(host);
@@ -4273,6 +4285,32 @@ async function route(request, response) {
     jsonResponse(response, 201, {
       ok: true,
       data: moderated ?? await createPrivateScript(user, body)
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/admin/content-security-settings") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await withDatabaseConnection(async (connection) => ({
+        settings: await readContentSecuritySettings(connection),
+        capabilities: contentModerationCapabilities()
+      }))
+    });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/admin/content-security-settings") {
+    const user = await getAuthUser(request);
+    requireRole(user, "system_admin");
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await withTransaction(async (connection) => ({
+        settings: await updateContentSecuritySettings(connection, user.user.id, body),
+        capabilities: contentModerationCapabilities()
+      }))
     });
     return;
   }
