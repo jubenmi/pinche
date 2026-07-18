@@ -23,6 +23,8 @@ const result = spawnSync(process.execPath, ["--test", ...matrixTests], {
   env: {
     ...process.env,
     NODE_ENV: "test",
+    DATABASE_TARGET_LOCK: "",
+    DATABASE_TARGET_LOCK_HOST: "",
     MYSQL_HOST: "127.0.0.1",
     MYSQL_DATABASE: "pinche_d45_release_matrix",
     REDIS_ENABLED: "false",

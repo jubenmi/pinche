@@ -1,15 +1,19 @@
 import { spawn } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync
-} from "node:fs";
-import path from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  buildSourceSnapshot,
+  DEFAULT_REQUIRED_DEV_FILES,
+  DEFAULT_WATCHED_PATHS,
+  invalidateBuildFingerprint,
+  inspectDevArtifacts,
+  inspectRequiredArtifacts,
+  planRefresh,
+  writeBuildFingerprint
+} from "./miniprogram-dev-artifacts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,28 +25,16 @@ const devDist = path.join(miniprogramProject, "dist/dev/mp-weixin");
 const defaultCli = "/Applications/wechatwebdevtools.app/Contents/MacOS/cli";
 const cliPath = process.env.WECHAT_DEVTOOLS_CLI || defaultCli;
 const force = process.argv.includes("--force");
+const rebuild = process.argv.includes("--rebuild");
 const devOutputReadyTimeoutMs = 8000;
 const devOutputReadyPollMs = 250;
-const devOutputReadyFiles = [
-  "app.json",
-  "project.config.json",
-  "wxcomponents/tdesign-miniprogram/image/image.json",
-  "wxcomponents/tdesign-miniprogram/image/image.wxml",
-  "wxcomponents/tdesign-miniprogram/image/image.js"
-];
-
-const watchedPaths = [
-  "apps/miniprogram/src",
-  "apps/miniprogram/package.json",
-  "apps/miniprogram/project.config.json",
-  "apps/miniprogram/vite.config.js",
-  "package.json"
-];
+const buildTimeoutMs = 120000;
+const initialBuildCompletePattern = /DONE\s+Build complete\. Watching for changes\.\.\./;
 
 function readState() {
   try {
     return JSON.parse(readFileSync(statePath, "utf8"));
-  } catch (error) {
+  } catch {
     return {};
   }
 }
@@ -63,36 +55,6 @@ function writeState(patch) {
   );
 }
 
-function latestMtimeMs(target) {
-  const absolutePath = path.join(root, target);
-  if (!existsSync(absolutePath)) {
-    return 0;
-  }
-
-  const stats = statSync(absolutePath);
-  if (!stats.isDirectory()) {
-    return stats.mtimeMs;
-  }
-
-  return readdirSync(absolutePath, { withFileTypes: true }).reduce(
-    (latest, entry) => {
-      if (entry.name === "node_modules" || entry.name === "dist") {
-        return latest;
-      }
-      return Math.max(latest, latestMtimeMs(path.join(target, entry.name)));
-    },
-    stats.mtimeMs
-  );
-}
-
-function relevantSnapshot() {
-  const latestMtime = Math.max(...watchedPaths.map(latestMtimeMs));
-  return {
-    latestMtime,
-    watchedPaths
-  };
-}
-
 function log(message) {
   console.log(`[devtools-refresh] ${message}`);
 }
@@ -107,33 +69,286 @@ function sleep(ms) {
   });
 }
 
-function canReadJson(file) {
+function inspectCurrentOutput() {
+  return inspectDevArtifacts({
+    root,
+    devDist,
+    watchedPaths: DEFAULT_WATCHED_PATHS,
+    requiredFiles: DEFAULT_REQUIRED_DEV_FILES
+  });
+}
+
+function inspectCurrentRequiredOutput() {
+  return inspectRequiredArtifacts({
+    devDist,
+    requiredFiles: DEFAULT_REQUIRED_DEV_FILES
+  });
+}
+
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode != null;
+}
+
+function defaultProcessGroupId(child) {
+  return process.platform !== "win32" && Number.isInteger(child.pid) ? child.pid : null;
+}
+
+function defaultIsProcessGroupAlive(processGroupId) {
+  if (!processGroupId) {
+    return false;
+  }
   try {
-    JSON.parse(readFileSync(file, "utf8"));
+    process.kill(-processGroupId, 0);
     return true;
   } catch (error) {
-    return false;
+    return error.code !== "ESRCH";
   }
 }
 
-function isDevOutputReady() {
-  for (const readyFile of devOutputReadyFiles) {
-    if (!existsSync(path.join(devDist, readyFile))) {
-      return false;
+function defaultSignalProcessGroup(processGroupId, signal) {
+  process.kill(-processGroupId, signal);
+}
+
+function signalBuildProcess(child, processGroupId, signal, signalProcessGroup) {
+  if (processGroupId) {
+    try {
+      signalProcessGroup(processGroupId, signal);
+      return true;
+    } catch (error) {
+      if (error.code !== "ESRCH") {
+        throw error;
+      }
     }
   }
-  return canReadJson(path.join(devDist, "app.json"));
+  return child.kill(signal);
+}
+
+function buildTreeHasExited(child, processGroupId, isProcessGroupAlive) {
+  return childHasExited(child) && !isProcessGroupAlive(processGroupId);
+}
+
+async function waitForBuildTreeExit(
+  child,
+  processGroupId,
+  isProcessGroupAlive,
+  timeoutMs
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (buildTreeHasExited(child, processGroupId, isProcessGroupAlive)) {
+      return true;
+    }
+    await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
+  return buildTreeHasExited(child, processGroupId, isProcessGroupAlive);
+}
+
+async function terminateBuildProcess(
+  child,
+  graceMs,
+  {
+    getProcessGroupId = defaultProcessGroupId,
+    isProcessGroupAlive = defaultIsProcessGroupAlive,
+    signalProcessGroup = defaultSignalProcessGroup
+  } = {}
+) {
+  const processGroupId = getProcessGroupId(child);
+  if (buildTreeHasExited(child, processGroupId, isProcessGroupAlive)) {
+    return;
+  }
+
+  for (const signal of ["SIGINT", "SIGTERM", "SIGKILL"]) {
+    signalBuildProcess(child, processGroupId, signal, signalProcessGroup);
+    if (await waitForBuildTreeExit(child, processGroupId, isProcessGroupAlive, graceMs)) {
+      return;
+    }
+  }
+  throw new Error("Miniprogram dev watcher could not be terminated");
+}
+
+export async function rebuildDevOutput(options = {}) {
+  if (
+    Object.hasOwn(options, "spawnBuild") &&
+    !Object.hasOwn(options, "invalidateFingerprint")
+  ) {
+    throw new Error("custom spawnBuild requires an explicit invalidateFingerprint");
+  }
+
+  const {
+    spawnBuild = () =>
+    spawn("npm", ["--workspace", "apps/miniprogram", "run", "dev:mp-weixin"], {
+      cwd: root,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"]
+    }),
+  inspectRequiredOutput = inspectCurrentRequiredOutput,
+  captureSnapshot = () =>
+    buildSourceSnapshot({ root, watchedPaths: DEFAULT_WATCHED_PATHS }),
+  invalidateFingerprint = () => invalidateBuildFingerprint(devDist),
+  persistFingerprint = (snapshot) => writeBuildFingerprint({ devDist, snapshot }),
+  timeoutMs = buildTimeoutMs,
+  pollMs = devOutputReadyPollMs,
+  terminationGraceMs = 2000,
+  getProcessGroupId = defaultProcessGroupId,
+  isProcessGroupAlive = defaultIsProcessGroupAlive,
+  signalProcessGroup = defaultSignalProcessGroup,
+  writeStdout = (chunk) => process.stdout.write(chunk),
+  writeStderr = (chunk) => process.stderr.write(chunk)
+  } = options;
+  invalidateFingerprint();
+  let expectedSnapshot = captureSnapshot();
+  const child = spawnBuild();
+  let completionAwaitingArtifacts = false;
+  let stdoutBuffer = "";
+  let completedSnapshot;
+
+  try {
+    completedSnapshot = await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        clearInterval(poll);
+        callback(value);
+      };
+      const tryComplete = () => {
+        if (!completionAwaitingArtifacts || inspectRequiredOutput().status !== "complete") {
+          return;
+        }
+        try {
+          const snapshot = captureSnapshot();
+          completionAwaitingArtifacts = false;
+          if (snapshot.fingerprint === expectedSnapshot.fingerprint) {
+            finish(resolve, snapshot);
+            return;
+          }
+          expectedSnapshot = snapshot;
+        } catch (error) {
+          finish(reject, error);
+        }
+      };
+      const timeout = setTimeout(
+        () => finish(reject, new Error(`Miniprogram dev build timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      );
+      const poll = setInterval(tryComplete, pollMs);
+
+      child.stdout?.on("data", (chunk) => {
+        writeStdout(chunk);
+        stdoutBuffer = `${stdoutBuffer}${chunk.toString()}`;
+        let completionMatch = initialBuildCompletePattern.exec(stdoutBuffer);
+        while (completionMatch) {
+          stdoutBuffer = stdoutBuffer.slice(completionMatch.index + completionMatch[0].length);
+          completionAwaitingArtifacts = true;
+          tryComplete();
+          completionMatch = initialBuildCompletePattern.exec(stdoutBuffer);
+        }
+        stdoutBuffer = stdoutBuffer.slice(-4096);
+      });
+      child.stderr?.on("data", writeStderr);
+      child.once("error", (error) => finish(reject, error));
+      child.once("close", (code, signal) => {
+        if (!settled) {
+          finish(
+            reject,
+            new Error(`Miniprogram dev build exited before completion (${code ?? signal ?? "unknown"})`)
+          );
+        }
+      });
+    });
+  } finally {
+    await terminateBuildProcess(child, terminationGraceMs, {
+      getProcessGroupId,
+      isProcessGroupAlive,
+      signalProcessGroup
+    });
+  }
+
+  if (inspectRequiredOutput().status !== "complete") {
+    throw new Error("Miniprogram dev output became incomplete after watcher cleanup");
+  }
+  const finalSnapshot = captureSnapshot();
+  if (finalSnapshot.fingerprint !== completedSnapshot.fingerprint) {
+    throw new Error("Miniprogram source changed before the completed build could be finalized");
+  }
+
+  persistFingerprint(finalSnapshot);
+  const persistedSnapshot = captureSnapshot();
+  if (
+    persistedSnapshot.fingerprint !== finalSnapshot.fingerprint ||
+    inspectRequiredOutput().status !== "complete"
+  ) {
+    invalidateFingerprint();
+    throw new Error("Miniprogram source or output changed while finalizing the build fingerprint");
+  }
+  return finalSnapshot;
 }
 
 async function waitForDevOutput() {
   const deadline = Date.now() + devOutputReadyTimeoutMs;
   while (Date.now() <= deadline) {
-    if (isDevOutputReady()) {
-      return true;
+    const result = inspectCurrentOutput();
+    if (result.status === "ready") {
+      return result;
     }
     await sleep(devOutputReadyPollMs);
   }
-  return false;
+  return inspectCurrentOutput();
+}
+
+export function launchDevToolsCli({
+  cliPath: executable,
+  projectPath,
+  cwd,
+  spawnCli = spawn,
+  timeoutMs = 30000
+}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const child = spawnCli(executable, ["open", "--project", projectPath], {
+      cwd,
+      stdio: "ignore"
+    });
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      child.off("error", onError);
+      child.off("close", onClose);
+      callback(value);
+    };
+    const onError = (error) => finish(reject, error);
+    const onClose = (code, signal) => {
+      if (code === 0) {
+        finish(resolve, true);
+        return;
+      }
+      finish(
+        reject,
+        new Error(`WeChat DevTools CLI exited with exit code ${code ?? signal ?? "unknown"}`)
+      );
+    };
+    const timeout = setTimeout(() => {
+      child.kill?.("SIGTERM");
+      finish(reject, new Error(`WeChat DevTools CLI timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.once("error", onError);
+    child.once("close", onClose);
+  });
+}
+
+export function shouldRefreshDevTools({ force, state, fingerprint, projectPath }) {
+  return (
+    force ||
+    state.lastStatus !== "refreshed" ||
+    state.fingerprint !== fingerprint ||
+    state.projectPath !== projectPath
+  );
 }
 
 async function openDevToolsProject() {
@@ -143,46 +358,104 @@ async function openDevToolsProject() {
     return false;
   }
 
-  if (!(await waitForDevOutput())) {
-    warn(`Dev build output is missing: ${path.join(devDist, "app.json")}`);
-    warn("Run npm run dev:mp-weixin once so WeChat DevTools has dev output to load.");
-    warn("Skipped refresh so DevTools does not load a half-written UniApp output directory.");
+  const output = await waitForDevOutput();
+  if (output.status !== "ready") {
+    warn(`Refusing to open ${devDist}: ${output.reason}.`);
+    warn("Run npm run devtools:refresh to rebuild the latest miniprogram output.");
     return false;
   }
 
   try {
-    const child = spawn(cliPath, ["open", "--project", devDist], {
+    await launchDevToolsCli({
+      cliPath,
+      projectPath: devDist,
       cwd: root,
-      detached: true,
-      stdio: "ignore"
+      spawnCli: spawn
     });
-    child.unref();
   } catch (error) {
     warn(error.message);
     return false;
   }
 
-  log("WeChat DevTools refresh triggered.");
+  log("WeChat DevTools refresh triggered with current source fingerprint.");
   return true;
 }
 
-const state = readState();
-const snapshot = relevantSnapshot();
-const shouldRefresh =
-  force ||
-  state.lastStatus !== "refreshed" ||
-  snapshot.latestMtime > Number(state.latestMtime || 0);
+export async function main() {
+  const state = readState();
+  let output = inspectCurrentOutput();
+  const decision = planRefresh({ artifactStatus: output.status, rebuild });
 
-if (!shouldRefresh) {
-  process.exit(0);
+  if (decision.action === "skip") {
+    warn(`Refusing stale or incomplete dev output: ${output.reason}.`);
+    warn(decision.guidance);
+    writeState({
+      fingerprint: state.fingerprint || null,
+      lastStatus: "skipped",
+      artifactStatus: output.status,
+      artifactReason: output.reason,
+      cliPath,
+      projectPath: devDist,
+      devDist
+    });
+    process.exitCode = decision.exitCode;
+    return false;
+  }
+
+  if (decision.action === "build") {
+    try {
+      log("Building current miniprogram source before refresh...");
+      await rebuildDevOutput();
+      output = inspectCurrentOutput();
+    } catch (error) {
+      warn(error.message);
+      writeState({
+        fingerprint: state.fingerprint || null,
+        lastStatus: "build-failed",
+        artifactStatus: output.status,
+        artifactReason: output.reason,
+        cliPath,
+        projectPath: devDist,
+        devDist
+      });
+      process.exitCode = 2;
+      return false;
+    }
+
+    if (output.status !== "ready") {
+      warn(`Build completed but current output is ${output.status}: ${output.reason}.`);
+      process.exitCode = 2;
+      return false;
+    }
+  }
+
+  const shouldRefresh = shouldRefreshDevTools({
+    force,
+    state,
+    fingerprint: output.currentFingerprint,
+    projectPath: devDist
+  });
+  if (!shouldRefresh) {
+    return true;
+  }
+
+  const ok = await openDevToolsProject();
+  writeState({
+    fingerprint: ok ? output.currentFingerprint : state.fingerprint || null,
+    watchedPaths: DEFAULT_WATCHED_PATHS,
+    lastStatus: ok ? "refreshed" : "skipped",
+    artifactStatus: output.status,
+    artifactReason: output.reason,
+    cliPath,
+    projectPath: devDist,
+    devDist
+  });
+  if (!ok) {
+    process.exitCode = 2;
+  }
+  return ok;
 }
 
-const ok = await openDevToolsProject();
-writeState({
-  latestMtime: ok ? snapshot.latestMtime : Number(state.latestMtime || 0),
-  watchedPaths: snapshot.watchedPaths,
-  lastStatus: ok ? "refreshed" : "skipped",
-  cliPath,
-  projectPath: devDist,
-  devDist
-});
+if (path.resolve(process.argv[1] || "") === __filename) {
+  await main();
+}

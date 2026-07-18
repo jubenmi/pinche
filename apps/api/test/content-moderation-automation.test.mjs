@@ -60,6 +60,8 @@ test("D45 automation commands keep unit, release matrix, static checks, and fake
   assert.doesNotMatch(smokeScript, /https?:\/\//);
 
   assert.match(releaseMatrixScript, /NODE_ENV === "production"/);
+  assert.match(releaseMatrixScript, /DATABASE_TARGET_LOCK:\s*""/);
+  assert.match(releaseMatrixScript, /DATABASE_TARGET_LOCK_HOST:\s*""/);
   for (const testFile of [
     "content-moderation-text-service.test.mjs",
     "content-moderation-wechat-image.test.mjs",
