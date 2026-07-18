@@ -17,7 +17,7 @@
     "build:mp-weixin": "npm --workspace apps/miniprogram run build:mp-weixin",
     "dev:admin-web": "npm --workspace apps/admin-web run dev",
     "build:admin-web": "npm --workspace apps/admin-web run build",
-    "devtools:refresh": "node scripts/devtools-refresh-hook.js --force",
+    "devtools:refresh": "node scripts/devtools-refresh-hook.js --force --rebuild",
     "dev:api": "npm --workspace apps/api run dev",
     "start:api": "npm --workspace apps/api run start",
     "migrate": "npm --workspace apps/api run migrate",

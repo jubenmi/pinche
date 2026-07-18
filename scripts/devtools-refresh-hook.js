@@ -5,10 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  buildSourceSnapshot,
   DEFAULT_REQUIRED_DEV_FILES,
   DEFAULT_WATCHED_PATHS,
   inspectDevArtifacts,
-  planRefresh
+  inspectRequiredArtifacts,
+  planRefresh,
+  writeBuildFingerprint
 } from "./miniprogram-dev-artifacts.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,6 +27,8 @@ const force = process.argv.includes("--force");
 const rebuild = process.argv.includes("--rebuild");
 const devOutputReadyTimeoutMs = 8000;
 const devOutputReadyPollMs = 250;
+const buildTimeoutMs = 120000;
+const initialBuildCompletePattern = /DONE\s+Build complete\. Watching for changes\.\.\./;
 
 function readState() {
   try {
@@ -72,6 +77,113 @@ function inspectCurrentOutput() {
   });
 }
 
+function inspectCurrentRequiredOutput() {
+  return inspectRequiredArtifacts({
+    devDist,
+    requiredFiles: DEFAULT_REQUIRED_DEV_FILES
+  });
+}
+
+function terminateBuildProcess(child) {
+  if (child.exitCode !== null || child.killed) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(forceKillTimer);
+      child.off("close", finish);
+      resolve();
+    };
+    const forceKillTimer = setTimeout(() => {
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+      }
+      finish();
+    }, 2000);
+    child.once("close", finish);
+    child.kill("SIGINT");
+  });
+}
+
+export async function rebuildDevOutput({
+  spawnBuild = () =>
+    spawn("npm", ["--workspace", "apps/miniprogram", "run", "dev:mp-weixin"], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"]
+    }),
+  inspectRequiredOutput = inspectCurrentRequiredOutput,
+  captureSnapshot = () =>
+    buildSourceSnapshot({ root, watchedPaths: DEFAULT_WATCHED_PATHS }),
+  persistFingerprint = (snapshot) => writeBuildFingerprint({ devDist, snapshot }),
+  timeoutMs = buildTimeoutMs,
+  pollMs = devOutputReadyPollMs,
+  writeStdout = (chunk) => process.stdout.write(chunk),
+  writeStderr = (chunk) => process.stderr.write(chunk)
+} = {}) {
+  const child = spawnBuild();
+  let buildReportedComplete = false;
+  let stdoutBuffer = "";
+
+  try {
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        clearInterval(poll);
+        callback(value);
+      };
+      const tryComplete = () => {
+        if (!buildReportedComplete || inspectRequiredOutput().status !== "complete") {
+          return;
+        }
+        try {
+          const snapshot = captureSnapshot();
+          persistFingerprint(snapshot);
+          finish(resolve, snapshot);
+        } catch (error) {
+          finish(reject, error);
+        }
+      };
+      const timeout = setTimeout(
+        () => finish(reject, new Error(`Miniprogram dev build timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      );
+      const poll = setInterval(tryComplete, pollMs);
+
+      child.stdout?.on("data", (chunk) => {
+        writeStdout(chunk);
+        stdoutBuffer = `${stdoutBuffer}${chunk.toString()}`.slice(-4096);
+        if (initialBuildCompletePattern.test(stdoutBuffer)) {
+          buildReportedComplete = true;
+          tryComplete();
+        }
+      });
+      child.stderr?.on("data", writeStderr);
+      child.once("error", (error) => finish(reject, error));
+      child.once("close", (code, signal) => {
+        if (!settled) {
+          finish(
+            reject,
+            new Error(`Miniprogram dev build exited before completion (${code ?? signal ?? "unknown"})`)
+          );
+        }
+      });
+    });
+  } finally {
+    await terminateBuildProcess(child);
+  }
+}
+
 async function waitForDevOutput() {
   const deadline = Date.now() + devOutputReadyTimeoutMs;
   while (Date.now() <= deadline) {
@@ -116,7 +228,7 @@ async function openDevToolsProject() {
 
 export async function main() {
   const state = readState();
-  const output = inspectCurrentOutput();
+  let output = inspectCurrentOutput();
   const decision = planRefresh({ artifactStatus: output.status, rebuild });
 
   if (decision.action === "skip") {
@@ -133,6 +245,33 @@ export async function main() {
     });
     process.exitCode = decision.exitCode;
     return false;
+  }
+
+  if (decision.action === "build") {
+    try {
+      log("Building current miniprogram source before refresh...");
+      await rebuildDevOutput();
+      output = inspectCurrentOutput();
+    } catch (error) {
+      warn(error.message);
+      writeState({
+        fingerprint: state.fingerprint || null,
+        lastStatus: "build-failed",
+        artifactStatus: output.status,
+        artifactReason: output.reason,
+        cliPath,
+        projectPath: devDist,
+        devDist
+      });
+      process.exitCode = 2;
+      return false;
+    }
+
+    if (output.status !== "ready") {
+      warn(`Build completed but current output is ${output.status}: ${output.reason}.`);
+      process.exitCode = 2;
+      return false;
+    }
   }
 
   const shouldRefresh =

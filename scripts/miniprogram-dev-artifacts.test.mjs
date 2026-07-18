@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
@@ -10,6 +12,7 @@ import {
   planRefresh,
   writeBuildFingerprint
 } from "./miniprogram-dev-artifacts.js";
+import { rebuildDevOutput } from "./devtools-refresh-hook.js";
 
 const watchedPaths = ["src", "package.json"];
 const requiredFiles = [
@@ -163,4 +166,78 @@ test("automatic refresh opens only already-ready output", () => {
   assert.equal(decision.shouldBuild, false);
   assert.equal(decision.shouldOpen, true);
   assert.equal(decision.exitCode, 0);
+});
+
+class FakeBuildProcess extends EventEmitter {
+  constructor() {
+    super();
+    this.stdout = new PassThrough();
+    this.stderr = new PassThrough();
+    this.exitCode = null;
+    this.killedWith = [];
+  }
+
+  kill(signal) {
+    this.killedWith.push(signal);
+    this.exitCode = 0;
+    queueMicrotask(() => this.emit("close", 0, signal));
+    return true;
+  }
+}
+
+test("explicit rebuild writes the current fingerprint only after initial output is complete", async () => {
+  const child = new FakeBuildProcess();
+  const events = [];
+  const rebuilt = rebuildDevOutput({
+    spawnBuild: () => child,
+    inspectRequiredOutput: () => ({ status: "complete" }),
+    captureSnapshot: () => {
+      events.push("snapshot");
+      return { fingerprint: "current" };
+    },
+    persistFingerprint: (snapshot) => events.push(`persist:${snapshot.fingerprint}`),
+    timeoutMs: 1000,
+    pollMs: 5,
+    writeStdout: () => {},
+    writeStderr: () => {}
+  });
+
+  child.stdout.write("DONE  Build complete. Watching for changes...\n");
+  const result = await rebuilt;
+
+  assert.deepEqual(events, ["snapshot", "persist:current"]);
+  assert.equal(result.fingerprint, "current");
+  assert.deepEqual(child.killedWith, ["SIGINT"]);
+});
+
+test("failed or timed-out rebuild terminates the watcher without writing a fingerprint", async () => {
+  const child = new FakeBuildProcess();
+  let persisted = false;
+
+  await assert.rejects(
+    rebuildDevOutput({
+      spawnBuild: () => child,
+      inspectRequiredOutput: () => ({ status: "incomplete" }),
+      captureSnapshot: () => ({ fingerprint: "must-not-persist" }),
+      persistFingerprint: () => {
+        persisted = true;
+      },
+      timeoutMs: 20,
+      pollMs: 5,
+      writeStdout: () => {},
+      writeStderr: () => {}
+    }),
+    /timed out/
+  );
+
+  assert.equal(persisted, false);
+  assert.deepEqual(child.killedWith, ["SIGINT"]);
+});
+
+test("stale output with explicit rebuild requests build before open", () => {
+  const decision = planRefresh({ artifactStatus: "stale", rebuild: true });
+
+  assert.equal(decision.action, "build");
+  assert.equal(decision.shouldBuild, true);
+  assert.equal(decision.shouldOpen, false);
 });

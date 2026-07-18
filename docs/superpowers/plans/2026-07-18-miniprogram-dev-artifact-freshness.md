@@ -53,9 +53,11 @@
 - [x] 2.4 改造 hook 使用共享状态模块；仅 `ready` 时调用微信开发者工具 CLI。
 - [x] 2.5 保留去重状态，但以内容指纹代替 mtime 作为刷新依据。
 - [x] 2.6 重跑定向测试并确认 GREEN。
-- [ ] 2.7 提交：`fix: refuse stale miniprogram dev output`。
+- [x] 2.7 提交：`fix: refuse stale miniprogram dev output`。
 
 ## Task 3：实现一次性构建并刷新
+
+> 当前进度：Task 3 已完成；完成信号与必需产物双重门禁、超时清理均已通过测试。
 
 **Files:**
 
@@ -63,12 +65,12 @@
 - Modify: `scripts/miniprogram-dev-artifacts.test.mjs`
 - Modify: `package.json`
 
-- [ ] 3.1 增加失败测试：`--rebuild` 必须等待首次构建完成、校验产物、写入当前指纹，再允许打开。
-- [ ] 3.2 增加失败测试：构建失败/超时必须终止子进程且不得写指纹或打开开发者工具。
-- [ ] 3.3 运行定向测试并确认 RED。
-- [ ] 3.4 实现一次性 `npm --workspace apps/miniprogram run dev:mp-weixin` 编排和可靠清理。
-- [ ] 3.5 将 `npm run devtools:refresh` 更新为显式 `--force --rebuild`。
-- [ ] 3.6 重跑定向测试并确认 GREEN。
+- [x] 3.1 增加失败测试：`--rebuild` 必须等待首次构建完成、校验产物、写入当前指纹，再允许打开。
+- [x] 3.2 增加失败测试：构建失败/超时必须终止子进程且不得写指纹或打开开发者工具。
+- [x] 3.3 运行定向测试并确认 RED。
+- [x] 3.4 实现一次性 `npm --workspace apps/miniprogram run dev:mp-weixin` 编排和可靠清理。
+- [x] 3.5 将 `npm run devtools:refresh` 更新为显式 `--force --rebuild`。
+- [x] 3.6 重跑定向测试并确认 GREEN。
 - [ ] 3.7 提交：`feat: rebuild latest miniprogram before refresh`。
 
 ## Task 4：把防回归契约纳入项目检查

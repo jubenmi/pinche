@@ -142,16 +142,9 @@ export function inspectDevArtifacts({
   watchedPaths = DEFAULT_WATCHED_PATHS,
   requiredFiles = DEFAULT_REQUIRED_DEV_FILES
 }) {
-  const missingFiles = requiredFiles.filter(
-    (requiredFile) => !existsSync(path.join(devDist, requiredFile))
-  );
-  if (missingFiles.length > 0) {
-    return { status: "incomplete", reason: "missing-required-files", missingFiles };
-  }
-
-  const invalidJsonFiles = invalidRequiredJsonFiles(devDist, requiredFiles);
-  if (invalidJsonFiles.length > 0) {
-    return { status: "incomplete", reason: "invalid-required-json", invalidJsonFiles };
+  const requiredOutput = inspectRequiredArtifacts({ devDist, requiredFiles });
+  if (requiredOutput.status !== "complete") {
+    return requiredOutput;
   }
 
   const currentSnapshot = buildSourceSnapshot({ root, watchedPaths });
@@ -185,7 +178,34 @@ export function inspectDevArtifacts({
   };
 }
 
+export function inspectRequiredArtifacts({
+  devDist,
+  requiredFiles = DEFAULT_REQUIRED_DEV_FILES
+}) {
+  const missingFiles = requiredFiles.filter(
+    (requiredFile) => !existsSync(path.join(devDist, requiredFile))
+  );
+  if (missingFiles.length > 0) {
+    return { status: "incomplete", reason: "missing-required-files", missingFiles };
+  }
+
+  const invalidJsonFiles = invalidRequiredJsonFiles(devDist, requiredFiles);
+  if (invalidJsonFiles.length > 0) {
+    return { status: "incomplete", reason: "invalid-required-json", invalidJsonFiles };
+  }
+  return { status: "complete", reason: "required-files-ready" };
+}
+
 export function planRefresh({ artifactStatus, rebuild }) {
+  if (rebuild) {
+    return {
+      action: "build",
+      shouldBuild: true,
+      shouldOpen: false,
+      exitCode: 0
+    };
+  }
+
   if (artifactStatus === "ready") {
     return {
       action: "open",
@@ -200,8 +220,6 @@ export function planRefresh({ artifactStatus, rebuild }) {
     shouldBuild: false,
     shouldOpen: false,
     exitCode: 2,
-    guidance: rebuild
-      ? "Rebuild support is unavailable."
-      : "Run npm run devtools:refresh to rebuild the latest miniprogram output."
+    guidance: "Run npm run devtools:refresh to rebuild the latest miniprogram output."
   };
 }
