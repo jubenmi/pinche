@@ -184,3 +184,24 @@ export function inspectDevArtifacts({
     generatedAt: buildFingerprint.generatedAt
   };
 }
+
+export function planRefresh({ artifactStatus, rebuild }) {
+  if (artifactStatus === "ready") {
+    return {
+      action: "open",
+      shouldBuild: false,
+      shouldOpen: true,
+      exitCode: 0
+    };
+  }
+
+  return {
+    action: "skip",
+    shouldBuild: false,
+    shouldOpen: false,
+    exitCode: 2,
+    guidance: rebuild
+      ? "Rebuild support is unavailable."
+      : "Run npm run devtools:refresh to rebuild the latest miniprogram output."
+  };
+}

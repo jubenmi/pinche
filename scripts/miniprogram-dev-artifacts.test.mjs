@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   buildSourceSnapshot,
   inspectDevArtifacts,
+  planRefresh,
   writeBuildFingerprint
 } from "./miniprogram-dev-artifacts.js";
 
@@ -141,4 +142,25 @@ test("invalid required JSON makes output incomplete", () => {
   } finally {
     project.cleanup();
   }
+});
+
+test("automatic refresh refuses stale output without starting a build", () => {
+  const decision = planRefresh({ artifactStatus: "stale", rebuild: false });
+
+  assert.deepEqual(decision, {
+    action: "skip",
+    shouldBuild: false,
+    shouldOpen: false,
+    exitCode: 2,
+    guidance: "Run npm run devtools:refresh to rebuild the latest miniprogram output."
+  });
+});
+
+test("automatic refresh opens only already-ready output", () => {
+  const decision = planRefresh({ artifactStatus: "ready", rebuild: false });
+
+  assert.equal(decision.action, "open");
+  assert.equal(decision.shouldBuild, false);
+  assert.equal(decision.shouldOpen, true);
+  assert.equal(decision.exitCode, 0);
 });

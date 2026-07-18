@@ -1,15 +1,15 @@
 import { spawn } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync
-} from "node:fs";
-import path from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  DEFAULT_REQUIRED_DEV_FILES,
+  DEFAULT_WATCHED_PATHS,
+  inspectDevArtifacts,
+  planRefresh
+} from "./miniprogram-dev-artifacts.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,28 +21,14 @@ const devDist = path.join(miniprogramProject, "dist/dev/mp-weixin");
 const defaultCli = "/Applications/wechatwebdevtools.app/Contents/MacOS/cli";
 const cliPath = process.env.WECHAT_DEVTOOLS_CLI || defaultCli;
 const force = process.argv.includes("--force");
+const rebuild = process.argv.includes("--rebuild");
 const devOutputReadyTimeoutMs = 8000;
 const devOutputReadyPollMs = 250;
-const devOutputReadyFiles = [
-  "app.json",
-  "project.config.json",
-  "wxcomponents/tdesign-miniprogram/image/image.json",
-  "wxcomponents/tdesign-miniprogram/image/image.wxml",
-  "wxcomponents/tdesign-miniprogram/image/image.js"
-];
-
-const watchedPaths = [
-  "apps/miniprogram/src",
-  "apps/miniprogram/package.json",
-  "apps/miniprogram/project.config.json",
-  "apps/miniprogram/vite.config.js",
-  "package.json"
-];
 
 function readState() {
   try {
     return JSON.parse(readFileSync(statePath, "utf8"));
-  } catch (error) {
+  } catch {
     return {};
   }
 }
@@ -63,36 +49,6 @@ function writeState(patch) {
   );
 }
 
-function latestMtimeMs(target) {
-  const absolutePath = path.join(root, target);
-  if (!existsSync(absolutePath)) {
-    return 0;
-  }
-
-  const stats = statSync(absolutePath);
-  if (!stats.isDirectory()) {
-    return stats.mtimeMs;
-  }
-
-  return readdirSync(absolutePath, { withFileTypes: true }).reduce(
-    (latest, entry) => {
-      if (entry.name === "node_modules" || entry.name === "dist") {
-        return latest;
-      }
-      return Math.max(latest, latestMtimeMs(path.join(target, entry.name)));
-    },
-    stats.mtimeMs
-  );
-}
-
-function relevantSnapshot() {
-  const latestMtime = Math.max(...watchedPaths.map(latestMtimeMs));
-  return {
-    latestMtime,
-    watchedPaths
-  };
-}
-
 function log(message) {
   console.log(`[devtools-refresh] ${message}`);
 }
@@ -107,33 +63,25 @@ function sleep(ms) {
   });
 }
 
-function canReadJson(file) {
-  try {
-    JSON.parse(readFileSync(file, "utf8"));
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
-function isDevOutputReady() {
-  for (const readyFile of devOutputReadyFiles) {
-    if (!existsSync(path.join(devDist, readyFile))) {
-      return false;
-    }
-  }
-  return canReadJson(path.join(devDist, "app.json"));
+function inspectCurrentOutput() {
+  return inspectDevArtifacts({
+    root,
+    devDist,
+    watchedPaths: DEFAULT_WATCHED_PATHS,
+    requiredFiles: DEFAULT_REQUIRED_DEV_FILES
+  });
 }
 
 async function waitForDevOutput() {
   const deadline = Date.now() + devOutputReadyTimeoutMs;
   while (Date.now() <= deadline) {
-    if (isDevOutputReady()) {
-      return true;
+    const result = inspectCurrentOutput();
+    if (result.status === "ready") {
+      return result;
     }
     await sleep(devOutputReadyPollMs);
   }
-  return false;
+  return inspectCurrentOutput();
 }
 
 async function openDevToolsProject() {
@@ -143,10 +91,10 @@ async function openDevToolsProject() {
     return false;
   }
 
-  if (!(await waitForDevOutput())) {
-    warn(`Dev build output is missing: ${path.join(devDist, "app.json")}`);
-    warn("Run npm run dev:mp-weixin once so WeChat DevTools has dev output to load.");
-    warn("Skipped refresh so DevTools does not load a half-written UniApp output directory.");
+  const output = await waitForDevOutput();
+  if (output.status !== "ready") {
+    warn(`Refusing to open ${devDist}: ${output.reason}.`);
+    warn("Run npm run devtools:refresh to rebuild the latest miniprogram output.");
     return false;
   }
 
@@ -162,27 +110,56 @@ async function openDevToolsProject() {
     return false;
   }
 
-  log("WeChat DevTools refresh triggered.");
+  log("WeChat DevTools refresh triggered with current source fingerprint.");
   return true;
 }
 
-const state = readState();
-const snapshot = relevantSnapshot();
-const shouldRefresh =
-  force ||
-  state.lastStatus !== "refreshed" ||
-  snapshot.latestMtime > Number(state.latestMtime || 0);
+export async function main() {
+  const state = readState();
+  const output = inspectCurrentOutput();
+  const decision = planRefresh({ artifactStatus: output.status, rebuild });
 
-if (!shouldRefresh) {
-  process.exit(0);
+  if (decision.action === "skip") {
+    warn(`Refusing stale or incomplete dev output: ${output.reason}.`);
+    warn(decision.guidance);
+    writeState({
+      fingerprint: state.fingerprint || null,
+      lastStatus: "skipped",
+      artifactStatus: output.status,
+      artifactReason: output.reason,
+      cliPath,
+      projectPath: devDist,
+      devDist
+    });
+    process.exitCode = decision.exitCode;
+    return false;
+  }
+
+  const shouldRefresh =
+    force ||
+    state.lastStatus !== "refreshed" ||
+    state.fingerprint !== output.currentFingerprint;
+  if (!shouldRefresh) {
+    return true;
+  }
+
+  const ok = await openDevToolsProject();
+  writeState({
+    fingerprint: ok ? output.currentFingerprint : state.fingerprint || null,
+    watchedPaths: DEFAULT_WATCHED_PATHS,
+    lastStatus: ok ? "refreshed" : "skipped",
+    artifactStatus: output.status,
+    artifactReason: output.reason,
+    cliPath,
+    projectPath: devDist,
+    devDist
+  });
+  if (!ok) {
+    process.exitCode = 2;
+  }
+  return ok;
 }
 
-const ok = await openDevToolsProject();
-writeState({
-  latestMtime: ok ? snapshot.latestMtime : Number(state.latestMtime || 0),
-  watchedPaths: snapshot.watchedPaths,
-  lastStatus: ok ? "refreshed" : "skipped",
-  cliPath,
-  projectPath: devDist,
-  devDist
-});
+if (path.resolve(process.argv[1] || "") === __filename) {
+  await main();
+}

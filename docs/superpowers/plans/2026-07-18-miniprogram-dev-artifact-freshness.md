@@ -36,21 +36,23 @@
 - [x] 1.5 运行 `node --test scripts/miniprogram-dev-artifacts.test.mjs`，确认因模块/行为尚未实现而 RED。
 - [x] 1.6 最小实现递归源码快照、SHA-256 内容指纹、manifest 读写和产物状态判断。
 - [x] 1.7 重跑测试，确认 GREEN。
-- [ ] 1.8 提交：`test: define miniprogram dev artifact freshness`。
+- [x] 1.8 提交：`test: define miniprogram dev artifact freshness`。
 
 ## Task 2：让刷新脚本关闭式拒绝旧包
+
+> 当前进度：Task 2 已完成；默认模式对旧包返回退出码 2，且未启动构建。
 
 **Files:**
 
 - Modify: `scripts/devtools-refresh-hook.js`
 - Modify: `scripts/miniprogram-dev-artifacts.test.mjs`
 
-- [ ] 2.1 增加失败测试：默认刷新在指纹缺失/过期时返回非成功状态，并给出 `npm run devtools:refresh` 指引。
-- [ ] 2.2 增加失败测试：Stop 模式不得启动 UniApp 构建。
-- [ ] 2.3 运行定向测试并确认 RED。
-- [ ] 2.4 改造 hook 使用共享状态模块；仅 `ready` 时调用微信开发者工具 CLI。
-- [ ] 2.5 保留去重状态，但以内容指纹代替 mtime 作为刷新依据。
-- [ ] 2.6 重跑定向测试并确认 GREEN。
+- [x] 2.1 增加失败测试：默认刷新在指纹缺失/过期时返回非成功状态，并给出 `npm run devtools:refresh` 指引。
+- [x] 2.2 增加失败测试：Stop 模式不得启动 UniApp 构建。
+- [x] 2.3 运行定向测试并确认 RED。
+- [x] 2.4 改造 hook 使用共享状态模块；仅 `ready` 时调用微信开发者工具 CLI。
+- [x] 2.5 保留去重状态，但以内容指纹代替 mtime 作为刷新依据。
+- [x] 2.6 重跑定向测试并确认 GREEN。
 - [ ] 2.7 提交：`fix: refuse stale miniprogram dev output`。
 
 ## Task 3：实现一次性构建并刷新
