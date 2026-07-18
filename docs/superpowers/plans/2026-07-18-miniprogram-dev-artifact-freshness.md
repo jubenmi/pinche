@@ -71,19 +71,21 @@
 - [x] 3.4 实现一次性 `npm --workspace apps/miniprogram run dev:mp-weixin` 编排和可靠清理。
 - [x] 3.5 将 `npm run devtools:refresh` 更新为显式 `--force --rebuild`。
 - [x] 3.6 重跑定向测试并确认 GREEN。
-- [ ] 3.7 提交：`feat: rebuild latest miniprogram before refresh`。
+- [x] 3.7 提交：`feat: rebuild latest miniprogram before refresh`。
 
 ## Task 4：把防回归契约纳入项目检查
+
+> 当前进度：Task 4 已完成；静态检查先因缺少根测试入口 RED，集成后 GREEN。
 
 **Files:**
 
 - Modify: `scripts/check-miniprogram.js`
 - Modify: `package.json`
 
-- [ ] 4.1 先修改静态检查预期并运行 `node scripts/check-miniprogram.js`，确认旧 hook 契约导致 RED。
-- [ ] 4.2 检查共享时间源码目录已纳入指纹，必需产物含管理页、日历、共享时间和入口。
-- [ ] 4.3 将新鲜度单测纳入根项目的稳定检查入口。
-- [ ] 4.4 运行 `node scripts/check-miniprogram.js` 与定向测试，确认 GREEN。
+- [x] 4.1 先修改静态检查预期并运行 `node scripts/check-miniprogram.js`，确认旧 hook 契约导致 RED。
+- [x] 4.2 检查共享时间源码目录已纳入指纹，必需产物含管理页、日历、共享时间和入口。
+- [x] 4.3 将新鲜度单测纳入根项目的稳定检查入口。
+- [x] 4.4 运行 `node scripts/check-miniprogram.js` 与定向测试，确认 GREEN。
 - [ ] 4.5 提交：`test: guard fresh miniprogram dev artifacts`。
 
 ## Task 5：从当前源码生成并审计最新开发包
