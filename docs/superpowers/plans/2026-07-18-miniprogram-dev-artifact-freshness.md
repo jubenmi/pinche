@@ -86,20 +86,22 @@
 - [x] 4.2 检查共享时间源码目录已纳入指纹，必需产物含管理页、日历、共享时间和入口。
 - [x] 4.3 将新鲜度单测纳入根项目的稳定检查入口。
 - [x] 4.4 运行 `node scripts/check-miniprogram.js` 与定向测试，确认 GREEN。
-- [ ] 4.5 提交：`test: guard fresh miniprogram dev artifacts`。
+- [x] 4.5 提交：`test: guard fresh miniprogram dev artifacts`。
 
 ## Task 5：从当前源码生成并审计最新开发包
+
+> 当前进度：Task 5 已完成；指纹 `5a7f4056…b7b7e7` 匹配，完整 `precheck + check` 退出码为 0。
 
 **Files:**
 
 - Generate (gitignored): `apps/miniprogram/dist/dev/mp-weixin/**`
 - Generate (gitignored): `apps/miniprogram/dist/dev/mp-weixin/.codex-source-fingerprint.json`
 
-- [ ] 5.1 运行一次性开发构建，但暂不打开开发者工具；确认 watcher 已终止。
-- [ ] 5.2 重新计算状态，必须为 `ready` 且指纹等于当前源码。
-- [ ] 5.3 检查构建产物包含改期按钮/选择器、`/reschedule` 专用接口和北京时间格式化实现。
-- [ ] 5.4 运行共享时间测试、`session-reschedule:verify`、新鲜度单测和 `check-miniprogram`。
-- [ ] 5.5 运行与改动范围相称的根项目检查；记录任何与本次无关的既有失败。
+- [x] 5.1 运行一次性开发构建，但暂不打开开发者工具；确认 watcher 已终止。
+- [x] 5.2 重新计算状态，必须为 `ready` 且指纹等于当前源码。
+- [x] 5.3 检查构建产物包含改期按钮/选择器、`/reschedule` 专用接口和北京时间格式化实现。
+- [x] 5.4 运行共享时间测试、`session-reschedule:verify`、新鲜度单测和 `check-miniprogram`。
+- [x] 5.5 运行与改动范围相称的根项目检查；记录任何与本次无关的既有失败。
 - [ ] 5.6 提交计划勾选与必要文档更新：`docs: record miniprogram freshness verification`。
 
 ## Task 6：微信开发者工具实际验收
