@@ -8,6 +8,7 @@ import {
   buildSourceSnapshot,
   DEFAULT_REQUIRED_DEV_FILES,
   DEFAULT_WATCHED_PATHS,
+  invalidateBuildFingerprint,
   inspectDevArtifacts,
   inspectRequiredArtifacts,
   planRefresh,
@@ -84,54 +85,86 @@ function inspectCurrentRequiredOutput() {
   });
 }
 
-function terminateBuildProcess(child) {
-  if (child.exitCode !== null || child.killed) {
-    return Promise.resolve();
-  }
+function childHasExited(child) {
+  return child.exitCode !== null || child.signalCode != null;
+}
 
+function signalBuildProcess(child, signal) {
+  if (process.platform !== "win32" && Number.isInteger(child.pid)) {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch (error) {
+      if (error.code === "ESRCH") {
+        return true;
+      }
+    }
+  }
+  return child.kill(signal);
+}
+
+function waitForChildExit(child, timeoutMs) {
+  if (childHasExited(child)) {
+    return Promise.resolve(true);
+  }
   return new Promise((resolve) => {
     let settled = false;
-    const finish = () => {
+    const finish = (exited) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(forceKillTimer);
-      child.off("close", finish);
-      resolve();
+      clearTimeout(timeout);
+      child.off("close", onClose);
+      resolve(exited);
     };
-    const forceKillTimer = setTimeout(() => {
-      if (child.exitCode === null) {
-        child.kill("SIGTERM");
-      }
-      finish();
-    }, 2000);
-    child.once("close", finish);
-    child.kill("SIGINT");
+    const onClose = () => finish(true);
+    const timeout = setTimeout(() => finish(childHasExited(child)), timeoutMs);
+    child.once("close", onClose);
   });
+}
+
+async function terminateBuildProcess(child, graceMs) {
+  if (childHasExited(child)) {
+    return;
+  }
+
+  for (const signal of ["SIGINT", "SIGTERM", "SIGKILL"]) {
+    signalBuildProcess(child, signal);
+    if (await waitForChildExit(child, graceMs)) {
+      return;
+    }
+  }
+  throw new Error("Miniprogram dev watcher could not be terminated");
 }
 
 export async function rebuildDevOutput({
   spawnBuild = () =>
     spawn("npm", ["--workspace", "apps/miniprogram", "run", "dev:mp-weixin"], {
       cwd: root,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"]
     }),
   inspectRequiredOutput = inspectCurrentRequiredOutput,
   captureSnapshot = () =>
     buildSourceSnapshot({ root, watchedPaths: DEFAULT_WATCHED_PATHS }),
+  invalidateFingerprint = () => invalidateBuildFingerprint(devDist),
   persistFingerprint = (snapshot) => writeBuildFingerprint({ devDist, snapshot }),
   timeoutMs = buildTimeoutMs,
   pollMs = devOutputReadyPollMs,
+  terminationGraceMs = 2000,
   writeStdout = (chunk) => process.stdout.write(chunk),
   writeStderr = (chunk) => process.stderr.write(chunk)
 } = {}) {
+  invalidateFingerprint();
+  let expectedSnapshot = captureSnapshot();
   const child = spawnBuild();
-  let buildReportedComplete = false;
+  let completionAwaitingArtifacts = false;
   let stdoutBuffer = "";
+  let completedSnapshot;
 
   try {
-    return await new Promise((resolve, reject) => {
+    completedSnapshot = await new Promise((resolve, reject) => {
       let settled = false;
       const finish = (callback, value) => {
         if (settled) {
@@ -143,13 +176,17 @@ export async function rebuildDevOutput({
         callback(value);
       };
       const tryComplete = () => {
-        if (!buildReportedComplete || inspectRequiredOutput().status !== "complete") {
+        if (!completionAwaitingArtifacts || inspectRequiredOutput().status !== "complete") {
           return;
         }
         try {
           const snapshot = captureSnapshot();
-          persistFingerprint(snapshot);
-          finish(resolve, snapshot);
+          completionAwaitingArtifacts = false;
+          if (snapshot.fingerprint === expectedSnapshot.fingerprint) {
+            finish(resolve, snapshot);
+            return;
+          }
+          expectedSnapshot = snapshot;
         } catch (error) {
           finish(reject, error);
         }
@@ -162,11 +199,15 @@ export async function rebuildDevOutput({
 
       child.stdout?.on("data", (chunk) => {
         writeStdout(chunk);
-        stdoutBuffer = `${stdoutBuffer}${chunk.toString()}`.slice(-4096);
-        if (initialBuildCompletePattern.test(stdoutBuffer)) {
-          buildReportedComplete = true;
+        stdoutBuffer = `${stdoutBuffer}${chunk.toString()}`;
+        let completionMatch = initialBuildCompletePattern.exec(stdoutBuffer);
+        while (completionMatch) {
+          stdoutBuffer = stdoutBuffer.slice(completionMatch.index + completionMatch[0].length);
+          completionAwaitingArtifacts = true;
           tryComplete();
+          completionMatch = initialBuildCompletePattern.exec(stdoutBuffer);
         }
+        stdoutBuffer = stdoutBuffer.slice(-4096);
       });
       child.stderr?.on("data", writeStderr);
       child.once("error", (error) => finish(reject, error));
@@ -180,8 +221,27 @@ export async function rebuildDevOutput({
       });
     });
   } finally {
-    await terminateBuildProcess(child);
+    await terminateBuildProcess(child, terminationGraceMs);
   }
+
+  if (inspectRequiredOutput().status !== "complete") {
+    throw new Error("Miniprogram dev output became incomplete after watcher cleanup");
+  }
+  const finalSnapshot = captureSnapshot();
+  if (finalSnapshot.fingerprint !== completedSnapshot.fingerprint) {
+    throw new Error("Miniprogram source changed before the completed build could be finalized");
+  }
+
+  persistFingerprint(finalSnapshot);
+  const persistedSnapshot = captureSnapshot();
+  if (
+    persistedSnapshot.fingerprint !== finalSnapshot.fingerprint ||
+    inspectRequiredOutput().status !== "complete"
+  ) {
+    invalidateFingerprint();
+    throw new Error("Miniprogram source or output changed while finalizing the build fingerprint");
+  }
+  return finalSnapshot;
 }
 
 async function waitForDevOutput() {
@@ -194,6 +254,58 @@ async function waitForDevOutput() {
     await sleep(devOutputReadyPollMs);
   }
   return inspectCurrentOutput();
+}
+
+export function launchDevToolsCli({
+  cliPath: executable,
+  projectPath,
+  cwd,
+  spawnCli = spawn,
+  timeoutMs = 30000
+}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const child = spawnCli(executable, ["open", "--project", projectPath], {
+      cwd,
+      stdio: "ignore"
+    });
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      child.off("error", onError);
+      child.off("close", onClose);
+      callback(value);
+    };
+    const onError = (error) => finish(reject, error);
+    const onClose = (code, signal) => {
+      if (code === 0) {
+        finish(resolve, true);
+        return;
+      }
+      finish(
+        reject,
+        new Error(`WeChat DevTools CLI exited with exit code ${code ?? signal ?? "unknown"}`)
+      );
+    };
+    const timeout = setTimeout(() => {
+      child.kill?.("SIGTERM");
+      finish(reject, new Error(`WeChat DevTools CLI timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.once("error", onError);
+    child.once("close", onClose);
+  });
+}
+
+export function shouldRefreshDevTools({ force, state, fingerprint, projectPath }) {
+  return (
+    force ||
+    state.lastStatus !== "refreshed" ||
+    state.fingerprint !== fingerprint ||
+    state.projectPath !== projectPath
+  );
 }
 
 async function openDevToolsProject() {
@@ -211,12 +323,12 @@ async function openDevToolsProject() {
   }
 
   try {
-    const child = spawn(cliPath, ["open", "--project", devDist], {
+    await launchDevToolsCli({
+      cliPath,
+      projectPath: devDist,
       cwd: root,
-      detached: true,
-      stdio: "ignore"
+      spawnCli: spawn
     });
-    child.unref();
   } catch (error) {
     warn(error.message);
     return false;
@@ -274,10 +386,12 @@ export async function main() {
     }
   }
 
-  const shouldRefresh =
-    force ||
-    state.lastStatus !== "refreshed" ||
-    state.fingerprint !== output.currentFingerprint;
+  const shouldRefresh = shouldRefreshDevTools({
+    force,
+    state,
+    fingerprint: output.currentFingerprint,
+    projectPath: devDist
+  });
   if (!shouldRefresh) {
     return true;
   }

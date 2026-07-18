@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync
 } from "node:fs";
@@ -15,6 +16,10 @@ export const BUILD_FINGERPRINT_VERSION = 1;
 
 export const DEFAULT_WATCHED_PATHS = [
   "apps/miniprogram/src",
+  "apps/miniprogram/.env",
+  "apps/miniprogram/.env.local",
+  "apps/miniprogram/.env.development",
+  "apps/miniprogram/.env.development.local",
   "apps/miniprogram/package.json",
   "apps/miniprogram/project.config.json",
   "apps/miniprogram/vite.config.js",
@@ -22,7 +27,8 @@ export const DEFAULT_WATCHED_PATHS = [
   "packages/shared/package.json",
   "packages/talk/miniprogram",
   "packages/talk/package.json",
-  "package.json"
+  "package.json",
+  "package-lock.json"
 ];
 
 export const DEFAULT_REQUIRED_DEV_FILES = [
@@ -33,6 +39,7 @@ export const DEFAULT_REQUIRED_DEV_FILES = [
   "pages/session/manage.js",
   "pages/session/manage.json",
   "pages/session/manage.wxml",
+  "utils/sessionReschedule.js",
   "components/SessionCalendar.js",
   "components/SessionCalendar.json",
   "components/SessionCalendar.wxml",
@@ -124,11 +131,33 @@ export function readBuildFingerprint(devDist) {
   }
 }
 
+export function invalidateBuildFingerprint(devDist) {
+  rmSync(fingerprintPath(devDist), { force: true });
+}
+
 function invalidRequiredJsonFiles(devDist, requiredFiles) {
   const invalid = [];
   for (const requiredFile of requiredFiles.filter((file) => file.endsWith(".json"))) {
     try {
       JSON.parse(readFileSync(path.join(devDist, requiredFile), "utf8"));
+    } catch {
+      invalid.push(requiredFile);
+    }
+  }
+  return invalid;
+}
+
+function invalidRequiredFiles(devDist, requiredFiles) {
+  const invalid = [];
+  for (const requiredFile of requiredFiles) {
+    try {
+      const absolutePath = path.join(devDist, requiredFile);
+      const stats = statSync(absolutePath);
+      if (!stats.isFile() || stats.size === 0) {
+        invalid.push(requiredFile);
+        continue;
+      }
+      readFileSync(absolutePath);
     } catch {
       invalid.push(requiredFile);
     }
@@ -187,6 +216,11 @@ export function inspectRequiredArtifacts({
   );
   if (missingFiles.length > 0) {
     return { status: "incomplete", reason: "missing-required-files", missingFiles };
+  }
+
+  const invalidFiles = invalidRequiredFiles(devDist, requiredFiles);
+  if (invalidFiles.length > 0) {
+    return { status: "incomplete", reason: "invalid-required-files", invalidFiles };
   }
 
   const invalidJsonFiles = invalidRequiredJsonFiles(devDist, requiredFiles);
