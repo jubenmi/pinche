@@ -22,18 +22,20 @@
 
 ## Task 1：以测试定义开发产物新鲜度
 
+> 当前进度：Task 1 已完成，RED 为模块不存在，GREEN 为 5/5。
+
 **Files:**
 
 - Create: `scripts/miniprogram-dev-artifacts.test.mjs`
 - Create: `scripts/miniprogram-dev-artifacts.js`
 
-- [ ] 1.1 写失败测试：缺少指纹时，即使旧产物存在也返回 `stale`。
-- [ ] 1.2 写失败测试：指纹与当前源码内容不一致时返回 `stale`。
-- [ ] 1.3 写失败测试：必需的入口、管理页、日历、共享时间或 TDesign 产物缺失时返回 `incomplete`。
-- [ ] 1.4 写失败测试：指纹匹配且必需产物完整、JSON 可解析时才返回 `ready`。
-- [ ] 1.5 运行 `node --test scripts/miniprogram-dev-artifacts.test.mjs`，确认因模块/行为尚未实现而 RED。
-- [ ] 1.6 最小实现递归源码快照、SHA-256 内容指纹、manifest 读写和产物状态判断。
-- [ ] 1.7 重跑测试，确认 GREEN。
+- [x] 1.1 写失败测试：缺少指纹时，即使旧产物存在也返回 `stale`。
+- [x] 1.2 写失败测试：指纹与当前源码内容不一致时返回 `stale`。
+- [x] 1.3 写失败测试：必需的入口、管理页、日历、共享时间或 TDesign 产物缺失时返回 `incomplete`。
+- [x] 1.4 写失败测试：指纹匹配且必需产物完整、JSON 可解析时才返回 `ready`。
+- [x] 1.5 运行 `node --test scripts/miniprogram-dev-artifacts.test.mjs`，确认因模块/行为尚未实现而 RED。
+- [x] 1.6 最小实现递归源码快照、SHA-256 内容指纹、manifest 读写和产物状态判断。
+- [x] 1.7 重跑测试，确认 GREEN。
 - [ ] 1.8 提交：`test: define miniprogram dev artifact freshness`。
 
 ## Task 2：让刷新脚本关闭式拒绝旧包
