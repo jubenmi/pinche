@@ -21,6 +21,8 @@ const miniprogramDevRoot = path.join(miniprogramRoot, "dist/dev/mp-weixin");
 const miniprogramBuildRoot = path.join(miniprogramRoot, "dist/build/mp-weixin");
 const codexHooksPath = path.join(root, ".codex/hooks.json");
 const devtoolsHookPath = path.join(root, "scripts/devtools-refresh-hook.js");
+const devArtifactGuardPath = path.join(root, "scripts/miniprogram-dev-artifacts.js");
+const devArtifactTestPath = path.join(root, "scripts/miniprogram-dev-artifacts.test.mjs");
 const d35AdminCatalogCheckPath = path.join(root, "scripts/d35-miniprogram-admin-catalog-check.js");
 const albumImageViewerPath = path.join(srcRoot, "components", "AlbumImageViewer.vue");
 const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
@@ -3824,8 +3826,16 @@ if (!fs.existsSync(devtoolsHookPath)) {
     "apps/miniprogram",
     "dist/dev/mp-weixin",
     "waitForDevOutput",
-    "wxcomponents/tdesign-miniprogram/image/image.json",
-    "[\"open\", \"--project\", devDist]",
+    "rebuildDevOutput",
+    "inspectDevArtifacts",
+    "invalidateFingerprint",
+    "terminateBuildProcess",
+    "defaultIsProcessGroupAlive",
+    "process.kill(-processGroupId, 0)",
+    '"SIGKILL"',
+    "launchDevToolsCli",
+    "--rebuild",
+    '["open", "--project", projectPath]',
     "projectPath: devDist",
     "open",
     "pinche-devtools-refresh-state.json"
@@ -3834,6 +3844,47 @@ if (!fs.existsSync(devtoolsHookPath)) {
       fail(`WeChat DevTools refresh hook is missing ${requiredHookText}`);
     }
   }
+}
+
+if (!fs.existsSync(devArtifactGuardPath) || !fs.existsSync(devArtifactTestPath)) {
+  fail("Missing miniprogram dev artifact freshness helper or tests");
+} else {
+  const devArtifactGuardSource = fs.readFileSync(devArtifactGuardPath, "utf8");
+  for (const requiredGuardText of [
+    ".codex-source-fingerprint.json",
+    "packages/shared/src",
+    "packages/talk/miniprogram",
+    "apps/miniprogram/.env.development",
+    "apps/miniprogram/.env.development.local",
+    "package-lock.json",
+    "pages/session/manage.js",
+    "utils/sessionReschedule.js",
+    "components/SessionCalendar.js",
+    "common/vendor.js",
+    "wxcomponents/tdesign-miniprogram/image/image.js",
+    "sha256"
+  ]) {
+    if (!devArtifactGuardSource.includes(requiredGuardText)) {
+      fail(`Miniprogram dev artifact guard is missing ${requiredGuardText}`);
+    }
+  }
+}
+
+const rootPackageJson = readJson(path.join(root, "package.json"));
+if (
+  rootPackageJson.scripts?.["devtools:refresh"] !==
+  "node scripts/devtools-refresh-hook.js --force --rebuild"
+) {
+  fail("devtools:refresh must rebuild current source before opening WeChat DevTools");
+}
+if (
+  rootPackageJson.scripts?.["test:miniprogram-dev-artifacts"] !==
+  "node --test scripts/miniprogram-dev-artifacts.test.mjs"
+) {
+  fail("Root package must expose the miniprogram dev artifact freshness tests");
+}
+if (!rootPackageJson.scripts?.check?.includes("npm run test:miniprogram-dev-artifacts")) {
+  fail("Root check must run the miniprogram dev artifact freshness tests");
 }
 
 if (!fs.existsSync(d35AdminCatalogCheckPath)) {
