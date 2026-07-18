@@ -271,6 +271,7 @@ test("explicit rebuild writes the current fingerprint only after initial output 
       events.push("snapshot");
       return { fingerprint: "current" };
     },
+    invalidateFingerprint: () => {},
     persistFingerprint: (snapshot) => events.push(`persist:${snapshot.fingerprint}`),
     timeoutMs: 1000,
     pollMs: 5,
@@ -301,6 +302,7 @@ test("failed or timed-out rebuild terminates the watcher without writing a finge
       spawnBuild: () => child,
       inspectRequiredOutput: () => ({ status: "incomplete" }),
       captureSnapshot: () => ({ fingerprint: "must-not-persist" }),
+      invalidateFingerprint: () => {},
       persistFingerprint: () => {
         persisted = true;
       },
@@ -362,6 +364,30 @@ test("failed rebuild invalidates an existing fingerprint before starting the wat
   }
 });
 
+test("a fake build must inject its fingerprint invalidator before any side effect", async () => {
+  const child = new FakeBuildProcess();
+  let spawnCalled = false;
+
+  await assert.rejects(
+    rebuildDevOutput({
+      spawnBuild: () => {
+        spawnCalled = true;
+        return child;
+      },
+      inspectRequiredOutput: () => ({ status: "incomplete" }),
+      captureSnapshot: () => ({ fingerprint: "isolated" }),
+      persistFingerprint: () => {},
+      timeoutMs: 10,
+      pollMs: 5,
+      terminationGraceMs: 5,
+      writeStdout: () => {},
+      writeStderr: () => {}
+    }),
+    /custom spawnBuild requires an explicit invalidateFingerprint/
+  );
+  assert.equal(spawnCalled, false);
+});
+
 test("rebuild waits for a completion bound to a stable source snapshot", async () => {
   const child = new FakeBuildProcess();
   const snapshots = [
@@ -417,6 +443,41 @@ test("watcher cleanup escalates until the process exit is confirmed", async () =
   child.stdout.write("DONE  Build complete. Watching for changes...\n");
   await result;
   assert.deepEqual(child.killedWith, ["SIGINT", "SIGTERM", "SIGKILL"]);
+});
+
+test("watcher cleanup keeps escalating after the npm wrapper exits while its group is alive", async () => {
+  const child = new FakeBuildProcess();
+  const groupSignals = [];
+  let groupAlive = true;
+  const result = rebuildDevOutput({
+    spawnBuild: () => child,
+    inspectRequiredOutput: () => ({ status: "complete" }),
+    captureSnapshot: () => ({ fingerprint: "stable" }),
+    invalidateFingerprint: () => {},
+    persistFingerprint: () => {},
+    timeoutMs: 1000,
+    pollMs: 5,
+    terminationGraceMs: 5,
+    getProcessGroupId: () => 12345,
+    isProcessGroupAlive: () => groupAlive,
+    signalProcessGroup: (_processGroupId, signal) => {
+      groupSignals.push(signal);
+      if (signal === "SIGINT") {
+        child.exitCode = 0;
+        queueMicrotask(() => child.emit("close", 0, signal));
+      }
+      if (signal === "SIGKILL") {
+        groupAlive = false;
+      }
+    },
+    writeStdout: () => {},
+    writeStderr: () => {}
+  });
+
+  child.stdout.write("DONE  Build complete. Watching for changes...\n");
+  await result;
+  assert.deepEqual(groupSignals, ["SIGINT", "SIGTERM", "SIGKILL"]);
+  assert.equal(groupAlive, false);
 });
 
 test("stale output with explicit rebuild requests build before open", () => {

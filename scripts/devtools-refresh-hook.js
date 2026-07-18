@@ -89,57 +89,93 @@ function childHasExited(child) {
   return child.exitCode !== null || child.signalCode != null;
 }
 
-function signalBuildProcess(child, signal) {
-  if (process.platform !== "win32" && Number.isInteger(child.pid)) {
+function defaultProcessGroupId(child) {
+  return process.platform !== "win32" && Number.isInteger(child.pid) ? child.pid : null;
+}
+
+function defaultIsProcessGroupAlive(processGroupId) {
+  if (!processGroupId) {
+    return false;
+  }
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (error) {
+    return error.code !== "ESRCH";
+  }
+}
+
+function defaultSignalProcessGroup(processGroupId, signal) {
+  process.kill(-processGroupId, signal);
+}
+
+function signalBuildProcess(child, processGroupId, signal, signalProcessGroup) {
+  if (processGroupId) {
     try {
-      process.kill(-child.pid, signal);
+      signalProcessGroup(processGroupId, signal);
       return true;
     } catch (error) {
-      if (error.code === "ESRCH") {
-        return true;
+      if (error.code !== "ESRCH") {
+        throw error;
       }
     }
   }
   return child.kill(signal);
 }
 
-function waitForChildExit(child, timeoutMs) {
-  if (childHasExited(child)) {
-    return Promise.resolve(true);
-  }
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (exited) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      child.off("close", onClose);
-      resolve(exited);
-    };
-    const onClose = () => finish(true);
-    const timeout = setTimeout(() => finish(childHasExited(child)), timeoutMs);
-    child.once("close", onClose);
-  });
+function buildTreeHasExited(child, processGroupId, isProcessGroupAlive) {
+  return childHasExited(child) && !isProcessGroupAlive(processGroupId);
 }
 
-async function terminateBuildProcess(child, graceMs) {
-  if (childHasExited(child)) {
+async function waitForBuildTreeExit(
+  child,
+  processGroupId,
+  isProcessGroupAlive,
+  timeoutMs
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (buildTreeHasExited(child, processGroupId, isProcessGroupAlive)) {
+      return true;
+    }
+    await sleep(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
+  return buildTreeHasExited(child, processGroupId, isProcessGroupAlive);
+}
+
+async function terminateBuildProcess(
+  child,
+  graceMs,
+  {
+    getProcessGroupId = defaultProcessGroupId,
+    isProcessGroupAlive = defaultIsProcessGroupAlive,
+    signalProcessGroup = defaultSignalProcessGroup
+  } = {}
+) {
+  const processGroupId = getProcessGroupId(child);
+  if (buildTreeHasExited(child, processGroupId, isProcessGroupAlive)) {
     return;
   }
 
   for (const signal of ["SIGINT", "SIGTERM", "SIGKILL"]) {
-    signalBuildProcess(child, signal);
-    if (await waitForChildExit(child, graceMs)) {
+    signalBuildProcess(child, processGroupId, signal, signalProcessGroup);
+    if (await waitForBuildTreeExit(child, processGroupId, isProcessGroupAlive, graceMs)) {
       return;
     }
   }
   throw new Error("Miniprogram dev watcher could not be terminated");
 }
 
-export async function rebuildDevOutput({
-  spawnBuild = () =>
+export async function rebuildDevOutput(options = {}) {
+  if (
+    Object.hasOwn(options, "spawnBuild") &&
+    !Object.hasOwn(options, "invalidateFingerprint")
+  ) {
+    throw new Error("custom spawnBuild requires an explicit invalidateFingerprint");
+  }
+
+  const {
+    spawnBuild = () =>
     spawn("npm", ["--workspace", "apps/miniprogram", "run", "dev:mp-weixin"], {
       cwd: root,
       detached: process.platform !== "win32",
@@ -153,9 +189,12 @@ export async function rebuildDevOutput({
   timeoutMs = buildTimeoutMs,
   pollMs = devOutputReadyPollMs,
   terminationGraceMs = 2000,
+  getProcessGroupId = defaultProcessGroupId,
+  isProcessGroupAlive = defaultIsProcessGroupAlive,
+  signalProcessGroup = defaultSignalProcessGroup,
   writeStdout = (chunk) => process.stdout.write(chunk),
   writeStderr = (chunk) => process.stderr.write(chunk)
-} = {}) {
+  } = options;
   invalidateFingerprint();
   let expectedSnapshot = captureSnapshot();
   const child = spawnBuild();
@@ -221,7 +260,11 @@ export async function rebuildDevOutput({
       });
     });
   } finally {
-    await terminateBuildProcess(child, terminationGraceMs);
+    await terminateBuildProcess(child, terminationGraceMs, {
+      getProcessGroupId,
+      isProcessGroupAlive,
+      signalProcessGroup
+    });
   }
 
   if (inspectRequiredOutput().status !== "complete") {

@@ -3830,6 +3830,8 @@ if (!fs.existsSync(devtoolsHookPath)) {
     "inspectDevArtifacts",
     "invalidateFingerprint",
     "terminateBuildProcess",
+    "defaultIsProcessGroupAlive",
+    "process.kill(-processGroupId, 0)",
     '"SIGKILL"',
     "launchDevToolsCli",
     "--rebuild",
