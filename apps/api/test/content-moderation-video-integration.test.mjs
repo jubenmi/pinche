@@ -143,6 +143,7 @@ test("an asynchronous video intake decision settles before object inspection", a
 });
 
 test("direct video fallback writes approved legacy and creates no moderation job", async () => {
+  let insertSql = "";
   let insertValues = null;
   let moderationJobs = 0;
   const intakeConnections = [];
@@ -164,6 +165,7 @@ test("direct video fallback writes approved legacy and creates no moderation job
       }
       if (String(sql).includes("INSERT INTO session_album_photos")) {
         timeline.push("insert_business");
+        insertSql = String(sql);
         insertValues = values;
         return [{ insertId: media.id }];
       }
@@ -206,6 +208,13 @@ test("direct video fallback writes approved legacy and creates no moderation job
     }
   );
 
+  const insertMatch = /INSERT INTO session_album_photos\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i
+    .exec(insertSql);
+  assert.ok(insertMatch, "video INSERT must expose an explicit column and value list");
+  const insertColumns = insertMatch[1].split(",").map((value) => value.trim());
+  const insertExpressions = insertMatch[2].split(",").map((value) => value.trim());
+  assert.equal(insertExpressions.length, insertColumns.length);
+  assert.equal((insertSql.match(/\?/g) || []).length, insertValues.length);
   assert.equal(insertValues.includes("approved_legacy"), true);
   assert.equal(result.moderation_status, "approved_legacy");
   assert.equal(result.moderation_message, null);
