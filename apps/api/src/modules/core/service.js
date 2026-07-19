@@ -69,7 +69,9 @@ import {
 import { cosStorageEnabled } from "../../storage/cos.js";
 import {
   MAX_SESSION_REVIEW_PHOTOS,
-  normalizeSessionReviewAlbumPhotoIds
+  isPublishableSessionReviewAlbumPhoto,
+  normalizeSessionReviewAlbumPhotoIds,
+  serializePublicSessionReview
 } from "./session-review.js";
 
 export { normalizeSessionReviewAlbumPhotoIds } from "./session-review.js";
@@ -7361,6 +7363,78 @@ export async function listSessionReviews(sessionId) {
         album_photo_ids: media.albumPhotoIds
       };
     });
+  });
+}
+
+export async function getPublicSessionReview(reviewId) {
+  const id = positiveId(reviewId, "reviewId");
+  return withDatabaseConnection(async (connection) => {
+    const [rows] = await connection.query(
+      `
+        SELECT
+          review.id,
+          review.rating,
+          review.content,
+          review.status,
+          user.nickname AS user_nickname,
+          CASE
+            WHEN avatar_asset.status = 'active'
+             AND avatar_asset.moderation_status IN ('approved', 'approved_legacy')
+            THEN user.avatar_url
+            ELSE NULL
+          END AS user_avatar_url,
+          seat.name AS seat_name,
+          seat.role_name AS seat_role_name,
+          session.script_name_snapshot,
+          session.store_name_snapshot,
+          session.start_at
+        FROM session_reviews AS review
+        JOIN users AS user ON user.id = review.user_id
+        JOIN sessions AS session ON session.id = review.session_id
+        LEFT JOIN session_seats AS seat ON seat.id = review.seat_id
+        LEFT JOIN user_image_assets AS avatar_asset ON avatar_asset.id = user.avatar_image_asset_id
+        WHERE review.id = ?
+          AND review.status = 'active'
+        LIMIT 1
+      `,
+      [id]
+    );
+    const review = rows[0];
+    if (!review) throw notFound("Session review not found");
+    const media = (await reviewPhotos(connection, [id])).get(id) || {
+      photos: [],
+      albumPhotoIds: []
+    };
+    return serializePublicSessionReview(review, media.photos);
+  });
+}
+
+export async function getSessionReviewAlbumPhoto(reviewId, albumPhotoId) {
+  const id = positiveId(reviewId, "reviewId");
+  const photoId = positiveId(albumPhotoId, "albumPhotoId");
+  return withDatabaseConnection(async (connection) => {
+    const [rows] = await connection.query(
+      `
+        SELECT
+          album.*,
+          link.review_id,
+          link.album_photo_id,
+          review.status AS review_status,
+          album.status AS album_photo_status
+        FROM session_review_photos AS link
+        JOIN session_reviews AS review ON review.id = link.review_id
+        JOIN session_album_photos AS album ON album.id = link.album_photo_id
+        WHERE link.review_id = ?
+          AND link.album_photo_id = ?
+        LIMIT 1
+      `,
+      [id, photoId]
+    );
+    const photo = rows[0];
+    if (!isPublishableSessionReviewAlbumPhoto(photo, id, photoId)) {
+      throw notFound("Session review photo not found");
+    }
+    return photo;
   });
 }
 

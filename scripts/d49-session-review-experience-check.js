@@ -37,11 +37,11 @@ assert(textBoundaries.includes("albumPhotoIds"), "moderation boundary must prese
 
 const server = read("apps/api/src/server.js");
 assert(
-  server.includes('"/api/session-reviews/:reviewId"'),
+  server.includes("publicSessionReviewId") && server.includes("getPublicSessionReview"),
   "server must expose a public single-review route"
 );
 assert(
-  server.includes('"/api/session-reviews/:reviewId/photos/:albumPhotoId/image"'),
+  server.includes("publicSessionReviewPhotoMatch") && server.includes("getSessionReviewAlbumPhoto"),
   "server must expose controlled review album-photo reads"
 );
 
@@ -68,4 +68,3 @@ assert(sharePage.includes("onShareTimeline"), "review share page must register t
 assert(sharePage.includes("/pages/session/review-share?id="), "both share channels must target one review id");
 
 console.log("D49 session review experience check passed");
-

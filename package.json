@@ -59,7 +59,7 @@
     "d46:acceptance:check": "node scripts/d46-isolated-acceptance-check.js",
     "d46:acceptance:api": "node scripts/d46-author-private-content-api-smoke.js",
     "d46:smoke": "node scripts/d46-author-private-content-smoke.js",
-    "d49:unit": "node --test apps/api/test/session-review-album-photos.test.mjs apps/miniprogram/test/sessionReviewPhotos.test.mjs",
+    "d49:unit": "node --test apps/api/test/session-review-album-photos.test.mjs apps/api/test/session-review-public.test.mjs apps/miniprogram/test/sessionReviewPhotos.test.mjs",
     "d49:check": "node scripts/d49-session-review-experience-check.js",
     "session-reschedule:verify": "npm --workspace apps/api run test:session-reschedule && node --test apps/miniprogram/test/sessionReschedule.test.mjs apps/miniprogram/test/authMessages.test.mjs apps/miniprogram/test/sessionMembership.test.mjs && node --check scripts/d45-session-reschedule-notifications-smoke.js && node scripts/d45-session-reschedule-notifications-safety-check.js && node scripts/d45-session-reschedule-notifications-check.js",
     "session-reschedule:smoke": "node scripts/d45-session-reschedule-notifications-smoke.js",
