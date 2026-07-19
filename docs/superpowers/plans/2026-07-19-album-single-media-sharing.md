@@ -17,6 +17,7 @@
 - Create `apps/api/test/album-single-media-share.test.mjs`: focused selector and capability pure/service contract tests.
 - Modify `apps/api/src/modules/core/service.js`: required-media selection and public video authorization.
 - Modify `apps/api/src/server.js`: share-token body, focused response, public video capability, local/COS range responder.
+- Modify `apps/api/src/storage/cos.js`: abortable COS range transport for public playback disconnects.
 - Create `apps/miniprogram/src/utils/albumSingleMediaShare.js`: pure focused-share cache and route helpers.
 - Create `apps/miniprogram/test/albumSingleMediaShare.test.mjs`: race, cache, route, and target lookup tests.
 - Modify `apps/miniprogram/src/components/AlbumImageViewer.vue`: presentational share state and public-focused CTA.

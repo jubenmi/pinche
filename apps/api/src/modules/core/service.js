@@ -7911,6 +7911,51 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
   });
 }
 
+export async function getPublicSessionAlbumVideoForPlayback(claims, mediaId, options = {}) {
+  const id = positiveId(mediaId, "mediaId");
+  if (
+    Number(claims?.version) !== 2 ||
+    !(claims?.shareId ?? claims?.share_id)
+  ) {
+    throw forbidden("Album video is outside this public share");
+  }
+  const normalizedClaims = normalizeAlbumShareClaims(claims);
+  const withConnection = options.withConnection || withDatabaseConnection;
+  return withConnection(async (connection) => {
+    const media = await findById(connection, "session_album_photos", id);
+    if (!media || media.status !== "active" || albumMediaType(media) !== "video") {
+      throw notFound("Album video not found");
+    }
+    if (!isModerationPublished(media.moderation_status)) {
+      throw moderationUnpublishedNotFound("album_video");
+    }
+    if (albumMediaProcessingStatus(media) !== "ready" || !String(media.display_url || "").trim()) {
+      throw forbidden("Album video is not ready");
+    }
+    if (Number(media.session_id) !== normalizedClaims.sessionId) {
+      throw forbidden("Album video is outside this public share");
+    }
+    const { share } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
+    if (!isPublicShareSnapshotMediaId(share.media_ids, id)) {
+      throw forbidden("Album video is outside this public share");
+    }
+    const tagsMap = await albumTagsForPhotos(connection, [id]);
+    const tags = tagsMap.get(id) || [];
+    const privacyByUser = await albumPrivacyMap(
+      connection,
+      normalizedClaims.sessionId,
+      [
+        media.uploader_user_id,
+        ...tags.map((tag) => tag.user_id).filter(Boolean)
+      ]
+    );
+    if (!isAlbumPhotoVisibleInPublicShare(media, tags, privacyByUser, normalizedClaims)) {
+      throw forbidden("Album video is not visible in this public share");
+    }
+    return media;
+  });
+}
+
 async function reviewPhotos(connection, reviewIds) {
   if (reviewIds.length === 0) {
     return new Map();

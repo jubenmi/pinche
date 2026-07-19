@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
@@ -52,6 +53,7 @@ import {
   createLocalAlbumVideoResponse,
   inspectLocalAlbumVideoObject,
   inspectSessionAlbumVideoObject,
+  parseSingleByteRange,
   validateCosAlbumVideoHeaders
 } from "./modules/album-video/media.js";
 import {
@@ -94,6 +96,7 @@ import {
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
   getPublicSessionAlbumShareCoverMedia,
+  getPublicSessionAlbumVideoForPlayback,
   getPublicSessionAlbumVideoCoverForMedia,
   getSessionForViewer,
   getSessionShareStats,
@@ -347,6 +350,7 @@ const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_PUBLIC_COVER_TOKEN_SECONDS = 10 * 60;
+const SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE = "session-album-public-video-file";
 const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   "ci-process": "snapshot",
   time: "1",
@@ -3338,6 +3342,66 @@ function verifySessionAlbumPublicMediaQuery(photoId, query, expectedUsage) {
   return normalizeSessionAlbumShareClaims(payload);
 }
 
+export function signSessionAlbumPublicVideoFileToken(payload) {
+  const exp = payload.exp ||
+    Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS;
+  const claims = normalizeSessionAlbumShareClaims({ ...payload, exp });
+  if (claims.version !== 2) {
+    throw forbidden("album public video token is invalid");
+  }
+  const shareTokenDigest = String(payload.shareTokenDigest || "");
+  if (!/^[a-f0-9]{64}$/.test(shareTokenDigest)) {
+    throw forbidden("album public video token is invalid");
+  }
+  return signSignedPayload(SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE, {
+    ...claims,
+    purpose: SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE,
+    mediaId: tokenPositiveInteger(payload.mediaId, "mediaId"),
+    shareTokenDigest,
+    exp: tokenPositiveInteger(exp, "exp")
+  });
+}
+
+export function verifySessionAlbumPublicVideoFileQuery(mediaId, query) {
+  const payload = verifySignedPayload(
+    SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE,
+    query.get("token") || "",
+    "album public video token"
+  );
+  if (payload.purpose !== SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE) {
+    throw forbidden("album public video token is invalid");
+  }
+  const tokenMediaId = tokenPositiveInteger(payload.mediaId, "mediaId");
+  const shareTokenDigest = String(payload.shareTokenDigest || "");
+  if (tokenMediaId !== Number(mediaId) || !/^[a-f0-9]{64}$/.test(shareTokenDigest)) {
+    throw forbidden("album public video token is invalid");
+  }
+  const claims = normalizeSessionAlbumShareClaims(payload);
+  if (claims.version !== 2) {
+    throw forbidden("album public video token is invalid");
+  }
+  return {
+    ...claims,
+    mediaId: tokenMediaId,
+    shareTokenDigest
+  };
+}
+
+function sessionAlbumPublicVideoFilePath(mediaId, claims, albumShareToken) {
+  const token = signSessionAlbumPublicVideoFileToken({
+    ...claims,
+    mediaId,
+    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
+  });
+  return `/api/session-album/public-share/media/${mediaId}/video-file?token=${encodeURIComponent(
+    token
+  )}`;
+}
+
+function sessionAlbumPublicVideoUrlPath(mediaId) {
+  return `/api/session-album/public-share/media/${mediaId}/video-url`;
+}
+
 function signSessionAlbumPublicCoverToken(share) {
   const exp = Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_COVER_TOKEN_SECONDS;
   return signSignedPayload("session-album-public-cover", {
@@ -3861,6 +3925,195 @@ function localAlbumVideoFilePath(videoPath, options = {}) {
   throw notFound("Album video file not found");
 }
 
+const PUBLIC_ALBUM_VIDEO_COS_CHUNK_BYTES = 1024 * 1024;
+
+function publicAlbumVideoCacheHeaders(headers) {
+  return { ...headers, "cache-control": "private, no-store" };
+}
+
+function publicAlbumVideoRangeNotSatisfiable(size) {
+  return {
+    statusCode: 416,
+    headers: publicAlbumVideoCacheHeaders({
+      "content-type": "video/mp4",
+      "accept-ranges": "bytes",
+      "content-range": `bytes */${size}`,
+      "content-length": 0
+    }),
+    body: null
+  };
+}
+
+function assertPublicAlbumVideoRangeBytes(bytes, start, end) {
+  const expectedLength = end - start + 1;
+  if (!Buffer.isBuffer(bytes) || bytes.length !== expectedLength) {
+    throw new AppError(
+      502,
+      "COS_INVALID_RANGE_RESPONSE",
+      "Object storage returned an invalid byte range"
+    );
+  }
+  return bytes;
+}
+
+export async function createPublicAlbumVideoResponse({
+  media,
+  method = "GET",
+  range,
+  cosEnabled = isCosUploadStorageEnabled(),
+  cosConfig = config.cos,
+  headObject = headCosObject,
+  readObjectRange = readCosObjectRange,
+  localFilePath,
+  openFile,
+  signal
+} = {}) {
+  const videoPath = String(media?.display_url || "");
+  if (!videoPath) {
+    throw notFound("Album video file not found");
+  }
+  const normalizedMethod = String(method).toUpperCase();
+  if (!cosEnabled) {
+    const localResponse = await createLocalAlbumVideoResponse({
+      filePath: localFilePath || localAlbumVideoFilePath(videoPath),
+      method: normalizedMethod,
+      range,
+      ...(openFile ? { openFile } : {})
+    });
+    return {
+      ...localResponse,
+      headers: publicAlbumVideoCacheHeaders(localResponse.headers)
+    };
+  }
+
+  const key = albumVideoObjectKey(videoPath);
+  const object = await headObject({
+    key,
+    config: cosConfig,
+    ...(signal ? { signal } : {})
+  });
+  const etag = String(object.headers?.etag || "").trim();
+  if (!etag) {
+    throw new AppError(
+      502,
+      "COS_OBJECT_VERSION_MISSING",
+      "COS album video HEAD response did not include an ETag"
+    );
+  }
+  let metadata;
+  try {
+    metadata = validateCosAlbumVideoHeaders({
+      contentLength: object.headers?.["content-length"],
+      contentType: object.headers?.["content-type"]
+    });
+  } catch {
+    throw new AppError(
+      502,
+      "COS_VIDEO_METADATA_MISSING",
+      "COS album video HEAD response is missing playback metadata"
+    );
+  }
+  if (!Number.isSafeInteger(metadata.byteSize) || metadata.contentType !== "video/mp4") {
+    throw new AppError(
+      502,
+      "COS_VIDEO_METADATA_MISSING",
+      "COS album video HEAD response is missing playback metadata"
+    );
+  }
+  const baseHeaders = publicAlbumVideoCacheHeaders({
+    "content-type": metadata.contentType,
+    "accept-ranges": "bytes"
+  });
+  if (normalizedMethod === "HEAD") {
+    return {
+      statusCode: 200,
+      headers: { ...baseHeaders, "content-length": metadata.byteSize },
+      body: null
+    };
+  }
+  let parsedRange = null;
+  if (range !== undefined && range !== null) {
+    try {
+      parsedRange = parseSingleByteRange(range, metadata.byteSize);
+    } catch (error) {
+      if (Number(error?.statusCode) === 416) {
+        return publicAlbumVideoRangeNotSatisfiable(metadata.byteSize);
+      }
+      throw error;
+    }
+  }
+  const readRange = async (start, end) => assertPublicAlbumVideoRangeBytes(
+    await readObjectRange({
+      key,
+      start,
+      end,
+      ifMatch: etag,
+      expectedByteSize: metadata.byteSize,
+      config: cosConfig,
+      ...(signal ? { signal } : {})
+    }),
+    start,
+    end
+  );
+  async function* chunks(firstByte, lastByte) {
+    for (let start = firstByte; start <= lastByte; start += PUBLIC_ALBUM_VIDEO_COS_CHUNK_BYTES) {
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new DOMException("aborted", "AbortError");
+      }
+      const end = Math.min(start + PUBLIC_ALBUM_VIDEO_COS_CHUNK_BYTES - 1, lastByte);
+      yield readRange(start, end);
+    }
+  }
+  if (parsedRange) {
+    const contentLength = parsedRange.end - parsedRange.start + 1;
+    return {
+      statusCode: 206,
+      headers: {
+        ...baseHeaders,
+        "content-range": `bytes ${parsedRange.start}-${parsedRange.end}/${metadata.byteSize}`,
+        "content-length": contentLength
+      },
+      body: Readable.from(chunks(parsedRange.start, parsedRange.end))
+    };
+  }
+  return {
+    statusCode: 200,
+    headers: { ...baseHeaders, "content-length": metadata.byteSize },
+    body: Readable.from(chunks(0, metadata.byteSize - 1))
+  };
+}
+
+async function servePublicSessionAlbumVideoFile(media, response, options = {}) {
+  const controller = new AbortController();
+  let completed = false;
+  const abortOnDisconnect = () => {
+    if (!completed && !response.writableEnded && !controller.signal.aborted) {
+      controller.abort(new DOMException("client disconnected", "AbortError"));
+    }
+  };
+  response.once("close", abortOnDisconnect);
+  try {
+    const publicResponse = await createPublicAlbumVideoResponse({
+      media,
+      ...options,
+      signal: controller.signal
+    });
+    response.writeHead(publicResponse.statusCode, publicResponse.headers);
+    if (!publicResponse.body) {
+      response.end();
+      completed = true;
+      return;
+    }
+    await pipeline(publicResponse.body, response);
+    completed = true;
+  } catch (error) {
+    if (!controller.signal.aborted) response.destroy(error);
+  } finally {
+    completed = true;
+    response.off("close", abortOnDisconnect);
+  }
+}
+
 export async function serveUploadedSessionAlbumVideoFile(media, response, options = {}) {
   const videoPath = media.display_url || media.source_url;
   if (!videoPath) {
@@ -4023,7 +4276,7 @@ function d45SmokeDatabaseIsIsolated() {
   );
 }
 
-async function route(request, response) {
+async function route(request, response, options = {}) {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
   if (request.method === "GET" && url.pathname.startsWith("/uploads/avatars/")) {
@@ -4170,6 +4423,59 @@ async function route(request, response) {
       publicSessionAlbumVideoCoverId
     );
     await serveUploadedSessionAlbumVideoCover(media, response);
+    return;
+  }
+
+  const publicSessionAlbumVideoUrlId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/public-share\/media\/(\d+)\/video-url$/
+  );
+  if (
+    request.method === "GET" &&
+    publicSessionAlbumVideoUrlId &&
+    url.pathname === sessionAlbumPublicVideoUrlPath(publicSessionAlbumVideoUrlId)
+  ) {
+    const publicVideo = options.publicVideo || {};
+    const albumShareToken = url.searchParams.get("token") || "";
+    const claims = (publicVideo.verifyShareToken || verifySessionAlbumShareToken)(albumShareToken);
+    const media = await (publicVideo.getVideo || getPublicSessionAlbumVideoForPlayback)(
+      claims,
+      publicSessionAlbumVideoUrlId
+    );
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        url: sessionAlbumPublicVideoFilePath(media.id, claims, albumShareToken),
+        expiresInSeconds: SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS
+      }
+    }, {
+      "cache-control": "private, no-store"
+    });
+    return;
+  }
+
+  const publicSessionAlbumVideoFileId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/public-share\/media\/(\d+)\/video-file$/
+  );
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    publicSessionAlbumVideoFileId
+  ) {
+    const publicVideo = options.publicVideo || {};
+    const claims = verifySessionAlbumPublicVideoFileQuery(
+      publicSessionAlbumVideoFileId,
+      url.searchParams
+    );
+    const media = await (publicVideo.getVideo || getPublicSessionAlbumVideoForPlayback)(
+      claims,
+      publicSessionAlbumVideoFileId
+    );
+    await servePublicSessionAlbumVideoFile(media, response, {
+      ...(publicVideo.responseOptions || {}),
+      method: request.method,
+      range: request.headers.range
+    });
     return;
   }
 
@@ -6230,9 +6536,9 @@ async function route(request, response) {
   errorResponse(response, 404, "NOT_FOUND", "Route not found");
 }
 
-export function createApp() {
+export function createApp(options = {}) {
   return http.createServer((request, response) => {
-    route(request, response).catch((error) => {
+    route(request, response, options).catch((error) => {
       if (error?.contentModerationDenied === true) {
         try {
           emitContentModerationEvent("moderation_access_denied", {

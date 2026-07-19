@@ -23,6 +23,7 @@
   - [x] 扩展 D48 纯函数 smoke 或新增 D50 unit，覆盖 required image/video、30/3 上限、稳定次序和缺失目标。
   - [ ] 新增 `apps/miniprogram/test/albumSingleMediaShare.test.mjs`，覆盖 ID、乱序 cache、dataset entry、路径和 focused DTO 查找。
   - [x] 运行新增检查，确认因实现缺失准确失败，而不是测试语法或 fixture 错误。
+  - 2026-07-19：`npm run d50:check` 已再次运行；公开 video-url/video-file 服务端文字契约已满足，首个剩余失败为尚未实施的端侧 `source === "single_media_share"`，因此 D50.2 静态契约总检仍保持未完成。
 
 - [x] D50.3 用 TDD 实现指定媒体公开快照。
   - [x] 扩展 `selectPublicShareMedia` 的 required media 输入，强制包含合规目标并维持 30/3 上限。
@@ -31,13 +32,20 @@
   - [x] 普通空 body 整册分享、摘要复用、封面选择和 D48 顺序保持不变。
   - [x] 运行 D50 selector/API、D48、D23 定向回归并记录结果。
 
-- [ ] D50.4 用 TDD 实现快照绑定的公开视频播放。
-  - [ ] 新增 public ready video service getter，要求 v2 share、快照成员、published、ready 与当前隐私。
-  - [ ] 新增 public video-url capability 签发/验证，绑定 share/session/media/digest/purpose/expiry。
-  - [ ] 新增 `GET|HEAD` public video-file 路由，每次重新授权。
-  - [ ] 本地响应复用正确 HEAD/200/206/416 语义。
-  - [ ] COS 响应通过应用层代理 Range 字节，不输出对象 URL或 302。
-  - [ ] 运行 D50 video、D32、D42 API media/server/stream 回归并记录结果。
+- [x] D50.4 用 TDD 实现快照绑定的公开视频播放。
+  - [x] 新增 public ready video service getter，要求 v2 share、快照成员、published、ready 与当前隐私。
+  - [x] 新增 public video-url capability 签发/验证，绑定 share/session/media/digest/purpose/expiry。
+  - [x] 新增 `GET|HEAD` public video-file 路由，每次重新授权。
+  - [x] 本地响应复用正确 HEAD/200/206/416 语义。
+  - [x] COS 响应通过应用层代理 Range 字节，不输出对象 URL或 302。
+  - [x] 运行 D50 video、D32、D42 API media/server/stream 回归并记录结果。
+  - 2026-07-19：RED（退出码 1）：`node --test apps/api/test/album-single-media-share.test.mjs` 先准确报 `getPublicSessionAlbumVideoForPlayback` 未导出；追加 capability 测试后准确报 `signSessionAlbumPublicVideoFileToken` 未导出；追加 responder 测试后准确报 `createPublicAlbumVideoResponse` 未导出，均不是 fixture 或语法失败。
+  - 2026-07-19：GREEN：同一 API 测试退出码 0，15/15 通过，覆盖 v2/revoked/snapshot/privacy/processing fail-closed、capability 签发/篡改/过期、路由合约、本地 HEAD/200/206/416 与 COS ETag-bound exact/full/suffix Range 和 1 MiB 分块；`node --check apps/api/src/modules/core/service.js`、`node --check apps/api/src/server.js` 与 `git diff --check` 均退出码 0。
+  - 2026-07-19：`node scripts/d48-album-sharing-role-claim-separation-check.js` 退出码 0；`npm run d42:api-media` 47/47、`npm run d42:api-server` 14/14 与 `node scripts/d42-album-video-stream-check.js` 10/10 均退出码 0。`node scripts/d32-admin-album-video-smoke.js` 在 sandbox 因本地连接被拒绝、两次经授权重跑后在既有 localhost 环境失败：`GET /api/sessions/28`、`GET /api/sessions/29` 均得到 404；未修改 D32 或成员视频行为，D50.4 保持未完成，待可复现的 API/数据库 smoke 环境复跑。
+  - 2026-07-19：审查补充 RED：新增大 206 Range、COS HEAD 非法元数据、取消与真实 HTTP route 测试后，focused API 测试准确失败为一次性大 Range 读取、400 元数据错误、取消未传播，以及 route 未使用 seam（403）；新增 D42 COS abort 断言也准确失败。GREEN：`node --test apps/api/test/album-single-media-share.test.mjs` 19/19 通过（需要 ephemeral localhost 权限），`node scripts/d42-album-video-server-check.js` 15/15 通过，覆盖大 206 的有序 1 MiB 分块、AbortSignal 销毁请求/响应且不启动下一块、route 的 video-url→GET/HEAD/206/416 与每次 file 请求重新授权、以及 malformed COS HEAD→502。
+  - 2026-07-19：D32 改为 owner-authenticated 详情读取和真实 multipart MP4 上传，并增加 public video-url 返回 application video-file URL、无 COS URL 的断言。在当前 worktree API (`PORT=3028`) 上运行后，上传和创建请求成功，但当前本地媒体处理配置未使创建视频立即 ready，旧断言 `created ready video should include video-url path` 失败；D50.4 继续保持未完成。
+  - 2026-07-19：复核即时 create response 的 `sessionAlbumVideoCreateResponse` 后确认它有 readiness metadata、没有 `video_url`；`video_url` 只在后续 authenticated album DTO 附加，既有 admin/member/public DTO 断言保留。D32 同步适配当前本地无 COS 快照 URL、异步删除 202 和 public cover 应用代理契约。以匹配 `SESSION_SECRET` 的 fresh current-worktree API (`PORT=3029`) 运行 `BASE_URL=http://localhost:3029 node scripts/d32-admin-album-video-smoke.js` 退出码 0，输出 `D32 admin album video smoke passed`，并实际断言 public video-url 返回无 COS 泄漏的 application video-file capability。最终 focused API 19/19、D48 check、D42 api-media 47/47、D42 api-server 15/15 和 stream 10/10 均退出码 0，D50.4 完成。
+  - 2026-07-19：最终取消链补充：public responder 将 disconnect signal 也传入 COS HEAD；pending HEAD 中止会返回 `AbortError` 且不会开始 Range。focused API 更新为 20/20，D42 api-server 更新为 16/16；D32 未受 service/route/harness 改动影响，沿用本记录中已通过的 fresh API 结果。
 
 - [ ] D50.5 用 TDD 实现端侧纯分享状态。
   - [ ] 新增 `albumSingleMediaShare.js` 的 ID、authority、cache、focused item 和 path helper。
