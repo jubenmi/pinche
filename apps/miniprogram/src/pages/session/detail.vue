@@ -146,7 +146,7 @@
             v-for="photo in review.photos"
             :key="photo"
             class="review-photo"
-            :src="assetUrl(photo)"
+            :src="apiUrl(photo)"
             mode="aspectFill"
           />
         </view>
@@ -176,6 +176,7 @@ import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import ChatEntry from "../../extensions/session-pseudo-chat/ChatEntry.vue";
 import { sessionDetailExtensions } from "../../extensions/sessionExtensions.js";
 import {
+  apiUrl,
   assetUrl,
   dataOf,
   ensureLoggedIn,
@@ -462,6 +463,7 @@ export default {
     };
   },
   methods: {
+    apiUrl,
     assetUrl,
     hydrateUser() {
       const auth = getCurrentUser();

@@ -381,7 +381,9 @@ test("review and user serialization boundaries retain only explicitly bound publ
   ]);
   const reviewPhotos = core.slice(core.indexOf("async function reviewPhotos"), core.indexOf("export async function listSessionReviews"));
   assert.match(reviewPhotos, /JOIN user_image_assets/);
-  assert.match(reviewPhotos, /approved.*approved_legacy|approved_legacy.*approved/s);
+  assert.match(reviewPhotos, /isModerationPublished/);
+  assert.match(reviewPhotos, /album_photo_moderation_status/);
+  assert.match(reviewPhotos, /image_asset_moderation_status/);
   assert.doesNotMatch(reviewPhotos, /image_asset_id IS NULL/);
   assert.match(users, /findOwnedPublishedUserImageAsset/);
 });

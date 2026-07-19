@@ -385,6 +385,77 @@ check("COS range helper signs the HEAD ETag as an If-Match precondition", async 
   assert.match(headers.authorization, /q-header-list=[^&]*if-match/);
 });
 
+check("COS range helper aborts its transport when the downstream signal is cancelled", async () => {
+  const controller = new AbortController();
+  let requestDestroyed = 0;
+  let responseDestroyed = 0;
+  const request = (_options, onResponse) => {
+    const pending = new EventEmitter();
+    pending.destroy = () => { requestDestroyed += 1; };
+    pending.end = () => {
+      queueMicrotask(() => {
+        const response = new EventEmitter();
+        response.statusCode = 206;
+        response.headers = {
+          "content-length": "12",
+          "content-range": `bytes 0-11/${VIDEO_BYTES.length}`
+        };
+        response.destroy = () => { responseDestroyed += 1; };
+        onResponse(response);
+        setTimeout(() => response.emit("end"), 5);
+      });
+    };
+    return pending;
+  };
+  const result = readCosObjectRange({
+    key: "uploads/session-album/videos/source/cancel.mp4",
+    start: 0,
+    end: 11,
+    ifMatch: '"d42-cancel"',
+    expectedByteSize: VIDEO_BYTES.length,
+    signal: controller.signal,
+    config: COS_CONFIG,
+    request
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  controller.abort(new DOMException("downstream disconnected", "AbortError"));
+  await assert.rejects(result, (error) => error?.name === "AbortError");
+  assert.equal(requestDestroyed, 1);
+  assert.equal(responseDestroyed, 1);
+});
+
+check("COS HEAD helper aborts its transport and cleans the signal listener", async () => {
+  const controller = new AbortController();
+  let requestDestroyed = 0;
+  let responseDestroyed = 0;
+  const request = (_options, onResponse) => {
+    const pending = new EventEmitter();
+    pending.destroy = () => { requestDestroyed += 1; };
+    pending.end = () => {
+      queueMicrotask(() => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        response.headers = {};
+        response.destroy = () => { responseDestroyed += 1; };
+        onResponse(response);
+        setTimeout(() => response.emit("end"), 5);
+      });
+    };
+    return pending;
+  };
+  const result = headCosObject({
+    key: "uploads/session-album/videos/source/head-cancel.mp4",
+    signal: controller.signal,
+    config: COS_CONFIG,
+    request
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  controller.abort(new DOMException("downstream disconnected", "AbortError"));
+  await assert.rejects(result, (error) => error?.name === "AbortError");
+  assert.equal(requestDestroyed, 1);
+  assert.equal(responseDestroyed, 1);
+});
+
 check("local server playback returns real HEAD, 200, 206, 416 and 404 responses", async () => {
   const sourceDir = await mkdtemp(path.join(os.tmpdir(), "d42-video-server-"));
   try {

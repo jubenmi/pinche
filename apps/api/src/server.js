@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
@@ -52,6 +53,7 @@ import {
   createLocalAlbumVideoResponse,
   inspectLocalAlbumVideoObject,
   inspectSessionAlbumVideoObject,
+  parseSingleByteRange,
   validateCosAlbumVideoHeaders
 } from "./modules/album-video/media.js";
 import {
@@ -68,6 +70,7 @@ import {
   cancelSession,
   claimSessionNpcRole,
   claimSessionSeat,
+  createOrReuseSessionAlbumPublicShare,
   createSessionAlbumPhoto,
   createSessionAlbumVideo,
   createCatalogRequest,
@@ -92,12 +95,15 @@ import {
   deleteScript,
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
+  getPublicSessionAlbumShareCoverMedia,
+  getPublicSessionAlbumVideoForPlayback,
   getPublicSessionAlbumVideoCoverForMedia,
   getSessionForViewer,
-  getSessionAlbumShareSubject,
   getSessionShareStats,
   getMySessionAlbumPrivacy,
   getMySessionReview,
+  getPublicSessionReview,
+  getSessionReviewAlbumPhoto,
   getAuthorAlbumImagePreview,
   getAuthorAlbumVideoPreview,
   getVisibleSessionAlbumPhotoForMedia,
@@ -132,10 +138,13 @@ import {
   markCatalogReviewItemNeedsChanges,
   mergeCatalogReviewItem,
   publishSession,
+  publicShareCoverGridLayout,
+  publicShareCoverMediaIdsDigest,
   rejectSignup,
   rejectCatalogReviewItem,
   relinkMySessionMembership,
   rescheduleSession,
+  revokeMySessionAlbumPublicShares,
   replaceStoreScripts,
   reviewCatalogRequest,
   transferSessionOrganizer,
@@ -340,6 +349,8 @@ const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
+const SESSION_ALBUM_PUBLIC_COVER_TOKEN_SECONDS = 10 * 60;
+const SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE = "session-album-public-video-file";
 const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   "ci-process": "snapshot",
   time: "1",
@@ -3198,11 +3209,22 @@ function verifySignedPayload(purpose, token, label) {
 }
 
 function normalizeSessionAlbumShareClaims(payload) {
-  return {
+  const claims = {
     sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
     sharerUserId: tokenPositiveInteger(payload.sharerUserId, "sharerUserId"),
     seatId: tokenPositiveInteger(payload.seatId, "seatId"),
     exp: tokenPositiveInteger(payload.exp, "exp")
+  };
+  if (payload.version === undefined && payload.shareId === undefined) {
+    return claims;
+  }
+  if (Number(payload.version) !== 2) {
+    throw forbidden("album share token is invalid");
+  }
+  return {
+    version: 2,
+    shareId: tokenPositiveInteger(payload.shareId, "shareId"),
+    ...claims
   };
 }
 
@@ -3259,13 +3281,16 @@ function sessionAlbumTokenDigest(token) {
 }
 
 function signSessionAlbumPublicMediaToken(payload) {
-  const exp = payload.exp ||
-    Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS;
+  const exp = Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS;
+  const shareClaims = normalizeSessionAlbumShareClaims({ ...payload, exp });
+  const usage = String(payload.usage || "");
+  if (!new Set(["image", "video_cover"]).has(usage)) {
+    throw forbidden("album public media usage is invalid");
+  }
   return signSignedPayload("session-album-public-media", {
-    sessionId: tokenPositiveInteger(payload.sessionId, "sessionId"),
-    sharerUserId: tokenPositiveInteger(payload.sharerUserId, "sharerUserId"),
-    seatId: tokenPositiveInteger(payload.seatId, "seatId"),
+    ...shareClaims,
     photoId: tokenPositiveInteger(payload.photoId, "photoId"),
+    usage,
     shareTokenDigest: String(payload.shareTokenDigest || ""),
     exp: tokenPositiveInteger(exp, "exp")
   });
@@ -3280,6 +3305,7 @@ function sessionAlbumPublicMediaPath(
   const token = signSessionAlbumPublicMediaToken({
     ...claims,
     photoId,
+    usage: "image",
     shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
   });
   const path = `/api/session-album/public-share/photos/${photoId}/image?token=${encodeURIComponent(
@@ -3292,6 +3318,7 @@ function sessionAlbumPublicVideoCoverPath(mediaId, claims, albumShareToken) {
   const token = signSessionAlbumPublicMediaToken({
     ...claims,
     photoId: mediaId,
+    usage: "video_cover",
     shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
   });
   return `/api/session-album/public-share/media/${mediaId}/cover?token=${encodeURIComponent(
@@ -3299,7 +3326,7 @@ function sessionAlbumPublicVideoCoverPath(mediaId, claims, albumShareToken) {
   )}`;
 }
 
-function verifySessionAlbumPublicMediaQuery(photoId, query) {
+function verifySessionAlbumPublicMediaQuery(photoId, query, expectedUsage) {
   const payload = verifySignedPayload(
     "session-album-public-media",
     query.get("token") || "",
@@ -3309,10 +3336,103 @@ function verifySessionAlbumPublicMediaQuery(photoId, query) {
   if (tokenPhotoId !== Number(photoId)) {
     throw forbidden("album public media token is invalid");
   }
-  if (!payload.shareTokenDigest) {
+  if (!payload.shareTokenDigest || payload.usage !== expectedUsage) {
     throw forbidden("album public media token is invalid");
   }
   return normalizeSessionAlbumShareClaims(payload);
+}
+
+export function signSessionAlbumPublicVideoFileToken(payload) {
+  const exp = payload.exp ||
+    Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS;
+  const claims = normalizeSessionAlbumShareClaims({ ...payload, exp });
+  if (claims.version !== 2) {
+    throw forbidden("album public video token is invalid");
+  }
+  const shareTokenDigest = String(payload.shareTokenDigest || "");
+  if (!/^[a-f0-9]{64}$/.test(shareTokenDigest)) {
+    throw forbidden("album public video token is invalid");
+  }
+  return signSignedPayload(SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE, {
+    ...claims,
+    purpose: SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE,
+    mediaId: tokenPositiveInteger(payload.mediaId, "mediaId"),
+    shareTokenDigest,
+    exp: tokenPositiveInteger(exp, "exp")
+  });
+}
+
+export function verifySessionAlbumPublicVideoFileQuery(mediaId, query) {
+  const payload = verifySignedPayload(
+    SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE,
+    query.get("token") || "",
+    "album public video token"
+  );
+  if (payload.purpose !== SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE) {
+    throw forbidden("album public video token is invalid");
+  }
+  const tokenMediaId = tokenPositiveInteger(payload.mediaId, "mediaId");
+  const shareTokenDigest = String(payload.shareTokenDigest || "");
+  if (tokenMediaId !== Number(mediaId) || !/^[a-f0-9]{64}$/.test(shareTokenDigest)) {
+    throw forbidden("album public video token is invalid");
+  }
+  const claims = normalizeSessionAlbumShareClaims(payload);
+  if (claims.version !== 2) {
+    throw forbidden("album public video token is invalid");
+  }
+  return {
+    ...claims,
+    mediaId: tokenMediaId,
+    shareTokenDigest
+  };
+}
+
+function sessionAlbumPublicVideoFilePath(mediaId, claims, albumShareToken) {
+  const token = signSessionAlbumPublicVideoFileToken({
+    ...claims,
+    mediaId,
+    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
+  });
+  return `/api/session-album/public-share/media/${mediaId}/video-file?token=${encodeURIComponent(
+    token
+  )}`;
+}
+
+function sessionAlbumPublicVideoUrlPath(mediaId) {
+  return `/api/session-album/public-share/media/${mediaId}/video-url`;
+}
+
+function signSessionAlbumPublicCoverToken(share) {
+  const exp = Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_COVER_TOKEN_SECONDS;
+  return signSignedPayload("session-album-public-cover", {
+    shareId: tokenPositiveInteger(share.share_id, "shareId"),
+    coverMediaIdsDigest: publicShareCoverMediaIdsDigest(share.cover_media_ids),
+    exp
+  });
+}
+
+function sessionAlbumPublicShareCoverPath(share) {
+  if (!Array.isArray(share.cover_media_ids) || share.cover_media_ids.length === 0) {
+    return "";
+  }
+  const token = signSessionAlbumPublicCoverToken(share);
+  return `/api/session-album/public-shares/${share.share_id}/cover?token=${encodeURIComponent(
+    token
+  )}`;
+}
+
+function verifySessionAlbumPublicCoverQuery(shareId, query) {
+  const payload = verifySignedPayload(
+    "session-album-public-cover",
+    query.get("token") || "",
+    "album public cover token"
+  );
+  const tokenShareId = tokenPositiveInteger(payload.shareId, "shareId");
+  const coverMediaIdsDigest = String(payload.coverMediaIdsDigest || "");
+  if (tokenShareId !== Number(shareId) || !/^[a-f0-9]{64}$/.test(coverMediaIdsDigest)) {
+    throw forbidden("album public cover token is invalid");
+  }
+  return { shareId: tokenShareId, coverMediaIdsDigest };
 }
 
 export function attachPublicSessionAlbumMediaUrls(
@@ -3321,7 +3441,11 @@ export function attachPublicSessionAlbumMediaUrls(
   albumShareToken,
   options = {}
 ) {
-  const resolved = albumImageUrlOptions(options);
+  const {
+    cover_media_ids: coverMediaIds = [],
+    ...publicAlbum
+  } = album;
+  const resolved = albumImageUrlOptions({ ...options, directMediaUrls: false });
   let signedImageCount = 0;
   const photos = (album.photos || [])
     .filter((photo) => isModerationPublished(photo?.moderation_status))
@@ -3332,7 +3456,7 @@ export function attachPublicSessionAlbumMediaUrls(
         return {
           ...safePhoto,
           cover_url: approved && photo.has_cover
-            ? signedPublicAlbumVideoSnapshotUrl(photo, claims, albumShareToken)
+            ? sessionAlbumPublicVideoCoverPath(photo.id, claims, albumShareToken)
             : ""
         };
       }
@@ -3350,7 +3474,11 @@ export function attachPublicSessionAlbumMediaUrls(
     sessionId: Number(album.session_id), outcome: "public-share", signedImageCount
   });
   const result = {
-    ...album,
+    ...publicAlbum,
+    cover_url: sessionAlbumPublicShareCoverPath({
+      share_id: album.share_id,
+      cover_media_ids: coverMediaIds
+    }),
     visible_count: photos.length,
     photos,
     media: photos
@@ -3525,6 +3653,76 @@ async function readUploadedObject({ url, prefix, localDir }) {
   } catch (error) {
     throw notFound();
   }
+}
+
+async function readUploadedSessionAlbumPhotoObject(photo) {
+  const photoUrl = new URL(photo.photo_url, "http://localhost");
+  if (photoUrl.pathname.startsWith("/uploads/session-album/display/")) {
+    return readUploadedObject({
+      url: photoUrl,
+      prefix: "/uploads/session-album/display/",
+      localDir: sessionAlbumDisplayUploadDir
+    });
+  }
+  if (!photoUrl.pathname.startsWith("/uploads/session-album/")) {
+    throw notFound("Album share cover source not found");
+  }
+  return readUploadedObject({
+    url: photoUrl,
+    prefix: "/uploads/session-album/",
+    localDir: sessionAlbumUploadDir
+  });
+}
+
+async function sessionAlbumPublicShareCoverBuffer(media) {
+  const layout = publicShareCoverGridLayout(media.length);
+  const sources = await Promise.all(media.map(readUploadedSessionAlbumPhotoObject));
+  const metadata = await Promise.all(
+    sources.map((source) => sharp(source.body, { failOn: "error" }).metadata())
+  );
+  const smallestSourceEdge = Math.min(
+    ...metadata.map((item) => Math.min(Number(item.width || 0), Number(item.height || 0)))
+  );
+  if (!Number.isFinite(smallestSourceEdge) || smallestSourceEdge < 1) {
+    throw notFound("Album share cover source not found");
+  }
+  const maximumCellSize = media.length === 1 ? 720 : media.length === 2 ? 420 : 320;
+  const cellSize = Math.max(1, Math.min(maximumCellSize, smallestSourceEdge));
+  const gap = cellSize > 24 ? Math.max(4, Math.round(cellSize * 0.025)) : 1;
+  const width = layout.columns * cellSize + (layout.columns - 1) * gap;
+  const height = layout.rows * cellSize + (layout.rows - 1) * gap;
+  const tiles = await Promise.all(
+    sources.map((source) =>
+      sharp(source.body, { failOn: "error" })
+        .rotate()
+        .resize({
+          width: cellSize,
+          height: cellSize,
+          fit: "cover",
+          position: "centre",
+          withoutEnlargement: true
+        })
+        .jpeg({ quality: 84 })
+        .toBuffer()
+    )
+  );
+  return sharp({
+    create: {
+      width,
+      height,
+      channels: 3,
+      background: "#f2eee7"
+    }
+  })
+    .composite(
+      layout.positions.map((position) => ({
+        input: tiles[position.index],
+        left: position.column * (cellSize + gap),
+        top: position.row * (cellSize + gap)
+      }))
+    )
+    .jpeg({ quality: 82, progressive: true })
+    .toBuffer();
 }
 
 async function deleteUploadedSessionAlbumPhotoObject(photoUrl) {
@@ -3727,6 +3925,195 @@ function localAlbumVideoFilePath(videoPath, options = {}) {
   throw notFound("Album video file not found");
 }
 
+const PUBLIC_ALBUM_VIDEO_COS_CHUNK_BYTES = 1024 * 1024;
+
+function publicAlbumVideoCacheHeaders(headers) {
+  return { ...headers, "cache-control": "private, no-store" };
+}
+
+function publicAlbumVideoRangeNotSatisfiable(size) {
+  return {
+    statusCode: 416,
+    headers: publicAlbumVideoCacheHeaders({
+      "content-type": "video/mp4",
+      "accept-ranges": "bytes",
+      "content-range": `bytes */${size}`,
+      "content-length": 0
+    }),
+    body: null
+  };
+}
+
+function assertPublicAlbumVideoRangeBytes(bytes, start, end) {
+  const expectedLength = end - start + 1;
+  if (!Buffer.isBuffer(bytes) || bytes.length !== expectedLength) {
+    throw new AppError(
+      502,
+      "COS_INVALID_RANGE_RESPONSE",
+      "Object storage returned an invalid byte range"
+    );
+  }
+  return bytes;
+}
+
+export async function createPublicAlbumVideoResponse({
+  media,
+  method = "GET",
+  range,
+  cosEnabled = isCosUploadStorageEnabled(),
+  cosConfig = config.cos,
+  headObject = headCosObject,
+  readObjectRange = readCosObjectRange,
+  localFilePath,
+  openFile,
+  signal
+} = {}) {
+  const videoPath = String(media?.display_url || "");
+  if (!videoPath) {
+    throw notFound("Album video file not found");
+  }
+  const normalizedMethod = String(method).toUpperCase();
+  if (!cosEnabled) {
+    const localResponse = await createLocalAlbumVideoResponse({
+      filePath: localFilePath || localAlbumVideoFilePath(videoPath),
+      method: normalizedMethod,
+      range,
+      ...(openFile ? { openFile } : {})
+    });
+    return {
+      ...localResponse,
+      headers: publicAlbumVideoCacheHeaders(localResponse.headers)
+    };
+  }
+
+  const key = albumVideoObjectKey(videoPath);
+  const object = await headObject({
+    key,
+    config: cosConfig,
+    ...(signal ? { signal } : {})
+  });
+  const etag = String(object.headers?.etag || "").trim();
+  if (!etag) {
+    throw new AppError(
+      502,
+      "COS_OBJECT_VERSION_MISSING",
+      "COS album video HEAD response did not include an ETag"
+    );
+  }
+  let metadata;
+  try {
+    metadata = validateCosAlbumVideoHeaders({
+      contentLength: object.headers?.["content-length"],
+      contentType: object.headers?.["content-type"]
+    });
+  } catch {
+    throw new AppError(
+      502,
+      "COS_VIDEO_METADATA_MISSING",
+      "COS album video HEAD response is missing playback metadata"
+    );
+  }
+  if (!Number.isSafeInteger(metadata.byteSize) || metadata.contentType !== "video/mp4") {
+    throw new AppError(
+      502,
+      "COS_VIDEO_METADATA_MISSING",
+      "COS album video HEAD response is missing playback metadata"
+    );
+  }
+  const baseHeaders = publicAlbumVideoCacheHeaders({
+    "content-type": metadata.contentType,
+    "accept-ranges": "bytes"
+  });
+  if (normalizedMethod === "HEAD") {
+    return {
+      statusCode: 200,
+      headers: { ...baseHeaders, "content-length": metadata.byteSize },
+      body: null
+    };
+  }
+  let parsedRange = null;
+  if (range !== undefined && range !== null) {
+    try {
+      parsedRange = parseSingleByteRange(range, metadata.byteSize);
+    } catch (error) {
+      if (Number(error?.statusCode) === 416) {
+        return publicAlbumVideoRangeNotSatisfiable(metadata.byteSize);
+      }
+      throw error;
+    }
+  }
+  const readRange = async (start, end) => assertPublicAlbumVideoRangeBytes(
+    await readObjectRange({
+      key,
+      start,
+      end,
+      ifMatch: etag,
+      expectedByteSize: metadata.byteSize,
+      config: cosConfig,
+      ...(signal ? { signal } : {})
+    }),
+    start,
+    end
+  );
+  async function* chunks(firstByte, lastByte) {
+    for (let start = firstByte; start <= lastByte; start += PUBLIC_ALBUM_VIDEO_COS_CHUNK_BYTES) {
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new DOMException("aborted", "AbortError");
+      }
+      const end = Math.min(start + PUBLIC_ALBUM_VIDEO_COS_CHUNK_BYTES - 1, lastByte);
+      yield readRange(start, end);
+    }
+  }
+  if (parsedRange) {
+    const contentLength = parsedRange.end - parsedRange.start + 1;
+    return {
+      statusCode: 206,
+      headers: {
+        ...baseHeaders,
+        "content-range": `bytes ${parsedRange.start}-${parsedRange.end}/${metadata.byteSize}`,
+        "content-length": contentLength
+      },
+      body: Readable.from(chunks(parsedRange.start, parsedRange.end))
+    };
+  }
+  return {
+    statusCode: 200,
+    headers: { ...baseHeaders, "content-length": metadata.byteSize },
+    body: Readable.from(chunks(0, metadata.byteSize - 1))
+  };
+}
+
+async function servePublicSessionAlbumVideoFile(media, response, options = {}) {
+  const controller = new AbortController();
+  let completed = false;
+  const abortOnDisconnect = () => {
+    if (!completed && !response.writableEnded && !controller.signal.aborted) {
+      controller.abort(new DOMException("client disconnected", "AbortError"));
+    }
+  };
+  response.once("close", abortOnDisconnect);
+  try {
+    const publicResponse = await createPublicAlbumVideoResponse({
+      media,
+      ...options,
+      signal: controller.signal
+    });
+    response.writeHead(publicResponse.statusCode, publicResponse.headers);
+    if (!publicResponse.body) {
+      response.end();
+      completed = true;
+      return;
+    }
+    await pipeline(publicResponse.body, response);
+    completed = true;
+  } catch (error) {
+    if (!controller.signal.aborted) response.destroy(error);
+  } finally {
+    completed = true;
+    response.off("close", abortOnDisconnect);
+  }
+}
+
 export async function serveUploadedSessionAlbumVideoFile(media, response, options = {}) {
   const videoPath = media.display_url || media.source_url;
   if (!videoPath) {
@@ -3889,7 +4276,7 @@ function d45SmokeDatabaseIsIsolated() {
   );
 }
 
-async function route(request, response) {
+async function route(request, response, options = {}) {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
   if (request.method === "GET" && url.pathname.startsWith("/uploads/avatars/")) {
@@ -3979,6 +4366,29 @@ async function route(request, response) {
     return;
   }
 
+  const publicSessionAlbumShareCoverId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/public-shares\/(\d+)\/cover$/
+  );
+  if (request.method === "GET" && publicSessionAlbumShareCoverId) {
+    const coverClaims = verifySessionAlbumPublicCoverQuery(
+      publicSessionAlbumShareCoverId,
+      url.searchParams
+    );
+    const { media } = await getPublicSessionAlbumShareCoverMedia(
+      coverClaims.shareId,
+      coverClaims.coverMediaIdsDigest
+    );
+    const cover = await sessionAlbumPublicShareCoverBuffer(media);
+    response.writeHead(200, {
+      "cache-control": "private, no-store",
+      "content-length": cover.length,
+      "content-type": "image/jpeg"
+    });
+    response.end(cover);
+    return;
+  }
+
   const publicSessionAlbumMediaPhotoId = idMatch(
     url.pathname,
     /^\/api\/session-album\/public-share\/photos\/(\d+)\/image$/
@@ -3986,7 +4396,8 @@ async function route(request, response) {
   if (request.method === "GET" && publicSessionAlbumMediaPhotoId) {
     const claims = verifySessionAlbumPublicMediaQuery(
       publicSessionAlbumMediaPhotoId,
-      url.searchParams
+      url.searchParams,
+      "image"
     );
     const variant = mediaVariant(url.searchParams);
     const photo = await getPublicSessionAlbumPhotoForMedia(
@@ -4004,13 +4415,67 @@ async function route(request, response) {
   if (request.method === "GET" && publicSessionAlbumVideoCoverId) {
     const claims = verifySessionAlbumPublicMediaQuery(
       publicSessionAlbumVideoCoverId,
-      url.searchParams
+      url.searchParams,
+      "video_cover"
     );
     const media = await getPublicSessionAlbumVideoCoverForMedia(
       claims,
       publicSessionAlbumVideoCoverId
     );
     await serveUploadedSessionAlbumVideoCover(media, response);
+    return;
+  }
+
+  const publicSessionAlbumVideoUrlId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/public-share\/media\/(\d+)\/video-url$/
+  );
+  if (
+    request.method === "GET" &&
+    publicSessionAlbumVideoUrlId &&
+    url.pathname === sessionAlbumPublicVideoUrlPath(publicSessionAlbumVideoUrlId)
+  ) {
+    const publicVideo = options.publicVideo || {};
+    const albumShareToken = url.searchParams.get("token") || "";
+    const claims = (publicVideo.verifyShareToken || verifySessionAlbumShareToken)(albumShareToken);
+    const media = await (publicVideo.getVideo || getPublicSessionAlbumVideoForPlayback)(
+      claims,
+      publicSessionAlbumVideoUrlId
+    );
+    jsonResponse(response, 200, {
+      ok: true,
+      data: {
+        url: sessionAlbumPublicVideoFilePath(media.id, claims, albumShareToken),
+        expiresInSeconds: SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS
+      }
+    }, {
+      "cache-control": "private, no-store"
+    });
+    return;
+  }
+
+  const publicSessionAlbumVideoFileId = idMatch(
+    url.pathname,
+    /^\/api\/session-album\/public-share\/media\/(\d+)\/video-file$/
+  );
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    publicSessionAlbumVideoFileId
+  ) {
+    const publicVideo = options.publicVideo || {};
+    const claims = verifySessionAlbumPublicVideoFileQuery(
+      publicSessionAlbumVideoFileId,
+      url.searchParams
+    );
+    const media = await (publicVideo.getVideo || getPublicSessionAlbumVideoForPlayback)(
+      claims,
+      publicSessionAlbumVideoFileId
+    );
+    await servePublicSessionAlbumVideoFile(media, response, {
+      ...(publicVideo.responseOptions || {}),
+      method: request.method,
+      range: request.headers.range
+    });
     return;
   }
 
@@ -5451,21 +5916,51 @@ async function route(request, response) {
   );
   if (request.method === "POST" && sessionAlbumShareTokenId) {
     const user = await getAuthUser(request);
-    const subject = await getSessionAlbumShareSubject(user, sessionAlbumShareTokenId);
-    const exp = Math.floor(Date.now() / 1000) + SESSION_ALBUM_SHARE_TOKEN_SECONDS;
+    const share = await createOrReuseSessionAlbumPublicShare(
+      user,
+      sessionAlbumShareTokenId,
+      { focusMediaId: body?.focusMediaId }
+    );
+    const exp = tokenPositiveInteger(
+      Math.floor(new Date(share.expires_at).getTime() / 1000),
+      "exp"
+    );
     const claims = {
+      version: 2,
+      shareId: Number(share.share_id),
       sessionId: Number(sessionAlbumShareTokenId),
       sharerUserId: Number(user.user.id),
-      seatId: Number(subject.share_subject.seat_id),
+      seatId: Number(share.share_subject.seat_id),
       exp
     };
     jsonResponse(response, 200, {
       ok: true,
       data: {
-        ...subject,
+        session_id: share.session_id,
+        share_id: share.share_id,
+        share_subject: share.share_subject,
+        share_owner: share.share_owner,
+        focus_media_id: share.focus_media_id,
+        visible_count: share.visible_count,
+        photo_count: share.photo_count,
+        video_count: share.video_count,
+        cover_url: sessionAlbumPublicShareCoverPath(share),
         token: signSessionAlbumShareToken(claims),
         expires_at: new Date(exp * 1000).toISOString()
       }
+    });
+    return;
+  }
+
+  const sessionAlbumPublicSharesId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/album\/public-shares$/
+  );
+  if (request.method === "DELETE" && sessionAlbumPublicSharesId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await revokeMySessionAlbumPublicShares(user, sessionAlbumPublicSharesId)
     });
     return;
   }
@@ -5767,6 +6262,30 @@ async function route(request, response) {
     return;
   }
 
+  const publicSessionReviewPhotoMatch = url.pathname.match(
+    /^\/api\/session-reviews\/(\d+)\/photos\/(\d+)\/image$/
+  );
+  if (request.method === "GET" && publicSessionReviewPhotoMatch) {
+    const photo = await getSessionReviewAlbumPhoto(
+      Number(publicSessionReviewPhotoMatch[1]),
+      Number(publicSessionReviewPhotoMatch[2])
+    );
+    await serveUploadedSessionAlbumPhoto(photo, response, { variant: "preview" });
+    return;
+  }
+
+  const publicSessionReviewId = idMatch(
+    url.pathname,
+    /^\/api\/session-reviews\/(\d+)$/
+  );
+  if (request.method === "GET" && publicSessionReviewId) {
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await getPublicSessionReview(publicSessionReviewId)
+    });
+    return;
+  }
+
   const mySessionReviewId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)\/review$/);
   if (request.method === "GET" && mySessionReviewId) {
     const user = await getAuthUser(request);
@@ -6017,9 +6536,9 @@ async function route(request, response) {
   errorResponse(response, 404, "NOT_FOUND", "Route not found");
 }
 
-export function createApp() {
+export function createApp(options = {}) {
   return http.createServer((request, response) => {
-    route(request, response).catch((error) => {
+    route(request, response, options).catch((error) => {
       if (error?.contentModerationDenied === true) {
         try {
           emitContentModerationEvent("moderation_access_denied", {
