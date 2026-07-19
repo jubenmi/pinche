@@ -47,11 +47,12 @@
   - 2026-07-19：复核即时 create response 的 `sessionAlbumVideoCreateResponse` 后确认它有 readiness metadata、没有 `video_url`；`video_url` 只在后续 authenticated album DTO 附加，既有 admin/member/public DTO 断言保留。D32 同步适配当前本地无 COS 快照 URL、异步删除 202 和 public cover 应用代理契约。以匹配 `SESSION_SECRET` 的 fresh current-worktree API (`PORT=3029`) 运行 `BASE_URL=http://localhost:3029 node scripts/d32-admin-album-video-smoke.js` 退出码 0，输出 `D32 admin album video smoke passed`，并实际断言 public video-url 返回无 COS 泄漏的 application video-file capability。最终 focused API 19/19、D48 check、D42 api-media 47/47、D42 api-server 15/15 和 stream 10/10 均退出码 0，D50.4 完成。
   - 2026-07-19：最终取消链补充：public responder 将 disconnect signal 也传入 COS HEAD；pending HEAD 中止会返回 `AbortError` 且不会开始 Range。focused API 更新为 20/20，D42 api-server 更新为 16/16；D32 未受 service/route/harness 改动影响，沿用本记录中已通过的 fresh API 结果。
 
-- [ ] D50.5 用 TDD 实现端侧纯分享状态。
-  - [ ] 新增 `albumSingleMediaShare.js` 的 ID、authority、cache、focused item 和 path helper。
-  - [ ] 乱序完成只能写自己的媒体 ID，当前 UI 只读取当前 ID。
-  - [ ] 目标不存在返回 null，不回退第一项。
-  - [ ] 运行端侧 unit 并确认红绿循环。
+- [x] D50.5 用 TDD 实现端侧纯分享状态。
+  - [x] 新增 `albumSingleMediaShare.js` 的 ID、authority、cache、focused item 和 path helper。
+  - [x] 乱序完成只能写自己的媒体 ID，当前 UI 只读取当前 ID。
+  - [x] 目标不存在返回 null，不回退第一项。
+  - [x] 运行端侧 unit 并确认红绿循环。
+  - 2026-07-19：RED：`node --test apps/miniprogram/test/albumSingleMediaShare.test.mjs` 退出码 1，准确报 `albumSingleMediaShare.js` 缺失（`ERR_MODULE_NOT_FOUND`）；审查补充 pure-state 契约后同一命令再次按预期报缺少 `beginSingleMediaShareRequest` 与 `resetSingleMediaShareState` export，并在 reset 竞态回归中准确显示 serial 重复。GREEN：同一命令退出码 0，10/10 通过，覆盖正安全整数 ID、不可变 pure state、按媒体 ID 的乱序/同 ID stale resolve/reject、authority/pure reset 后 serial 单调、dataset 精确缓存查找、冻结的安全错误字段、无回退 focused DTO 查找和编码路径。`node --check apps/miniprogram/test/albumSingleMediaShare.test.mjs`、`node --check apps/miniprogram/src/utils/albumSingleMediaShare.js` 与 `git diff --check` 均退出码 0。
 
 - [ ] D50.6 实现成员预览器当前项分享。
   - [ ] `AlbumImageViewer` 增加 share status、原生 share button、提示事件，不持有 API/token。
