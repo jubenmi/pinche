@@ -36,13 +36,12 @@
         </view>
 
         <view class="rating-row" aria-label="评价星级">
-          <t-icon
+          <text
             v-for="value in [1, 2, 3, 4, 5]"
             :key="value"
-            name="star-filled"
             class="rating-star"
             :class="{ active: review.rating >= value }"
-          />
+          >★</text>
           <text class="rating-text">{{ review.rating }} 星</text>
         </view>
 
@@ -54,7 +53,7 @@
             v-for="(photo, index) in review.photos"
             :key="`${index}-${photo}`"
             class="share-photo"
-            :src="assetUrl(photo)"
+            :src="reviewPhotoUrl(photo)"
             mode="aspectFill"
             @tap="previewPhoto(index)"
           />
@@ -80,7 +79,7 @@
 <script>
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
-import { assetUrl, dataOf, ensureLoggedIn, request } from "../../utils/api";
+import { apiUrl, assetUrl, dataOf, ensureLoggedIn, request } from "../../utils/api";
 import { showWechatShareMenus } from "../../utils/share";
 
 const SHARE_FALLBACK_IMAGE = "/static/art/ticket-landscape.jpg";
@@ -159,10 +158,13 @@ export default {
     },
     shareImage() {
       const photo = this.review?.photos?.[0];
-      return photo ? assetUrl(photo) : SHARE_FALLBACK_IMAGE;
+      return photo ? this.reviewPhotoUrl(photo) : SHARE_FALLBACK_IMAGE;
+    },
+    reviewPhotoUrl(photo) {
+      return apiUrl(photo);
     },
     previewPhoto(index) {
-      const urls = (this.review?.photos || []).map((photo) => assetUrl(photo));
+      const urls = (this.review?.photos || []).map((photo) => this.reviewPhotoUrl(photo));
       if (!urls.length) return;
       uni.previewImage({
         current: urls[index] || urls[0],
@@ -266,7 +268,10 @@ export default {
 
 .rating-star {
   color: #d5d0c7;
+  font-family: Georgia, "Times New Roman", serif;
   font-size: 38rpx;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .rating-star.active {

@@ -26,11 +26,7 @@
           :disabled="saving || !canEditDraft"
           @tap="rating = value"
         >
-          <t-icon
-            name="star-filled"
-            size="50rpx"
-            :color="rating >= value ? '#e4a313' : '#d5d0c7'"
-          />
+          <text class="rating-star" :class="{ active: rating >= value }">★</text>
         </t-button>
       </view>
     </view>
@@ -165,7 +161,7 @@ import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { uploadAlbumPhoto } from "../../utils/albumPhotoUpload";
 import {
-  assetUrl,
+  apiUrl,
   dataOf,
   ensureLoggedIn,
   request
@@ -241,7 +237,7 @@ export default {
       return this.photoState.legacyPhotoUrls.map((url, index) => ({
         id: null,
         key: `legacy-${index}-${url}`,
-        url: assetUrl(url),
+        url: apiUrl(url),
         legacy: true
       }));
     },
@@ -266,7 +262,6 @@ export default {
     await Promise.all([this.loadMyReview(), this.loadReviewAlbum()]);
   },
   methods: {
-    assetUrl,
     onContentChange(event) {
       this.content = String(event?.detail?.value ?? event?.detail ?? "").slice(0, 900);
     },
@@ -281,10 +276,10 @@ export default {
       );
     },
     albumPhotoUrl(photo) {
-      const path = photo?.thumbnail_display_url || photo?.thumbnail_load_url ||
-        photo?.thumbnail_url || photo?.preview_display_url || photo?.preview_load_url ||
+      const path = photo?.thumbnail_load_url || photo?.preview_load_url ||
+        photo?.thumbnail_display_url || photo?.thumbnail_url || photo?.preview_display_url ||
         photo?.preview_url || photo?.image_url || photo?.display_url || "";
-      return assetUrl(path);
+      return apiUrl(path);
     },
     async loadMyReview() {
       if (!this.sessionId) {
@@ -616,6 +611,18 @@ export default {
 
 .rating-button.active {
   background: transparent;
+  color: #e4a313;
+}
+
+.rating-star {
+  color: #d5d0c7;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 50rpx;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.rating-star.active {
   color: #e4a313;
 }
 
