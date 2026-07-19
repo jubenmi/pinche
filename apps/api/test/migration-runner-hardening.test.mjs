@@ -6,10 +6,37 @@ import {
   ensureMigrationsTable,
   migrationLockName,
   reconcileMigrationChecksums,
+  runMigrations,
   serializeMigrationError,
   sha256Checksum,
   withMigrationLock,
 } from "../src/db/migrate.js";
+
+function migrationPreparer(id, filename) {
+  return {
+    id,
+    filenames: new Set([filename]),
+    prepare: async () => ({ skipStatements: true }),
+  };
+}
+
+test("migration runner rejects preparer conflicts before opening a database connection", async () => {
+  let connectionCalls = 0;
+  await assert.rejects(
+    runMigrations({
+      connectionFactory: async () => {
+        connectionCalls += 1;
+        throw new Error("connection must not be opened");
+      },
+      migrationPreparers: [
+        migrationPreparer("first", "0042_conflict.sql"),
+        migrationPreparer("second", "0042_conflict.sql"),
+      ],
+    }),
+    { code: "MIGRATION_PREPARER_CONFLICT" },
+  );
+  assert.equal(connectionCalls, 0);
+});
 
 test("migration history schema creates or upgrades the nullable checksum column", async () => {
   const calls = [];

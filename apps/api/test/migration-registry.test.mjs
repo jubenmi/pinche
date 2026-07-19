@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   defaultMigrationPreparers,
   prepareRegisteredMigration,
+  validateMigrationPreparerRegistry,
 } from "../src/db/migration-registry.js";
 
 function entry(id, filenames, prepare) {
@@ -50,6 +51,22 @@ test("registry fails closed when two preparers claim the same filename", async (
       && error.details.filename === "0042_conflict.sql"
       && assert.deepEqual(error.details.preparers, ["first", "second"]) === undefined,
   );
+});
+
+test("registry validation finds duplicate claims before any preparer can run", () => {
+  let prepareCalls = 0;
+  const entries = [
+    entry("first", ["0042_conflict.sql"], async () => { prepareCalls += 1; }),
+    entry("second", ["0042_conflict.sql"], async () => { prepareCalls += 1; }),
+  ];
+
+  assert.throws(
+    () => validateMigrationPreparerRegistry(entries),
+    (error) => error.code === "MIGRATION_PREPARER_CONFLICT"
+      && error.details.filename === "0042_conflict.sql"
+      && assert.deepEqual(error.details.preparers, ["first", "second"]) === undefined,
+  );
+  assert.equal(prepareCalls, 0);
 });
 
 test("default registry owns album video, content moderation, and user image migrations", () => {

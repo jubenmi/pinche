@@ -36,18 +36,35 @@ export const defaultMigrationPreparers = Object.freeze([
   }),
 ]);
 
+export function validateMigrationPreparerRegistry(
+  entries = defaultMigrationPreparers,
+) {
+  const preparersByFilename = new Map();
+  for (const entry of entries) {
+    for (const filename of entry.filenames) {
+      const preparers = preparersByFilename.get(filename) ?? [];
+      preparers.push(entry.id);
+      preparersByFilename.set(filename, preparers);
+    }
+  }
+  for (const [filename, preparers] of preparersByFilename) {
+    if (preparers.length > 1) {
+      throw migrationError("MIGRATION_PREPARER_CONFLICT", {
+        filename,
+        preparers,
+      });
+    }
+  }
+  return entries;
+}
+
 export async function prepareRegisteredMigration(
   connection,
   filename,
   entries = defaultMigrationPreparers,
 ) {
+  validateMigrationPreparerRegistry(entries);
   const matches = entries.filter((entry) => entry.filenames.has(filename));
   if (matches.length === 0) return { skipStatements: false };
-  if (matches.length > 1) {
-    throw migrationError("MIGRATION_PREPARER_CONFLICT", {
-      filename,
-      preparers: matches.map(({ id }) => id),
-    });
-  }
   return matches[0].prepare(connection, filename);
 }

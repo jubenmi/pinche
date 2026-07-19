@@ -1,8 +1,14 @@
-import { readdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 const MIGRATION_FILENAME_PATTERN = /^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
+const execFileAsync = promisify(execFile);
+const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+const FUTURE_HISTORY_PATH = "scripts/migration-filename-history.json";
+const futureHistoryUrl = new URL("./migration-filename-history.json", import.meta.url);
 
 export const LEGACY_MAX_PREFIX = 32;
 
@@ -82,9 +88,16 @@ function sameStrings(actual, expected) {
   );
 }
 
-export function validateMigrationFilenames(filenames) {
+export function validateMigrationFilenames(
+  filenames,
+  {
+    baselineFutureMigrationHistory = [],
+    futureMigrationHistory = [],
+  } = {},
+) {
   const issues = [];
   const filenamesByPrefix = new Map();
+  const validMigrations = [];
 
   for (const filename of filenames) {
     const match = MIGRATION_FILENAME_PATTERN.exec(filename);
@@ -101,6 +114,7 @@ export function validateMigrationFilenames(filenames) {
 
     const prefix = match[1];
     const numericPrefix = Number(prefix);
+    validMigrations.push({ filename, prefix, numericPrefix });
     const prefixFilenames = filenamesByPrefix.get(prefix) ?? [];
     prefixFilenames.push(filename);
     filenamesByPrefix.set(prefix, prefixFilenames);
@@ -116,23 +130,27 @@ export function validateMigrationFilenames(filenames) {
     }
   }
 
+  const actualLegacyFilenames = validMigrations
+    .filter(({ numericPrefix }) => numericPrefix <= LEGACY_MAX_PREFIX)
+    .map(({ filename }) => filename)
+    .sort();
+  const expectedLegacyFilenames = [...LEGACY_MIGRATION_FILENAMES].sort();
+  if (!sameStrings(actualLegacyFilenames, expectedLegacyFilenames)) {
+    const actualLegacySet = new Set(actualLegacyFilenames);
+    issues.push(
+      issue(
+        "MIGRATION_FILENAME_LEGACY_SET_MISMATCH",
+        "Legacy migration filenames must match the complete immutable history",
+        {
+          missing: expectedLegacyFilenames.filter((name) => !actualLegacySet.has(name)),
+          unexpected: actualLegacyFilenames.filter((name) => !legacyFilenames.has(name)),
+        },
+      ),
+    );
+  }
+
   for (const [prefix, prefixFilenames] of filenamesByPrefix) {
     const sortedFilenames = [...prefixFilenames].sort();
-    const legacyException = LEGACY_DUPLICATE_PREFIXES[prefix];
-
-    if (legacyException) {
-      if (!sameStrings(sortedFilenames, [...legacyException].sort())) {
-        issues.push(
-          issue(
-            "MIGRATION_FILENAME_LEGACY_SET_MISMATCH",
-            `Legacy duplicate prefix ${prefix} must match its exact allowlist`,
-            { prefix, filenames: sortedFilenames },
-          ),
-        );
-      }
-      continue;
-    }
-
     if (Number(prefix) > LEGACY_MAX_PREFIX && sortedFilenames.length > 1) {
       issues.push(
         issue(
@@ -144,13 +162,139 @@ export function validateMigrationFilenames(filenames) {
     }
   }
 
+  let previousHistoryPrefix = LEGACY_MAX_PREFIX;
+  const validFutureHistory = [];
+  for (const filename of futureMigrationHistory) {
+    const match = MIGRATION_FILENAME_PATTERN.exec(filename);
+    const numericPrefix = match ? Number(match[1]) : 0;
+    if (!match || numericPrefix <= LEGACY_MAX_PREFIX) {
+      issues.push(
+        issue(
+          "MIGRATION_FILENAME_HISTORY_INVALID",
+          "Future migration history entries must be valid filenames above the legacy high-water mark",
+          { filename },
+        ),
+      );
+      continue;
+    }
+    validFutureHistory.push(filename);
+    if (numericPrefix <= previousHistoryPrefix) {
+      issues.push(
+        issue(
+          "MIGRATION_FILENAME_HISTORY_NOT_INCREASING",
+          "Future migration history must remain append-only with strictly increasing prefixes",
+          { filename, prefix: match[1], previousPrefix: String(previousHistoryPrefix).padStart(4, "0") },
+        ),
+      );
+    }
+    previousHistoryPrefix = numericPrefix;
+  }
+
+  const historyPrefixPreserved = baselineFutureMigrationHistory.every(
+    (filename, index) => futureMigrationHistory[index] === filename,
+  );
+  if (
+    baselineFutureMigrationHistory.length > futureMigrationHistory.length
+    || !historyPrefixPreserved
+  ) {
+    issues.push(
+      issue(
+        "MIGRATION_FILENAME_HISTORY_REWRITTEN",
+        "Existing future migration history must remain an exact prefix of the current history",
+        {
+          baselineLength: baselineFutureMigrationHistory.length,
+          currentLength: futureMigrationHistory.length,
+        },
+      ),
+    );
+  }
+
+  const actualFutureFilenames = validMigrations
+    .filter(({ numericPrefix }) => numericPrefix > LEGACY_MAX_PREFIX)
+    .map(({ filename }) => filename)
+    .sort();
+  const expectedFutureFilenames = [...validFutureHistory].sort();
+  if (!sameStrings(actualFutureFilenames, expectedFutureFilenames)) {
+    const actualFutureSet = new Set(actualFutureFilenames);
+    const expectedFutureSet = new Set(expectedFutureFilenames);
+    issues.push(
+      issue(
+        "MIGRATION_FILENAME_FUTURE_SET_MISMATCH",
+        "Future migration files must match the append-only migration history",
+        {
+          missing: expectedFutureFilenames.filter((name) => !actualFutureSet.has(name)),
+          unregistered: actualFutureFilenames.filter((name) => !expectedFutureSet.has(name)),
+        },
+      ),
+    );
+  }
+
   return issues;
+}
+
+function parseFutureMigrationHistory(text, source) {
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string")) {
+    throw new Error(`${source} must contain a JSON array of migration filenames`);
+  }
+  return parsed;
+}
+
+async function gitStdout(args) {
+  const { stdout } = await execFileAsync("git", args, {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+  return stdout;
+}
+
+async function baselineGitRef() {
+  const configured = String(
+    process.env.MIGRATION_GOVERNANCE_BASE_REF || "",
+  ).trim();
+  if (configured && !/^0+$/.test(configured)) return configured;
+
+  const status = await gitStdout([
+    "status",
+    "--porcelain",
+    "--",
+    FUTURE_HISTORY_PATH,
+  ]);
+  return status.trim() ? "HEAD" : "HEAD^";
+}
+
+async function readBaselineFutureMigrationHistory() {
+  const ref = await baselineGitRef();
+  try {
+    await gitStdout(["cat-file", "-e", `${ref}^{commit}`]);
+  } catch {
+    throw new Error(`Migration governance baseline commit is unavailable: ${ref}`);
+  }
+
+  try {
+    await gitStdout(["cat-file", "-e", `${ref}:${FUTURE_HISTORY_PATH}`]);
+  } catch {
+    return [];
+  }
+  return parseFutureMigrationHistory(
+    await gitStdout(["show", `${ref}:${FUTURE_HISTORY_PATH}`]),
+    `${ref}:${FUTURE_HISTORY_PATH}`,
+  );
 }
 
 export async function checkMigrationDirectory(
   migrationsUrl = new URL("../apps/api/migrations/", import.meta.url),
 ) {
-  return validateMigrationFilenames(await readdir(migrationsUrl));
+  const futureMigrationHistory = parseFutureMigrationHistory(
+    await readFile(futureHistoryUrl, "utf8"),
+    FUTURE_HISTORY_PATH,
+  );
+  const baselineFutureMigrationHistory = await readBaselineFutureMigrationHistory();
+  return validateMigrationFilenames(await readdir(migrationsUrl), {
+    baselineFutureMigrationHistory,
+    futureMigrationHistory,
+  });
 }
 
 async function main() {

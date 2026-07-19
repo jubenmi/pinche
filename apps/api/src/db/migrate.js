@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config/env.js";
-import { prepareRegisteredMigration } from "./migration-registry.js";
+import {
+  defaultMigrationPreparers,
+  prepareRegisteredMigration,
+  validateMigrationPreparerRegistry,
+} from "./migration-registry.js";
 import { createServerConnection } from "./mysql.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -112,12 +116,20 @@ function splitSqlStatements(sql) {
     .filter(Boolean);
 }
 
-export async function applyMigration(connection, { file, sql, checksum = sha256Checksum(sql) }) {
+export async function applyMigration(
+  connection,
+  { file, sql, checksum = sha256Checksum(sql) },
+  { migrationPreparers = defaultMigrationPreparers } = {},
+) {
   const statements = splitSqlStatements(sql);
 
   await connection.beginTransaction();
   try {
-    const { skipStatements } = await prepareRegisteredMigration(connection, file);
+    const { skipStatements } = await prepareRegisteredMigration(
+      connection,
+      file,
+      migrationPreparers,
+    );
     if (!skipStatements) {
       for (const statement of statements) {
         await connection.query(statement);
@@ -255,8 +267,12 @@ async function migrationFiles() {
     .sort();
 }
 
-export async function runMigrations() {
-  const connection = await createServerConnection();
+export async function runMigrations({
+  connectionFactory = createServerConnection,
+  migrationPreparers = defaultMigrationPreparers,
+} = {}) {
+  validateMigrationPreparerRegistry(migrationPreparers);
+  const connection = await connectionFactory();
 
   try {
     await ensureDatabase(connection);
@@ -280,7 +296,7 @@ export async function runMigrations() {
 
       for (const migration of migrations) {
         if (applied.has(migration.file)) continue;
-        await applyMigration(connection, migration);
+        await applyMigration(connection, migration, { migrationPreparers });
         executed.push(migration.file);
       }
 

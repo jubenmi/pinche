@@ -24,6 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Setup Node.js
@@ -37,6 +38,8 @@ jobs:
 
       - name: Run checks
         run: npm run check
+        env:
+          MIGRATION_GOVERNANCE_BASE_REF: ${{ github.event.before }}
 
       - name: Set Docker tags
         id: tags
