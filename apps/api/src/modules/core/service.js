@@ -6555,7 +6555,7 @@ export async function createSessionAlbumVideo(user, sessionId, body = {}, option
               author_visibility_version,
               status
             )
-          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+          VALUES (?, ?, 'video', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
         `,
         [
           id,
