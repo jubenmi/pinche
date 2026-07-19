@@ -45,7 +45,7 @@ CREATE TABLE session_album_public_shares (
   seat_id BIGINT UNSIGNED NOT NULL,
   media_ids JSON NOT NULL,
   snapshot_digest CHAR(64) NOT NULL,
-  cover_media_id BIGINT UNSIGNED NULL,
+  cover_media_ids JSON NOT NULL,
   expires_at DATETIME NOT NULL,
   revoked_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -65,8 +65,8 @@ CREATE TABLE session_album_public_shares (
 设计约束：
 
 - `media_ids` 只能保存 1–30 个去重正整数，服务层读写时必须严格校验。
-- `snapshot_digest` 是排序后媒体 ID、封面 ID、分享者和席位的 SHA-256，用于复用未过期且内容相同的快照，避免每次进入相册都插入新行。
-- `cover_media_id` 必须为空或包含在 `media_ids` 中。
+- `snapshot_digest` 是排序后媒体 ID、封面 ID 集合、分享者和席位的 SHA-256，用于复用未过期且内容相同的快照，避免每次进入相册都插入新行。
+- `cover_media_ids` 只能保存 0–9 个去重正整数，并且每个 ID 都必须包含在 `media_ids` 中。
 - 过期时间继续使用现有 30 天相册分享期限。
 - `revoked_at` 非空的快照不得被复用，也不得继续签发列表、封面或媒体 URL。
 - 不建立快照媒体明细表；公开上限固定为 30，使用有界 JSON 可以少一张表和一组写事务，同时不会产生任意大小字段。
@@ -113,7 +113,7 @@ AND no inconsistent occupied-seat tag is missing user_id
 createOrReuseSessionAlbumPublicShare(user, sessionId)
 loadSessionAlbumPublicShare(claims)
 selectPublicShareMedia(candidates, tagsMap, privacyMap, subject)
-selectPublicShareCover(selectedMedia, tagsMap, subject)
+selectPublicShareCoverMedia(selectedMedia, tagsMap, subject)
 ```
 
 选择步骤：
@@ -126,14 +126,14 @@ selectPublicShareCover(selectedMedia, tagsMap, subject)
    - `2`：分享者上传的其他合规媒体。
 4. 每个桶内按 `created_at DESC, id DESC` 选择，整体最多 30 项且视频最多 3 项。
 5. 保存前把最终媒体 ID 按选择结果固定；公开响应再按 `created_at ASC, id ASC` 展示游玩过程。
-6. 对规范化后的媒体 ID、封面 ID、分享者和席位计算 `snapshot_digest`。
+6. 对规范化后的媒体 ID、封面 ID 集合、分享者和席位计算 `snapshot_digest`。
 7. 如果最近未过期、未撤销快照的 digest 完全相同，则复用该行；否则插入新快照。
 
 快照只固定“可能被读取的媒体 ID”，不冻结隐私或审核状态。公开列表和每个媒体 URL 读取仍重新执行统一资格函数，因此后续关闭隐私、删除或审核撤回可以立即隐藏内容。
 
-### 4.3 封面选择
+### 4.3 封面选择与动态宫格
 
-`selectPublicShareCover` 只检查已选快照中的图片：
+`selectPublicShareCoverMedia` 只检查已选快照中的图片：
 
 第一优先级：
 
@@ -154,16 +154,39 @@ created_at DESC
 id DESC
 ```
 
-封面不是原图地址。现有公开图片接口新增 `variant=share_cover`，继续使用短期媒体 token，并通过现有 Sharp/COS 图片处理链路生成固定上限的 JPEG：
+选择器最多返回前 9 张安全候选；不足 9 张时使用全部候选。宫格布局固定为：
+
+| 图片数 | 行列布局 |
+|---:|---|
+| 1 | 单图 |
+| 2 | `2` |
+| 3 | `3` |
+| 4 | `2 + 2` |
+| 5 | `3 + 2` |
+| 6 | `3 + 3` |
+| 7 | `3 + 3 + 1` |
+| 8 | `3 + 3 + 2` |
+| 9 | `3 + 3 + 3` |
+
+最后一行不足 3 张时左对齐，和朋友圈多图排列一致。每个格子使用相同正方形边长和固定间距；画布宽高随实际列数和行数计算，不补空白占位、不重复图片、不叠加文字。
+
+封面不是原图地址。新增独立受控接口：
+
+```text
+GET /api/session-album/public-shares/:shareId/cover?token=<coverToken>
+```
+
+接口使用短期 cover token，并通过现有 Sharp/COS 图片读取链路取得 `cover_media_ids`，再由 Sharp 逐张裁切和合成为一张 JPEG：
 
 - 自动方向纠正；
-- 中心安全裁切为微信卡片适合的横向比例；
+- 每张中心安全裁切为正方形格子；
+- 按 1–9 张固定布局合成，末行左对齐；
 - 不放大低分辨率源图；
 - 质量压缩；
 - strip 元数据；
 - `private, no-store`。
 
-公开媒体 token 增加 `usage = album_media | share_cover`。`share_cover` 读取除普通公开资格外，还必须重新执行安全封面资格；如果标签后来变成合照或隐私关闭，接口关闭式失败。D48 不做服务端文字叠加，标题仍由微信分享标题承载，以避免增加字体、排版和多尺寸资产链路。
+cover token 绑定 `shareId`、完整 `cover_media_ids` 摘要和过期时间。读取时每一张图片都必须重新执行普通公开资格和严格安全封面资格；如果任意一张后来变成合照、被删除或隐私关闭，整个合成封面关闭式失败，不临时换图或缩减宫格。D48 不做服务端文字叠加，标题仍由微信分享标题承载。
 
 ### 4.4 新版相册分享 token
 
@@ -212,7 +235,7 @@ POST /api/sessions/:id/album/share-token
   "visible_count": 18,
   "photo_count": 16,
   "video_count": 2,
-  "cover_url": "/api/session-album/public-share/photos/88/image?...&variant=share_cover"
+  "cover_url": "/api/session-album/public-shares/123/cover?token=..."
 }
 ```
 
@@ -361,7 +384,7 @@ onShareTimeline() {
 - 上传者关闭、任一被标注者关闭及分享者本人关闭两类隐私。
 - 未标注、未批准、D46 作者私有、处理中视频排除。
 - 30 项总上限、3 项视频上限、稳定排序和快照固定。
-- 封面人物优先、场景降级、合照排除和无候选降级。
+- 封面人物优先、场景降级、合照排除、1–9 图动态布局和无候选降级。
 - v2 相册 token、旧 D23 token、邀请 token 三类隔离。
 - 快照外媒体不能通过公开媒体接口读取。
 - 停止分享后列表、封面和已签发的单媒体 URL 都立即失效；重新分享生成新 shareId，旧 shareId 不恢复。

@@ -19,7 +19,7 @@
   - [ ] 更新 `package.json`，把 D48 静态检查和 smoke 语法检查加入根 `check`，不得删除 D18/D23/D40/D45/D46 回归。
   - [ ] 运行 `node scripts/d48-album-sharing-role-claim-separation-check.js`，确认先因缺少迁移与实现失败，而不是脚本语法错误。
   - [ ] 新增 `apps/api/migrations/0032_session_album_public_shares.sql`，只创建 `session_album_public_shares` 及设计中列出的索引/外键。
-  - [ ] 扩展迁移测试或静态检查，验证 `media_ids`、`snapshot_digest`、`cover_media_id`、`revoked_at` 与 30 天过期字段存在。
+  - [ ] 扩展迁移测试或静态检查，验证 `media_ids`、`snapshot_digest`、`cover_media_ids`、`revoked_at` 与 30 天过期字段存在。
   - [ ] 运行 API 迁移测试和 D48 检查，确认迁移子项转绿，后续业务契约仍按预期失败。
 
 - [ ] D48.3 用 TDD 实现公开资格与隐私一票否决。
@@ -38,7 +38,7 @@
   - [ ] 先增加失败用例，证明快照内媒体隐私关闭、删除或审核撤回后从旧分享消失。
   - [ ] 在 `apps/api/src/modules/core/service.js` 新增 `selectPublicShareMedia`、`createOrReuseSessionAlbumPublicShare` 与 `loadSessionAlbumPublicShare` 的有界实现。
   - [ ] 严格校验数据库 `media_ids` 为 1–30 个去重正整数；非法或越界快照关闭式失败。
-  - [ ] 以规范化媒体 ID、封面 ID、分享者和席位计算 `snapshot_digest`，复用相同且未过期的最近快照。
+  - [ ] 以规范化媒体 ID、封面 ID 集合、分享者和席位计算 `snapshot_digest`，复用相同且未过期的最近快照。
   - [ ] 快照选择阶段按优先级挑选，公开 DTO 阶段按 `created_at ASC, id ASC` 输出。
   - [ ] 运行 D48 smoke 快照子集，确认上限、稳定顺序、复用和动态收紧全部转绿。
 
@@ -56,14 +56,16 @@
   - [ ] 运行 D23、D40、D48 token 与匿名访问 smoke，确认旧链接兼容、新链接固定快照、邀请相册隔离。
 
 - [ ] D48.6 用 TDD 实现相册照片封面。
-  - [ ] 先增加失败用例：分享者本人上传且仅标自己角色的图片优先成为封面。
-  - [ ] 先增加失败用例：没有人物图时可使用分享者上传的纯 NPC/场景/道具图；合照、他人上传图和快照外图不能成为封面。
-  - [ ] 先增加失败用例：同级候选按像素面积、创建时间和 ID 稳定选择；无候选返回空 `cover_url`。
-  - [ ] 在 `apps/api/src/modules/core/service.js` 新增 `selectPublicShareCover`，并确保 `cover_media_id` 包含在快照 `media_ids` 中。
-  - [ ] 在 `apps/api/src/server.js` 为公开图片增加 `variant=share_cover` 与 `usage=share_cover`，绑定 shareId/photoId 并二次执行严格封面资格。
-  - [ ] 复用 Sharp/COS 图片处理链路生成自动旋转、横向安全裁切、限尺寸、压缩、strip 元数据的 JPEG，不创建原图直链。
-  - [ ] 修改 `attachPublicSessionAlbumMediaUrls` 或相邻有界 helper，返回可供小程序 `apiUrl()` 规范化的短期封面 URL。
-  - [ ] 运行 D48 封面 smoke 和 COS/local 图片定向测试，确认相同隐私规则、短期 token 和品牌图降级。
+  - [ ] 先增加失败用例：分享者本人上传且仅标自己角色的图片优先进入封面候选。
+  - [ ] 先增加失败用例：没有人物图时可使用分享者上传的纯 NPC/场景/道具图；合照、他人上传图和快照外图不能进入候选。
+  - [ ] 先增加失败用例：同级候选按像素面积、创建时间和 ID 稳定选择，最多返回 9 张；无候选返回空 `cover_url`。
+  - [ ] 先为纯布局 helper 增加 1–9 张失败用例，锁定 `1`、`2`、`3`、`2+2`、`3+2`、`3+3`、`3+3+1`、`3+3+2`、`3+3+3`，不足一行时左对齐且不补图。
+  - [ ] 在 `apps/api/src/modules/core/service.js` 新增 `selectPublicShareCoverMedia`，并确保每个 `cover_media_ids` 都包含在快照 `media_ids` 中。
+  - [ ] 在 `apps/api/src/server.js` 新增 `GET /api/session-album/public-shares/:shareId/cover`，短期 token 绑定 shareId 与完整封面 ID 集合摘要。
+  - [ ] 复用 Sharp/COS 图片读取链路，把每张图片自动旋转并中心裁切成正方形，再按 1–9 张固定宫格合成、限尺寸、压缩和 strip 元数据，不创建原图直链。
+  - [ ] 合成前逐张二次执行普通公开资格与严格封面资格；任意一张失效时整个封面关闭式失败，不临时换图或缩减宫格。
+  - [ ] 修改分享 token 响应或相邻有界 helper，返回可供小程序 `apiUrl()` 规范化的短期合成封面 URL。
+  - [ ] 运行 D48 封面 smoke 和 COS/local 图片定向测试，确认 1–9 布局、相同隐私规则、短期 token 和品牌图降级。
 
 - [ ] D48.7 收窄公开 DTO 并补公开相册头部。
   - [ ] 先增加失败契约，证明公开响应不含上传者 ID/昵称、其他用户标签、对象 Key/ETag、作者私有字段和精确 `start_at`。
@@ -116,7 +118,7 @@
 - [ ] 公开快照最多 30 项、视频最多 3 项，后续新媒体不进入旧快照。
 - [ ] 快照内媒体在隐私、删除或审核变化后立即停止公开。
 - [ ] 分享者可在现有隐私页停止本场全部新版相册分享，旧链接立即失效且不会复活。
-- [ ] 相册封面优先由分享者本人上传的安全相册照片生成，合照与他人照片不作封面。
+- [ ] 相册封面使用最多 9 张由分享者本人上传的安全照片，按朋友圈 1–9 图布局合成；合照与他人照片不作封面。
 - [ ] 无安全封面时稳定降级现有票根图。
 - [ ] 公开 DTO 和页面不泄漏其他玩家、原标签、精确时间、对象字段或作者私有内容。
 - [ ] 角色邀请只支持好友和群聊，继续复用 direct/review 认领流程。
