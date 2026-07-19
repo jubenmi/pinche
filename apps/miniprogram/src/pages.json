@@ -71,6 +71,12 @@
       }
     },
     {
+      "path": "pages/session/review-share",
+      "style": {
+        "navigationBarTitleText": "游后感"
+      }
+    },
+    {
       "path": "pages/session/album",
       "style": {
         "navigationBarTitleText": "相册"
