@@ -175,7 +175,7 @@
       </view>
     </view>
 
-    <view v-if="filteredPhotos.length === 0" class="section empty-section">
+    <view v-if="!focusedPublicMediaUnavailable && filteredPhotos.length === 0" class="section empty-section">
       <t-empty class="empty-state" :description="`还没有你的照片。${emptyText}`" />
       <t-button
         v-if="canUpload && !timelineMode"
@@ -197,7 +197,7 @@
     </view>
 
     <uv-waterfall
-      v-else
+      v-else-if="!focusedPublicMediaUnavailable"
       ref="albumWaterfall"
       v-model="waterfallPhotos"
       class="photo-waterfall"
@@ -503,13 +503,26 @@
       :photos="previewPhotos"
       :initial-index="previewInitialIndex"
       :allow-download="previewAllowsDownload"
+      :share-status="previewShareStatus"
+      :show-counter="!focusedPublicMode"
+      :primary-action-label="focusedPublicMode ? '查看完整相册' : ''"
       :media-progress="previewMediaProgress"
       @close="closePhotoPreview"
       @change="handlePreviewChange"
       @video-error="handlePreviewVideoError"
       @need-video="handlePreviewVideoRequest"
       @download="handlePreviewDownload"
+      @share-status-tap="handleSingleMediaShareStatusTap"
+      @primary-action="showFullPublicAlbum"
     />
+
+    <view
+      v-if="focusedPublicMediaUnavailable && publicAlbumSnapshotLoaded"
+      class="section focused-public-unavailable"
+    >
+      <t-empty description="该内容已不可查看" />
+      <t-button class="button" @tap="showFullPublicAlbum">查看完整相册</t-button>
+    </view>
 
     <t-popup
       :visible="tagSheetVisible"
@@ -641,6 +654,17 @@ import {
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
+import {
+  createFocusedPublicVideoRequestContext,
+  createSingleMediaShareAuthority,
+  focusedPublicSnapshotProjection,
+  isFocusedPublicVideoRequestCurrent,
+  normalizeFocusedMediaId,
+  singleMediaShareCardImage,
+  singleMediaShareFailClosedPayload,
+  singleMediaShareRouteState,
+  singleMediaSharePath
+} from "../../utils/albumSingleMediaShare";
 
 function albumMediaCachePath(photoId, variant = "preview") {
   const root =
@@ -666,6 +690,11 @@ export default {
       sessionId: "",
       timelineMode: false,
       albumShareToken: "",
+      singleMediaShareRequested: false,
+      focusedPublicMode: false,
+      focusedPublicMediaUnavailable: false,
+      focusMediaId: null,
+      publicAlbumSnapshotLoaded: false,
       shareSubject: null,
       shareOwner: null,
       shareCoverUrl: "",
@@ -710,6 +739,8 @@ export default {
       previewPhotos: [],
       previewCurrentIndex: 0,
       previewInitialIndex: 0,
+      singleMediaShareAuthority: createSingleMediaShareAuthority(),
+      singleMediaShareStateVersion: 0,
       previewMediaUrlRefreshRequest: null,
       albumMediaRefresh: null,
       albumListRequestAuthority: createAlbumListRequestAuthority(),
@@ -749,6 +780,13 @@ export default {
     },
     previewAllowsDownload() {
       return !this.timelineMode && this.isDownloadableAlbumImage(this.previewCurrentPhoto);
+    },
+    previewShareStatus() {
+      this.singleMediaShareStateVersion;
+      if (this.timelineMode || !this.previewOverlayVisible) {
+        return "hidden";
+      }
+      return this.singleMediaShareAuthority.currentEntry(this.previewCurrentPhoto?.id)?.status || "hidden";
     },
     previewMediaProgress() {
       const result = {};
@@ -1016,10 +1054,14 @@ export default {
   async onLoad(options) {
     this.visiblePhotoMediaRequests = {};
     this.sessionId = options.id || "";
-    this.timelineMode =
-      options.source === "wechat_timeline" ||
-      Boolean(options.albumShareToken || options.token);
-    this.albumShareToken = options.albumShareToken || options.token || "";
+    const routeState = singleMediaShareRouteState(options);
+    this.singleMediaShareRequested = routeState.singleMediaShareRequested;
+    this.focusMediaId = routeState.focusMediaId;
+    this.timelineMode = routeState.timelineMode;
+    this.albumShareToken = routeState.token;
+    this.focusedPublicMode = routeState.focusedPublicMode;
+    this.focusedPublicMediaUnavailable = routeState.focusedPublicMediaUnavailable;
+    this.publicAlbumSnapshotLoaded = false;
     this.initializeAlbumMediaRefreshController();
     this.showShareMenus();
     this.applyAlbumNavigationTitle();
@@ -1065,6 +1107,7 @@ export default {
     this.clearAuthorPrivateAlbumState();
   },
   onUnload() {
+    this.resetSingleMediaShareState();
     this.clearAuthorPrivateAlbumState();
     this.unobserveAlbumAuthChanges();
     this.albumMediaRefresh?.dispose();
@@ -1074,7 +1117,19 @@ export default {
     this.albumScrollTop = Number(event?.scrollTop || 0);
     this.updateTopActionsFloating();
   },
-  onShareAppMessage() {
+  onShareAppMessage(options) {
+    if (options?.from === "button") {
+      const mediaId = normalizeFocusedMediaId(options?.target?.dataset?.mediaId);
+      const entry = this.singleMediaShareAuthority.entryFor(mediaId);
+      if (entry?.status === "ready" && entry.path) {
+        return {
+          title: entry.title || this.albumShareTitle(),
+          path: entry.path,
+          imageUrl: entry.imageUrl || ""
+        };
+      }
+      return singleMediaShareFailClosedPayload();
+    }
     if (!this.albumShareToken) {
       showToast({ title: "当前没有可公开分享的完成标注照片", icon: "none" });
     }
@@ -1155,6 +1210,111 @@ export default {
     albumShareImage() {
       return this.shareCoverUrl || "/static/art/ticket-landscape.jpg";
     },
+    resetSingleMediaShareState() {
+      this.singleMediaShareAuthority.reset();
+      this.singleMediaShareStateVersion += 1;
+    },
+    isSingleMediaShareEligible(photo) {
+      return Boolean(
+        !this.timelineMode &&
+          normalizeFocusedMediaId(photo?.id) &&
+          this.isCurrentPublishedAlbumMedia(photo) &&
+          (this.isImageMedia(photo) || this.videoReady(photo))
+      );
+    },
+    async prepareSingleMediaShareCardImage(photo) {
+      const currentPhoto = this.viewerPhotoWithCachedMedia(photo);
+      let source = "";
+      if (currentPhoto.media_type === "video") {
+        source =
+          currentPhoto.thumbnail_display_url ||
+          currentPhoto.cover_url ||
+          await this.loadVisiblePhotoMedia(photo, "thumbnail");
+      } else {
+        source =
+          currentPhoto.preview_display_url ||
+          await this.loadVisiblePhotoMedia(photo, "preview") ||
+          currentPhoto.thumbnail_display_url ||
+          await this.loadVisiblePhotoMedia(photo, "thumbnail");
+      }
+      return singleMediaShareCardImage(await this.prepareShareCoverUrl(source));
+    },
+    async prepareSingleMediaShare(photo, { force = false } = {}) {
+      const mediaId = normalizeFocusedMediaId(photo?.id);
+      if (!this.isSingleMediaShareEligible(photo) || !mediaId) {
+        return null;
+      }
+      const cachedEntry = this.singleMediaShareAuthority.entryFor(mediaId);
+      if (cachedEntry?.status === "ready" || (!force && cachedEntry)) {
+        return cachedEntry;
+      }
+      const shareRequest = this.singleMediaShareAuthority.begin(mediaId);
+      this.singleMediaShareStateVersion += 1;
+      if (!shareRequest) {
+        return null;
+      }
+      try {
+        const response = await request({
+          url: `/api/sessions/${this.sessionId}/album/share-token`,
+          method: "POST",
+          data: { focusMediaId: mediaId }
+        });
+        const data = dataOf(response) || {};
+        const token = typeof data.token === "string" ? data.token.trim() : "";
+        if (normalizeFocusedMediaId(data.focus_media_id) !== mediaId || !token) {
+          throw albumMediaError("ALBUM_PUBLIC_SHARE_RESPONSE_INVALID", "当前内容暂时无法分享");
+        }
+        const path = singleMediaSharePath({
+          sessionId: this.sessionId,
+          token,
+          mediaId
+        });
+        if (!path) {
+          throw albumMediaError("ALBUM_PUBLIC_SHARE_RESPONSE_INVALID", "当前内容暂时无法分享");
+        }
+        const imageUrl = await this.prepareSingleMediaShareCardImage(photo);
+        const entry = this.singleMediaShareAuthority.resolve(shareRequest, {
+          title: this.albumShareSessionTitle() || this.albumShareTitle(),
+          path,
+          imageUrl,
+          token
+        });
+        this.singleMediaShareStateVersion += 1;
+        return entry;
+      } catch (error) {
+        const entry = this.singleMediaShareAuthority.reject(shareRequest, error);
+        this.singleMediaShareStateVersion += 1;
+        return entry;
+      }
+    },
+    handleSingleMediaShareStatusTap(event) {
+      const payload = event?.detail || event || {};
+      const mediaId = normalizeFocusedMediaId(payload.mediaId);
+      const entry = this.singleMediaShareAuthority.entryFor(mediaId);
+      if (entry?.status === "failed") {
+        const photo = this.previewPhotos.find((item) => normalizeFocusedMediaId(item?.id) === mediaId);
+        if (photo) {
+          this.prepareSingleMediaShare(photo, { force: true });
+        }
+        return;
+      }
+      showToast({
+        title: entry?.status === "blocked" ? "该内容当前不可分享" : "正在准备分享，请稍候",
+        icon: "none"
+      });
+    },
+    showFullPublicAlbum() {
+      this.focusedPublicMode = false;
+      this.singleMediaShareRequested = false;
+      this.focusedPublicMediaUnavailable = false;
+      this.previewOverlayVisible = false;
+      this.previewPhotos = [];
+      this.previewCurrentIndex = 0;
+      this.previewInitialIndex = 0;
+      this.previewVideoUrlRequests = {};
+      this.resetPreviewVideoViewerState();
+      this.refreshWaterfall();
+    },
     albumTimelineQuery() {
       return queryString({
         id: this.sessionId,
@@ -1209,6 +1369,7 @@ export default {
       const nextUserId = auth?.user?.id || "";
       const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
       if (accountChanged) {
+        this.resetSingleMediaShareState();
         this.clearAuthorPrivateAlbumState();
       }
       this.currentUserId = nextUserId;
@@ -1622,10 +1783,16 @@ export default {
         return;
       }
       if (!this.sessionId || !this.albumShareToken) {
-        this.statusText = "分享相册链接缺少访问凭证。";
+        this.publicAlbumSnapshotLoaded = false;
+        this.focusedPublicMode = false;
+        this.focusedPublicMediaUnavailable = this.singleMediaShareRequested;
+        this.statusText = this.singleMediaShareRequested
+          ? "该内容已不可查看"
+          : "分享相册链接缺少访问凭证。";
         return;
       }
       this.loadingAlbum = true;
+      this.publicAlbumSnapshotLoaded = false;
       this.shareCoverPrepared = false;
       this.showShareMenus();
       const listRequest = this.beginAlbumListRequest();
@@ -1666,10 +1833,27 @@ export default {
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.statusText = "";
+        this.publicAlbumSnapshotLoaded = true;
         this.showShareMenus();
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
         this.albumMediaRefresh?.schedule();
+        if (this.singleMediaShareRequested) {
+          const focusedSnapshot = focusedPublicSnapshotProjection(this.photos, this.focusMediaId);
+          if (!this.focusedPublicMode || focusedSnapshot.unavailable) {
+            this.focusedPublicMode = false;
+            this.focusedPublicMediaUnavailable = true;
+            this.statusText = "该内容已不可查看";
+            return;
+          }
+          this.focusedPublicMediaUnavailable = false;
+          this.resetPreviewVideoViewerState();
+          this.previewPhotos = focusedSnapshot.photos.map((photo) => this.viewerPhotoWithCachedMedia(photo));
+          this.previewCurrentIndex = 0;
+          this.previewInitialIndex = 0;
+          this.previewOverlayVisible = true;
+          this.ensurePreviewMediaAround(0);
+        }
       } catch (error) {
         if (!this.isCurrentAlbumListRequest(listRequest)) {
           return;
@@ -1681,6 +1865,8 @@ export default {
         this.canUpload = false;
         this.shareCoverUrl = "";
         this.shareCoverPrepared = false;
+        this.publicAlbumSnapshotLoaded = false;
+        this.focusedPublicMediaUnavailable = false;
         this.showShareMenus();
         this.statusText =
           error?.statusCode === 403
@@ -2305,6 +2491,16 @@ export default {
         nextPreviewPhotos.some((photo) => String(photo.id) === String(activePreviewId));
       this.previewPhotos = nextPreviewPhotos;
       if (this.previewOverlayVisible && !activeStillPreviewable) {
+        if (this.focusedPublicMode) {
+          this.previewOverlayVisible = false;
+          this.previewPhotos = [];
+          this.previewCurrentIndex = 0;
+          this.previewInitialIndex = 0;
+          this.focusedPublicMode = false;
+          this.focusedPublicMediaUnavailable = true;
+          this.statusText = "该内容已不可查看";
+          return;
+        }
         this.closePhotoPreview();
         return;
       }
@@ -2407,6 +2603,7 @@ export default {
         return false;
       }
       if (
+        !(this.focusedPublicMode && this.timelineMode && this.videoReady(photo)) &&
         !canOpenAlbumMediaPreview({
           timelineMode: this.timelineMode,
           mediaType: photo?.media_type,
@@ -3482,12 +3679,19 @@ export default {
       this.previewInitialIndex = currentIndex;
       this.previewOverlayVisible = true;
       this.ensurePreviewMediaAround(currentIndex);
+      this.prepareSingleMediaShare(this.previewCurrentPhoto);
     },
     closePhotoPreview() {
+      if (this.focusedPublicMode) {
+        this.showFullPublicAlbum();
+        return;
+      }
       this.previewOverlayVisible = false;
       this.previewPhotos = [];
       this.previewCurrentIndex = 0;
       this.previewInitialIndex = 0;
+      this.previewVideoUrlRequests = {};
+      this.resetSingleMediaShareState();
       this.resetPreviewVideoViewerState();
       this.skipNextAlbumRefreshOnShow = false;
     },
@@ -3511,10 +3715,12 @@ export default {
       const index = Number(payload.index || 0);
       this.previewCurrentIndex = index;
       this.ensurePreviewMediaAround(index);
+      this.prepareSingleMediaShare(this.previewCurrentPhoto);
     },
     handlePreviewVideoRequest(event) {
       const payload = event?.detail || event || {};
-      if (!payload.photo || this.timelineMode || !this.isCurrentPreviewableAlbumMedia(payload.photo)) {
+      const focusedPublicVideo = this.timelineMode && this.focusedPublicMode && this.videoReady(payload.photo);
+      if (!payload.photo || (!focusedPublicVideo && (this.timelineMode || !this.isCurrentPreviewableAlbumMedia(payload.photo)))) {
         return;
       }
       if (payload.retry) {
@@ -3539,7 +3745,8 @@ export default {
     handlePreviewVideoError(event) {
       const payload = event?.detail || event || {};
       const photo = payload.photo;
-      if (!photo || this.timelineMode || !this.isCurrentPreviewableAlbumMedia(photo)) {
+      const focusedPublicVideo = this.timelineMode && this.focusedPublicMode && this.videoReady(photo);
+      if (!photo || (!focusedPublicVideo && (this.timelineMode || !this.isCurrentPreviewableAlbumMedia(photo)))) {
         return;
       }
       const key = String(photo.id);
@@ -3571,8 +3778,9 @@ export default {
       });
     },
     loadPreviewVideoUrl(photo, options = {}) {
+      const focusedPublicVideo = this.timelineMode && this.focusedPublicMode;
       if (
-        this.timelineMode ||
+        (!focusedPublicVideo && this.timelineMode) ||
         !photo ||
         photo.id === undefined ||
         photo.id === null ||
@@ -3582,6 +3790,29 @@ export default {
         return Promise.resolve("");
       }
       const key = String(photo.id);
+      const focusedPublicVideoRequest = focusedPublicVideo
+        ? createFocusedPublicVideoRequestContext({
+            albumShareToken: this.albumShareToken,
+            focusMediaId: this.focusMediaId,
+            mediaId: photo.id,
+            focusedPublicMode: this.focusedPublicMode,
+            previewOverlayVisible: this.previewOverlayVisible,
+            previewCurrentPhotoId: this.previewCurrentPhoto?.id
+          })
+        : null;
+      if (focusedPublicVideo && !focusedPublicVideoRequest) {
+        return Promise.resolve("");
+      }
+      const focusedPublicVideoRequestIsCurrent = () =>
+        !focusedPublicVideo ||
+        isFocusedPublicVideoRequestCurrent(focusedPublicVideoRequest, {
+          albumShareToken: this.albumShareToken,
+          focusMediaId: this.focusMediaId,
+          mediaId: photo.id,
+          focusedPublicMode: this.focusedPublicMode,
+          previewOverlayVisible: this.previewOverlayVisible,
+          previewCurrentPhotoId: this.previewCurrentPhoto?.id
+        });
       const cachedPhoto =
         this.photos.find((item) => String(item.id) === key) ||
         this.previewPhotos.find((item) => String(item.id) === key) ||
@@ -3606,9 +3837,14 @@ export default {
       this.updatePreviewPhotoDisplayMedia(photo.id, { video_load_failed: false });
       this.setVisiblePhotoMedia(photo.id, { videoFailed: false });
       const videoUrlEndpoint = `/api/session-album/media/${photo.id}/video-url`;
-      const loadRequest = request({ url: videoUrlEndpoint })
+      const playbackVideoUrlEndpoint = focusedPublicVideo
+        ? `/api/session-album/public-share/media/${photo.id}/video-url${queryString({
+            token: this.albumShareToken
+          })}`
+        : videoUrlEndpoint;
+      const loadRequest = request({ url: playbackVideoUrlEndpoint })
         .then((response) => {
-          if (!this.isCurrentPreviewableAlbumMedia(photo)) {
+          if (!this.isCurrentPreviewableAlbumMedia(photo) || !focusedPublicVideoRequestIsCurrent()) {
             return "";
           }
           const data = dataOf(response) || {};
@@ -3633,6 +3869,9 @@ export default {
           return videoUrl;
         })
         .catch(() => {
+          if (!focusedPublicVideoRequestIsCurrent()) {
+            return "";
+          }
           this.setVisiblePhotoMedia(photo.id, { videoFailed: true });
           this.updatePreviewPhotoDisplayMedia(photo.id, { video_load_failed: true });
           return "";

@@ -18,10 +18,10 @@
 - [ ] D50.2 先建立失败契约与纯函数红灯。
   - 2026-07-19：`node --check scripts/d50-album-single-media-sharing-check.js` 已通过。已运行 `npm run d50:check`，静态契约按预期红灯，首个失败为 service 缺少 `ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE`，并非规格或脚本语法错误。D50.2 仍待端侧单测和根 check wiring，保持未完成。
   - 2026-07-19：RED：`node --test apps/api/test/album-single-media-share.test.mjs` 退出码 1；selector 测试准确显示 `requiredMediaId` 尚未影响选择（要求图片 ID 1 实际首项为 35，required ready 视频 ID 100 未进入快照），并非语法或 fixture 加载失败。GREEN：同一命令退出码 0，8/8 通过，且执行了 focus-first 快照持久化/复用和 eligibility 后 409；在临时 worktree API 上运行 `SESSION_SECRET=local-development-session-secret-change-before-production BASE_URL=http://localhost:3028 node scripts/d48-album-sharing-role-claim-separation-smoke.js` 退出码 0，覆盖空 body 的 `focus_media_id: null`、numeric focus 回显与快照包含、以及 unavailable focus HTTP 409/error code；`node scripts/d23-album-share-join-policy-check.js`、修改 JS 的 `node --check` 和 `git diff --check` 均退出码 0。
-  - [ ] 新增 `scripts/d50-album-single-media-sharing-check.js`，锁定 spec、focus 请求/响应、错误码、公开 video 路由、viewer share 和 CTA。
+  - [x] 新增 `scripts/d50-album-single-media-sharing-check.js`，锁定 spec、focus 请求/响应、错误码、公开 video 路由、viewer share 和 CTA。
   - [ ] 将 D50 check、API/端侧单测语法检查纳入根 `check`。
   - [x] 扩展 D48 纯函数 smoke 或新增 D50 unit，覆盖 required image/video、30/3 上限、稳定次序和缺失目标。
-  - [ ] 新增 `apps/miniprogram/test/albumSingleMediaShare.test.mjs`，覆盖 ID、乱序 cache、dataset entry、路径和 focused DTO 查找。
+  - [x] 新增 `apps/miniprogram/test/albumSingleMediaShare.test.mjs`，覆盖 ID、乱序 cache、dataset entry、路径和 focused DTO 查找。
   - [x] 运行新增检查，确认因实现缺失准确失败，而不是测试语法或 fixture 错误。
   - 2026-07-19：`npm run d50:check` 已再次运行；公开 video-url/video-file 服务端文字契约已满足，首个剩余失败为尚未实施的端侧 `source === "single_media_share"`，因此 D50.2 静态契约总检仍保持未完成。
 
@@ -54,20 +54,21 @@
   - [x] 运行端侧 unit 并确认红绿循环。
   - 2026-07-19：RED：`node --test apps/miniprogram/test/albumSingleMediaShare.test.mjs` 退出码 1，准确报 `albumSingleMediaShare.js` 缺失（`ERR_MODULE_NOT_FOUND`）；审查补充 pure-state 契约后同一命令再次按预期报缺少 `beginSingleMediaShareRequest` 与 `resetSingleMediaShareState` export，并在 reset 竞态回归中准确显示 serial 重复。GREEN：同一命令退出码 0，10/10 通过，覆盖正安全整数 ID、不可变 pure state、按媒体 ID 的乱序/同 ID stale resolve/reject、authority/pure reset 后 serial 单调、dataset 精确缓存查找、冻结的安全错误字段、无回退 focused DTO 查找和编码路径。`node --check apps/miniprogram/test/albumSingleMediaShare.test.mjs`、`node --check apps/miniprogram/src/utils/albumSingleMediaShare.js` 与 `git diff --check` 均退出码 0。
 
-- [ ] D50.6 实现成员预览器当前项分享。
-  - [ ] `AlbumImageViewer` 增加 share status、原生 share button、提示事件，不持有 API/token。
-  - [ ] album page 在 open/change 时按媒体 ID准备 focus snapshot 与安全卡片封面。
-  - [ ] `onShareAppMessage` 按 button dataset 精确读取 cache；页面菜单整册分享保持原状。
-  - [ ] blocked/failed/loading 状态不回退旧 token或其他媒体。
-  - [ ] 运行 viewer sequence、mini-program 静态和构建定向检查。
+- [x] D50.6 实现成员预览器当前项分享。
+  - [x] `AlbumImageViewer` 增加 share status、原生 share button、提示事件，不持有 API/token。
+  - [x] album page 在 open/change 时按媒体 ID准备 focus snapshot 与安全卡片封面。
+  - [x] `onShareAppMessage` 按 button dataset 精确读取 cache；页面菜单整册分享保持原状。
+  - [x] blocked/failed/loading 状态不回退旧 token或其他媒体。
+  - [x] 运行 viewer sequence、mini-program 静态和构建定向检查。
 
-- [ ] D50.7 实现公开单项模式与“查看完整相册”。
-  - [ ] onLoad 解析 `source=single_media_share` 与正整数 focus ID。
-  - [ ] 公共列表加载后只把目标单项传入 viewer，隐藏 counter/download/member actions。
-  - [ ] 目标不存在显示“该内容已不可查看”，不自动选择其他媒体。
-  - [ ] CTA 退出单项模式并展示已加载同一公开快照；整份 token 失效时不显示 CTA。
-  - [ ] ready 视频调用 public video-url，并复用一次刷新/重试状态机。
-  - [ ] 运行图片、视频、invalid focus、CTA 和竞态定向测试。
+- [x] D50.7 实现公开单项模式与“查看完整相册”。
+  - [x] onLoad 解析 `source=single_media_share` 与正整数 focus ID。
+  - [x] 公共列表加载后只把目标单项传入 viewer，隐藏 counter/download/member actions。
+  - [x] 目标不存在显示“该内容已不可查看”，不自动选择其他媒体。
+  - [x] CTA 退出单项模式并展示已加载同一公开快照；整份 token 失效时不显示 CTA。
+  - [x] ready 视频调用 public video-url，并复用一次刷新/重试状态机。
+  - [x] 运行图片、视频、invalid focus、CTA 和竞态定向测试。
+  - 2026-07-19：RED：扩展 `npm run d50:check` 后退出码 1，首个失败为 album page 尚未包含 `source === "single_media_share"`；审查补充 helper 契约后 `node --test apps/miniprogram/test/albumSingleMediaShare.test.mjs` 也按预期因缺少 focused public route/video guard export 退出码 1；button cache reset 的 fail-closed helper export 和 focused CTA 安全区/视频控件静态契约同样先按预期红灯。GREEN：`npm run d50:check` 与 helper 单测 15/15 均退出码 0，锁定 ID-bound request/response、button dataset cache reset 的 credential-free fail-closed payload、tokenless fail-closed public route、单项 snapshot projection、同媒体安全卡图 fallback、CTA 无请求/认证及安全区视频控件留白、native share、公开视频路由和晚到视频结果 guard。`node scripts/d31-album-viewer-sequence-check.js`、`node scripts/check-miniprogram.js`、`npm run d42:mini`、`node scripts/d32-admin-album-video-check.js` 与 `npm run build:mp-weixin` 均退出码 0；两个 Sass deprecation warning 为既有构建告警，未新增错误。本记录仅覆盖 helper/static integration 契约与构建回归；微信开发者工具真机/手工路径仍留在 D50.8。
 
 - [ ] D50.8 完成专项、全量和微信开发者工具验收。
   - [ ] 运行 D50 check 与新增 unit/API 测试。

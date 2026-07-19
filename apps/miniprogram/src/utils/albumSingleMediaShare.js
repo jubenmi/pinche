@@ -1,4 +1,5 @@
 const SHARE_ENTRY_STATUSES = new Set(["loading", "ready", "blocked", "failed"]);
+export const SINGLE_MEDIA_SHARE_SAFE_CARD_IMAGE = "/static/art/ticket-landscape.jpg";
 
 function normalizedPositiveSafeInteger(value) {
   if (typeof value === "number") {
@@ -124,6 +125,84 @@ export function focusedPublicMedia(photos = [], focusMediaId) {
   return photos.find(
     (photo) => normalizeFocusedMediaId(photo?.id) === normalizedFocusMediaId
   ) || null;
+}
+
+export function singleMediaShareRouteState(options = {}) {
+  const source = typeof options?.source === "string" ? options.source : "";
+  const token = String(options?.albumShareToken || options?.token || "").trim();
+  const focusMediaId = normalizeFocusedMediaId(options?.focusMediaId);
+  const singleMediaShareRequested = source === "single_media_share";
+  const focusedPublicMode = Boolean(singleMediaShareRequested && token && focusMediaId);
+  return Object.freeze({
+    token,
+    focusMediaId,
+    singleMediaShareRequested,
+    timelineMode: source === "wechat_timeline" || singleMediaShareRequested || Boolean(token),
+    focusedPublicMode,
+    focusedPublicMediaUnavailable: Boolean(singleMediaShareRequested && !focusedPublicMode)
+  });
+}
+
+export function focusedPublicSnapshotProjection(photos = [], focusMediaId) {
+  const photo = focusedPublicMedia(photos, focusMediaId);
+  return Object.freeze({
+    photo,
+    photos: photo ? Object.freeze([photo]) : Object.freeze([]),
+    unavailable: !photo
+  });
+}
+
+export function singleMediaShareCardImage(value, fallback = SINGLE_MEDIA_SHARE_SAFE_CARD_IMAGE) {
+  const image = typeof value === "string" ? value.trim() : "";
+  return image || fallback;
+}
+
+export function singleMediaShareFailClosedPayload() {
+  return Object.freeze({
+    title: "该内容暂不可分享",
+    path: "/pages/session/album?source=single_media_share",
+    imageUrl: SINGLE_MEDIA_SHARE_SAFE_CARD_IMAGE
+  });
+}
+
+export function createFocusedPublicVideoRequestContext(state = {}) {
+  const albumShareToken = typeof state?.albumShareToken === "string"
+    ? state.albumShareToken.trim()
+    : "";
+  const focusMediaId = normalizeFocusedMediaId(state?.focusMediaId);
+  const mediaId = normalizeFocusedMediaId(state?.mediaId);
+  const previewCurrentPhotoId = normalizeFocusedMediaId(state?.previewCurrentPhotoId);
+  if (
+    !albumShareToken ||
+    !focusMediaId ||
+    !mediaId ||
+    focusMediaId !== mediaId ||
+    previewCurrentPhotoId !== mediaId ||
+    !state?.focusedPublicMode ||
+    !state?.previewOverlayVisible
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    albumShareToken,
+    focusMediaId,
+    mediaId,
+    focusedPublicMode: true,
+    previewOverlayVisible: true,
+    previewCurrentPhotoId
+  });
+}
+
+export function isFocusedPublicVideoRequestCurrent(context, state = {}) {
+  if (!context) return false;
+  const current = createFocusedPublicVideoRequestContext(state);
+  return Boolean(
+    current &&
+      current.albumShareToken === context.albumShareToken &&
+      current.focusMediaId === context.focusMediaId &&
+      current.mediaId === context.mediaId &&
+      current.previewCurrentPhotoId === context.previewCurrentPhotoId
+  );
 }
 
 export function createSingleMediaShareAuthority() {

@@ -3,15 +3,21 @@ import test from "node:test";
 
 import {
   beginSingleMediaShareRequest,
+  createFocusedPublicVideoRequestContext,
   createSingleMediaShareAuthority,
   createSingleMediaShareState,
   focusedPublicMedia,
+  focusedPublicSnapshotProjection,
+  isFocusedPublicVideoRequestCurrent,
   normalizeFocusedMediaId,
   rejectSingleMediaShareRequest,
   resetSingleMediaShareState,
   resolveSingleMediaShareRequest,
+  singleMediaShareCardImage,
   singleMediaShareEntryFor,
-  singleMediaSharePath
+  singleMediaShareFailClosedPayload,
+  singleMediaSharePath,
+  singleMediaShareRouteState
 } from "../src/utils/albumSingleMediaShare.js";
 
 test("normalizes only positive safe integer media IDs", () => {
@@ -31,6 +37,102 @@ test("finds only the exact normalized focused public media ID", () => {
   assert.equal(focusedPublicMedia(photos, 13), null);
   assert.equal(focusedPublicMedia(photos, "not-an-id"), null);
   assert.equal(focusedPublicMedia({ 0: photos[0], length: 1 }, 11), null);
+});
+
+test("routes every single-media source through the public path and fails closed without token or focus", () => {
+  assert.deepEqual(
+    singleMediaShareRouteState({
+      source: "single_media_share",
+      albumShareToken: "snapshot-token",
+      focusMediaId: "12"
+    }),
+    {
+      token: "snapshot-token",
+      focusMediaId: 12,
+      singleMediaShareRequested: true,
+      timelineMode: true,
+      focusedPublicMode: true,
+      focusedPublicMediaUnavailable: false
+    }
+  );
+  for (const options of [
+    { source: "single_media_share", focusMediaId: 12 },
+    { source: "single_media_share", albumShareToken: "snapshot-token", focusMediaId: "invalid" }
+  ]) {
+    const route = singleMediaShareRouteState(options);
+    assert.equal(route.timelineMode, true);
+    assert.equal(route.focusedPublicMode, false);
+    assert.equal(route.focusedPublicMediaUnavailable, true);
+  }
+});
+
+test("projects valid image or ready video snapshots to one exact focused item without fallback", () => {
+  const photos = [
+    { id: 11, media_type: "image", label: "image" },
+    { id: 12, media_type: "video", processing_status: "ready", label: "ready video" }
+  ];
+  assert.deepEqual(focusedPublicSnapshotProjection(photos, 11), {
+    photo: photos[0],
+    photos: [photos[0]],
+    unavailable: false
+  });
+  assert.deepEqual(focusedPublicSnapshotProjection(photos, 12), {
+    photo: photos[1],
+    photos: [photos[1]],
+    unavailable: false
+  });
+  assert.deepEqual(focusedPublicSnapshotProjection(photos, 99), {
+    photo: null,
+    photos: [],
+    unavailable: true
+  });
+});
+
+test("uses only the same-media share image and a safe explicit fallback", () => {
+  assert.equal(singleMediaShareCardImage("wxfile://focused-cover.jpg"), "wxfile://focused-cover.jpg");
+  assert.equal(singleMediaShareCardImage(""), "/static/art/ticket-landscape.jpg");
+  assert.equal(singleMediaShareCardImage(null), "/static/art/ticket-landscape.jpg");
+});
+
+test("returns a credential-free fail-closed payload after a button-cache reset or invalid dataset", () => {
+  const authority = createSingleMediaShareAuthority();
+  authority.begin(12);
+  authority.reset();
+  assert.equal(authority.entryFor("not-an-id"), null);
+  assert.deepEqual(
+    singleMediaShareFailClosedPayload({
+      sessionId: 42,
+      mediaId: "not-an-id",
+      token: "must-not-leak"
+    }),
+    {
+      title: "该内容暂不可分享",
+      path: "/pages/session/album?source=single_media_share",
+      imageUrl: "/static/art/ticket-landscape.jpg"
+    }
+  );
+});
+
+test("rejects late public video results after focused context deactivates or changes", () => {
+  const context = createFocusedPublicVideoRequestContext({
+    albumShareToken: "snapshot-token",
+    focusMediaId: "12",
+    mediaId: 12,
+    focusedPublicMode: true,
+    previewOverlayVisible: true,
+    previewCurrentPhotoId: "12"
+  });
+  assert.ok(context);
+  assert.equal(isFocusedPublicVideoRequestCurrent(context, { ...context }), true);
+  for (const changedState of [
+    { ...context, albumShareToken: "different-token" },
+    { ...context, focusMediaId: 13 },
+    { ...context, previewCurrentPhotoId: 11 },
+    { ...context, focusedPublicMode: false },
+    { ...context, previewOverlayVisible: false }
+  ]) {
+    assert.equal(isFocusedPublicVideoRequestCurrent(context, changedState), false);
+  }
 });
 
 test("pure state helpers replace entries without mutating prior snapshots", () => {

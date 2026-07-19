@@ -15,6 +15,28 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function methodBlock(source, name, nextName) {
+  const findMethodStart = (methodName, fromIndex = 0) => {
+    const expression = new RegExp(`^\\s{2,}(?:async\\s+)?${methodName}\\(`, "m");
+    const match = source.slice(fromIndex).match(expression);
+    return match?.index === undefined ? -1 : fromIndex + match.index;
+  };
+  const start = findMethodStart(name);
+  assert(start >= 0, `D50 source method is missing: ${name}`);
+  const end = nextName ? findMethodStart(nextName, start + name.length) : -1;
+  assert(end > start, `D50 source method boundary is missing after: ${name}`);
+  return source.slice(start, end);
+}
+
+function assertOrdered(source, tokens, label) {
+  let cursor = -1;
+  for (const token of tokens) {
+    const index = source.indexOf(token, cursor + 1);
+    assert(index >= 0, `${label} is missing or out of order: ${token}`);
+    cursor = index;
+  }
+}
+
 const requirements = read("specs/d50-album-single-media-sharing/requirements.md");
 const design = read("specs/d50-album-single-media-sharing/design.md");
 const tasks = read("specs/d50-album-single-media-sharing/tasks.md");
@@ -56,19 +78,193 @@ for (const token of [
 }
 
 const albumPage = read("apps/miniprogram/src/pages/session/album.vue");
+const shareHelper = read("apps/miniprogram/src/utils/albumSingleMediaShare.js");
+for (const helperName of [
+  "singleMediaShareRouteState",
+  "focusedPublicSnapshotProjection",
+  "singleMediaShareCardImage",
+  "createFocusedPublicVideoRequestContext",
+  "isFocusedPublicVideoRequestCurrent"
+]) {
+  assert(shareHelper.includes(`export function ${helperName}`), `D50 helper must export: ${helperName}`);
+}
 assert(
-  albumPage.includes('source === "single_media_share"'),
-  'D50 album page must enable focused public mode only for source === "single_media_share"'
+  shareHelper.includes('source === "single_media_share"'),
+  'D50 route helper must enable focused public mode only for source === "single_media_share"'
 );
 assert(
-  albumPage.includes('primary-action-label="查看完整相册"'),
+  albumPage.includes("focusedPublicMode ? '查看完整相册' : ''"),
   "D50 album page must pass the focused-mode 查看完整相册 primary action"
+);
+
+const senderPreparation = methodBlock(albumPage, "prepareSingleMediaShare", "handleSingleMediaShareStatusTap");
+assertOrdered(
+  senderPreparation,
+  [
+    "const mediaId = normalizeFocusedMediaId(photo?.id);",
+    "const cachedEntry = this.singleMediaShareAuthority.entryFor(mediaId);",
+    "const shareRequest = this.singleMediaShareAuthority.begin(mediaId);",
+    "url: `/api/sessions/${this.sessionId}/album/share-token`,",
+    'method: "POST",',
+    "data: { focusMediaId: mediaId }",
+    "normalizeFocusedMediaId(data.focus_media_id) !== mediaId",
+    "singleMediaSharePath({",
+    "this.singleMediaShareAuthority.resolve(shareRequest,",
+    "this.singleMediaShareAuthority.reject(shareRequest, error)"
+  ],
+  "D50 sender must request and resolve an exact focused-media snapshot"
+);
+assert(
+  senderPreparation.includes("!this.isSingleMediaShareEligible(photo)"),
+  "D50 sender must fail closed before requesting an ineligible media item"
+);
+
+const shareCallback = methodBlock(albumPage, "onShareAppMessage", "onShareTimeline");
+assertOrdered(
+  shareCallback,
+  [
+    'options?.from === "button"',
+    "options?.target?.dataset?.mediaId",
+    "this.singleMediaShareAuthority.entryFor(mediaId)",
+    'entry?.status === "ready"',
+    "entry.path",
+    "entry.imageUrl"
+  ],
+  "D50 native button share must read the exact dataset cache entry"
+);
+assert(
+  !shareCallback.includes("previewCurrentIndex"),
+  "D50 native button share must not derive its entry from the live preview index"
+);
+assert(
+  shareCallback.includes("return singleMediaShareFailClosedPayload();"),
+  "D50 stale or invalid button datasets must return a credential-free fail-closed payload"
+);
+const buttonShareCallback = shareCallback.slice(0, shareCallback.indexOf("if (!this.albumShareToken)"));
+assert(
+  !buttonShareCallback.includes("return {}") && !buttonShareCallback.includes("albumShareToken"),
+  "D50 invalid button sharing must not fall back to page sharing or expose a snapshot token"
+);
+
+const publicLoad = methodBlock(albumPage, "loadPublicAlbum", "normalizeAlbumMediaUrl");
+assertOrdered(
+  publicLoad,
+  [
+    "this.singleMediaShareRequested",
+    "this.publicAlbumSnapshotLoaded = false;",
+    "this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));",
+    "const focusedSnapshot = focusedPublicSnapshotProjection(this.photos, this.focusMediaId);",
+    "this.previewPhotos = focusedSnapshot.photos.map((photo) => this.viewerPhotoWithCachedMedia(photo));",
+    "this.previewCurrentIndex = 0;",
+    "this.previewInitialIndex = 0;",
+    "this.previewOverlayVisible = true;"
+  ],
+  "D50 focused public mode must commit the snapshot then open exactly the focused item"
+);
+assert(
+  publicLoad.includes("this.focusedPublicMediaUnavailable = this.singleMediaShareRequested;") &&
+    publicLoad.includes('? "该内容已不可查看"'),
+  "D50 tokenless focused routes must close without loading a public or member snapshot"
+);
+const onLoad = methodBlock(albumPage, "onLoad", "onShow");
+assertOrdered(
+  onLoad,
+  [
+    "const routeState = singleMediaShareRouteState(options);",
+    "this.timelineMode = routeState.timelineMode;",
+    "if (this.timelineMode)",
+    "await this.loadPublicAlbum();",
+    "return;",
+    "ensureLoggedIn"
+  ],
+  "D50 tokenless single-media routes must stay public and never enter member authentication"
+);
+assert(
+  publicLoad.includes('this.statusText = "该内容已不可查看";') &&
+    publicLoad.includes("this.focusedPublicMediaUnavailable = true;"),
+  "D50 missing focused media must close without selecting another snapshot item"
+);
+assert(
+  albumPage.includes('v-else-if="!focusedPublicMediaUnavailable"') &&
+    albumPage.includes('v-if="focusedPublicMediaUnavailable && publicAlbumSnapshotLoaded"'),
+  "D50 unavailable focus must hide the snapshot waterfall until the explicit full-album CTA"
+);
+const closePreview = methodBlock(albumPage, "closePhotoPreview", "resetPreviewVideoViewerState");
+assertOrdered(
+  closePreview,
+  ["if (this.focusedPublicMode)", "this.showFullPublicAlbum();", "return;"],
+  "D50 focused viewer close must explicitly reveal the already-loaded full snapshot"
+);
+const showFullAlbum = methodBlock(albumPage, "showFullPublicAlbum", "albumTimelineQuery");
+assert(
+  !showFullAlbum.includes("request(") && !showFullAlbum.includes("ensureLoggedIn"),
+  "D50 full-album CTA must reveal the loaded snapshot without request or authentication"
+);
+assertOrdered(
+  showFullAlbum,
+  ["this.focusedPublicMode = false;", "this.previewVideoUrlRequests = {};", "this.refreshWaterfall();"],
+  "D50 full-album CTA must deactivate focused state and clear the video request projection"
+);
+
+const shareCardPreparation = methodBlock(albumPage, "prepareSingleMediaShareCardImage", "prepareSingleMediaShare");
+assert(
+  shareCardPreparation.includes("singleMediaShareCardImage(await this.prepareShareCoverUrl(source))"),
+  "D50 share cards must use the same-media image or the explicit safe fallback"
+);
+
+const publicVideo = methodBlock(albumPage, "loadPreviewVideoUrl", "handlePreviewDownload");
+assertOrdered(
+  publicVideo,
+  [
+    "this.focusedPublicMode",
+    "createFocusedPublicVideoRequestContext({",
+    "isFocusedPublicVideoRequestCurrent(focusedPublicVideoRequest",
+    "/api/session-album/public-share/media/${photo.id}/video-url",
+    "token: this.albumShareToken",
+    "!focusedPublicVideoRequestIsCurrent()"
+  ],
+  "D50 focused public video must use the public capability endpoint and same token"
 );
 
 const viewer = read("apps/miniprogram/src/components/AlbumImageViewer.vue");
 assert(
   viewer.includes('open-type="share"'),
   "D50 album viewer must render a native open-type=share button"
+);
+assertOrdered(
+  viewer,
+  [
+    "shareStatus:",
+    'default: "hidden"',
+    "showCounter:",
+    "primaryActionLabel:"
+  ],
+  "D50 viewer must expose presentational share and focused-mode props"
+);
+assertOrdered(
+  viewer,
+  [
+    'v-if="showCounter"',
+    'v-if="shareStatus === \'ready\' && currentPhoto"',
+    'open-type="share"',
+    ':data-media-id="currentPhoto.id"',
+    'v-else-if="shareStatus !== \'hidden\' && currentPhoto"',
+    'share-status-tap',
+    'v-if="primaryActionLabel"',
+    'primary-action'
+  ],
+  "D50 viewer must keep native sharing exclusive to an exact ready item and emit non-native status/CTA events"
+);
+assert(
+  !viewer.includes("share-token") && !viewer.includes("albumShareToken"),
+  "D50 viewer must remain presentational and must not own share tokens"
+);
+assert(
+  viewer.includes(`:class="{ 'album-image-viewer__slide--with-primary-action': primaryActionLabel }"`) &&
+    viewer.includes(".album-image-viewer__slide--with-primary-action .album-image-viewer__video-shell") &&
+    viewer.includes("z-index: 8;") &&
+    viewer.includes("bottom: calc(24rpx + env(safe-area-inset-bottom));"),
+  "D50 focused CTA must reserve video controls space and layer above the viewer using safe-area spacing"
 );
 
 console.log("D50 album single-media sharing checks passed");

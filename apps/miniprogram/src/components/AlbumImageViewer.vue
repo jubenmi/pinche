@@ -22,7 +22,10 @@
         :key="photoKey(photo, logicalIndexForWindowIndex(windowIndex))"
         class="album-image-viewer__item"
       >
-        <view class="album-image-viewer__slide">
+        <view
+          class="album-image-viewer__slide"
+          :class="{ 'album-image-viewer__slide--with-primary-action': primaryActionLabel }"
+        >
           <image
             v-if="isImage(photo) && thumbnailUrl(photo) && !thumbnailFailed(photo)"
             class="album-image-viewer__image album-image-viewer__image--thumbnail"
@@ -91,8 +94,27 @@
     </swiper>
 
     <view class="album-image-viewer__topbar">
-      <view class="album-image-viewer__counter">{{ counterText }}</view>
+      <view v-if="showCounter" class="album-image-viewer__counter">{{ counterText }}</view>
       <view class="album-image-viewer__actions">
+        <button
+          v-if="shareStatus === 'ready' && currentPhoto"
+          class="album-image-viewer__icon-button album-image-viewer__share-button"
+          open-type="share"
+          :data-media-id="currentPhoto.id"
+          aria-label="分享"
+          @tap.stop
+        >
+          分享
+        </button>
+        <view
+          v-else-if="shareStatus !== 'hidden' && currentPhoto"
+          class="album-image-viewer__icon-button"
+          aria-role="button"
+          aria-label="分享状态"
+          @tap.stop="$emit('share-status-tap', { mediaId: currentPhoto.id, status: shareStatus })"
+        >
+          {{ shareStatus === "loading" ? "准备中" : shareStatus === "blocked" ? "不可分享" : "重试分享" }}
+        </view>
         <view
           v-if="allowDownload"
           class="album-image-viewer__icon-button"
@@ -111,6 +133,15 @@
           ×
         </view>
       </view>
+    </view>
+    <view
+      v-if="primaryActionLabel"
+      class="album-image-viewer__primary-action"
+      aria-role="button"
+      :aria-label="primaryActionLabel"
+      @tap.stop="$emit('primary-action', { photo: currentPhoto })"
+    >
+      {{ primaryActionLabel }}
     </view>
   </view>
 </template>
@@ -135,6 +166,18 @@ export default {
     allowDownload: {
       type: Boolean,
       default: false
+    },
+    shareStatus: {
+      type: String,
+      default: "hidden"
+    },
+    showCounter: {
+      type: Boolean,
+      default: true
+    },
+    primaryActionLabel: {
+      type: String,
+      default: ""
     },
     mediaProgress: {
       type: Object,
@@ -722,6 +765,11 @@ export default {
   background: #050505;
 }
 
+.album-image-viewer__slide--with-primary-action .album-image-viewer__video-shell {
+  inset: 0 0 calc(174rpx + env(safe-area-inset-bottom));
+  height: auto;
+}
+
 .album-image-viewer__video-poster {
   opacity: 0.76;
   filter: brightness(0.78);
@@ -869,6 +917,40 @@ export default {
 .album-image-viewer__icon-button.close {
   font-size: 42rpx;
   font-weight: 500;
+}
+
+.album-image-viewer__share-button {
+  min-width: 88rpx;
+  width: auto;
+  margin: 0;
+  padding: 0 14rpx;
+  border: 0;
+  border-radius: 30rpx;
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  font-size: 23rpx;
+  line-height: 58rpx;
+}
+
+.album-image-viewer__share-button::after {
+  border: 0;
+}
+
+.album-image-viewer__primary-action {
+  position: absolute;
+  right: 32rpx;
+  bottom: calc(24rpx + env(safe-area-inset-bottom));
+  left: 32rpx;
+  z-index: 8;
+  min-height: 88rpx;
+  padding: 22rpx 28rpx;
+  border-radius: 999rpx;
+  background: #ffffff;
+  color: #153f34;
+  font-size: 28rpx;
+  font-weight: 700;
+  text-align: center;
+  box-sizing: border-box;
 }
 
 @keyframes album-viewer-spin {

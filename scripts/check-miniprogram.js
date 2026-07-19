@@ -256,7 +256,15 @@ function isAllowedNativeAvatarPrimitiveTag(tag, tagSource) {
     );
   }
   if (tag === "button") {
-    return /profile-avatar-button/.test(className) || /auth-profile-trigger/.test(className);
+    return (
+      /profile-avatar-button/.test(className) ||
+      /auth-profile-trigger/.test(className) ||
+      (
+        /album-image-viewer__share-button/.test(className) &&
+        /\bopen-type\s*=\s*["']share["']/.test(tagSource) &&
+        /\bdata-media-id\s*=/.test(tagSource)
+      )
+    );
   }
   if (tag === "input") {
     return /\bprofile-nickname-input\b/.test(className) && /\btype\s*=\s*["']nickname["']/.test(tagSource);
