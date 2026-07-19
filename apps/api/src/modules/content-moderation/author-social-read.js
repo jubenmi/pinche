@@ -12,7 +12,12 @@ export function mergeAuthorReviewState(state, projection) {
       content: projection.content.content,
       photos: Array.isArray(projection.content.photoUrls)
         ? [...projection.content.photoUrls]
-        : [],
+        : Array.isArray(review.photos) ? [...review.photos] : [],
+      ...(Array.isArray(projection.content.albumPhotoIds)
+        ? { album_photo_ids: [...projection.content.albumPhotoIds] }
+        : Array.isArray(review.album_photo_ids)
+          ? { album_photo_ids: [...review.album_photo_ids] }
+          : {}),
       author_private: projection
     }
   };

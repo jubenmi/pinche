@@ -83,6 +83,11 @@ test("D46 explicitly projects the ten text actions with correct draft and publis
     }, 12, {
       rating: 5, content: "体验很好", photoUrls: ["/uploads/session-reviews/a.jpg"]
     }],
+    ["upsert_session_review", "12", {
+      rating: 4, content: "相册照片", albumPhotoIds: [31, 32], ...sensitive
+    }, 12, {
+      rating: 4, content: "相册照片", albumPhotoIds: [31, 32]
+    }],
     ["create_session_message", "12", {
       content: "大家晚点到", ...sensitive
     }, null, {

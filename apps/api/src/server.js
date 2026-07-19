@@ -99,6 +99,8 @@ import {
   getSessionShareStats,
   getMySessionAlbumPrivacy,
   getMySessionReview,
+  getPublicSessionReview,
+  getSessionReviewAlbumPhoto,
   getAuthorAlbumImagePreview,
   getAuthorAlbumVideoPreview,
   getVisibleSessionAlbumPhotoForMedia,
@@ -5948,6 +5950,30 @@ async function route(request, response) {
     jsonResponse(response, 200, {
       ok: true,
       data: access.access_scope === "member" ? await listSessionReviews(sessionReviewsId) : []
+    });
+    return;
+  }
+
+  const publicSessionReviewPhotoMatch = url.pathname.match(
+    /^\/api\/session-reviews\/(\d+)\/photos\/(\d+)\/image$/
+  );
+  if (request.method === "GET" && publicSessionReviewPhotoMatch) {
+    const photo = await getSessionReviewAlbumPhoto(
+      Number(publicSessionReviewPhotoMatch[1]),
+      Number(publicSessionReviewPhotoMatch[2])
+    );
+    await serveUploadedSessionAlbumPhoto(photo, response, { variant: "preview" });
+    return;
+  }
+
+  const publicSessionReviewId = idMatch(
+    url.pathname,
+    /^\/api\/session-reviews\/(\d+)$/
+  );
+  if (request.method === "GET" && publicSessionReviewId) {
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await getPublicSessionReview(publicSessionReviewId)
     });
     return;
   }

@@ -3,6 +3,7 @@ import {
   normalizePrivateRoleTemplate
 } from "../core/npc-role-normalization.js";
 import { badRequest } from "../../http/errors.js";
+import { normalizeSessionReviewAlbumPhotoIds } from "../core/session-review.js";
 
 const PHONE_NUMBER = /(?:\+?86[\s-]?)?1[3-9]\d(?:[\s-]?\d){8}/g;
 const MAX_SESSION_REVIEW_PHOTOS = 9;
@@ -396,13 +397,19 @@ function canonicalBody(action, body) {
       const rating = integerValue(body.rating);
       if (rating < 1 || rating > 5) throw badRequest("rating must be between 1 and 5");
       const content = body.content === undefined || body.content === null ? null : String(body.content);
-      if (content && content.length > 500) throw badRequest("content must be 500 characters or fewer");
+      if (content && content.length > 900) throw badRequest("content must be 900 characters or fewer");
       assertPublicTextSafe("content", content);
       pickDefined(result, body, ["rating", "content"]);
       result.rating = rating;
       if (body.content !== undefined) result.content = content;
       if (body.photoUrls !== undefined) {
         result.photoUrls = canonicalReviewPhotoUrls(body.photoUrls);
+      }
+      if (body.albumPhotoIds !== undefined) {
+        result.albumPhotoIds = normalizeSessionReviewAlbumPhotoIds(body.albumPhotoIds);
+      }
+      if (body.photoUrls !== undefined && body.albumPhotoIds !== undefined) {
+        throw badRequest("albumPhotoIds and photoUrls cannot be submitted together");
       }
       return result;
     }
