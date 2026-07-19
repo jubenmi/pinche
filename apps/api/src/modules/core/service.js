@@ -2028,6 +2028,7 @@ function tagsByPhotoId(rows = []) {
         ? Number(row.session_npc_role_id)
         : null,
       user_id: row.user_id ? Number(row.user_id) : null,
+      seat_user_id: row.seat_user_id ? Number(row.seat_user_id) : null,
       label: row.label
     });
     map.set(photoId, list);
@@ -2042,10 +2043,11 @@ async function albumTagsForPhotos(connection, photoIds) {
   const placeholders = photoIds.map(() => "?").join(", ");
   const [rows] = await connection.query(
     `
-      SELECT *
-      FROM session_album_photo_tags
-      WHERE photo_id IN (${placeholders})
-      ORDER BY photo_id, sort_order, id
+      SELECT tag.*, seat.confirmed_user_id AS seat_user_id
+      FROM session_album_photo_tags tag
+      LEFT JOIN session_seats seat ON seat.id = tag.seat_id
+      WHERE tag.photo_id IN (${placeholders})
+      ORDER BY tag.photo_id, tag.sort_order, tag.id
     `,
     photoIds
   );
@@ -2151,34 +2153,49 @@ async function requirePublicAlbumShareSeat(connection, claims) {
   return { ...normalized, seat };
 }
 
-function isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, claims) {
+export function isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, claims) {
   const { sessionId, sharerUserId, seatId } = normalizeAlbumShareClaims(claims);
-  if (Number(photo.session_id) !== sessionId || tags.length === 0) {
+  if (
+    Number(photo.session_id) !== sessionId ||
+    photo.status !== "active" ||
+    !isModerationPublished(photo.moderation_status) ||
+    !Array.isArray(tags) ||
+    tags.length === 0
+  ) {
+    return false;
+  }
+  if (
+    albumMediaType(photo) === "video" &&
+    albumMediaProcessingStatus(photo) !== "ready"
+  ) {
     return false;
   }
 
   const hasSharerSeatTag = tags.some(
     (tag) => tag.tag_type === "seat" && Number(tag.seat_id) === seatId
   );
-  if (!hasSharerSeatTag) {
+  const uploaderUserId = Number(photo.uploader_user_id || 0);
+  if (!uploaderUserId || (!hasSharerSeatTag && uploaderUserId !== sharerUserId)) {
     return false;
   }
 
-  const uploaderUserId = Number(photo.uploader_user_id);
-  if (uploaderUserId && uploaderUserId !== sharerUserId) {
-    const uploaderPrivacy = privacyByUser.get(uploaderUserId) || albumPrivacy();
-    if (!uploaderPrivacy.allow_uploaded_visible) {
-      return false;
-    }
+  const uploaderPrivacy = privacyByUser.get(uploaderUserId) || albumPrivacy();
+  if (!uploaderPrivacy.allow_uploaded_visible) {
+    return false;
   }
 
-  const taggedUserIds = [
-    ...new Set(tags.map((tag) => Number(tag.user_id || 0)).filter(Boolean))
-  ];
-  for (const taggedUserId of taggedUserIds) {
-    if (taggedUserId === sharerUserId) {
-      continue;
+  const taggedUserIds = new Set();
+  for (const tag of tags) {
+    const taggedUserId = Number(tag.user_id || 0);
+    const seatUserId = tag.tag_type === "seat"
+      ? Number(tag.seat_user_id || 0)
+      : 0;
+    if (seatUserId && (!taggedUserId || taggedUserId !== seatUserId)) {
+      return false;
     }
+    if (taggedUserId) taggedUserIds.add(taggedUserId);
+  }
+  for (const taggedUserId of taggedUserIds) {
     const taggedPrivacy = privacyByUser.get(taggedUserId) || albumPrivacy();
     if (!taggedPrivacy.allow_tagged_visible) {
       return false;

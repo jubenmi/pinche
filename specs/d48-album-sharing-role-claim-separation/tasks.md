@@ -14,23 +14,24 @@
   - [x] `tasks.md` 建立 Kiro 风格 TDD 执行与验收清单。
   - [x] 确认本期不新增相册页面、认领状态机、AI 选图、人物识别或服务端封面文字排版。
 
-- [ ] D48.2 先建立失败契约和快照迁移。
-  - [ ] 新增 `scripts/d48-album-sharing-role-claim-separation-check.js`，断言 D48 spec、迁移、服务函数、v2 claims、好友公开相册路径、安全封面和邀请菜单契约存在。
-  - [ ] 更新 `package.json`，把 D48 静态检查和 smoke 语法检查加入根 `check`，不得删除 D18/D23/D40/D45/D46 回归。
-  - [ ] 运行 `node scripts/d48-album-sharing-role-claim-separation-check.js`，确认先因缺少迁移与实现失败，而不是脚本语法错误。
-  - [ ] 新增 `apps/api/migrations/0032_session_album_public_shares.sql`，只创建 `session_album_public_shares` 及设计中列出的索引/外键。
-  - [ ] 扩展迁移测试或静态检查，验证 `media_ids`、`snapshot_digest`、`cover_media_ids`、`revoked_at` 与 30 天过期字段存在。
-  - [ ] 运行 API 迁移测试和 D48 检查，确认迁移子项转绿，后续业务契约仍按预期失败。
+- [x] D48.2 先建立失败契约和快照迁移。
+  - 2026-07-19：已在隔离 worktree 建立静态契约与 smoke 入口；首次运行准确失败于 0032 缺失，补迁移后准确推进到服务函数缺失。
+  - [x] 新增 `scripts/d48-album-sharing-role-claim-separation-check.js`，断言 D48 spec、迁移、服务函数、v2 claims、好友公开相册路径、安全封面和邀请菜单契约存在。
+  - [x] 更新 `package.json`，把 D48 静态检查和 smoke 语法检查加入根 `check`，不得删除 D18/D23/D40/D45/D46 回归。
+  - [x] 运行 `node scripts/d48-album-sharing-role-claim-separation-check.js`，确认先因缺少迁移与实现失败，而不是脚本语法错误。
+  - [x] 新增 `apps/api/migrations/0032_session_album_public_shares.sql`，只创建 `session_album_public_shares` 及设计中列出的索引/外键。
+  - [x] 扩展迁移测试或静态检查，验证 `media_ids`、`snapshot_digest`、`cover_media_ids`、`revoked_at` 与 30 天过期字段存在。
+  - [x] 运行 API 迁移测试和 D48 检查，确认迁移子项转绿，后续业务契约仍按预期失败。
 
 - [ ] D48.3 用 TDD 实现公开资格与隐私一票否决。
-  - [ ] 在 `scripts/d48-album-sharing-role-claim-separation-smoke.js` 先建立失败用例：分享者角色照可见、分享者上传场景照可见、无关他人照片不可见、未标注不可见。
-  - [ ] 增加失败用例：上传者关闭 `allow_uploaded_visible` 时始终排除，包括上传者本人分享。
-  - [ ] 增加失败用例：任一标签用户关闭 `allow_tagged_visible` 时整项排除，包括分享者本人关闭和多人合照一人关闭。
-  - [ ] 增加失败用例：已确认席位标签缺失 `user_id` 时关闭式排除，NPC/场景/`other` 无真实用户时不产生个人否决。
-  - [ ] 修改 `apps/api/src/modules/core/service.js` 的 `isAlbumPhotoVisibleInPublicShare`，实现“分享者席位或分享者上传”及无本人例外的统一门禁。
+  - [x] 在 `scripts/d48-album-sharing-role-claim-separation-smoke.js` 先建立失败用例：分享者角色照可见、分享者上传场景照可见、无关他人照片不可见、未标注不可见。
+  - [x] 增加失败用例：上传者关闭 `allow_uploaded_visible` 时始终排除，包括上传者本人分享。
+  - [x] 增加失败用例：任一标签用户关闭 `allow_tagged_visible` 时整项排除，包括分享者本人关闭和多人合照一人关闭。
+  - [x] 增加失败用例：已确认席位标签缺失 `user_id` 时关闭式排除，NPC/场景/`other` 无真实用户时不产生个人否决。
+  - [x] 修改 `apps/api/src/modules/core/service.js` 的 `isAlbumPhotoVisibleInPublicShare`，实现“分享者席位或分享者上传”及无本人例外的统一门禁。
   - [ ] 确保图片、ready 视频、公开列表、单媒体读取和封面选择调用同一门禁；不得只在列表层过滤。
-  - [ ] 运行 `node scripts/d48-album-sharing-role-claim-separation-smoke.js` 的隐私子集，确认全部转绿。
-  - [ ] 运行 D18、D23、D45、D46 相册/审核定向回归，确认完整相册和未批准媒体门禁不变。
+  - [x] 运行 `node scripts/d48-album-sharing-role-claim-separation-smoke.js` 的隐私子集，确认全部转绿。
+  - [x] 运行 D18、D23、D45、D46 相册/审核定向回归，确认完整相册和未批准媒体门禁不变。
 
 - [ ] D48.4 用 TDD 实现有界公开快照。
   - [ ] 先增加失败用例，证明创建分享时最多选择 30 项、视频最多 3 项，且三个优先级和时间/ID 次序稳定。
