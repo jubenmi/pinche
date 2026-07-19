@@ -227,6 +227,38 @@ test("review proposals retain only validated local review photo paths", () => {
     })),
     { code: "BAD_REQUEST" }
   );
+
+  const albumDescriptor = buildTextModerationDescriptor(input("upsert_session_review", {
+    content: "很长也可以写到九百字",
+    rating: 4,
+    albumPhotoIds: [31, 32]
+  }));
+  assert.deepEqual(albumDescriptor.payload.body.albumPhotoIds, [31, 32]);
+  assert.equal(
+    buildTextModerationDescriptor(input("upsert_session_review", {
+      content: "字".repeat(900),
+      rating: 5,
+      albumPhotoIds: []
+    })).payload.body.content.length,
+    900
+  );
+  assert.throws(
+    () => buildTextModerationDescriptor(input("upsert_session_review", {
+      content: "字".repeat(901),
+      rating: 5,
+      albumPhotoIds: []
+    })),
+    { code: "BAD_REQUEST" }
+  );
+  assert.throws(
+    () => buildTextModerationDescriptor(input("upsert_session_review", {
+      content: "不能混用",
+      rating: 5,
+      photoUrls: [],
+      albumPhotoIds: []
+    })),
+    { code: "BAD_REQUEST" }
+  );
 });
 
 test("covered invalid payloads fail before a proposal can be sent to WeChat", () => {

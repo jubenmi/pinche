@@ -28,6 +28,9 @@ assert(service.includes("can_review"), "service must return can_review for Mine 
 assert(service.includes("has_review"), "service must return has_review for Mine participation rows");
 assert(service.includes("assertSessionReviewPhotoUrls"), "service must validate review photo paths");
 assert(service.includes("MAX_SESSION_REVIEW_PHOTOS"), "service must enforce review photo count");
+assert(service.includes("MAX_SESSION_REVIEW_CONTENT_LENGTH = 900"), "service must allow 900-character reviews");
+assert(service.includes("normalizeSessionReviewAlbumPhotoIds"), "service must validate session album photo ids");
+assert(service.includes("album_photo_ids"), "service must return referenced session album photo ids");
 
 const server = read("apps/api/src/server.js");
 assert(server.includes("sessionReviewUploadDir"), "server must define review upload directory");
