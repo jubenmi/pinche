@@ -106,9 +106,11 @@ assert(detail.includes("loadSessionReviews"), "detail page must load public revi
 assert(detail.includes("goReview"), "detail page must navigate to review page");
 
 const reviewPage = read("apps/miniprogram/src/pages/session/review.vue");
-assert(reviewPage.includes("uploadSessionReviewPhoto"), "review page must upload selected photos");
+assert(reviewPage.includes("uploadAlbumPhoto"), "review page uploads through the session album pipeline");
+assert(!reviewPage.includes("uploadSessionReviewPhoto"), "review page must not create new legacy review photos");
 assert(reviewPage.includes("PUT"), "review page must save review with PUT");
 assert(reviewPage.includes("rating"), "review page must collect rating");
-assert(reviewPage.includes("photoUrls"), "review page must save photo urls");
+assert(reviewPage.includes("buildSessionReviewPhotoRequest"), "review page must save album photo ids");
+assert(reviewPage.includes('maxlength="900"'), "review page must allow 900-character notes");
 
 console.log("D15 session review records check passed");
