@@ -5612,7 +5612,8 @@ async function route(request, response) {
     const user = await getAuthUser(request);
     const share = await createOrReuseSessionAlbumPublicShare(
       user,
-      sessionAlbumShareTokenId
+      sessionAlbumShareTokenId,
+      { focusMediaId: body?.focusMediaId }
     );
     const exp = tokenPositiveInteger(
       Math.floor(new Date(share.expires_at).getTime() / 1000),
@@ -5633,6 +5634,7 @@ async function route(request, response) {
         share_id: share.share_id,
         share_subject: share.share_subject,
         share_owner: share.share_owner,
+        focus_media_id: share.focus_media_id,
         visible_count: share.visible_count,
         photo_count: share.photo_count,
         video_count: share.video_count,

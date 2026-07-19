@@ -2222,7 +2222,7 @@ function publicShareMediaPriority(photo, tags, claims) {
   return 2;
 }
 
-export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claims) {
+export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claims, options = {}) {
   const ranked = [];
   for (const photo of Array.isArray(candidates) ? candidates : []) {
     const tags = tagsMap.get(Number(photo.id)) || [];
@@ -2242,9 +2242,14 @@ export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claim
     return Number(right.photo.id) - Number(left.photo.id);
   });
 
-  const selected = [];
-  let videoCount = 0;
+  const requiredMediaId = Number(options?.requiredMediaId || 0);
+  const required = requiredMediaId
+    ? ranked.find(({ photo }) => Number(photo.id) === requiredMediaId)
+    : null;
+  const selected = required ? [required.photo] : [];
+  let videoCount = required && albumMediaType(required.photo) === "video" ? 1 : 0;
   for (const { photo } of ranked) {
+    if (required && Number(photo.id) === requiredMediaId) continue;
     const isVideo = albumMediaType(photo) === "video";
     if (isVideo && videoCount >= 3) continue;
     selected.push(photo);
@@ -2252,6 +2257,18 @@ export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claim
     if (selected.length >= 30) break;
   }
   return selected;
+}
+
+function normalizePublicShareFocusMediaId(value) {
+  if (value === undefined) return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new AppError(
+      409,
+      "ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE",
+      "The selected album media is not available to share"
+    );
+  }
+  return value;
 }
 
 const PUBLIC_SHARE_SAFE_SCENE_TAG_TYPES = new Set([
@@ -6558,6 +6575,7 @@ export async function getSessionAlbumShareSubject(user, sessionId) {
 
 export async function createOrReuseSessionAlbumPublicShare(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
+  const focusMediaId = normalizePublicShareFocusMediaId(options.focusMediaId);
   const runWithTransaction = options.withTransaction || withTransaction;
   return runWithTransaction(async (connection) => {
     const session = await requireSessionAlbumOpen(connection, id);
@@ -6618,7 +6636,16 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       }
     }
     const privacyByUser = await albumPrivacyMap(connection, id, privacyUserIds);
-    const selectedMedia = selectPublicShareMedia(photoRows, tagsMap, privacyByUser, claims);
+    const selectedMedia = selectPublicShareMedia(photoRows, tagsMap, privacyByUser, claims, {
+      requiredMediaId: focusMediaId
+    });
+    if (focusMediaId && !selectedMedia.some((media) => Number(media.id) === focusMediaId)) {
+      throw new AppError(
+        409,
+        "ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE",
+        "The selected album media is not available to share"
+      );
+    }
     if (selectedMedia.length === 0) {
       throw new AppError(
         409,
@@ -6701,6 +6728,7 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
         nickname: seat.sharer_nickname || "车友",
         avatar_url: seat.sharer_avatar_url || ""
       },
+      focus_media_id: focusMediaId || null,
       visible_count: selectedMedia.length,
       photo_count: photoCount,
       video_count: videoCount

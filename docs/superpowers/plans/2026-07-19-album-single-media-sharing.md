@@ -96,7 +96,8 @@ Expected: one commit containing only D50 spec/plan/contract wiring.
 - Create: `apps/api/test/album-single-media-share.test.mjs`
 - Modify: `apps/api/src/modules/core/service.js`
 - Modify: `apps/api/src/server.js`
-- Modify: `scripts/d48-album-sharing-role-claim-separation-smoke.js`
+- Modify: `scripts/d23-album-share-join-policy-smoke.js` (D48 localhost companion coverage)
+- Verify: `scripts/d48-album-sharing-role-claim-separation-smoke.js` (full localhost companion; no source change)
 - Modify: `specs/d50-album-single-media-sharing/tasks.md`
 
 - [ ] **Step 1: Write selector tests before production code**

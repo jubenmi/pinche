@@ -16,19 +16,20 @@
   - [x] 逐条对照现有代码，确认本期无需迁移、新页面或新表。
 
 - [ ] D50.2 先建立失败契约与纯函数红灯。
-  - 2026-07-19：`node --check scripts/d50-album-single-media-sharing-check.js` 已通过。已运行 `npm run d50:check`，静态契约按预期红灯，首个失败为 service 缺少 `ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE`，并非规格或脚本语法错误。纯函数单测尚未创建，本任务保持未完成。
+  - 2026-07-19：`node --check scripts/d50-album-single-media-sharing-check.js` 已通过。已运行 `npm run d50:check`，静态契约按预期红灯，首个失败为 service 缺少 `ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE`，并非规格或脚本语法错误。D50.2 仍待端侧单测和根 check wiring，保持未完成。
+  - 2026-07-19：RED：`node --test apps/api/test/album-single-media-share.test.mjs` 退出码 1；selector 测试准确显示 `requiredMediaId` 尚未影响选择（要求图片 ID 1 实际首项为 35，required ready 视频 ID 100 未进入快照），并非语法或 fixture 加载失败。GREEN：同一命令退出码 0，8/8 通过，且执行了 focus-first 快照持久化/复用和 eligibility 后 409；在临时 worktree API 上运行 `SESSION_SECRET=local-development-session-secret-change-before-production BASE_URL=http://localhost:3028 node scripts/d48-album-sharing-role-claim-separation-smoke.js` 退出码 0，覆盖空 body 的 `focus_media_id: null`、numeric focus 回显与快照包含、以及 unavailable focus HTTP 409/error code；`node scripts/d23-album-share-join-policy-check.js`、修改 JS 的 `node --check` 和 `git diff --check` 均退出码 0。
   - [ ] 新增 `scripts/d50-album-single-media-sharing-check.js`，锁定 spec、focus 请求/响应、错误码、公开 video 路由、viewer share 和 CTA。
   - [ ] 将 D50 check、API/端侧单测语法检查纳入根 `check`。
-  - [ ] 扩展 D48 纯函数 smoke 或新增 D50 unit，覆盖 required image/video、30/3 上限、稳定次序和缺失目标。
+  - [x] 扩展 D48 纯函数 smoke 或新增 D50 unit，覆盖 required image/video、30/3 上限、稳定次序和缺失目标。
   - [ ] 新增 `apps/miniprogram/test/albumSingleMediaShare.test.mjs`，覆盖 ID、乱序 cache、dataset entry、路径和 focused DTO 查找。
-  - [ ] 运行新增检查，确认因实现缺失准确失败，而不是测试语法或 fixture 错误。
+  - [x] 运行新增检查，确认因实现缺失准确失败，而不是测试语法或 fixture 错误。
 
-- [ ] D50.3 用 TDD 实现指定媒体公开快照。
-  - [ ] 扩展 `selectPublicShareMedia` 的 required media 输入，强制包含合规目标并维持 30/3 上限。
-  - [ ] `createOrReuseSessionAlbumPublicShare` 校验 focus ID，失败返回 409 `ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE`。
-  - [ ] share-token 路由解析可选 JSON body，并返回 `focus_media_id`。
-  - [ ] 普通空 body 整册分享、摘要复用、封面选择和 D48 顺序保持不变。
-  - [ ] 运行 D50 selector/API、D48、D23 定向回归并记录结果。
+- [x] D50.3 用 TDD 实现指定媒体公开快照。
+  - [x] 扩展 `selectPublicShareMedia` 的 required media 输入，强制包含合规目标并维持 30/3 上限。
+  - [x] `createOrReuseSessionAlbumPublicShare` 校验 focus ID，失败返回 409 `ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE`。
+  - [x] share-token 路由解析可选 JSON body，并返回 `focus_media_id`。
+  - [x] 普通空 body 整册分享、摘要复用、封面选择和 D48 顺序保持不变。
+  - [x] 运行 D50 selector/API、D48、D23 定向回归并记录结果。
 
 - [ ] D50.4 用 TDD 实现快照绑定的公开视频播放。
   - [ ] 新增 public ready video service getter，要求 v2 share、快照成员、published、ready 与当前隐私。

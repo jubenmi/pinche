@@ -345,10 +345,46 @@ async function main() {
     directPlayer.token
   );
   assert(shareTokenPayload.data.token, "confirmed direct player should receive album share token");
+  assert(
+    shareTokenPayload.data.focus_media_id === null,
+    "empty-body album sharing should preserve the legacy no-focus response"
+  );
   assert(shareTokenPayload.data.share_id, "D48 album share token should bind a snapshot share id");
   assert(
     Number(shareTokenPayload.data.share_subject.seat_id) === Number(direct.seats[0].id),
     "album share token subject should bind the confirmed seat"
+  );
+
+  const focusedShareTokenPayload = await request(
+    "POST",
+    `/api/sessions/${direct.session.id}/album/share-token`,
+    { focusMediaId: Number(publicScenePhoto.id) },
+    directPlayer.token
+  );
+  assert(
+    Number(focusedShareTokenPayload.data.focus_media_id) === Number(publicScenePhoto.id),
+    "numeric focusMediaId should be returned by the share-token route"
+  );
+  const focusedPublicAlbum = await request(
+    "GET",
+    `/api/sessions/${direct.session.id}/album/public-share?token=${encodeURIComponent(
+      focusedShareTokenPayload.data.token
+    )}`
+  );
+  assert(
+    albumPhotoIds(focusedPublicAlbum).has(Number(publicScenePhoto.id)),
+    "the focused share snapshot should persist the eligible requested media"
+  );
+  const unavailableFocusedShare = await request(
+    "POST",
+    `/api/sessions/${direct.session.id}/album/share-token`,
+    { focusMediaId: Number(hiddenOtherSeatPhoto.id) },
+    directPlayer.token,
+    409
+  );
+  assert(
+    unavailableFocusedShare.error?.code === "ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE",
+    "an ineligible focused media ID should fail closed with the D50 error code"
   );
   const signedClaims = JSON.parse(
     Buffer.from(shareTokenPayload.data.token.split(".")[0], "base64url").toString("utf8")
