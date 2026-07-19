@@ -134,12 +134,13 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
   assert.match(reviewCatch, /const moderationMessage = contentModerationErrorText\(error\);/);
   assert.match(reviewCatch, /if \(moderationMessage\) \{\s*this\.statusText = moderationMessage;\s*return;/);
   assert.doesNotMatch(reviewCatch, /this\.(?:rating|content|photos)\s*=/);
-  assert.match(review, /uploadSessionReviewPhotos/);
-  assert.match(review, /recoverPendingSessionReviewPhotos/);
+  assert.match(review, /uploadAlbumPhoto/);
+  assert.match(review, /contentModerationStatusText/);
+  assert.match(review, /photoState/);
+  assert.match(review, /albumPhotoIds/);
+  assert.doesNotMatch(review, /uploadSessionReviewPhotos/);
   assert.match(profile, /recoverPendingUserAvatar/);
   assert.match(api, /rememberPendingUserImageOperation[\s\S]*\/api\/uploads\/user-image\/finalize/);
-  assert.match(review, /photos\.length \+ pendingPhotoCount >= 9/);
-  assert.match(review, /new Set\(\[\.\.\.this\.photos, \.\.\.approvedPaths\]\)/);
 
   assert.match(detail, /contentModerationErrorText/);
   assert.match(manage, /contentModerationErrorText/);
@@ -163,11 +164,11 @@ test("the mini-program renders mapped media statuses and keeps text Review on th
   assertSuccessfulUpdateFollowsRequest(
     review,
     'url: `/api/sessions/${this.sessionId}/review`',
-    "acknowledgeSessionReviewPhotoAssociations(this.photos"
+    "const result = dataOf(response);"
   );
-  assert.match(review, /canSave\(\)[\s\S]*this\.pendingPhotoCount === 0/);
-  assert.match(review, /captureSessionReviewPhotoAssociationCutoff/);
-  assert.match(review, /acknowledgeSessionReviewPhotoAssociations\([\s\S]*reviewAssociationCutoff/);
+  assert.match(review, /async saveReview\(\)[\s\S]*if \(this\.pendingPhotoCount > 0\)/);
+  assert.doesNotMatch(review, /captureSessionReviewPhotoAssociationCutoff/);
+  assert.doesNotMatch(review, /acknowledgeSessionReviewPhotoAssociations/);
   assertSuccessfulUpdateFollowsRequest(create, "const response = await request({", "this.stores = [store,");
   assertSuccessfulUpdateFollowsRequest(script, "const response = await request({", "this.scripts = [script,");
   assertSuccessfulUpdateFollowsRequest(setup, "const sessionResponse = await request({", "uni.redirectTo({ url:");
@@ -862,7 +863,7 @@ test("stacked profile requests supersede only uploads started before their assoc
   assert.equal(toasts.at(-1)?.title, "图片已由已保存内容替代，请重新选择。");
 });
 
-test("review save blocks pending photos without PUT or acknowledgement and keeps approval recoverable", async () => {
+test("review save blocks pending album photos without PUT and keeps legacy recovery available", async () => {
   const reviewSource = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
   const saveReviewBody = extractMethodBody(reviewSource, "async saveReview()");
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -873,6 +874,7 @@ test("review save blocks pending photos without PUT or acknowledgement and keeps
     "acknowledgeSessionReviewPhotoAssociations",
     "showToast",
     "contentModerationErrorText",
+    "contentModerationStatusText",
     "setTimeout",
     "uni",
     saveReviewBody
@@ -893,6 +895,7 @@ test("review save blocks pending photos without PUT or acknowledgement and keeps
     () => { acknowledgementCount += 1; },
     () => {},
     () => "",
+    () => PENDING_TEXT,
     () => {},
     { navigateBack() {} }
   );
@@ -937,6 +940,29 @@ test("review save blocks pending photos without PUT or acknowledgement and keeps
     approvedPaths: ["/uploads/session-reviews/eventual.jpg"],
     pendingCount: 0
   });
+});
+
+test("switching away from phone upload abandons its pending-review save block", async () => {
+  const reviewSource = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  const applyPhotoSourceBody = extractMethodBody(reviewSource, "applyPhotoSource(source)");
+  const applyPhotoSource = new Function(
+    "switchSessionReviewPhotoSource",
+    `return function applyPhotoSource(source) {${applyPhotoSourceBody}};`
+  )((state, source) => ({ ...state, source }));
+  const page = {
+    photoState: { source: "upload" },
+    pendingPhotoCount: 2,
+    albumPickerVisible: false,
+    choosePhonePhotos() {
+      throw new Error("phone picker must not reopen when switching to album");
+    }
+  };
+
+  applyPhotoSource.call(page, "album");
+
+  assert.equal(page.photoState.source, "album");
+  assert.equal(page.pendingPhotoCount, 0);
+  assert.equal(page.albumPickerVisible, true);
 });
 
 test("backend fallback persists and replays one operation locator across an approved response loss", async () => {

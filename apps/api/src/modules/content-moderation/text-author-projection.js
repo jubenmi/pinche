@@ -37,6 +37,14 @@ function stringArray(value, field) {
   });
 }
 
+function positiveIntegerArray(value, field) {
+  if (!Array.isArray(value)) throw projectionError(field);
+  return value.map((entry) => {
+    if (!Number.isSafeInteger(entry) || entry <= 0) throw projectionError(field);
+    return entry;
+  });
+}
+
 const ROLE_FIELDS = Object.freeze([
   "name",
   "description",
@@ -98,6 +106,9 @@ function projectNpcRole(body) {
 function projectReview(body) {
   const projected = pickScalars(body, ["rating", "content"]);
   if (body.photoUrls !== undefined) projected.photoUrls = stringArray(body.photoUrls, "photoUrls");
+  if (body.albumPhotoIds !== undefined) {
+    projected.albumPhotoIds = positiveIntegerArray(body.albumPhotoIds, "albumPhotoIds");
+  }
   return projected;
 }
 

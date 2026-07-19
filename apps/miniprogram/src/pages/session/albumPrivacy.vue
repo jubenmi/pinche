@@ -15,6 +15,20 @@
       />
     </view>
 
+    <view class="section stop-share-section">
+      <view class="section-title">已经发出的公开相册</view>
+      <view class="setting-note">停止后，你在本场生成的新版好友、群聊和朋友圈相册链接会立即失效；两项隐私开关不会改变。</view>
+      <t-button
+        class="stop-share-button"
+        theme="danger"
+        variant="outline"
+        :disabled="revoking"
+        @tap="stopMyAlbumShares"
+      >
+        {{ revoking ? "正在停止..." : "停止我的相册分享" }}
+      </t-button>
+    </view>
+
     <view class="section settings-section">
       <view class="setting-row">
         <view class="setting-copy">
@@ -61,7 +75,7 @@
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
-import { showToast } from "../../utils/tdesignFeedback";
+import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 export default {
   components: { AuthIdentityBar, FeedbackHost },
@@ -71,7 +85,8 @@ export default {
       allowUploadedVisible: true,
       allowTaggedVisible: true,
       statusText: "",
-      saving: false
+      saving: false,
+      revoking: false
     };
   },
   async onLoad(options) {
@@ -125,6 +140,36 @@ export default {
         this.statusText = "保存失败，请稍后重试。";
       } finally {
         this.saving = false;
+      }
+    },
+    async stopMyAlbumShares() {
+      if (this.revoking || !this.sessionId) return;
+      const confirmed = await new Promise((resolve) => {
+        showModal({
+          title: "停止我的相册分享？",
+          content: "你在本场生成的新版公开相册链接会立即失效。此操作不会修改照片隐私设置。",
+          confirmText: "停止分享",
+          cancelText: "取消",
+          success: (result) => resolve(Boolean(result.confirm)),
+          fail: () => resolve(false)
+        });
+      });
+      if (!confirmed) return;
+      this.revoking = true;
+      try {
+        const response = await request({
+          url: `/api/sessions/${this.sessionId}/album/public-shares`,
+          method: "DELETE"
+        });
+        const revokedCount = Number(dataOf(response)?.revoked_count || 0);
+        showToast({
+          title: revokedCount > 0 ? "已停止相册分享" : "当前没有有效分享",
+          icon: "none"
+        });
+      } catch (error) {
+        this.statusText = "停止分享失败，请稍后重试。";
+      } finally {
+        this.revoking = false;
       }
     }
   }
@@ -186,6 +231,14 @@ export default {
 
 .rule-section {
   background: #fffefb;
+}
+
+.stop-share-section {
+  background: #fffefb;
+}
+
+.stop-share-button {
+  margin-top: 22rpx;
 }
 
 .rule-row {

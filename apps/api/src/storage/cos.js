@@ -60,6 +60,13 @@ function cosNetworkError() {
   return cosStorageError(502, "COS_NETWORK_ERROR", "COS storage network request failed");
 }
 
+function cosAbortError() {
+  const error = new Error("COS request was aborted");
+  error.name = "AbortError";
+  error.code = "ABORT_ERR";
+  return error;
+}
+
 function invalidCosListResponse() {
   return cosStorageError(502, "COS_INVALID_LIST_RESPONSE", "COS object list response was invalid");
 }
@@ -331,6 +338,7 @@ function cosRequest({
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
   request = https.request,
+  signal,
   config
 }) {
   if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 0) {
@@ -399,6 +407,7 @@ function cosRequest({
     let activeResponse = null;
     let timeoutHandle;
     let settled = false;
+    let removeAbortListener = () => {};
 
     const clearRequestTimeout = () => {
       if (timeoutHandle !== undefined) {
@@ -414,6 +423,7 @@ function cosRequest({
       if (settled) return false;
       settled = true;
       clearRequestTimeout();
+      removeAbortListener();
       complete(value);
       return true;
     };
@@ -444,6 +454,20 @@ function cosRequest({
       rejectOnce(error);
       abortTransport();
     }, timeoutMs);
+
+    if (signal) {
+      const abort = () => {
+        if (rejectOnce(signal.reason instanceof Error ? signal.reason : cosAbortError())) {
+          abortTransport();
+        }
+      };
+      if (signal.aborted) {
+        abort();
+        return;
+      }
+      signal.addEventListener("abort", abort, { once: true });
+      removeAbortListener = () => signal.removeEventListener("abort", abort);
+    }
 
     try {
       pendingRequest = request(
@@ -640,7 +664,8 @@ export async function headCosObject({
   request,
   timeoutMs = DEFAULT_COS_INSPECTION_TIMEOUT_MS,
   setTimeoutFn,
-  clearTimeoutFn
+  clearTimeoutFn,
+  signal
 }) {
   return cosRequest({
     method: "HEAD",
@@ -649,6 +674,7 @@ export async function headCosObject({
     timeoutMs,
     setTimeoutFn,
     clearTimeoutFn,
+    signal,
     request,
     config
   });
@@ -713,7 +739,8 @@ export async function readCosObjectRange({
   request,
   timeoutMs = DEFAULT_COS_INSPECTION_TIMEOUT_MS,
   setTimeoutFn,
-  clearTimeoutFn
+  clearTimeoutFn,
+  signal
 }) {
   if (
     !Number.isSafeInteger(start) ||
@@ -736,6 +763,7 @@ export async function readCosObjectRange({
     timeoutMs,
     setTimeoutFn,
     clearTimeoutFn,
+    signal,
     request,
     config
   });

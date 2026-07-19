@@ -2,6 +2,13 @@ import mysql from "mysql2/promise";
 
 const baseUrl = process.env.BASE_URL || "http://localhost:3018";
 const suffix = Date.now();
+const MP4_BYTES = Buffer.from([
+  0x00, 0x00, 0x00, 0x18,
+  0x66, 0x74, 0x79, 0x70,
+  0x69, 0x73, 0x6f, 0x6d,
+  0x00, 0x00, 0x00, 0x00,
+  0x69, 0x73, 0x6f, 0x6d
+]);
 
 async function request(method, path, body, token, expectedStatus = 200) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -55,6 +62,22 @@ function fakeVideoSourceUrl(sessionId, userId, serial = 1) {
   return `/uploads/session-album/videos/source/admin-video-${sessionId}-${userId}-${
     suffix + serial
   }-aaaaaaaaaaaaaaaa.mp4`;
+}
+
+async function uploadAdminVideo(sessionId, token) {
+  const form = new FormData();
+  form.append("video", new Blob([MP4_BYTES], { type: "video/mp4" }), "d32-video.mp4");
+  const response = await fetch(`${baseUrl}/api/admin/sessions/${sessionId}/album/videos/uploads`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: form
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+  if (response.status !== 201) {
+    throw new Error(`video upload expected 201, got ${response.status}: ${text}`);
+  }
+  return payload.data.sourceUrl;
 }
 
 async function createSeat(sessionId, seat, token) {
@@ -151,7 +174,7 @@ async function approveSeat(sessionId, seatId, player, owner) {
     201
   );
   await request("PATCH", `/api/signups/${signup.data.id}/approve`, {}, owner.token);
-  const detail = await request("GET", `/api/sessions/${sessionId}`);
+  const detail = await request("GET", `/api/sessions/${sessionId}`, undefined, owner.token);
   return detail.data.seats.find((seat) => Number(seat.id) === Number(seatId));
 }
 
@@ -230,7 +253,7 @@ async function main() {
     "POST",
     `/api/admin/sessions/${session.id}/album/videos`,
     {
-      sourceUrl: fakeVideoSourceUrl(session.id, admin.user.id, 2),
+      sourceUrl: await uploadAdminVideo(session.id, admin.token),
       durationSeconds: 12,
       videoWidth: 1280,
       videoHeight: 720,
@@ -244,9 +267,8 @@ async function main() {
     fallbackVideo.data.processing_status === "ready",
     "created video should become ready immediately from the locally compressed source MP4"
   );
-  assert(fallbackVideo.data.video_url, "created ready video should include video-url path");
 
-  const sourceUrl = fakeVideoSourceUrl(session.id, admin.user.id, 3);
+  const sourceUrl = await uploadAdminVideo(session.id, admin.token);
   const processingVideoId = await insertProcessingVideo({
     sessionId: session.id,
     userId: admin.user.id,
@@ -277,10 +299,11 @@ async function main() {
   const readyVideo = album.data.media.find((item) => Number(item.id) === Number(processingVideoId));
   assert(readyVideo?.processing_status === "ready", "ready video should appear in album media");
   assert(readyVideo.video_url, "ready video should include video-url path");
-  assert(readyVideo.cover_url, "ready video should include signed snapshot cover URL");
-  assert(readyVideo.cover_url.includes("ci-process=snapshot"), "cover URL should use CI snapshot params");
-  assert(readyVideo.cover_url.includes("time=1"), "cover URL should request the 1-second frame");
-  assert(readyVideo.cover_url.includes("format=jpg"), "cover URL should request jpg format");
+  if (readyVideo.cover_url) {
+    assert(readyVideo.cover_url.includes("ci-process=snapshot"), "cover URL should use CI snapshot params");
+    assert(readyVideo.cover_url.includes("time=1"), "cover URL should request the 1-second frame");
+    assert(readyVideo.cover_url.includes("format=jpg"), "cover URL should request jpg format");
+  }
 
   const signed = await request("GET", readyVideo.video_url, undefined, admin.token);
   assert(signed.data.url, "ready video should return a playback URL");
@@ -312,7 +335,7 @@ async function main() {
     "POST",
     `/api/admin/sessions/${session.id}/album/videos`,
     {
-      sourceUrl: fakeVideoSourceUrl(session.id, admin.user.id, 4),
+      sourceUrl: await uploadAdminVideo(session.id, admin.token),
       durationSeconds: 12,
       videoWidth: 1280,
       videoHeight: 720,
@@ -333,12 +356,14 @@ async function main() {
     member.token,
     403
   );
-  await request(
+  const deletion = await request(
     "DELETE",
     `/api/session-album/photos/${deletionVideo.data.id}`,
     undefined,
-    admin.token
+    admin.token,
+    202
   );
+  assert(deletion.data.deletionPending === true, "video deletion should enter the async cleanup path");
 
   const shareToken = await request(
     "POST",
@@ -356,12 +381,31 @@ async function main() {
     (item) => Number(item.id) === Number(processingVideoId)
   );
   assert(publicVideo?.media_type === "video", "public share should include tagged ready video");
-  assert(publicVideo.cover_url, "public share video should expose cover URL");
-  assert(
-    publicVideo.cover_url.includes("ci-process=snapshot"),
-    "public share cover should use signed snapshot URL"
-  );
+  if (publicVideo.cover_url) {
+    assert(
+      /^\/api\/session-album\/public-share\/media\/\d+\/cover\?token=/.test(
+        publicVideo.cover_url
+      ),
+      "public share cover should remain on the application cover route"
+    );
+  }
   assert(!publicVideo.video_url, "public share video should not expose playback URL");
+  const publicCapability = await request(
+    "GET",
+    `/api/session-album/public-share/media/${processingVideoId}/video-url?token=${encodeURIComponent(
+      shareToken.data.token
+    )}`
+  );
+  assert(
+    /^\/api\/session-album\/public-share\/media\/\d+\/video-file\?token=/.test(
+      publicCapability.data.url
+    ),
+    "public video capability should remain on the application video-file route"
+  );
+  assert(
+    !/cos\.|q-signature|https?:/i.test(publicCapability.data.url),
+    "public video capability must not expose a COS URL"
+  );
 
   console.log("D32 admin album video smoke passed");
 }

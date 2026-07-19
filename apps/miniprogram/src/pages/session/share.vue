@@ -146,13 +146,13 @@ export default {
       return this.entry === "album";
     },
     pageTitle() {
-      return this.isAlbumEntry ? "查看车局相册" : "分享票";
+      return this.isAlbumEntry ? "查看车局相册" : "邀请好友认领角色";
     },
     pageIntro() {
       if (this.isAlbumEntry) {
         return "同车成员可直接进入相册；未上车先选择角色。";
       }
-      return "这张局卡已经可以发给朋友或群聊。";
+      return "发送给好友或群聊，对方可以查看实时角色并申请认领。";
     },
     statusPillText() {
       if (this.isAlbumEntry) {
@@ -468,18 +468,14 @@ export default {
         : "";
       return {
         title,
-        path: `/pages/session/share?id=${this.sessionId}${entryQuery}&shareCode=${shareCode}${inviteQuery}&source=wechat_share`
+        path: `/pages/session/share?id=${this.sessionId}${entryQuery}&shareCode=${shareCode}${inviteQuery}&source=wechat_share`,
+        imageUrl: "/static/art/ticket-landscape.jpg"
       };
     }
     return {
       title: this.shareCardTitle(),
-      path: `/pages/session/share${flowToQuery(flow)}`
-    };
-  },
-  onShareTimeline() {
-    return {
-      title: this.timelineShareTitle(),
-      query: this.shareTimelineQuery()
+      path: `/pages/session/share${flowToQuery(flow)}`,
+      imageUrl: "/static/art/ticket-landscape.jpg"
     };
   },
   methods: {
@@ -501,22 +497,6 @@ export default {
     },
     shareCardTitle() {
       return `${this.scriptName}｜${this.storeName}｜${this.startText}`;
-    },
-    timelineShareTitle() {
-      const seatText = this.availableCount > 0
-        ? `还差${this.availableCount}位上车`
-        : "剧本车局发车中";
-      return `${seatText}｜${this.scriptName}｜${this.storeName}｜${this.startText}，来一起沉浸一局`;
-    },
-    shareTimelineQuery() {
-      if (this.sessionId) {
-        const shareCode = `s${this.sessionId}-${Date.now()}`;
-        return `id=${encodeURIComponent(this.sessionId)}&shareCode=${encodeURIComponent(
-          shareCode
-        )}&source=wechat_timeline`;
-      }
-      const query = flowToQuery(this.persistFlow()).replace(/^\?/, "");
-      return query ? `${query}&source=wechat_timeline` : "source=wechat_timeline";
     },
     hasSeatSelectionLogin() {
       const auth = getCurrentUser();
@@ -1099,10 +1079,20 @@ export default {
       }
     },
     showShareMenus() {
-      showWechatShareMenus({
-        withShareTicket: true,
-        menus: ["shareAppMessage", "shareTimeline"]
-      });
+      const showFriendShareMenu = () => {
+        showWechatShareMenus({
+          withShareTicket: true,
+          menus: ["shareAppMessage"]
+        });
+      };
+      if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
+        uni.hideShareMenu({
+          menus: ["shareTimeline"],
+          complete: showFriendShareMenu
+        });
+        return;
+      }
+      showFriendShareMenu();
     },
     seatTypeLabel(type) {
       const labels = {
