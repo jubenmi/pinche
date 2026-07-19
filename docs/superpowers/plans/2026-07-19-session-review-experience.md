@@ -106,4 +106,3 @@
 4. Open the built editor at the matching mobile viewport, capture it, and compare it side-by-side with the selected reference using the Product Design design-QA workflow.
 5. Fix visible mismatches, repeat the comparison, and record evidence and known platform limitations in `tasks.md`.
 6. Review the final diff for scope fidelity before reporting completion.
-

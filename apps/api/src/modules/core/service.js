@@ -7649,10 +7649,19 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
       }
     }
   }
-  const updatedMedia = (await reviewPhotos(connection, [Number(review.id)])).get(Number(review.id)) || {
-    photos: [],
-    albumPhotoIds: []
-  };
+  const updatedMedia = shouldReplacePhotos
+    ? (albumPhotoIds !== undefined
+      ? {
+          photos: albumPhotos.map((photo) =>
+            `/api/session-reviews/${Number(review.id)}/photos/${Number(photo.id)}/image`
+          ),
+          albumPhotoIds: albumPhotos.map((photo) => Number(photo.id))
+        }
+      : { photos: [...(photoUrls || [])], albumPhotoIds: [] })
+    : ((await reviewPhotos(connection, [Number(review.id)])).get(Number(review.id)) || {
+        photos: [],
+        albumPhotoIds: []
+      });
   return {
     ...review,
     rating,

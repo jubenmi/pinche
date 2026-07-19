@@ -5,4 +5,3 @@ ALTER TABLE session_review_photos
   ADD KEY idx_session_review_photos_album_photo (album_photo_id),
   ADD CONSTRAINT fk_session_review_photos_album_photo
     FOREIGN KEY (album_photo_id) REFERENCES session_album_photos(id) ON DELETE CASCADE;
-

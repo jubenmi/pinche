@@ -64,4 +64,3 @@ export function buildSessionReviewPhotoRequest(state) {
     albumPhotoIds: photoIds(state.selectedAlbumPhotoIds)
   };
 }
-

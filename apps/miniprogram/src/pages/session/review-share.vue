@@ -1,5 +1,6 @@
 <template>
   <view class="page review-share-page">
+    <AuthIdentityBar passive-guest @guest-login="loginFromGuestBar" />
     <FeedbackHost />
 
     <view class="share-heading">
@@ -22,11 +23,11 @@
     <template v-else-if="review">
       <view class="section review-card">
         <view class="author-row">
-          <t-image
-            v-if="review.author?.avatar_url"
+          <image
             class="author-avatar"
-            :src="assetUrl(review.author.avatar_url)"
+            :src="review.author?.avatar_url ? assetUrl(review.author.avatar_url) : '/static/icons/user.png'"
             mode="aspectFill"
+            :webp="true"
           />
           <view class="author-copy">
             <view class="author-name">{{ review.author?.nickname || "车友" }}</view>
@@ -35,12 +36,13 @@
         </view>
 
         <view class="rating-row" aria-label="评价星级">
-          <text
+          <t-icon
             v-for="value in [1, 2, 3, 4, 5]"
             :key="value"
+            name="star-filled"
             class="rating-star"
             :class="{ active: review.rating >= value }"
-          >★</text>
+          />
           <text class="rating-text">{{ review.rating }} 星</text>
         </view>
 
@@ -64,20 +66,27 @@
 
     <view v-if="review" class="bottom-action share-bottom-action">
       <view class="timeline-help">可分享给好友、群聊；朋友圈请使用右上角菜单</view>
-      <button class="button share-button" open-type="share">分享给好友或群</button>
+      <t-button
+        class="button share-button"
+        open-type="share"
+        custom-style="width: 100%; height: 90rpx; min-height: 90rpx; border-color: #07553f; background: #07553f; color: #ffffff;"
+      >
+        分享给好友或群
+      </t-button>
     </view>
   </view>
 </template>
 
 <script>
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
-import { assetUrl, dataOf, request } from "../../utils/api";
+import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
+import { assetUrl, dataOf, ensureLoggedIn, request } from "../../utils/api";
 import { showWechatShareMenus } from "../../utils/share";
 
 const SHARE_FALLBACK_IMAGE = "/static/art/ticket-landscape.jpg";
 
 export default {
-  components: { FeedbackHost },
+  components: { AuthIdentityBar, FeedbackHost },
   data() {
     return {
       reviewId: "",
@@ -120,6 +129,11 @@ export default {
   },
   methods: {
     assetUrl,
+    async loginFromGuestBar() {
+      await ensureLoggedIn({
+        content: "登录后可以查看自己的车局，也可以继续浏览这条游后感。"
+      });
+    },
     async loadReview() {
       if (!this.reviewId) {
         this.loading = false;
@@ -324,4 +338,3 @@ export default {
   font-size: 29rpx;
 }
 </style>
-

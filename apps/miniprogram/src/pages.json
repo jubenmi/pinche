@@ -103,6 +103,7 @@
       "t-badge": "/wxcomponents/tdesign-miniprogram/badge/badge",
       "t-dialog": "/wxcomponents/tdesign-miniprogram/dialog/dialog",
       "t-empty": "/wxcomponents/tdesign-miniprogram/empty/empty",
+      "t-icon": "/wxcomponents/tdesign-miniprogram/icon/icon",
       "t-image": "/wxcomponents/tdesign-miniprogram/image/image",
       "t-input": "/wxcomponents/tdesign-miniprogram/input/input",
       "t-notice-bar": "/wxcomponents/tdesign-miniprogram/notice-bar/notice-bar",

@@ -67,4 +67,3 @@ test("public review album-photo authorization fails closed", () => {
     assert.equal(isPublishableSessionReviewAlbumPhoto({ ...valid, ...patch }, 88, 31), false);
   }
 });
-

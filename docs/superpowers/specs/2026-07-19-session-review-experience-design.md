@@ -23,4 +23,3 @@
 - 技术设计：`specs/d49-session-review-experience/design.md`
 - 执行清单：`specs/d49-session-review-experience/tasks.md`
 - 实施计划：`docs/superpowers/plans/2026-07-19-session-review-experience.md`
-

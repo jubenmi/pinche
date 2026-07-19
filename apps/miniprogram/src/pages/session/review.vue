@@ -26,7 +26,11 @@
           :disabled="saving || !canEditDraft"
           @tap="rating = value"
         >
-          ★
+          <t-icon
+            name="star-filled"
+            size="50rpx"
+            :color="rating >= value ? '#e4a313' : '#d5d0c7'"
+          />
         </t-button>
       </view>
     </view>
@@ -111,6 +115,7 @@
         <t-button
           class="button publish-button"
           :class="{ disabled: saving || !canSave }"
+          :custom-style="publishButtonStyle"
           :disabled="saving || !canSave"
           @tap="saveReview"
         >
@@ -130,7 +135,7 @@
         <view class="album-picker-head">
           <view>
             <view class="album-picker-title">从本场相册选择</view>
-            <view class="album-picker-note">最多选择 9 张已通过审核的照片</view>
+            <view class="album-picker-note">最多选择 9 张当前可用照片</view>
           </view>
           <t-button class="album-picker-done" @tap="closeAlbumPicker">完成</t-button>
         </view>
@@ -171,7 +176,10 @@ import {
   switchSessionReviewPhotoSource,
   toggleSessionReviewAlbumPhoto
 } from "../../utils/sessionReviewPhotos";
-import { contentModerationErrorText } from "../../utils/contentModeration";
+import {
+  contentModerationErrorText,
+  contentModerationStatusText
+} from "../../utils/contentModeration";
 import {
   authorPrivateStatusText,
   isAuthorPrivateText
@@ -202,6 +210,13 @@ export default {
     },
     canEditDraft() {
       return !this.activeDraft || this.activeDraft.can_edit === true;
+    },
+    publishButtonStyle() {
+      const shared = "width: 100%; height: 94rpx; min-height: 94rpx; color: #ffffff; font-size: 31rpx;";
+      if (this.saving || !this.canSave) {
+        return `${shared} border-color: #aeb8b1; background: #aeb8b1; --td-button-default-bg-color: #aeb8b1; --td-button-default-color: #ffffff; --td-button-default-border-color: #aeb8b1;`;
+      }
+      return `${shared} border-color: #1a5d4d; background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%); --td-button-default-bg-color: #1f6f5b; --td-button-default-color: #ffffff; --td-button-default-border-color: #1a5d4d;`;
     },
     hasAlbumSourceOption() {
       return this.albumPhotos.length > 0;
@@ -332,6 +347,7 @@ export default {
       this.applyPhotoSource(source);
     },
     applyPhotoSource(source) {
+      this.pendingPhotoCount = 0;
       this.photoState = switchSessionReviewPhotoSource(this.photoState, source);
       if (source === "album") {
         this.albumPickerVisible = true;
@@ -431,7 +447,7 @@ export default {
           }
         }
         if (this.pendingPhotoCount > 0) {
-          this.statusText = `${this.pendingPhotoCount} 张照片已进入本场相册，审核通过后才可加入记录。`;
+          this.statusText = contentModerationStatusText("review");
         } else if (failedCount > 0) {
           this.statusText = `${failedCount} 张照片上传失败，请稍后重试。`;
         } else {
@@ -444,6 +460,10 @@ export default {
     },
     async saveReview() {
       if (!this.canSave || this.saving) return;
+      if (this.pendingPhotoCount > 0) {
+        this.statusText = contentModerationStatusText("review");
+        return;
+      }
       this.saving = true;
       this.statusText = "正在发布记录...";
       try {
@@ -480,7 +500,9 @@ export default {
         const moderationMessage = contentModerationErrorText(error);
         if (moderationMessage) {
           this.statusText = moderationMessage;
-        } else if (error?.statusCode === 403) {
+          return;
+        }
+        if (error?.statusCode === 403) {
           this.statusText = "只有已上车玩家可以写记录。";
         } else if (error?.statusCode === 400) {
           this.statusText = "请检查星级、文字和所选照片后再发布。";

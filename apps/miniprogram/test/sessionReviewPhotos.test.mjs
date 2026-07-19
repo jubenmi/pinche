@@ -60,4 +60,3 @@ test("untouched legacy photos are omitted while an explicit change sends albumPh
   const selected = toggleSessionReviewAlbumPhoto(cleared, 42);
   assert.deepEqual(buildSessionReviewPhotoRequest(selected), { albumPhotoIds: [42] });
 });
-
