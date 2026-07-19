@@ -15,15 +15,16 @@
   - [x] implementation plan 映射到精确文件、RED/GREEN 命令与提交边界。
   - [x] 逐条对照现有代码，确认本期无需迁移、新页面或新表。
 
-- [ ] D50.2 先建立失败契约与纯函数红灯。
+- [x] D50.2 先建立失败契约与纯函数红灯。
   - 2026-07-19：`node --check scripts/d50-album-single-media-sharing-check.js` 已通过。已运行 `npm run d50:check`，静态契约按预期红灯，首个失败为 service 缺少 `ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE`，并非规格或脚本语法错误。D50.2 仍待端侧单测和根 check wiring，保持未完成。
   - 2026-07-19：RED：`node --test apps/api/test/album-single-media-share.test.mjs` 退出码 1；selector 测试准确显示 `requiredMediaId` 尚未影响选择（要求图片 ID 1 实际首项为 35，required ready 视频 ID 100 未进入快照），并非语法或 fixture 加载失败。GREEN：同一命令退出码 0，8/8 通过，且执行了 focus-first 快照持久化/复用和 eligibility 后 409；在临时 worktree API 上运行 `SESSION_SECRET=local-development-session-secret-change-before-production BASE_URL=http://localhost:3028 node scripts/d48-album-sharing-role-claim-separation-smoke.js` 退出码 0，覆盖空 body 的 `focus_media_id: null`、numeric focus 回显与快照包含、以及 unavailable focus HTTP 409/error code；`node scripts/d23-album-share-join-policy-check.js`、修改 JS 的 `node --check` 和 `git diff --check` 均退出码 0。
   - [x] 新增 `scripts/d50-album-single-media-sharing-check.js`，锁定 spec、focus 请求/响应、错误码、公开 video 路由、viewer share 和 CTA。
-  - [ ] 将 D50 check、API/端侧单测语法检查纳入根 `check`。
+  - [x] 将 D50 check、API/端侧单测语法检查纳入根 `check`。
   - [x] 扩展 D48 纯函数 smoke 或新增 D50 unit，覆盖 required image/video、30/3 上限、稳定次序和缺失目标。
   - [x] 新增 `apps/miniprogram/test/albumSingleMediaShare.test.mjs`，覆盖 ID、乱序 cache、dataset entry、路径和 focused DTO 查找。
   - [x] 运行新增检查，确认因实现缺失准确失败，而不是测试语法或 fixture 错误。
   - 2026-07-19：`npm run d50:check` 已再次运行；公开 video-url/video-file 服务端文字契约已满足，首个剩余失败为尚未实施的端侧 `source === "single_media_share"`，因此 D50.2 静态契约总检仍保持未完成。
+  - 2026-07-19：Task 8 将 `d50:unit` 与 `d50:check` 前置接入根 `precheck`，并在根 `check` 增加 D50 API 测试、端侧测试及纯 helper 的 `node --check`；完整 `npm run check` 退出码 0，D50.2 完成。
 
 - [x] D50.3 用 TDD 实现指定媒体公开快照。
   - [x] 扩展 `selectPublicShareMedia` 的 required media 输入，强制包含合规目标并维持 30/3 上限。
@@ -71,26 +72,32 @@
   - 2026-07-19：RED：扩展 `npm run d50:check` 后退出码 1，首个失败为 album page 尚未包含 `source === "single_media_share"`；审查补充 helper 契约后 `node --test apps/miniprogram/test/albumSingleMediaShare.test.mjs` 也按预期因缺少 focused public route/video guard export 退出码 1；button cache reset 的 fail-closed helper export 和 focused CTA 安全区/视频控件静态契约同样先按预期红灯。GREEN：`npm run d50:check` 与 helper 单测 15/15 均退出码 0，锁定 ID-bound request/response、button dataset cache reset 的 credential-free fail-closed payload、tokenless fail-closed public route、单项 snapshot projection、同媒体安全卡图 fallback、CTA 无请求/认证及安全区视频控件留白、native share、公开视频路由和晚到视频结果 guard。`node scripts/d31-album-viewer-sequence-check.js`、`node scripts/check-miniprogram.js`、`npm run d42:mini`、`node scripts/d32-admin-album-video-check.js` 与 `npm run build:mp-weixin` 均退出码 0；两个 Sass deprecation warning 为既有构建告警，未新增错误。本记录仅覆盖 helper/static integration 契约与构建回归；微信开发者工具真机/手工路径仍留在 D50.8。
 
 - [ ] D50.8 完成专项、全量和微信开发者工具验收。
-  - [ ] 运行 D50 check 与新增 unit/API 测试。
-  - [ ] 运行 D48、D23、D31、D32、D42 定向回归。
-  - [ ] 运行完整 `npm run check`，退出码为 0。
-  - [ ] 运行 `npm run build:mp-weixin`，退出码为 0。
+  - 2026-07-19：Task 8 自动验证已完成；微信原生分享面板、真实 COS 与真机路径在获得实际证据前保持未完成。
+  - [x] 运行 D50 check 与新增 unit/API 测试。
+  - [x] 运行 D48、D23、D31、D32、D42 定向回归。
+  - [x] 运行完整 `npm run check`，退出码为 0。
+  - [x] 运行 `npm run build:mp-weixin`，退出码为 0。
   - [ ] 微信开发者工具验证图片分享完整路径。
   - [ ] 微信开发者工具验证 ready 视频播放、拖动、刷新/重试和 CTA。
   - [ ] 验证撤销、删除、审核撤回与隐私变化后旧链接关闭式失效。
-  - [ ] 将命令、结果、限制和任何经批准偏差记录到本文件。
+  - [x] 将命令、结果、限制和任何经批准偏差记录到本文件。
+  - 2026-07-19：`npm run d50:unit` 首次在受限沙箱内 34/35，通过项外唯一失败为真实 HTTP route fixture 无法监听 `127.0.0.1`（`listen EPERM`）；允许本地临时监听后同一命令 35/35、退出码 0。`npm run d50:check` 退出码 0。
+  - 2026-07-19：在端口 3031 启动当前 worktree API，连接本地开发 MySQL/Redis 且使用匹配 session secret；健康检查确认 schema ready。`d48-album-sharing-role-claim-separation-smoke.js`（含 D23 API smoke）退出码 0；D48、D23、D31、D32 静态检查均退出码 0；`d32-admin-album-video-smoke.js` 退出码 0。临时 API 随后停止，端口不再监听。
+  - 2026-07-19：`npm run d42:api-media` 47/47、`npm run d42:api-server` 16/16 + stream 10/10、`npm run d42:mini` 19/19 + 8/8，均退出码 0。`npm run check` 与 `npm run build:mp-weixin` 均退出码 0；仅出现既有 Sass legacy API / `@import` 弃用提示，无新错误。
+  - 2026-07-19：逐项复核 requirements/design/tasks、`git diff --check`、文件清单与生产 diff；改动均映射到 D50，未新增迁移、页面、公开下载、互动、奖励或无关重构。微信开发者工具 CLI 可用且登录有效，但当前仓库没有 D50 自动化 fixture；CLI 只能证明工具可用，不能证明原生分享面板、好友接收、真机视频拖动/刷新或真实 COS 代理，因此对应三项保持未勾选，无规格偏差。
 
 ## D50 验收清单
 
 - [ ] 成员可从全屏预览分享当前已公开图片或 ready 视频。
-- [ ] 分享卡不会因快速滑动或乱序请求指向错误媒体。
+- [x] 分享卡不会因快速滑动或乱序请求指向错误媒体。
 - [ ] 接收者初始只看到目标媒体，不能左右浏览其他项。
 - [ ] “查看完整相册”进入同一份公开只读快照，无需登录。
-- [ ] 指定目标不突破 30 项、3 视频、审核和隐私一票否决。
+- [x] 指定目标不突破 30 项、3 视频、审核和隐私一票否决。
 - [ ] 公开视频通过 v2 快照 capability 与应用层 Range 代理播放，不泄漏 COS URL。
-- [ ] 目标失效不回退其他媒体；整份 share 失效时隐藏 CTA。
-- [ ] 现有整册/朋友圈分享、D48、viewer 和成员视频行为不回归。
-- [ ] `npm run check` 与 `npm run build:mp-weixin` 通过。
+  - 自动化已覆盖本地字节响应、COS 代理 contract、Range 和 URL 不泄漏；真实 COS 环境仍待验收。
+- [x] 目标失效不回退其他媒体；整份 share 失效时隐藏 CTA。
+- [x] 现有整册/朋友圈分享、D48、viewer 和成员视频行为不回归。
+- [x] `npm run check` 与 `npm run build:mp-weixin` 通过。
 
 ## 验证记录
 
