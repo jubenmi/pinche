@@ -1476,14 +1476,14 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Share page must keep visible breathing room between the ticket and role cards");
   }
   const shareTimelineSource = methodBody(shareSource, "onShareTimeline");
-  if (!shareTimelineSource) {
-    fail("Share page must support WeChat Moments sharing with onShareTimeline");
+  if (shareTimelineSource) {
+    fail("Role invitation must be limited to friend/group sharing and disable Moments");
   }
-  if (!shareTimelineSource.includes("query:")) {
-    fail("Share page Moments sharing must return a query for the current share page route");
-  }
-  if (!shareTimelineSource.includes("title: this.timelineShareTitle()")) {
-    fail("Share page Moments sharing must use a dedicated attractive timeline title");
+  if (
+    !shareSource.includes("hideShareMenu") ||
+    !shareSource.includes('menus: ["shareTimeline"]')
+  ) {
+    fail("Role invitation must explicitly hide a Moments menu inherited from another page");
   }
   const shareAppMessageSource = methodBody(shareSource, "onShareAppMessage");
   if (!shareAppMessageSource.includes("title: this.shareCardTitle()")) {
@@ -1497,25 +1497,18 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Share page title copy must include script name, store, and time");
   }
-  const timelineShareTitleSource = methodBody(shareSource, "timelineShareTitle");
+  if (!shareSource.includes('menus: ["shareAppMessage"]')) {
+    fail("Role invitation share menu must enable friend/group sharing only");
+  }
+  if (!shareAppMessageSource.includes('/static/art/ticket-landscape.jpg')) {
+    fail("Role invitation friend/group share must use the fixed safe ticket cover");
+  }
   if (
-    !timelineShareTitleSource.includes("this.scriptName") ||
-    !timelineShareTitleSource.includes("this.storeName") ||
-    !timelineShareTitleSource.includes("this.startText")
+    !shareSource.includes("邀请好友认领角色") ||
+    !shareSource.includes("发送给好友或群聊") ||
+    !shareSource.includes("join-invite-token")
   ) {
-    fail("Share page Moments copy must include script name, store, and time");
-  }
-  if (!shareSource.includes("timelineShareTitle")) {
-    fail("Share page must keep Moments copy separate from friend/group share copy");
-  }
-  if (!shareSource.includes("还差") || !shareSource.includes("沉浸一局")) {
-    fail("Share page Moments copy must read like an inviting carpool pitch");
-  }
-  if (shareTimelineSource.includes("path:")) {
-    fail("Share page Moments sharing must use query instead of path");
-  }
-  if (!shareSource.includes('menus: ["shareAppMessage", "shareTimeline"]')) {
-    fail("Share page share menu must enable both friend/group and Moments sharing");
+    fail("Role invitation page must explain friend/group role claiming and keep its invite token");
   }
   for (const requiredFinalShareText of ["claimSeat", "/api/signups", "loadPublishedSession"]) {
     if (!shareSource.includes(requiredFinalShareText)) {
@@ -2906,9 +2899,10 @@ if (!fs.existsSync(pagesJsonPath)) {
     "canRequestAlbumShareToken",
     "/album/public-share",
     "/album/share-token",
-    "entry=album",
+    'source: "wechat_share"',
     "source: \"wechat_timeline\"",
     "albumTimelineQuery",
+    "shareCoverUrl",
     "showWechatShareMenus",
     "(!this.timelineMode && !token)"
   ]) {
@@ -3458,11 +3452,12 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
   if (
-    !albumShareAppMessageSource.includes("/pages/session/share") ||
-    !albumShareAppMessageSource.includes("entry=album") ||
-    !albumShareAppMessageSource.includes("source=wechat_share")
+    !albumShareAppMessageSource.includes("/pages/session/album") ||
+    !albumShareAppMessageSource.includes('source: "wechat_share"') ||
+    !albumShareAppMessageSource.includes("albumShareToken") ||
+    albumShareAppMessageSource.includes("entry=album")
   ) {
-    fail("Album friend/group sharing must route to the album-entry share page");
+    fail("Album friend/group sharing must route directly to the public read-only album snapshot");
   }
   if (
     albumShareAppMessageSource.includes('"车局相册"') ||
@@ -3475,10 +3470,11 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const albumShareTitleSource = methodBody(albumSource, "albumShareTitle");
   if (
-    !albumShareTitleSource.includes("albumShareSessionTitle") ||
-    !albumShareTitleSource.includes("相册邀请")
+    !albumShareTitleSource.includes("albumScriptName") ||
+    !albumShareTitleSource.includes("shareSubjectLabel") ||
+    !albumShareTitleSource.includes("游玩相册")
   ) {
-    fail("Album friend/group sharing title must include script and store names with 相册邀请");
+    fail("Album friend/group sharing title must include the script, role and play-album wording");
   }
   const albumShareSessionTitleSource = methodBody(albumSource, "albumShareSessionTitle");
   if (

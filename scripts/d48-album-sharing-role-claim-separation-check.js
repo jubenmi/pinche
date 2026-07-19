@@ -71,20 +71,35 @@ const server = read("apps/api/src/server.js");
 for (const token of [
   "version: 2",
   "shareId",
-  "ALBUM_PUBLIC_SHARE_EMPTY",
+  'usage: "image"',
+  'usage: "video_cover"',
   "/api/session-album/public-shares/",
   "/cover",
   "revokeMySessionAlbumPublicShares"
 ]) {
   assert(server.includes(token), `D48 server contract is missing: ${token}`);
 }
+assert(
+  service.includes("ALBUM_PUBLIC_SHARE_EMPTY"),
+  "D48 share creation must reject an empty public snapshot"
+);
 
 const albumPage = read("apps/miniprogram/src/pages/session/album.vue");
 assert(
   albumPage.includes("/pages/session/album") &&
-    albumPage.includes("source=wechat_share") &&
-    albumPage.includes("source=wechat_timeline"),
+    albumPage.includes('source: "wechat_share"') &&
+    albumPage.includes('source: "wechat_timeline"'),
   "album sharing must route friend/group and timeline recipients to the public album page"
+);
+assert(
+  albumPage.includes("prepareShareCoverUrl") &&
+    albumPage.includes("shareCoverPrepared") &&
+    albumPage.includes("getImageInfo"),
+  "album sharing must preflight its short-lived cover and fall back before enabling share menus"
+);
+assert(
+  albumPage.match(/this\.albumSession = this\.albumSessionSummary\(data\);/g)?.length >= 3,
+  "public album refresh must preserve header metadata when onLoad and onShow race"
 );
 assert(
   albumPage.includes("shareCoverUrl") && albumPage.includes("ticket-landscape.jpg"),
@@ -94,8 +109,10 @@ assert(
 const invitePage = read("apps/miniprogram/src/pages/session/share.vue");
 assert(invitePage.includes("join-invite-token"), "role invitation must keep join-invite-token");
 assert(
-  !invitePage.includes('"shareTimeline"') && !invitePage.includes("onShareTimeline("),
-  "role invitation must not expose the timeline share channel"
+  invitePage.includes("hideShareMenu") &&
+    invitePage.includes('menus: ["shareTimeline"]') &&
+    !invitePage.includes("onShareTimeline("),
+  "role invitation must explicitly hide the timeline share channel"
 );
 
 const packageJson = read("package.json");

@@ -157,6 +157,14 @@ assert(
     publicMediaBody.includes("sessionId"),
   "public album media lookup must re-check the photo belongs to the public share set"
 );
+for (const token of [
+  "createOrReuseSessionAlbumPublicShare",
+  "loadSessionAlbumPublicShare",
+  "isPublicShareSnapshotMediaId",
+  "revokeMySessionAlbumPublicShares"
+]) {
+  assert(service.includes(token), `D48 must explicitly replace the D23 dynamic share boundary: ${token}`);
+}
 
 const server = read("apps/api/src/server.js");
 for (const token of [
@@ -178,5 +186,14 @@ assert(
     server.includes("request.method === \"GET\" && publicSessionAlbumShareId"),
   "server.js must expose GET /api/sessions/:id/album/public-share"
 );
+for (const token of [
+  "version: 2",
+  "shareId",
+  "payload.version === undefined",
+  "/api/session-album/public-shares/",
+  "revokeMySessionAlbumPublicShares"
+]) {
+  assert(server.includes(token), `D23 compatibility must retain old tokens while adding D48: ${token}`);
+}
 
 console.log("D23 album share join policy checks passed");
