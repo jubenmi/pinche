@@ -45,7 +45,7 @@ test("member/admin attachment signs only rows already retained by privacy filter
   }]);
 });
 
-test("public-share attachment signs only its filtered rows and strips internal facts", () => {
+test("public-share attachment proxies filtered rows so privacy and revocation remain enforceable", () => {
   const calls = [];
   const result = attachPublicSessionAlbumMediaUrls({
     session_id: 8,
@@ -60,7 +60,12 @@ test("public-share attachment signs only its filtered rows and strips internal f
     directMediaUrls: true, nowSeconds: 1000, cosConfig, buildUrls: fakeSignedUrls(calls),
     emit: () => {}
   });
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 0);
+  assert.match(
+    result.photos[0].image_url,
+    /^\/api\/session-album\/public-share\/photos\/5\/image\?token=/
+  );
+  assert.equal(result.photos[0].preview_display_url, result.photos[0].image_url);
   assert.equal("storage_object_key" in result.photos[0], false);
   assert.equal("storage_object_etag" in result.photos[0], false);
 });

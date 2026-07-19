@@ -3,6 +3,28 @@
     <AuthIdentityBar v-if="!timelineMode" />
     <FeedbackHost />
 
+    <view v-if="timelineMode && albumSession" class="section public-share-head">
+      <view class="public-share-owner">
+        <image
+          v-if="shareOwnerAvatar"
+          class="public-share-avatar"
+          :src="shareOwnerAvatar"
+          mode="aspectFill"
+        />
+        <view class="public-share-owner-copy">
+          <view class="public-share-owner-name">{{ shareOwnerName }} 分享了游玩相册</view>
+          <view class="public-share-role">这一晚，TA 是「{{ shareSubjectLabel || "角色待定" }}」</view>
+        </view>
+      </view>
+      <view class="public-share-script">《{{ albumScriptName || "剧本待定" }}》</view>
+      <view class="public-share-meta">
+        <text>{{ albumStoreName || "店家待定" }}</text>
+        <text v-if="albumPlayedOn">{{ albumPlayedOn }}</text>
+        <text>{{ publicShareCountText }}</text>
+      </view>
+      <view class="public-share-intro">{{ publicAlbumIntro }}</view>
+    </view>
+
     <view
       v-if="operationText || (!timelineMode && hiddenCount > 0)"
       class="section album-head"
@@ -645,6 +667,10 @@ export default {
       timelineMode: false,
       albumShareToken: "",
       shareSubject: null,
+      shareOwner: null,
+      shareCoverUrl: "",
+      shareCoverPrepared: false,
+      shareCounts: { total: 0, photos: 0, videos: 0 },
       albumSession: null,
       photos: [],
       people: [],
@@ -794,6 +820,21 @@ export default {
     albumStoreName() {
       return String(this.albumSession?.store_name_snapshot || "").trim();
     },
+    albumPlayedOn() {
+      return String(this.albumSession?.played_on || "").trim();
+    },
+    shareOwnerName() {
+      return String(this.shareOwner?.nickname || "车友").trim() || "车友";
+    },
+    shareOwnerAvatar() {
+      return this.normalizeAlbumMediaUrl(this.shareOwner?.avatar_url || "");
+    },
+    publicShareCountText() {
+      const photoCount = Number(this.shareCounts.photos || 0);
+      const videoCount = Number(this.shareCounts.videos || 0);
+      if (videoCount > 0) return `${photoCount} 张照片 · ${videoCount} 段视频`;
+      return `${photoCount || Number(this.shareCounts.total || 0)} 张照片`;
+    },
     currentAlbumRoleName() {
       const userId = Number(this.currentUserId || 0);
       if (!userId) {
@@ -813,9 +854,12 @@ export default {
     },
     albumIntro() {
       if (this.timelineMode) {
-        return "朋友圈只读展示，不包含车内完整相册和上车入口。";
+        return "公开只读展示，不包含车内完整相册和上车入口。";
       }
       return "仅展示你上传或标注了你角色的照片；其他车友照片不会展示。";
+    },
+    publicAlbumIntro() {
+      return this.albumIntro;
     },
     shareSubjectLabel() {
       return (
@@ -1031,10 +1075,16 @@ export default {
     this.updateTopActionsFloating();
   },
   onShareAppMessage() {
-    const shareCode = `s${this.sessionId}-${Date.now()}`;
+    if (!this.albumShareToken) {
+      showToast({ title: "当前没有可公开分享的完成标注照片", icon: "none" });
+    }
     return {
       title: this.albumShareTitle(),
-      path: `/pages/session/share?id=${this.sessionId}&entry=album&shareCode=${shareCode}&source=wechat_share`,
+      path: `/pages/session/album${queryString({
+        id: this.sessionId,
+        source: "wechat_share",
+        albumShareToken: this.albumShareToken
+      })}`,
       imageUrl: this.albumShareImage()
     };
   },
@@ -1064,26 +1114,46 @@ export default {
   methods: {
     apiUrl,
     showShareMenus() {
-      const menus = ["shareAppMessage"];
-      if (this.timelineMode || this.albumShareToken) {
-        menus.push("shareTimeline");
+      if (!this.albumShareToken || !this.shareCoverPrepared) {
+        if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
+          uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
+        }
+        return;
       }
       showWechatShareMenus({
         withShareTicket: true,
-        menus
+        menus: ["shareAppMessage", "shareTimeline"]
+      });
+    },
+    async prepareShareCoverUrl(path) {
+      const source = this.normalizeAlbumMediaUrl(path || "");
+      if (!source) return "";
+      if (typeof uni === "undefined" || typeof uni.getImageInfo !== "function") {
+        return source;
+      }
+      return new Promise((resolve) => {
+        uni.getImageInfo({
+          src: source,
+          success: (result) => resolve(result.path || result.tempFilePath || source),
+          fail: () => resolve("")
+        });
       });
     },
     albumShareTitle() {
-      return `${this.albumShareSessionTitle()}｜相册邀请`;
+      return `我在《${this.albumScriptName || "剧本待定"}》中饰演「${
+        this.shareSubjectLabel || "角色待定"
+      }」｜游玩相册`;
     },
     albumTimelineTitle() {
-      return `${this.albumShareSessionTitle()}｜相册`;
+      return `这一晚，我是「${this.shareSubjectLabel || "角色待定"}」｜《${
+        this.albumScriptName || "剧本待定"
+      }》`;
     },
     albumShareSessionTitle() {
       return `${this.albumScriptName || "剧本待定"}｜${this.albumStoreName || "店家待定"}`;
     },
     albumShareImage() {
-      return "/static/art/ticket-landscape.jpg";
+      return this.shareCoverUrl || "/static/art/ticket-landscape.jpg";
     },
     albumTimelineQuery() {
       return queryString({
@@ -1097,7 +1167,8 @@ export default {
         id: Number(data.session_id || data.id || this.sessionId || 0) || this.sessionId,
         script_name_snapshot: data.script_name_snapshot || "",
         store_name_snapshot: data.store_name_snapshot || "",
-        start_at: data.start_at || ""
+        start_at: data.start_at || "",
+        played_on: data.played_on || ""
       };
     },
     applyAlbumSessionFallback(session) {
@@ -1179,14 +1250,21 @@ export default {
       return Boolean(this.localAlbumShareSubject());
     },
     async ensureAlbumShareToken() {
-      if (this.timelineMode || this.albumShareToken || !this.sessionId) {
+      if (this.timelineMode || !this.sessionId) {
         return;
       }
       if (!this.canRequestAlbumShareToken()) {
+        this.albumShareToken = "";
         this.shareSubject = null;
+        this.shareOwner = null;
+        this.shareCoverUrl = "";
+        this.shareCoverPrepared = false;
+        this.shareCounts = { total: 0, photos: 0, videos: 0 };
         this.showShareMenus();
         return;
       }
+      this.shareCoverPrepared = false;
+      this.showShareMenus();
       try {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/album/share-token`,
@@ -1195,9 +1273,24 @@ export default {
         const data = dataOf(response) || {};
         this.albumShareToken = data.token || "";
         this.shareSubject = data.share_subject || this.localAlbumShareSubject();
+        this.shareOwner = data.share_owner || null;
+        this.shareCoverUrl = await this.prepareShareCoverUrl(data.cover_url || "");
+        this.shareCoverPrepared = true;
+        this.shareCounts = {
+          total: Number(data.visible_count || 0),
+          photos: Number(data.photo_count || 0),
+          videos: Number(data.video_count || 0)
+        };
       } catch (error) {
         this.albumShareToken = "";
         this.shareSubject = null;
+        this.shareOwner = null;
+        this.shareCoverUrl = "";
+        this.shareCoverPrepared = false;
+        this.shareCounts = { total: 0, photos: 0, videos: 0 };
+        if (error?.code === "ALBUM_PUBLIC_SHARE_EMPTY" || error?.statusCode === 409) {
+          this.statusText = "照片需先完成角色或场景标注，并符合所有人的隐私设置后才能分享。";
+        }
       }
       this.showShareMenus();
     },
@@ -1424,6 +1517,26 @@ export default {
               return null;
             }
             const data = dataOf(response) || {};
+            if (this.timelineMode) {
+              this.shareCoverPrepared = false;
+              this.showShareMenus();
+              const preparedCoverUrl = await this.prepareShareCoverUrl(data.cover_url || "");
+              if (!this.isCurrentAlbumListRequest(listRequest)) {
+                return null;
+              }
+              this.albumSession = this.albumSessionSummary(data);
+              this.shareSubject = data.share_subject || this.shareSubject;
+              this.shareOwner = data.share_owner || this.shareOwner;
+              this.shareCoverUrl = preparedCoverUrl;
+              this.shareCoverPrepared = true;
+              this.shareCounts = {
+                total: Number(data.visible_count || 0),
+                photos: Number(data.photo_count || 0),
+                videos: Number(data.video_count || 0)
+              };
+              this.showShareMenus();
+              this.applyAlbumNavigationTitle();
+            }
             reportAlbumMediaEvent("media_refresh_success", { sessionId: Number(this.sessionId) });
             return {
               photos: (data.photos || []).map((photo) => this.normalizePhotoMedia(photo)),
@@ -1513,6 +1626,8 @@ export default {
         return;
       }
       this.loadingAlbum = true;
+      this.shareCoverPrepared = false;
+      this.showShareMenus();
       const listRequest = this.beginAlbumListRequest();
       try {
         const response = await request({
@@ -1524,6 +1639,10 @@ export default {
           return;
         }
         const data = dataOf(response) || {};
+        const preparedCoverUrl = await this.prepareShareCoverUrl(data.cover_url || "");
+        if (!this.isCurrentAlbumListRequest(listRequest)) {
+          return;
+        }
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
         this.visiblePhotoMediaRequests = {};
@@ -1536,9 +1655,18 @@ export default {
         this.hiddenCount = 0;
         this.albumSession = this.albumSessionSummary(data);
         this.shareSubject = data.share_subject || this.shareSubject;
+        this.shareOwner = data.share_owner || this.shareOwner;
+        this.shareCoverUrl = preparedCoverUrl;
+        this.shareCoverPrepared = true;
+        this.shareCounts = {
+          total: Number(data.visible_count || 0),
+          photos: Number(data.photo_count || 0),
+          videos: Number(data.video_count || 0)
+        };
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.statusText = "";
+        this.showShareMenus();
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
         this.albumMediaRefresh?.schedule();
@@ -1551,6 +1679,9 @@ export default {
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.albumSession = null;
         this.canUpload = false;
+        this.shareCoverUrl = "";
+        this.shareCoverPrepared = false;
+        this.showShareMenus();
         this.statusText =
           error?.statusCode === 403
             ? "分享相册已过期或不可访问。"
@@ -3805,6 +3936,71 @@ export default {
   border-radius: 20rpx;
   background: rgba(255, 255, 252, 0.96);
   box-shadow: 0 14rpx 36rpx rgba(42, 58, 49, 0.05);
+}
+
+.public-share-head {
+  padding: 28rpx 30rpx;
+  border: 1rpx solid rgba(222, 215, 202, 0.76);
+  border-radius: 20rpx;
+  background: rgba(255, 255, 252, 0.97);
+}
+
+.public-share-owner {
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+}
+
+.public-share-avatar {
+  flex: 0 0 72rpx;
+  width: 72rpx;
+  height: 72rpx;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #eef2ee;
+}
+
+.public-share-owner-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.public-share-owner-name {
+  color: #153f34;
+  font-size: 27rpx;
+  font-weight: 650;
+}
+
+.public-share-role {
+  margin-top: 5rpx;
+  color: #718078;
+  font-size: 22rpx;
+}
+
+.public-share-script {
+  margin-top: 24rpx;
+  color: #142f29;
+  font-family: STKaiti, KaiTi, serif;
+  font-size: 38rpx;
+  font-weight: 700;
+}
+
+.public-share-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx 18rpx;
+  margin-top: 12rpx;
+  color: #7a857d;
+  font-size: 22rpx;
+}
+
+.public-share-intro {
+  margin-top: 18rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx solid #eee9df;
+  color: #8d7b55;
+  font-size: 22rpx;
+  line-height: 1.45;
 }
 
 .notice {

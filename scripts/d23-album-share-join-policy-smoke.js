@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 const baseUrl = process.env.BASE_URL || "http://localhost:3018";
 const suffix = Date.now();
 
@@ -97,6 +99,22 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function legacyAlbumShareToken({ sessionId, sharerUserId, seatId }) {
+  const payloadText = Buffer.from(JSON.stringify({
+    sessionId,
+    sharerUserId,
+    seatId,
+    exp: Math.floor(Date.now() / 1000) + 10 * 60
+  })).toString("base64url");
+  const sessionSecret = process.env.SESSION_SECRET ||
+    "local-docker-session-secret-change-before-production";
+  const signature = crypto
+    .createHmac("sha256", sessionSecret)
+    .update(`session-album-share:${payloadText}`)
+    .digest("hex");
+  return `${payloadText}.${signature}`;
 }
 
 function startAt(hoursFromNow = -1) {
@@ -283,23 +301,17 @@ async function main() {
   );
   assert(joined.data.join_result === "joined", "direct session should join immediately");
 
-  const shareTokenPayload = await request(
-    "POST",
-    `/api/sessions/${direct.session.id}/album/share-token`,
-    {},
-    directPlayer.token
-  );
-  assert(shareTokenPayload.data.token, "confirmed direct player should receive album share token");
-  assert(
-    Number(shareTokenPayload.data.share_subject.seat_id) === Number(direct.seats[0].id),
-    "album share token subject should bind the confirmed seat"
-  );
-
   const publicOwnPhoto = await createTaggedPhoto(
     direct.session.id,
     directPlayer,
     "public-own",
     [`seat:${direct.seats[0].id}`]
+  );
+  const publicScenePhoto = await createTaggedPhoto(
+    direct.session.id,
+    directPlayer,
+    "public-scene",
+    ["other:session"]
   );
   const hiddenOtherSeatPhoto = await createTaggedPhoto(
     direct.session.id,
@@ -326,18 +338,94 @@ async function main() {
     ["npc:session"]
   );
 
+  const shareTokenPayload = await request(
+    "POST",
+    `/api/sessions/${direct.session.id}/album/share-token`,
+    {},
+    directPlayer.token
+  );
+  assert(shareTokenPayload.data.token, "confirmed direct player should receive album share token");
+  assert(shareTokenPayload.data.share_id, "D48 album share token should bind a snapshot share id");
+  assert(
+    Number(shareTokenPayload.data.share_subject.seat_id) === Number(direct.seats[0].id),
+    "album share token subject should bind the confirmed seat"
+  );
+  const signedClaims = JSON.parse(
+    Buffer.from(shareTokenPayload.data.token.split(".")[0], "base64url").toString("utf8")
+  );
+  assert(signedClaims.version === 2, "new album share tokens should use version 2 claims");
+  assert(
+    Number(signedClaims.shareId) === Number(shareTokenPayload.data.share_id),
+    "new album share token should bind the persisted snapshot"
+  );
+
+  const latePublicPhoto = await createTaggedPhoto(
+    direct.session.id,
+    directPlayer,
+    "late-public",
+    [`seat:${direct.seats[0].id}`]
+  );
+
   const publicAlbum = await request(
     "GET",
     `/api/sessions/${direct.session.id}/album/public-share?token=${encodeURIComponent(
       shareTokenPayload.data.token
     )}`
   );
+  const legacyToken = legacyAlbumShareToken({
+    sessionId: direct.session.id,
+    sharerUserId: directPlayer.user.id,
+    seatId: direct.seats[0].id
+  });
+  const legacyPublicAlbum = await request(
+    "GET",
+    `/api/sessions/${direct.session.id}/album/public-share?token=${encodeURIComponent(legacyToken)}`
+  );
+  assert(
+    albumPhotoIds(legacyPublicAlbum).has(Number(latePublicPhoto.id)),
+    "a pre-D48 stateless token should remain read-only compatible with the stricter live filter"
+  );
+  const joinInvite = await request(
+    "POST",
+    `/api/sessions/${direct.session.id}/join-invite-token`,
+    {},
+    directPlayer.token,
+    201
+  );
+  await request(
+    "GET",
+    `/api/sessions/${direct.session.id}/album/public-share?token=${encodeURIComponent(
+      joinInvite.data.token
+    )}`,
+    undefined,
+    undefined,
+    403
+  );
   const publicIds = albumPhotoIds(publicAlbum);
   assert(publicIds.has(Number(publicOwnPhoto.id)), "public album should include sharer seat photo");
+  assert(publicIds.has(Number(publicScenePhoto.id)), "public album should include a tagged sharer-uploaded scene");
+  assert(!publicIds.has(Number(latePublicPhoto.id)), "an old public snapshot should exclude later media");
   assert(!publicIds.has(Number(hiddenOtherSeatPhoto.id)), "public album should hide other-seat photo");
   assert(!publicIds.has(Number(hiddenUntaggedPhoto.id)), "public album should hide untagged photo");
   assert(!publicIds.has(Number(hiddenOtherOnlyPhoto.id)), "public album should hide other-only photo");
   assert(!publicIds.has(Number(hiddenNpcOnlyPhoto.id)), "public album should hide npc-only photo");
+  assert(!("start_at" in publicAlbum.data), "public album should not expose the precise session time");
+  assert(publicAlbum.data.played_on, "public album should expose only the Beijing play date");
+  assert(publicAlbum.data.share_owner?.nickname, "public album should expose a safe share owner");
+  assert(
+    (publicAlbum.data.photos || []).every(
+      (photo) => Array.isArray(photo.tags) && photo.tags.length === 0 &&
+        !("uploader_user_id" in photo) && !("storage_object_key" in photo)
+    ),
+    "public album media DTO should remove people and storage internals"
+  );
+
+  assert(shareTokenPayload.data.cover_url, "a safe album photo should produce a share cover");
+  const publicCover = await rawRequest("GET", shareTokenPayload.data.cover_url);
+  assert(
+    (publicCover.headers.get("content-type") || "").includes("image/jpeg"),
+    "the generated public share cover should be a controlled JPEG"
+  );
 
   const publicOwn = publicPhoto(publicAlbum, publicOwnPhoto.id);
   assert(publicOwn?.image_url, "public album photo should include public image URL");
@@ -368,6 +456,59 @@ async function main() {
   );
   await rawRequest("GET", tamperedPublicUrl, undefined, 403);
 
+  await request(
+    "PUT",
+    `/api/sessions/${direct.session.id}/album/privacy`,
+    { allowUploadedVisible: false, allowTaggedVisible: true },
+    directPlayer.token
+  );
+  const hiddenByPrivacy = await request(
+    "GET",
+    `/api/sessions/${direct.session.id}/album/public-share?token=${encodeURIComponent(
+      shareTokenPayload.data.token
+    )}`
+  );
+  assert(
+    hiddenByPrivacy.data.visible_count === 0,
+    "the sharer's own uploader privacy veto should dynamically hide old snapshot media"
+  );
+  await rawRequest("GET", publicOwn.image_url, undefined, 403);
+  await rawRequest("GET", shareTokenPayload.data.cover_url, undefined, 403);
+  await request(
+    "PUT",
+    `/api/sessions/${direct.session.id}/album/privacy`,
+    { allowUploadedVisible: true, allowTaggedVisible: true },
+    directPlayer.token
+  );
+
+  await request(
+    "DELETE",
+    `/api/sessions/${direct.session.id}/album/public-shares`,
+    undefined,
+    directPlayer.token
+  );
+  await request(
+    "GET",
+    `/api/sessions/${direct.session.id}/album/public-share?token=${encodeURIComponent(
+      shareTokenPayload.data.token
+    )}`,
+    undefined,
+    undefined,
+    403
+  );
+  await rawRequest("GET", publicOwn.image_url, undefined, 403);
+  await rawRequest("GET", shareTokenPayload.data.cover_url, undefined, 403);
+  const renewedShare = await request(
+    "POST",
+    `/api/sessions/${direct.session.id}/album/share-token`,
+    {},
+    directPlayer.token
+  );
+  assert(
+    Number(renewedShare.data.share_id) !== Number(shareTokenPayload.data.share_id),
+    "sharing after revocation should create a new share id"
+  );
+
   console.log(
     JSON.stringify(
       {
@@ -379,7 +520,9 @@ async function main() {
         publicAlbumPage: `pages/session/album?id=${direct.session.id}&source=wechat_timeline&albumShareToken=${encodeURIComponent(
           shareTokenPayload.data.token
         )}`,
-        albumEntrySharePage: `pages/session/share?id=${direct.session.id}&entry=album&source=wechat_share`
+        friendAlbumPage: `pages/session/album?id=${direct.session.id}&source=wechat_share&albumShareToken=${encodeURIComponent(
+          renewedShare.data.token
+        )}`
       },
       null,
       2
