@@ -1216,7 +1216,7 @@ test("migration CLI JSON preserves all structured duplicate details", async () =
 });
 
 test("album video migration runs preflight immediately before its ALTER", async () => {
-  const { applyMigration } = await apiMigrationRunner();
+  const { applyMigration, sha256Checksum } = await apiMigrationRunner();
   const {
     prepareAlbumVideoMigration,
     SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
@@ -1266,7 +1266,7 @@ test("album video migration runs preflight immediately before its ALTER", async 
     "index-inspection",
     "preflight",
     "alter",
-    ["record", [SESSION_ALBUM_VIDEO_HARDENING_MIGRATION]],
+    ["record", [SESSION_ALBUM_VIDEO_HARDENING_MIGRATION, sha256Checksum(sql)]],
     "commit"
   ]);
   assert.deepEqual(
@@ -1279,7 +1279,7 @@ test("album video migration runs preflight immediately before its ALTER", async 
 });
 
 test("album video migration reconciles an exact existing unique index", async () => {
-  const { applyMigration } = await apiMigrationRunner();
+  const { applyMigration, sha256Checksum } = await apiMigrationRunner();
   const {
     SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
     SESSION_ALBUM_VIDEO_SOURCE_INDEX
@@ -1304,14 +1304,15 @@ test("album video migration reconciles an exact existing unique index", async ()
     commit: async () => { calls.push("commit"); },
     rollback: async () => { calls.push("rollback"); }
   };
+  const sql = "ALTER TABLE session_album_photos ADD UNIQUE KEY ignored_by_reconciliation (source_url);";
   await applyMigration(connection, {
     file: SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
-    sql: "ALTER TABLE session_album_photos ADD UNIQUE KEY ignored_by_reconciliation (source_url);"
+    sql
   });
   assert.deepEqual(calls, [
     "begin",
     "exact-index",
-    ["record", [SESSION_ALBUM_VIDEO_HARDENING_MIGRATION]],
+    ["record", [SESSION_ALBUM_VIDEO_HARDENING_MIGRATION, sha256Checksum(sql)]],
     "commit"
   ]);
 });

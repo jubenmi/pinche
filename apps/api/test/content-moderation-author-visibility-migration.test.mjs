@@ -178,7 +178,7 @@ function authorVisibilityMigrationConnection({
         foreignKeyExists = true;
         return [{ affectedRows: 0 }];
       }
-      if (text === "INSERT INTO schema_migrations (version) VALUES (?)" && shouldFailRecord) {
+      if (text === "INSERT INTO schema_migrations (version, checksum_sha256) VALUES (?, ?)" && shouldFailRecord) {
         shouldFailRecord = false;
         throw new Error("simulated schema_migrations write failure");
       }
