@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
+const requireBuild = process.argv.includes("--require-build");
 
 function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -44,7 +45,15 @@ assert(
 
 const builtApiPath = "apps/miniprogram/dist/build/mp-weixin/utils/api.js";
 const builtSafeFeedbackPath = "apps/miniprogram/dist/build/mp-weixin/utils/safeFeedback.js";
-if (fs.existsSync(path.join(root, builtApiPath))) {
+if (requireBuild) {
+  assert(
+    fs.existsSync(path.join(root, builtApiPath)),
+    "Production API bundle is missing; run the production build first"
+  );
+  assert(
+    fs.existsSync(path.join(root, builtSafeFeedbackPath)),
+    "Production bundle must emit the safe feedback gateway"
+  );
   const builtApi = read(builtApiPath);
   assert(
     builtApi.includes('require("./safeFeedback.js")'),
@@ -53,10 +62,6 @@ if (fs.existsSync(path.join(root, builtApiPath))) {
   assert(
     !/typeof\s+[A-Za-z_$][\w$]*\.showModal/.test(builtApi),
     "Production API bundle must not dereference showModal before checking its provider"
-  );
-  assert(
-    fs.existsSync(path.join(root, builtSafeFeedbackPath)),
-    "Production bundle must emit the safe feedback gateway"
   );
 }
 

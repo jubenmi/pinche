@@ -18,7 +18,7 @@
     "dev:admin-web": "npm --workspace apps/admin-web run dev",
     "build:admin-web": "npm --workspace apps/admin-web run build",
     "test:miniprogram-dev-artifacts": "node --test scripts/miniprogram-dev-artifacts.test.mjs",
-    "test:miniprogram-production-login": "node --test apps/miniprogram/test/safeFeedback.test.mjs && npm run build:mp-weixin && node scripts/miniprogram-production-login-compatibility-check.js && node scripts/d37-wechat-review-login-check.js",
+    "test:miniprogram-production-login": "node --test apps/miniprogram/test/safeFeedback.test.mjs && npm run build:mp-weixin && node scripts/miniprogram-production-login-compatibility-check.js --require-build && node scripts/d37-wechat-review-login-check.js",
     "smoke:miniprogram-production-login": "npm run build:mp-weixin && node scripts/miniprogram-production-login-smoke.mjs",
     "devtools:refresh": "node scripts/devtools-refresh-hook.js --force --rebuild",
     "dev:api": "npm --workspace apps/api run dev",
