@@ -12,28 +12,28 @@
 
 ### Task 1: Pin the production-bundle regression with failing checks
 
-- [ ] Add `apps/miniprogram/test/safeFeedback.test.mjs` covering preferred feedback, `uni` fallback, and the no-provider callback path.
-- [ ] Add `scripts/miniprogram-production-login-compatibility-check.js` to reject direct feedback imports and unsafe production output.
-- [ ] Add focused package scripts without changing dependency or lock files.
-- [ ] Run the focused checks and record the expected failure before implementation.
+- [x] Add `apps/miniprogram/test/safeFeedback.test.mjs` covering preferred feedback, `uni` fallback, and the no-provider callback path.
+- [x] Add `scripts/miniprogram-production-login-compatibility-check.js` to reject direct feedback imports and unsafe production output.
+- [x] Add focused package scripts without changing dependency or lock files.
+- [x] Run the focused checks and record the expected failure before implementation.
 
 ### Task 2: Implement the safe feedback gateway
 
-- [ ] Add `apps/miniprogram/src/utils/safeFeedback.js` with stable wrappers for modal, toast, and action sheet calls.
-- [ ] Change `apps/miniprogram/src/utils/api.js` to use namespace import plus the safe gateway.
-- [ ] Run unit tests, production build, compatibility check, and D37 login policy check.
-- [ ] Inspect the built `utils/api.js` and `utils/safeFeedback.js` contract for unsafe property access.
+- [x] Add `apps/miniprogram/src/utils/safeFeedback.js` with stable wrappers for modal, toast, and action sheet calls.
+- [x] Change `apps/miniprogram/src/utils/api.js` to use namespace import plus the safe gateway.
+- [x] Run unit tests, production build, compatibility check, and D37 login policy check.
+- [x] Inspect the built `utils/api.js` and `utils/safeFeedback.js` contract for unsafe property access.
 
 ### Task 3: Add and run a real production-login smoke test
 
-- [ ] Add `scripts/miniprogram-production-login-smoke.mjs` using a pinned, temporary `miniprogram-automator` install so repository dependencies remain unchanged.
-- [ ] Launch `apps/miniprogram/dist/build/mp-weixin`, clear authentication storage, trigger the explicit home-page login action, confirm the modal, and wait for the authenticated home label.
-- [ ] Fail on page exceptions or the prior `showModal` undefined signature and always close the automation session.
-- [ ] Run the smoke against the production bundle and capture a passing result.
+- [x] Add `scripts/miniprogram-production-login-smoke.mjs` using a pinned, temporary `miniprogram-automator` install so repository dependencies remain unchanged.
+- [x] Launch `apps/miniprogram/dist/build/mp-weixin`, clear authentication storage, trigger the explicit home-page login action, confirm the modal, and wait for the authenticated home label.
+- [x] Fail on page exceptions or the prior `showModal` undefined signature and always close the automation session.
+- [x] Run the smoke against the production bundle and capture a passing result.
 
 ### Task 4: Verify and integrate
 
-- [ ] Run `npm run check`, focused production-login checks, build, and real-login smoke from the feature worktree.
+- [x] Run `npm run check`, focused production-login checks, build, and real-login smoke from the feature worktree.
 - [ ] Commit only the plan, tests, scripts, gateway, API integration, and package-script changes.
 - [ ] Merge the feature branch into local `develop` without touching the user's unrelated dirty files.
 - [ ] Re-run the release gate from `develop`.
