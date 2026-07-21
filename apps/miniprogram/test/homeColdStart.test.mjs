@@ -11,15 +11,15 @@ test("cold home renders a native boot state before custom components", () => {
   const pageRoot = '<view class="page home-page">';
   const rootStart = homeSource.indexOf(pageRoot);
   const bootStart = homeSource.indexOf(
-    '<view v-if="isHomeBooting" class="home-boot-state">',
+    `<view class="home-boot-state" :style="{ display: isHomeReady ? 'none' : 'flex' }">`,
     rootStart
   );
-  const businessStart = homeSource.indexOf("<template v-else>", bootStart);
+  const businessStart = homeSource.indexOf('<template v-if="isHomeReady">', bootStart);
   const authStart = homeSource.indexOf("<AuthIdentityBar", businessStart);
 
   assert.notEqual(rootStart, -1, "home page root must exist");
   assert.notEqual(bootStart, -1, "home page must expose a native cold-start state");
-  assert.notEqual(businessStart, -1, "home business components must be deferred to v-else");
+  assert.notEqual(businessStart, -1, "home business components must wait for readiness");
   assert.ok(bootStart < businessStart, "boot state must render before the business branch");
   assert.ok(authStart > businessStart, "AuthIdentityBar must mount only after boot completes");
 
@@ -33,7 +33,7 @@ test("cold home renders a native boot state before custom components", () => {
   );
   assert.match(
     homeSource,
-    /const isHomeBooting = computed\(\(\) => backendStatus\.available === null\);/,
-    "boot state must last until the first backend availability result"
+    /const isHomeReady = computed\(\(\) => backendStatus\.available !== null\);/,
+    "boot state must default visible before page data exists and last until the first backend result"
   );
 });

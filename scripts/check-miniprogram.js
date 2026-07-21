@@ -3679,7 +3679,7 @@ if (!fs.existsSync(pagesJsonPath)) {
         /^\s*<scroll-view\b[^>]*>\s*<view\b[^>]*>\s*<AuthIdentityBar\b/.test(afterRoot);
       const homeBootsBeforeAuth =
         pagePath === "pages/index/index" &&
-        /^\s*<view\b[^>]*v-if="isHomeBooting"[^>]*class="home-boot-state"[^>]*>[\s\S]*?<template\s+v-else>\s*<AuthIdentityBar\b/.test(
+        /^\s*<view\b[^>]*class="home-boot-state"[^>]*:style="\{ display: isHomeReady \? 'none' : 'flex' \}"[^>]*>[\s\S]*?<template\s+v-if="isHomeReady">\s*<AuthIdentityBar\b/.test(
           afterRoot
         );
       if (!authIsFirstRootChild && !authIsFirstScrollContentChild && !homeBootsBeforeAuth) {

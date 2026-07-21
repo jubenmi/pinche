@@ -1,13 +1,13 @@
 <template>
   <view class="page home-page">
-    <view v-if="isHomeBooting" class="home-boot-state">
+    <view class="home-boot-state" :style="{ display: isHomeReady ? 'none' : 'flex' }">
       <view class="home-boot-mark">拼</view>
       <view class="home-boot-title">剧本迷·拼车</view>
       <view class="home-boot-text">首页加载中...</view>
       <view class="home-boot-hint">正在获取公开车局</view>
     </view>
 
-    <template v-else>
+    <template v-if="isHomeReady">
       <AuthIdentityBar passive-guest @guest-login="loginFromGuestBar" />
       <FeedbackHost />
 
@@ -98,7 +98,7 @@ let maintenanceTimer = null;
 let authExpiredToastActive = false;
 
 const retryButtonText = computed(() => (backendStatus.checking ? "检查中..." : "重试"));
-const isHomeBooting = computed(() => backendStatus.available === null);
+const isHomeReady = computed(() => backendStatus.available !== null);
 const isAdmin = computed(() => roles.value.includes("system_admin"));
 const calendarMode = computed(() => (isAuthenticated.value ? "member" : "guest"));
 const createButtonLabel = computed(() =>

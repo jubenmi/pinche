@@ -19,7 +19,7 @@
 
 - [x] **Step 1: 写失败测试**
 
-测试读取 `pages/index/index.vue`，要求根页面的第一个条件内容是 `home-boot-state` 原生 `view`，启动块不包含任何自定义/TDesign 组件，业务组件位于 `v-else` 分支，并由 `backendStatus.available === null` 控制。
+测试读取 `pages/index/index.vue`，要求根页面的第一个内容是无条件存在的 `home-boot-state` 原生 `view`，只用动态内联 `display` 在就绪后隐藏；启动块不包含任何自定义/TDesign 组件，业务组件位于后续 `v-if` 分支。
 
 - [x] **Step 2: 运行测试确认 RED**
 
@@ -41,7 +41,7 @@ Expected: FAIL，提示首页缺少原生冷启动状态。
 在现有 computed 区域增加：
 
 ```js
-const isHomeBooting = computed(() => backendStatus.available === null);
+const isHomeReady = computed(() => backendStatus.available !== null);
 ```
 
 - [x] **Step 2: 增加原生模板分支并延迟业务组件挂载**
@@ -49,14 +49,14 @@ const isHomeBooting = computed(() => backendStatus.available === null);
 根节点内先渲染：
 
 ```vue
-<view v-if="isHomeBooting" class="home-boot-state">
+<view class="home-boot-state" :style="{ display: isHomeReady ? 'none' : 'flex' }">
   <view class="home-boot-mark">拼</view>
   <view class="home-boot-title">剧本迷·拼车</view>
   <view class="home-boot-text">首页加载中...</view>
 </view>
 ```
 
-把 `AuthIdentityBar`、`FeedbackHost`、维护态和 `SessionCalendar` 放入 `<template v-else>`，不改变其内部业务分支。
+把 `AuthIdentityBar`、`FeedbackHost`、维护态和 `SessionCalendar` 放入 `<template v-if="isHomeReady">`，不改变其内部业务分支。
 
 - [x] **Step 3: 增加不依赖组件的启动态样式**
 
@@ -81,7 +81,7 @@ Expected: exit 0，输出 `DONE Build complete.`。
 
 - [x] **Step 2: 检查最终 WXML**
 
-确认 `pages/index/index.wxml` 在业务组件前包含原生 `home-boot-state` 条件分支，且构建产物没有模板编译错误。
+确认 `pages/index/index.wxml` 在业务组件前包含无 `wx:if`、仅带动态 `style` 的原生 `home-boot-state` 节点，且构建产物没有模板编译错误。
 
 - [x] **Step 3: 运行相关回归**
 
