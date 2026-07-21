@@ -104,16 +104,29 @@
           aria-label="分享"
           @tap.stop
         >
-          分享
+          <t-image
+            class="album-image-viewer__share-icon"
+            src="/static/icons/share-light.svg"
+            mode="aspectFit"
+            width="32rpx"
+            height="32rpx"
+          />
         </button>
         <view
           v-else-if="shareStatus !== 'hidden' && currentPhoto"
           class="album-image-viewer__icon-button"
+          :class="{ 'album-image-viewer__icon-button--disabled': ['blocked', 'failed'].includes(shareStatus) }"
           aria-role="button"
           aria-label="分享状态"
           @tap.stop="$emit('share-status-tap', { mediaId: currentPhoto.id, status: shareStatus })"
         >
-          {{ shareStatus === "loading" ? "准备中" : shareStatus === "blocked" ? "不可分享" : "重试分享" }}
+          <t-image
+            class="album-image-viewer__share-icon"
+            src="/static/icons/share-light.svg"
+            mode="aspectFit"
+            width="32rpx"
+            height="32rpx"
+          />
         </view>
         <view
           v-if="allowDownload"
@@ -920,20 +933,23 @@ export default {
 }
 
 .album-image-viewer__share-button {
-  min-width: 88rpx;
-  width: auto;
   margin: 0;
-  padding: 0 14rpx;
+  padding: 0;
   border: 0;
-  border-radius: 30rpx;
-  background: rgba(255, 255, 255, 0.18);
-  color: #ffffff;
-  font-size: 23rpx;
-  line-height: 58rpx;
+  background: rgba(0, 0, 0, 0.42);
 }
 
 .album-image-viewer__share-button::after {
   border: 0;
+}
+
+.album-image-viewer__share-icon {
+  width: 32rpx;
+  height: 32rpx;
+}
+
+.album-image-viewer__icon-button--disabled {
+  opacity: 0.38;
 }
 
 .album-image-viewer__primary-action {

@@ -1284,6 +1284,14 @@ export default {
       } catch (error) {
         const entry = this.singleMediaShareAuthority.reject(shareRequest, error);
         this.singleMediaShareStateVersion += 1;
+        if (force && entry?.status === "failed") {
+          showModal({
+            title: "分享暂不可用",
+            content: error?.userMessage || "分享准备失败，请稍后再试。",
+            showCancel: false,
+            confirmText: "知道了"
+          });
+        }
         return entry;
       }
     },
