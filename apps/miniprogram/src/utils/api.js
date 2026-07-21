@@ -1,6 +1,12 @@
 import COS from "cos-wx-sdk-v5/index.js";
 import { contentModerationErrorText, isContentModerationError } from "./contentModeration.js";
-import { showActionSheet, showModal, showToast } from "./tdesignFeedback.js";
+import { createSafeFeedback } from "./safeFeedback.js";
+import * as tdesignFeedback from "./tdesignFeedback.js";
+
+const { showActionSheet, showModal, showToast } = createSafeFeedback({
+  getPreferredFeedback: () => tdesignFeedback,
+  getPlatformFeedback: () => (typeof uni === "undefined" ? null : uni)
+});
 
 const TOKEN_KEY = "pinche_token";
 const USER_KEY = "pinche_user";
