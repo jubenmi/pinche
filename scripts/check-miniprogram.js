@@ -3677,7 +3677,12 @@ if (!fs.existsSync(pagesJsonPath)) {
       const authIsFirstRootChild = /^\s*<AuthIdentityBar\b/.test(afterRoot);
       const authIsFirstScrollContentChild =
         /^\s*<scroll-view\b[^>]*>\s*<view\b[^>]*>\s*<AuthIdentityBar\b/.test(afterRoot);
-      if (!authIsFirstRootChild && !authIsFirstScrollContentChild) {
+      const homeBootsBeforeAuth =
+        pagePath === "pages/index/index" &&
+        /^\s*<view\b[^>]*v-if="isHomeBooting"[^>]*class="home-boot-state"[^>]*>[\s\S]*?<template\s+v-else>\s*<AuthIdentityBar\b/.test(
+          afterRoot
+        );
+      if (!authIsFirstRootChild && !authIsFirstScrollContentChild && !homeBootsBeforeAuth) {
         fail(`Auth identity bar must be the first page element: ${pagePath}`);
       }
     } else if (rootViewMatch) {

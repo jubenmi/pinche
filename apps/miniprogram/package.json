@@ -6,6 +6,7 @@
   "scripts": {
     "dev:mp-weixin": "uni -p mp-weixin",
     "build:mp-weixin": "uni build -p mp-weixin",
+    "test:home-cold-start": "node --test test/homeColdStart.test.mjs",
     "test:album-media": "npm run build:mp-weixin && node --test test/albumMediaSelection.test.mjs test/albumMediaOperation.test.mjs test/albumPhotoUpload.test.mjs test/cosSdkBundle.test.mjs",
     "test:content-moderation": "node --test test/contentModeration.test.mjs"
   },
