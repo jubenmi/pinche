@@ -5,9 +5,9 @@ import { requiredSchemaTables } from "../src/db/mysql.js";
 import { applyMigration } from "../src/db/migrate.js";
 import {
   CONTENT_MODERATION_PROVIDER_ATTEMPTS_MIGRATION,
-  prepareMigration,
+  prepareContentModerationMigration as prepareMigration,
   reconcileContentModerationProviderAttempts
-} from "../src/modules/album-video/migration.js";
+} from "../src/modules/content-moderation/migration.js";
 
 const migrationUrl = new URL("../migrations/0024_content_moderation.sql", import.meta.url);
 const providerAttemptsMigrationUrl = new URL(

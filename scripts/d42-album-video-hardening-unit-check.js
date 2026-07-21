@@ -1218,7 +1218,7 @@ test("migration CLI JSON preserves all structured duplicate details", async () =
 test("album video migration runs preflight immediately before its ALTER", async () => {
   const { applyMigration } = await apiMigrationRunner();
   const {
-    prepareMigration,
+    prepareAlbumVideoMigration,
     SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
     SESSION_ALBUM_VIDEO_SOURCE_INDEX
   } = await apiMigrationHelpers();
@@ -1270,7 +1270,7 @@ test("album video migration runs preflight immediately before its ALTER", async 
     "commit"
   ]);
   assert.deepEqual(
-    await prepareMigration(
+    await prepareAlbumVideoMigration(
       { query: async () => { throw new Error("other migrations must not inspect the video index"); } },
       "0022_store_location_data.sql"
     ),

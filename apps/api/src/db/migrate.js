@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config/env.js";
-import { prepareMigration } from "../modules/album-video/migration.js";
+import { prepareRegisteredMigration } from "./migration-registry.js";
 import { createServerConnection } from "./mysql.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -34,7 +34,7 @@ export async function applyMigration(connection, { file, sql }) {
 
   await connection.beginTransaction();
   try {
-    const { skipStatements } = await prepareMigration(connection, file);
+    const { skipStatements } = await prepareRegisteredMigration(connection, file);
     if (!skipStatements) {
       for (const statement of statements) {
         await connection.query(statement);

@@ -5,9 +5,9 @@ import test from "node:test";
 import { applyMigration } from "../src/db/migrate.js";
 import {
   AUTHOR_PRIVATE_CONTENT_VISIBILITY_MIGRATION,
-  prepareMigration,
+  prepareContentModerationMigration as prepareMigration,
   reconcileAuthorPrivateContentVisibility
-} from "../src/modules/album-video/migration.js";
+} from "../src/modules/content-moderation/migration.js";
 
 const migrationUrl = new URL(
   "../migrations/0030_author_private_content_visibility.sql",
