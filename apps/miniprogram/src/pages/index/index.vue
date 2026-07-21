@@ -1,48 +1,57 @@
 <template>
   <view class="page home-page">
-    <AuthIdentityBar passive-guest @guest-login="loginFromGuestBar" />
-    <FeedbackHost />
-
-    <view v-if="backendStatus.maintenance" class="maintenance-state">
-      <t-image class="maintenance-art" src="/static/art/maintenance-landscape.jpg" mode="widthFix" />
-      <view class="maintenance-title">服务正在上线维护中</view>
-      <view class="maintenance-text">我们正在准备后端服务，稍后会自动恢复。</view>
-      <view v-if="backendStatus.lastCheckedAt" class="maintenance-meta">
-        最近检查：{{ backendStatus.lastCheckedAt }}
-      </view>
-      <view v-if="backendStatus.lastErrorMessage" class="maintenance-meta">
-        {{ backendStatus.lastErrorMessage }}
-      </view>
-      <view class="build-version">{{ buildVersion }}</view>
-      <t-button
-        class="maintenance-retry"
-        :class="{ disabled: backendStatus.checking }"
-        :disabled="backendStatus.checking"
-        @tap="retryBackend"
-      >
-        {{ retryButtonText }}
-      </t-button>
+    <view class="home-boot-state" :style="{ display: isHomeReady ? 'none' : 'flex' }">
+      <view class="home-boot-mark">拼</view>
+      <view class="home-boot-title">剧本迷·拼车</view>
+      <view class="home-boot-text">首页加载中...</view>
+      <view class="home-boot-hint">正在获取公开车局</view>
     </view>
 
-    <view v-else class="home-normal">
-      <SessionCalendar
-        :sessions="sessions"
-        :signups="signups"
-        :guest-sessions="guestSessions"
-        :calendar-mode="calendarMode"
-        :loading="isCalendarLoading"
-        :refreshing="isRefreshingCalendar"
-        :status-text="homeStatusText"
-        show-create-button
-        :create-button-label="createButtonLabel"
-        :show-admin-button="showAdminAction"
-        @create="handleCreateAction"
-        @admin="handleAdminAction"
-        @identity-required="loginFromIdentityAction"
-        @refresh="refreshCalendar"
-        @auth-expired="handleAuthExpired"
-      />
-    </view>
+    <template v-if="isHomeReady">
+      <AuthIdentityBar passive-guest @guest-login="loginFromGuestBar" />
+      <FeedbackHost />
+
+      <view v-if="backendStatus.maintenance" class="maintenance-state">
+        <t-image class="maintenance-art" src="/static/art/maintenance-landscape.jpg" mode="widthFix" />
+        <view class="maintenance-title">服务正在上线维护中</view>
+        <view class="maintenance-text">我们正在准备后端服务，稍后会自动恢复。</view>
+        <view v-if="backendStatus.lastCheckedAt" class="maintenance-meta">
+          最近检查：{{ backendStatus.lastCheckedAt }}
+        </view>
+        <view v-if="backendStatus.lastErrorMessage" class="maintenance-meta">
+          {{ backendStatus.lastErrorMessage }}
+        </view>
+        <view class="build-version">{{ buildVersion }}</view>
+        <t-button
+          class="maintenance-retry"
+          :class="{ disabled: backendStatus.checking }"
+          :disabled="backendStatus.checking"
+          @tap="retryBackend"
+        >
+          {{ retryButtonText }}
+        </t-button>
+      </view>
+
+      <view v-else class="home-normal">
+        <SessionCalendar
+          :sessions="sessions"
+          :signups="signups"
+          :guest-sessions="guestSessions"
+          :calendar-mode="calendarMode"
+          :loading="isCalendarLoading"
+          :refreshing="isRefreshingCalendar"
+          :status-text="homeStatusText"
+          show-create-button
+          :create-button-label="createButtonLabel"
+          :show-admin-button="showAdminAction"
+          @create="handleCreateAction"
+          @admin="handleAdminAction"
+          @identity-required="loginFromIdentityAction"
+          @refresh="refreshCalendar"
+          @auth-expired="handleAuthExpired"
+        />
+      </view>
+    </template>
   </view>
 </template>
 
@@ -89,6 +98,7 @@ let maintenanceTimer = null;
 let authExpiredToastActive = false;
 
 const retryButtonText = computed(() => (backendStatus.checking ? "检查中..." : "重试"));
+const isHomeReady = computed(() => backendStatus.available !== null);
 const isAdmin = computed(() => roles.value.includes("system_admin"));
 const calendarMode = computed(() => (isAuthenticated.value ? "member" : "guest"));
 const createButtonLabel = computed(() =>
@@ -381,6 +391,57 @@ onShareTimeline(() => ({
   display: flex;
   flex: 1;
   flex-direction: column;
+}
+
+.home-boot-state {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 760rpx;
+  padding: 72rpx 24rpx;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.home-boot-mark {
+  display: flex;
+  width: 88rpx;
+  height: 88rpx;
+  align-items: center;
+  justify-content: center;
+  border-radius: 24rpx;
+  background: #1d5d4e;
+  box-shadow: 0 16rpx 36rpx rgba(29, 93, 78, 0.18);
+  color: #ffffff;
+  font-size: 38rpx;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.home-boot-title {
+  margin-top: 28rpx;
+  color: #183d34;
+  font-size: 34rpx;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.home-boot-text {
+  margin-top: 18rpx;
+  color: #6f7b73;
+  font-size: 26rpx;
+  line-height: 1.6;
+}
+
+.home-boot-hint {
+  margin-top: 8rpx;
+  color: #9aa19a;
+  font-size: 22rpx;
+  line-height: 1.45;
 }
 
 .build-version {
