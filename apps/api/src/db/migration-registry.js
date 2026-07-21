@@ -18,7 +18,43 @@ function migrationError(code, details) {
   return error;
 }
 
+export const SCHEMA_MIGRATION_CHECKSUMS_MIGRATION =
+  "0033_schema_migration_checksums.sql";
+
+async function prepareSchemaMigrationChecksums(connection) {
+  const [columns] = await connection.query(
+    `
+      SELECT
+        DATA_TYPE AS data_type,
+        CHARACTER_MAXIMUM_LENGTH AS character_maximum_length,
+        IS_NULLABLE AS is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'schema_migrations'
+        AND column_name = 'checksum_sha256'
+      LIMIT 1
+    `,
+  );
+  const column = columns[0];
+  if (
+    !column ||
+    String(column.data_type).toLowerCase() !== "char" ||
+    Number(column.character_maximum_length) !== 64 ||
+    String(column.is_nullable).toUpperCase() !== "YES"
+  ) {
+    throw migrationError("MIGRATION_HISTORY_SCHEMA_MISMATCH", {
+      column: "checksum_sha256",
+    });
+  }
+  return { skipStatements: true, reconciledMigrationChecksums: true };
+}
+
 export const defaultMigrationPreparers = Object.freeze([
+  Object.freeze({
+    id: "schema-migration-checksums",
+    filenames: new Set([SCHEMA_MIGRATION_CHECKSUMS_MIGRATION]),
+    prepare: prepareSchemaMigrationChecksums,
+  }),
   Object.freeze({
     id: "album-video",
     filenames: new Set([SESSION_ALBUM_VIDEO_HARDENING_MIGRATION]),

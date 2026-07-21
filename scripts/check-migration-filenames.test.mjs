@@ -5,17 +5,23 @@ import test from "node:test";
 import { validateMigrationFilenames } from "./check-migration-filenames.mjs";
 
 const migrationsUrl = new URL("../apps/api/migrations/", import.meta.url);
+const currentFutureHistory = ["0033_schema_migration_checksums.sql"];
 
 async function currentMigrationFilenames() {
   return (await readdir(migrationsUrl)).filter((name) => name.endsWith(".sql"));
 }
 
 function issueCodes(filenames, options) {
-  return validateMigrationFilenames(filenames, options).map(({ code }) => code);
+  return validateMigrationFilenames(filenames, {
+    futureMigrationHistory: currentFutureHistory,
+    ...options,
+  }).map(({ code }) => code);
 }
 
 test("the current migration history, including five legacy duplicate prefixes, is valid", async () => {
-  assert.deepEqual(validateMigrationFilenames(await currentMigrationFilenames()), []);
+  assert.deepEqual(validateMigrationFilenames(await currentMigrationFilenames(), {
+    futureMigrationHistory: currentFutureHistory,
+  }), []);
 });
 
 test("future migration filenames must use a four-digit prefix and snake_case description", async () => {
@@ -35,14 +41,18 @@ test("prefixes from 0033 onward are globally unique", async () => {
   const filenames = await currentMigrationFilenames();
 
   assert.equal(
-    issueCodes([...filenames, "0033_add_alpha.sql", "0033_add_beta.sql"])
+    issueCodes([...filenames, "0034_add_alpha.sql", "0034_add_beta.sql"])
       .includes("MIGRATION_FILENAME_DUPLICATE_PREFIX"),
     true,
   );
   assert.deepEqual(
     validateMigrationFilenames(
-      [...filenames, "0033_add_alpha.sql", "0034_add_beta.sql"],
-      { futureMigrationHistory: ["0033_add_alpha.sql", "0034_add_beta.sql"] },
+      [...filenames, "0034_add_alpha.sql", "0035_add_beta.sql"],
+      { futureMigrationHistory: [
+        ...currentFutureHistory,
+        "0034_add_alpha.sql",
+        "0035_add_beta.sql",
+      ] },
     ),
     [],
   );
@@ -51,9 +61,10 @@ test("prefixes from 0033 onward are globally unique", async () => {
 test("future migration history is append-only and strictly increasing", async () => {
   const filenames = await currentMigrationFilenames();
   const futureMigrationHistory = [
-    "0033_first.sql",
-    "0035_existing.sql",
-    "0034_backdated.sql",
+    ...currentFutureHistory,
+    "0034_first.sql",
+    "0036_existing.sql",
+    "0035_backdated.sql",
   ];
 
   assert.equal(
@@ -65,11 +76,16 @@ test("future migration history is append-only and strictly increasing", async ()
 
 test("future migration history cannot insert a backdated prefix before an existing maximum", async () => {
   const filenames = await currentMigrationFilenames();
-  const baselineFutureMigrationHistory = ["0033_first.sql", "0035_existing.sql"];
+  const baselineFutureMigrationHistory = [
+    ...currentFutureHistory,
+    "0034_first.sql",
+    "0036_existing.sql",
+  ];
   const futureMigrationHistory = [
-    "0033_first.sql",
-    "0034_backdated.sql",
-    "0035_existing.sql",
+    ...currentFutureHistory,
+    "0034_first.sql",
+    "0035_backdated.sql",
+    "0036_existing.sql",
   ];
 
   assert.equal(

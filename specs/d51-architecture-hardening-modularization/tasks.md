@@ -41,20 +41,20 @@
   - [x] 运行 `node --test apps/api/test/http-body-boundaries.test.mjs apps/api/test/runtime-config.test.mjs apps/api/test/rate-limit.test.mjs`，预期全部通过。
   - [x] 运行 `npm run d46:unit && npm run d50:unit && npm run check`，确认审核、媒体 capability、分享和完整回归通过。
 
-- [ ] D51.4 重构迁移 runner，并把生产迁移收敛为单入口。
-  - [ ] 新建 `apps/api/src/infra/db/sql-statements.js`，用状态机处理引号、转义、行注释、块注释和 statement 分号。
-  - [ ] 新建 `apps/api/src/infra/db/migration-lock.js`，以数据库名派生固定命名锁，设置有界等待并在 finally 释放。
-  - [ ] 新建 `apps/api/src/infra/db/migration-registry.js`，提供按完整 migration filename 注册 preflight/reconcile/skipSql 的接口。
-  - [ ] 将 album-video、content-moderation 和 user-image-assets 的特殊迁移逻辑移入所属模块 handler；通用 runner 不再导入 album-video migration 聚合文件。
-  - [ ] 新增 `0033_schema_migration_checksums.sql`，为 `schema_migrations` 增加 SHA-256 checksum，并实现旧记录一次性可信回填。
-  - [ ] 修改 `apps/api/src/db/migrate.js` 或替换为 `apps/api/src/infra/db/migrate.js`，依次执行锁、checksum、registry、SQL 和记录写入。
-  - [ ] 新建迁移编号检查器，历史 `0021/0022/0024/0030/0032` 进入固定 allowlist；后续新编号必须唯一且递增。
-  - [ ] 修改 `apps/api/docker-entrypoint.sh`，仅在显式 `RUN_MIGRATIONS_ON_START=true` 时执行迁移；生产示例不设置该变量。
-  - [ ] 保留 `docker-compose.prod.example.yml` 的独立 migrate 服务，验证 API/Worker 只依赖其成功结果而不重复迁移。
-  - [ ] 扩展 `migration-runner.test.mjs`，覆盖 parser、checksum、registry、锁超时、释放、DDL 部分应用重跑和错误结构。
-  - [ ] 在空 MySQL 8.4 fixture 运行 `npm run migrate` 两次，第一次完整应用、第二次 executed 为空。
-  - [ ] 并发启动两个 fixture migrator，验证一个持锁执行，另一个有界失败且 `schema_migrations` 无重复/部分记录。
-  - [ ] 运行 D42/D43/D45/D46 迁移相关测试与 `npm run check`，预期全部通过。
+- [x] D51.4 重构迁移 runner，并把生产迁移收敛为单入口。
+  - [x] 新建 `apps/api/src/infra/db/sql-statements.js`，用状态机处理引号、转义、行注释、块注释和 statement 分号。
+  - [x] 新建 `apps/api/src/infra/db/migration-lock.js`，以数据库名派生固定命名锁，设置有界等待并在 finally 释放。
+  - [x] 新建 `apps/api/src/infra/db/migration-registry.js`，提供按完整 migration filename 注册 preflight/reconcile/skipSql 的接口。
+  - [x] 将 album-video、content-moderation 和 user-image-assets 的特殊迁移逻辑移入所属模块 handler；通用 runner 不再导入 album-video migration 聚合文件。
+  - [x] 新增 `0033_schema_migration_checksums.sql`，为 `schema_migrations` 增加 SHA-256 checksum，并实现旧记录一次性可信回填。
+  - [x] 修改 `apps/api/src/db/migrate.js` 或替换为 `apps/api/src/infra/db/migrate.js`，依次执行锁、checksum、registry、SQL 和记录写入。
+  - [x] 新建迁移编号检查器，历史 `0021/0022/0024/0030/0032` 进入固定 allowlist；后续新编号必须唯一且递增。
+  - [x] 修改 `apps/api/docker-entrypoint.sh`，仅在显式 `RUN_MIGRATIONS_ON_START=true` 时执行迁移；生产示例不设置该变量。
+  - [x] 保留 `docker-compose.prod.example.yml` 的独立 migrate 服务，验证 API/Worker 只依赖其成功结果而不重复迁移。
+  - [x] 扩展 `migration-runner.test.mjs`，覆盖 parser、checksum、registry、锁超时、释放、DDL 部分应用重跑和错误结构。
+  - [x] 在空 MySQL 8.4 fixture 运行 `npm run migrate` 两次，第一次完整应用、第二次 executed 为空。
+  - [x] 并发启动两个 fixture migrator，验证一个持锁执行，另一个有界失败且 `schema_migrations` 无重复/部分记录。
+  - [x] 运行 D42/D43/D45/D46 迁移相关测试与 `npm run check`，预期全部通过。
 
 - [ ] D51.5 建立 PR CI、真实 MySQL integration 和分层命令。
   - [ ] 将根 `package.json` 的 81 步命令拆为 `check:fast`、`test:unit`、`test:contracts`、`test:integration`、`build:all` 和聚合 `check`。
@@ -207,3 +207,4 @@
 - 2026-07-22：在隔离工作树 `.worktrees/d51-architecture-hardening-modularization`、分支 `codex/d51-architecture-hardening-modularization` 开始执行。talk 子模块通过主仓库本地 Git 对象初始化到固定提交 `58c7c704941796a9361446b6e8bd71e0aa9584f1`；依赖安装后，未加入任何 D51 RED 测试前的原始 `npm run check` 退出码为 0。D51.2 正在进行，尚未勾选。
 - 2026-07-22：D51.2 完成。`npm run d51:check` 退出码 0，并显式报告 7 个待建模块入口与生产 API 隐式迁移的基线缺口；严格模式仍为 RED。隔离回环端口运行三组 D51 行为测试，结果 11 项中 1 通过、10 失败：两个超限 JSON 请求实际返回 404 而非 413；四组弱生产配置仍输出 `CONFIG_OK`；迁移 parser/checksum/lock 接口缺失；历史重复编号 validator 在 checker 实现前缺失。随后原 `npm run check` 再次退出码 0，证明 RED 未混入既有聚合门禁。
 - 2026-07-22：D51.3 完成。新增 `d51:security` 并接入 `precheck`；专项 19/19 通过，覆盖无正文读取的超限 `Content-Length` 预检、chunked 累计上限、非法 JSON、callback 专用上限、request ID/低敏单行日志、health 脱敏、80ms 测试超时、内存/Redis limiter、429 `Retry-After` 和 Redis 故障 503。`npm run d46:unit && npm run d50:unit && npm run check` 在允许回环监听的隔离环境退出码 0；第一次普通沙箱运行仅因既有 D50 回环监听 `EPERM` 失败，不是代码回归。
+- 2026-07-22：D51.4 完成。`npm run d51:migrations` 35/35 通过，覆盖 SQL 状态机、checksum 漂移/回填、完整文件名 registry、命名锁超时/释放、迁移历史和错误结构；迁移文件治理检查通过。临时 MySQL 8.4 空库首次执行 38 个迁移、第二次 `executed: []`；同步并发试验中第一个 migrator 持锁 15 秒，第二个以 1 秒上限返回 `MIGRATION_LOCK_UNAVAILABLE`，最终 `schema_migrations` 为 38 行、38 个不同版本、0 个缺失 checksum。生产 entrypoint 不再隐式迁移，开发 Compose 显式打开，生产 Compose 继续依赖独立 migrate 服务。`npm run d42:api-lifecycle && npm run d43:unit && npm run d45:unit && npm run d46:unit` 与允许回环监听的 `npm run check` 均退出码 0；`npm run d51:check` 只剩 7 个后续模块入口缺口，不再报告生产隐式迁移。

@@ -5,6 +5,7 @@ import {
   applyMigration,
   ensureMigrationsTable,
   migrationLockName,
+  migrationLockTimeoutSeconds,
   reconcileMigrationChecksums,
   runMigrations,
   serializeMigrationError,
@@ -144,6 +145,18 @@ test("migration lock name is stable, bounded, and readable for ordinary database
   assert.equal(migrationLockName("pinche"), "pinche:migrate:pinche");
   assert.ok(Buffer.byteLength(migrationLockName("数".repeat(100)), "utf8") <= 64);
   assert.equal(migrationLockName("x".repeat(100)), migrationLockName("x".repeat(100)));
+});
+
+test("migration lock timeout is explicitly bounded for concurrent runners", () => {
+  assert.equal(migrationLockTimeoutSeconds(undefined), 30);
+  assert.equal(migrationLockTimeoutSeconds("1"), 1);
+  assert.equal(migrationLockTimeoutSeconds("60"), 60);
+  for (const invalid of ["0", "61", "1.5", "not-a-number"]) {
+    assert.throws(
+      () => migrationLockTimeoutSeconds(invalid),
+      (error) => error?.code === "MIGRATION_LOCK_TIMEOUT_INVALID",
+    );
+  }
 });
 
 test("migration lock wraps work and releases in finally", async () => {

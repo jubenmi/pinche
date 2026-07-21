@@ -19,7 +19,7 @@ test("D51 baseline mode records known architecture gaps without hiding them", ()
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /D51 baseline gaps:/);
   assert.match(result.stdout, /MISSING_MODULE_ENTRY/);
-  assert.match(result.stdout, /PRODUCTION_API_RUNS_MIGRATIONS/);
+  assert.doesNotMatch(result.stdout, /PRODUCTION_API_RUNS_MIGRATIONS/);
 });
 
 test("D51 strict mode remains red while target architecture gaps exist", () => {

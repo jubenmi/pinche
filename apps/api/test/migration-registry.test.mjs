@@ -72,7 +72,12 @@ test("registry validation finds duplicate claims before any preparer can run", (
 test("default registry owns album video, content moderation, and user image migrations", () => {
   assert.deepEqual(
     defaultMigrationPreparers.map(({ id }) => id),
-    ["album-video", "content-moderation", "user-image-assets"],
+    [
+      "schema-migration-checksums",
+      "album-video",
+      "content-moderation",
+      "user-image-assets",
+    ],
   );
   const claimed = defaultMigrationPreparers.flatMap(({ id, filenames }) =>
     [...filenames].map((filename) => [filename, id]));
@@ -84,5 +89,22 @@ test("default registry owns album video, content moderation, and user image migr
     "0027_content_moderation_retry_exhaustion.sql",
     "0030_author_private_content_visibility.sql",
     "0031_user_image_assets.sql",
+    "0033_schema_migration_checksums.sql",
   ]);
+});
+
+test("checksum metadata marker is reconciled by the runner-owned handler", async () => {
+  const calls = [];
+  const result = await prepareRegisteredMigration(
+    {
+      async query(sql) {
+        calls.push(sql.replace(/\s+/g, " ").trim());
+        return [[{ data_type: "char", character_maximum_length: 64, is_nullable: "YES" }]];
+      },
+    },
+    "0033_schema_migration_checksums.sql",
+  );
+  assert.deepEqual(result, { skipStatements: true, reconciledMigrationChecksums: true });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /information_schema\.columns/);
 });

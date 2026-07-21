@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config/env.js";
+import { splitSqlStatements } from "../infra/db/sql-statements.js";
 import {
   defaultMigrationPreparers,
   prepareRegisteredMigration,
@@ -20,6 +21,24 @@ function migrationError(code, details = {}) {
   error.code = code;
   error.details = details;
   return error;
+}
+
+export function migrationLockTimeoutSeconds(
+  raw = process.env.MIGRATION_LOCK_TIMEOUT_SECONDS,
+) {
+  if (raw === undefined || raw === "") return MIGRATION_LOCK_TIMEOUT_SECONDS;
+  if (!/^\d+$/.test(String(raw))) {
+    throw migrationError("MIGRATION_LOCK_TIMEOUT_INVALID", {
+      variable: "MIGRATION_LOCK_TIMEOUT_SECONDS",
+    });
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 60) {
+    throw migrationError("MIGRATION_LOCK_TIMEOUT_INVALID", {
+      variable: "MIGRATION_LOCK_TIMEOUT_SECONDS",
+    });
+  }
+  return value;
 }
 
 export function sha256Checksum(value) {
@@ -102,18 +121,6 @@ function quoteIdentifier(identifier) {
   }
 
   return `\`${identifier}\``;
-}
-
-function splitSqlStatements(sql) {
-  const withoutLineComments = sql
-    .split(/\r?\n/)
-    .filter((line) => !line.trim().startsWith("--"))
-    .join("\n");
-
-  return withoutLineComments
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
 }
 
 export async function applyMigration(
@@ -270,6 +277,7 @@ async function migrationFiles() {
 export async function runMigrations({
   connectionFactory = createServerConnection,
   migrationPreparers = defaultMigrationPreparers,
+  lockTimeoutSeconds = migrationLockTimeoutSeconds(),
 } = {}) {
   validateMigrationPreparerRegistry(migrationPreparers);
   const connection = await connectionFactory();
@@ -301,7 +309,7 @@ export async function runMigrations({
       }
 
       return { executed, total: files.length };
-    });
+    }, { timeoutSeconds: lockTimeoutSeconds });
   } finally {
     await connection.end();
   }
