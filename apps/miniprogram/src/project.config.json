@@ -12,7 +12,7 @@
     "bigPackageSizeSupport": true
   },
   "compileType": "miniprogram",
-  "libVersion": "3.12.1",
+  "libVersion": "3.17.0",
   "appid": "wx2675a606d3bd242c",
   "projectname": "剧本迷·拼车",
   "condition": {

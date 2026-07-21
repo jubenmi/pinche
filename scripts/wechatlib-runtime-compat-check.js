@@ -13,6 +13,17 @@ function assert(condition, message) {
   }
 }
 
+for (const projectConfigPath of [
+  "apps/miniprogram/project.config.json",
+  "apps/miniprogram/src/project.config.json"
+]) {
+  const projectConfig = JSON.parse(read(projectConfigPath));
+  assert(
+    projectConfig.libVersion === "3.17.0",
+    `${projectConfigPath} must use WeChatLib 3.17.0 to avoid the 3.12.1 page-route blank screen`
+  );
+}
+
 const dateTimePicker = read(
   "apps/miniprogram/src/wxcomponents/tdesign-miniprogram/date-time-picker/date-time-picker.js"
 );
