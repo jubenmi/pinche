@@ -34,9 +34,9 @@
 ### Task 4: Verify and integrate
 
 - [x] Run `npm run check`, focused production-login checks, build, and real-login smoke from the feature worktree.
-- [ ] Commit only the plan, tests, scripts, gateway, API integration, and package-script changes.
-- [ ] Merge the feature branch into local `develop` without touching the user's unrelated dirty files.
-- [ ] Re-run the release gate from `develop`.
+- [x] Commit only the plan, tests, scripts, gateway, API integration, and package-script changes.
+- [x] Merge the feature branch into local `develop` without touching the user's unrelated dirty files.
+- [x] Re-run the release gate from `develop`.
 
 ### Task 5: Guarded CI release and experience upload
 
