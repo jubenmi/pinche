@@ -12,6 +12,28 @@ export function badRequest(message, details) {
   return new AppError(400, "BAD_REQUEST", message, details);
 }
 
+export function invalidJson() {
+  return new AppError(400, "INVALID_JSON", "Request body must be valid JSON");
+}
+
+export function payloadTooLarge() {
+  return new AppError(413, "PAYLOAD_TOO_LARGE", "Request body is too large");
+}
+
+export function rateLimited(retryAfter = 1) {
+  const error = new AppError(429, "RATE_LIMITED", "Too many requests");
+  error.retryAfter = Math.max(1, Math.min(3600, Math.ceil(Number(retryAfter) || 1)));
+  return error;
+}
+
+export function rateLimitUnavailable() {
+  return new AppError(
+    503,
+    "RATE_LIMIT_UNAVAILABLE",
+    "Request protection is temporarily unavailable"
+  );
+}
+
 export function unauthorized(message = "Authentication required") {
   return new AppError(401, "UNAUTHORIZED", message);
 }

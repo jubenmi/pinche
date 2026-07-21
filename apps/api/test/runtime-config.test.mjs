@@ -14,6 +14,8 @@ const secureProductionEnv = Object.freeze({
   MYSQL_DATABASE: "pinche",
   DATABASE_TARGET_LOCK: "cloud",
   DATABASE_TARGET_LOCK_HOST: "mysql.example.invalid",
+  REDIS_ENABLED: "true",
+  REDIS_URL: "redis://redis.example.invalid:6379/0",
   CONTENT_MODERATION_ENABLED: "false",
   CONTENT_MODERATION_TEXT_INTAKE_MODE: "closed",
   CONTENT_MODERATION_IMAGE_INTAKE_MODE: "closed",
@@ -38,6 +40,12 @@ function importProductionConfig(overrides) {
   });
 }
 
+test("secure production config imports without performing external I/O", () => {
+  const result = importProductionConfig({});
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stdout, "CONFIG_OK");
+});
+
 for (const [name, overrides, expectedVariable] of [
   ["mock login", { WECHAT_MOCK_LOGIN: "true" }, "WECHAT_MOCK_LOGIN"],
   ["weak session secret", { SESSION_SECRET: "development-secret" }, "SESSION_SECRET"],
@@ -58,3 +66,12 @@ for (const [name, overrides, expectedVariable] of [
     assert.doesNotMatch(combinedOutput, /development-secret|d51-production-secret/);
   });
 }
+
+test("production requires shared Redis rate-limit state", () => {
+  const result = importProductionConfig({ REDIS_ENABLED: "false", REDIS_URL: "" });
+  const combinedOutput = `${result.stdout}\n${result.stderr}`;
+  assert.notEqual(result.status, 0, combinedOutput);
+  assert.match(combinedOutput, /RUNTIME_CONFIG_INVALID/);
+  assert.match(combinedOutput, /REDIS_ENABLED/);
+  assert.doesNotMatch(combinedOutput, /redis:\/\//);
+});

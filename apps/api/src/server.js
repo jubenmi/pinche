@@ -9,6 +9,7 @@ import sharp from "sharp";
 import { isModerationPublished } from "@pinche/shared";
 import { config, publicConfig } from "./config/env.js";
 import { checkDatabaseReadiness, withDatabaseConnection, withTransaction } from "./db/mysql.js";
+import { readBody } from "./http/body.js";
 import {
   AppError,
   badRequest,
@@ -17,6 +18,8 @@ import {
   phoneRequired,
   unauthorized
 } from "./http/errors.js";
+import { createRequestContext } from "./http/request-context.js";
+import { logRequest } from "./http/request-log.js";
 import {
   publicUser,
   updateUserPhone,
@@ -32,6 +35,11 @@ import {
   loginWithWechatCode,
   verifyBusinessToken
 } from "./modules/auth/wechat.js";
+import {
+  createAuthRateLimiter,
+  createMemoryRateLimitStore
+} from "./modules/auth/rate-limit.js";
+import { createLazyRedisRateLimitStore } from "./infra/redis/rate-limit-store.js";
 import { routeExtensions } from "./modules/extensions/registry.js";
 import { geocodeStoreLocation, reverseGeocodeCity } from "./modules/location/geocoding.js";
 import {
@@ -1550,7 +1558,7 @@ export function normalizeError(error) {
   }
 
   if (error?.code === "ER_DUP_ENTRY") {
-    return new AppError(409, "CONFLICT", "Duplicate resource", error.sqlMessage);
+    return new AppError(409, "CONFLICT", "Duplicate resource");
   }
 
   return new AppError(500, "INTERNAL_ERROR", "Internal server error");
@@ -1574,20 +1582,6 @@ async function readRawBody(request, maxBytes = Infinity) {
   return Buffer.concat(chunks);
 }
 
-async function readJsonBody(request) {
-  const rawBody = await readRawBody(request, JSON_BODY_MAX_BYTES);
-  if (rawBody.length === 0) {
-    return {};
-  }
-
-  const body = rawBody.toString("utf8");
-  if (!body.trim()) {
-    return {};
-  }
-
-  return JSON.parse(body);
-}
-
 function isBodyMethod(method) {
   return ["POST", "PATCH", "PUT"].includes(method);
 }
@@ -1597,12 +1591,7 @@ export async function bodyFor(request) {
     return {};
   }
 
-  try {
-    return await readJsonBody(request);
-  } catch (error) {
-    if (error instanceof AppError) throw error;
-    throw new AppError(400, "INVALID_JSON", "Request body must be valid JSON");
-  }
+  return readBody(request, { kind: "json" });
 }
 
 export function publicShareTokenOptions(body) {
@@ -4183,13 +4172,13 @@ function stringMatch(pathname, pattern) {
   return match ? match[1] : null;
 }
 
-async function getAuthUser(request) {
+async function getAuthUser(request, verifier = verifyBusinessToken) {
   const header = request.headers.authorization || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   if (!match) {
     throw unauthorized();
   }
-  return verifyBusinessToken(match[1]);
+  return verifier(match[1]);
 }
 
 async function optionalAuthUser(request) {
@@ -4204,6 +4193,33 @@ function requireRole(user, role) {
   if (!user.roles.includes(role)) {
     throw forbidden(`${role} role required`);
   }
+}
+
+const defaultAuthRateLimiter = createAuthRateLimiter({
+  store: config.nodeEnv === "production"
+    ? createLazyRedisRateLimitStore({ url: config.redis.url })
+    : createMemoryRateLimitStore()
+});
+
+const SENSITIVE_AUTH_LIMITS = Object.freeze({
+  "wechat-login": Object.freeze({ limit: 10, windowSeconds: 60 }),
+  "admin-ticket-create": Object.freeze({ limit: 10, windowSeconds: 60 }),
+  "admin-ticket-poll": Object.freeze({ limit: 60, windowSeconds: 60 }),
+  "admin-ticket-approve": Object.freeze({ limit: 20, windowSeconds: 60 })
+});
+
+async function consumeSensitiveAuthRequest(request, options, scope, actorId = null) {
+  const limiter = options.rateLimiter || defaultAuthRateLimiter;
+  const address = options.requestContext?.clientAddress || "unknown";
+  const numericActorId = Number(actorId);
+  const actor = Number.isSafeInteger(numericActorId) && numericActorId > 0
+    ? `:user-${numericActorId}`
+    : "";
+  await limiter.consume({
+    scope,
+    key: `${address}${actor}`,
+    ...SENSITIVE_AUTH_LIMITS[scope]
+  });
 }
 
 function contentModerationCapabilities() {
@@ -5048,26 +5064,26 @@ async function route(request, response, options = {}) {
   }
 
   if (request.method === "GET" && url.pathname === "/health") {
-    const database = await checkDatabaseReadiness();
+    const database = await (options.checkDatabaseReadiness || checkDatabaseReadiness)();
     jsonResponse(response, database.ok ? 200 : 503, {
       ok: database.ok,
       service: "pinche-api",
-      config: publicConfig(),
-      database,
+      capabilities: publicConfig(),
+      database: {
+        connected: database.connected === true,
+        schemaReady: database.schemaReady === true
+      },
       now: new Date().toISOString()
     });
     return;
   }
 
   if (request.method === "GET" && url.pathname === "/health/db") {
-    const database = await checkDatabaseReadiness();
+    const database = await (options.checkDatabaseReadiness || checkDatabaseReadiness)();
     jsonResponse(response, database.ok ? 200 : 503, {
       ok: database.ok,
-      database: config.mysql.database,
-      connected: database.connected,
-      schemaReady: database.schemaReady,
-      missingTables: database.missingTables,
-      ...(database.error ? { error: database.error } : {})
+      connected: database.connected === true,
+      schemaReady: database.schemaReady === true
     });
     return;
   }
@@ -5131,7 +5147,9 @@ async function route(request, response, options = {}) {
   }
 
   if (request.method === "POST" && url.pathname === "/api/auth/wechat/login") {
-    const result = await loginWithWechatCode(body.code);
+    await consumeSensitiveAuthRequest(request, options, "wechat-login");
+    const login = options.auth?.loginWithWechatCode || loginWithWechatCode;
+    const result = await login(body.code);
     jsonResponse(response, 200, {
       ok: true,
       data: result
@@ -5140,9 +5158,11 @@ async function route(request, response, options = {}) {
   }
 
   if (request.method === "POST" && url.pathname === "/api/admin/web-login/tickets") {
+    await consumeSensitiveAuthRequest(request, options, "admin-ticket-create");
+    const createTicket = options.auth?.createAdminWebLoginTicket || createAdminWebLoginTicket;
     jsonResponse(response, 201, {
       ok: true,
-      data: await createAdminWebLoginTicket({
+      data: await createTicket({
         userAgent: request.headers["user-agent"] || body.userAgent
       })
     });
@@ -5153,9 +5173,11 @@ async function route(request, response, options = {}) {
     /^\/api\/admin\/web-login\/tickets\/([^/]+)$/
   )?.[1];
   if (request.method === "GET" && adminWebLoginTicketId) {
+    await consumeSensitiveAuthRequest(request, options, "admin-ticket-poll");
+    const pollTicket = options.auth?.pollAdminWebLoginTicket || pollAdminWebLoginTicket;
     jsonResponse(response, 200, {
       ok: true,
-      data: await pollAdminWebLoginTicket(
+      data: await pollTicket(
         adminWebLoginTicketId,
         url.searchParams.get("secret")
       )
@@ -5167,10 +5189,20 @@ async function route(request, response, options = {}) {
     /^\/api\/admin\/web-login\/tickets\/([^/]+)\/approve$/
   )?.[1];
   if (request.method === "POST" && adminWebLoginApproveId) {
-    const user = await getAuthUser(request);
+    const user = await getAuthUser(
+      request,
+      options.auth?.verifyBusinessToken || verifyBusinessToken
+    );
+    await consumeSensitiveAuthRequest(
+      request,
+      options,
+      "admin-ticket-approve",
+      user.user.id
+    );
+    const approveTicket = options.auth?.approveAdminWebLoginTicket || approveAdminWebLoginTicket;
     jsonResponse(response, 200, {
       ok: true,
-      data: await approveAdminWebLoginTicket(user, adminWebLoginApproveId, body)
+      data: await approveTicket(user, adminWebLoginApproveId, body)
     });
     return;
   }
@@ -6489,8 +6521,27 @@ async function route(request, response, options = {}) {
 }
 
 export function createApp(options = {}) {
-  return http.createServer((request, response) => {
-    route(request, response, options).catch((error) => {
+  const server = http.createServer((request, response) => {
+    const requestContext = createRequestContext(request);
+    response.setHeader("x-request-id", requestContext.requestId);
+    response.setHeader("x-content-type-options", "nosniff");
+    response.setHeader("referrer-policy", "no-referrer");
+
+    let logged = false;
+    const logOnce = () => {
+      if (logged) return;
+      logged = true;
+      logRequest({
+        request,
+        response,
+        context: requestContext,
+        logger: options.logger || console
+      });
+    };
+    response.once("finish", logOnce);
+    response.once("close", logOnce);
+
+    route(request, response, { ...options, requestContext }).catch((error) => {
       if (error?.contentModerationDenied === true) {
         try {
           emitContentModerationEvent("moderation_access_denied", {
@@ -6509,6 +6560,17 @@ export function createApp(options = {}) {
         }
       }
       const normalized = normalizeError(error);
+      if (response.destroyed || response.writableEnded) return;
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      if (normalized.retryAfter) {
+        response.setHeader("retry-after", String(normalized.retryAfter));
+      }
+      if (normalized.code === "PAYLOAD_TOO_LARGE") {
+        response.setHeader("connection", "close");
+      }
       errorResponse(
         response,
         normalized.statusCode,
@@ -6518,6 +6580,17 @@ export function createApp(options = {}) {
       );
     });
   });
+  const timeouts = {
+    headersTimeoutMs: 15_000,
+    requestTimeoutMs: 30_000,
+    keepAliveTimeoutMs: 5_000,
+    ...options.timeouts
+  };
+  server.headersTimeout = timeouts.headersTimeoutMs;
+  server.requestTimeout = timeouts.requestTimeoutMs;
+  server.keepAliveTimeout = timeouts.keepAliveTimeoutMs;
+  server.setTimeout(timeouts.requestTimeoutMs, (socket) => socket.destroy());
+  return server;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

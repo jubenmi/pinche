@@ -25,21 +25,21 @@
   - [x] 运行 `node --test apps/api/test/http-body-boundaries.test.mjs apps/api/test/runtime-config.test.mjs apps/api/test/migration-runner.test.mjs`，保存预期失败原因。
   - [x] 运行原 `npm run check`，确认新增 RED 未混入现有主检查且基线仍为退出码 0。
 
-- [ ] D51.3 加固 HTTP body、生产配置、请求 ID 和敏感入口限流。
-  - [ ] 新建 `apps/api/src/http/body.js`，实现 `none/json/raw/stream` policy、1 MiB JSON 默认上限、`Content-Length` 预检和 chunked 累计上限。
-  - [ ] 修改 `apps/api/src/http/errors.js`，增加 413 `PAYLOAD_TOO_LARGE`、429 `RATE_LIMITED` 和 503 `RATE_LIMIT_UNAVAILABLE`，错误正文不含原始输入。
-  - [ ] 修改 `apps/api/src/server.js`，让普通 JSON 路由使用有界 parser；保留 avatar、review photo、album image/video 和 callback 的专用读取路径。
-  - [ ] 在 `apps/api/src/config/env.js` 新增纯 `validateRuntimeConfig`，生产校验 mock login、session secret、HTTPS base URL 和 database target lock。
-  - [ ] 新建 `apps/api/src/http/request-context.js` 和 `request-log.js`，生成/验证 request ID，响应带 `x-request-id`，日志只使用规范化 route 和低敏字段。
-  - [ ] 在 HTTP app lifecycle 配置有界 headers/request/keep-alive timeout，并用真实慢请求测试验证连接会被终止。
-  - [ ] 新建 `apps/api/src/modules/auth/rate-limit.js`、`apps/api/src/infra/redis/rate-limit-store.js` 和内存测试适配器。
-  - [ ] 将微信登录、后台登录票据创建/轮询/批准接入统一 limiter；Redis 故障在生产返回 503。
-  - [ ] 扩展 `http-body-boundaries.test.mjs` 验证 413/400 分离、媒体专用上限不回归、body 不进入错误响应。
-  - [ ] 扩展 `runtime-config.test.mjs` 验证负向配置在 DB/Redis/外部网络前失败且不输出 secret。
-  - [ ] 扩展 health 测试，确认只输出安全能力布尔值，不输出数据库 host、Redis URL、secret 或 token。
-  - [ ] 新建 `apps/api/test/rate-limit.test.mjs`，覆盖内存/Redis 语义、429、Retry-After、存储故障 503 和不同 scope 隔离。
-  - [ ] 运行 `node --test apps/api/test/http-body-boundaries.test.mjs apps/api/test/runtime-config.test.mjs apps/api/test/rate-limit.test.mjs`，预期全部通过。
-  - [ ] 运行 `npm run d46:unit && npm run d50:unit && npm run check`，确认审核、媒体 capability、分享和完整回归通过。
+- [x] D51.3 加固 HTTP body、生产配置、请求 ID 和敏感入口限流。
+  - [x] 新建 `apps/api/src/http/body.js`，实现 `none/json/raw/stream` policy、1 MiB JSON 默认上限、`Content-Length` 预检和 chunked 累计上限。
+  - [x] 修改 `apps/api/src/http/errors.js`，增加 413 `PAYLOAD_TOO_LARGE`、429 `RATE_LIMITED` 和 503 `RATE_LIMIT_UNAVAILABLE`，错误正文不含原始输入。
+  - [x] 修改 `apps/api/src/server.js`，让普通 JSON 路由使用有界 parser；保留 avatar、review photo、album image/video 和 callback 的专用读取路径。
+  - [x] 在 `apps/api/src/config/env.js` 新增纯 `validateRuntimeConfig`，生产校验 mock login、session secret、HTTPS base URL 和 database target lock。
+  - [x] 新建 `apps/api/src/http/request-context.js` 和 `request-log.js`，生成/验证 request ID，响应带 `x-request-id`，日志只使用规范化 route 和低敏字段。
+  - [x] 在 HTTP app lifecycle 配置有界 headers/request/keep-alive timeout，并用真实慢请求测试验证连接会被终止。
+  - [x] 新建 `apps/api/src/modules/auth/rate-limit.js`、`apps/api/src/infra/redis/rate-limit-store.js` 和内存测试适配器。
+  - [x] 将微信登录、后台登录票据创建/轮询/批准接入统一 limiter；Redis 故障在生产返回 503。
+  - [x] 扩展 `http-body-boundaries.test.mjs` 验证 413/400 分离、媒体专用上限不回归、body 不进入错误响应。
+  - [x] 扩展 `runtime-config.test.mjs` 验证负向配置在 DB/Redis/外部网络前失败且不输出 secret。
+  - [x] 扩展 health 测试，确认只输出安全能力布尔值，不输出数据库 host、Redis URL、secret 或 token。
+  - [x] 新建 `apps/api/test/rate-limit.test.mjs`，覆盖内存/Redis 语义、429、Retry-After、存储故障 503 和不同 scope 隔离。
+  - [x] 运行 `node --test apps/api/test/http-body-boundaries.test.mjs apps/api/test/runtime-config.test.mjs apps/api/test/rate-limit.test.mjs`，预期全部通过。
+  - [x] 运行 `npm run d46:unit && npm run d50:unit && npm run check`，确认审核、媒体 capability、分享和完整回归通过。
 
 - [ ] D51.4 重构迁移 runner，并把生产迁移收敛为单入口。
   - [ ] 新建 `apps/api/src/infra/db/sql-statements.js`，用状态机处理引号、转义、行注释、块注释和 statement 分号。
@@ -206,3 +206,4 @@
 - 2026-07-22：D51 spec 三件套写入 `specs/d51-architecture-hardening-modularization/`。本次只新增文档，未修改业务代码、数据库、CI、容器或生产环境；D51.2 及后续实施项保持未勾选。
 - 2026-07-22：在隔离工作树 `.worktrees/d51-architecture-hardening-modularization`、分支 `codex/d51-architecture-hardening-modularization` 开始执行。talk 子模块通过主仓库本地 Git 对象初始化到固定提交 `58c7c704941796a9361446b6e8bd71e0aa9584f1`；依赖安装后，未加入任何 D51 RED 测试前的原始 `npm run check` 退出码为 0。D51.2 正在进行，尚未勾选。
 - 2026-07-22：D51.2 完成。`npm run d51:check` 退出码 0，并显式报告 7 个待建模块入口与生产 API 隐式迁移的基线缺口；严格模式仍为 RED。隔离回环端口运行三组 D51 行为测试，结果 11 项中 1 通过、10 失败：两个超限 JSON 请求实际返回 404 而非 413；四组弱生产配置仍输出 `CONFIG_OK`；迁移 parser/checksum/lock 接口缺失；历史重复编号 validator 在 checker 实现前缺失。随后原 `npm run check` 再次退出码 0，证明 RED 未混入既有聚合门禁。
+- 2026-07-22：D51.3 完成。新增 `d51:security` 并接入 `precheck`；专项 19/19 通过，覆盖无正文读取的超限 `Content-Length` 预检、chunked 累计上限、非法 JSON、callback 专用上限、request ID/低敏单行日志、health 脱敏、80ms 测试超时、内存/Redis limiter、429 `Retry-After` 和 Redis 故障 503。`npm run d46:unit && npm run d50:unit && npm run check` 在允许回环监听的隔离环境退出码 0；第一次普通沙箱运行仅因既有 D50 回环监听 `EPERM` 失败，不是代码回归。
