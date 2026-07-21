@@ -231,6 +231,16 @@ assert(
   viewer.includes('open-type="share"'),
   "D50 album viewer must render a native open-type=share button"
 );
+assert(
+  (viewer.match(/src="\/static\/icons\/share-light\.svg"/g) || []).length === 2 &&
+    viewer.includes("album-image-viewer__share-icon") &&
+    viewer.includes("'album-image-viewer__icon-button--disabled': ['blocked', 'failed'].includes(shareStatus)") &&
+    !viewer.includes('>\n          分享\n        </button>') &&
+    !viewer.includes('"准备中"') &&
+    !viewer.includes('"不可分享"') &&
+    !viewer.includes('"重试分享"'),
+  "D50 album viewer must keep one share glyph across states, gray unavailable states, and never render share status text"
+);
 assertOrdered(
   viewer,
   [
@@ -258,6 +268,19 @@ assertOrdered(
 assert(
   !viewer.includes("share-token") && !viewer.includes("albumShareToken"),
   "D50 viewer must remain presentational and must not own share tokens"
+);
+assertOrdered(
+  albumPage,
+  [
+    "const entry = this.singleMediaShareAuthority.reject(shareRequest, error);",
+    'if (force && entry?.status === "failed")',
+    "showModal({",
+    'title: "分享暂不可用"',
+    'content: error?.userMessage || "分享准备失败，请稍后再试。"',
+    "showCancel: false",
+    'confirmText: "知道了"'
+  ],
+  "D50 only user-forced share preparation failures may use a modal without changing the share glyph"
 );
 assert(
   viewer.includes(`:class="{ 'album-image-viewer__slide--with-primary-action': primaryActionLabel }"`) &&
