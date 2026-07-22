@@ -814,7 +814,10 @@ function albumMediaResponse(media, tags = [], options = {}) {
     processing_status: mediaType === "video" ? albumMediaProcessingStatus(media) : "ready",
     moderation_status: moderationStatus,
     created_at: media.created_at,
-    tags: options.publicShare ? [] : tags
+    tags: options.publicShare ? [] : tags,
+    ...(options.publicShare
+      ? { public_category: options.publicCategory === "share_subject" ? "share_subject" : "other" }
+      : {})
   };
 
   if (options.publicShare) {
@@ -2232,6 +2235,22 @@ export function isAlbumPhotoVisibleInPublicShare(
     }
   }
   return true;
+}
+
+export function publicAlbumMediaCategory(tags, claims) {
+  const { seatId } = normalizeAlbumShareClaims(claims);
+  return Array.isArray(tags) && tags.some(
+    (tag) => tag.tag_type === "seat" && Number(tag.seat_id) === seatId
+  )
+    ? "share_subject"
+    : "other";
+}
+
+export function publicAlbumMediaResponse(media, tags, claims) {
+  return albumMediaResponse(media, tags, {
+    publicShare: true,
+    publicCategory: publicAlbumMediaCategory(tags, claims)
+  });
 }
 
 function publicShareMediaPriority(photo, tags, claims) {
@@ -7144,7 +7163,7 @@ export async function listPublicSessionAlbumShare(claims) {
       ) {
         continue;
       }
-      photos.push(albumMediaResponse(photo, tags, { publicShare: true }));
+      photos.push(publicAlbumMediaResponse(photo, tags, normalizedClaims));
     }
     return {
       session_id: normalizedClaims.sessionId,
