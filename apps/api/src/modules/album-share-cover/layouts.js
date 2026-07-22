@@ -58,10 +58,10 @@ const LAYOUTS = Object.freeze({
 
 export function albumShareCoverLayout(variant, count) {
   if (!Object.hasOwn(ALBUM_SHARE_COVER_VARIANTS, variant)) {
-    throw new Error(`invalid album share cover variant: ${variant}`);
+    throw new TypeError("invalid album share cover variant");
   }
   if (!Number.isInteger(count) || count < 1 || count > 9) {
-    throw new Error(`invalid album share cover count: ${count}`);
+    throw new RangeError("invalid album share cover count");
   }
 
   return {
