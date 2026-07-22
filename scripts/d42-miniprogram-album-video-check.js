@@ -73,7 +73,7 @@ function assertAlbumMediaEntryContract(source) {
       'mediaType: ["image", "video"],',
       'sourceType: ["album", "camera"],',
       'sizeType: ["original"],',
-      "maxDuration: MAX_ALBUM_VIDEO_DURATION_SECONDS,"
+      "maxDuration: MAX_ALBUM_VIDEO_RECORDING_DURATION_SECONDS,"
     ],
     "chooseAlbumMedia chooseMedia options"
   );
@@ -140,11 +140,30 @@ assert.ok(
   "the direct PUT must happen only after the authoritative size gate"
 );
 
-const compressVideo = block(album, "async compressVideoBeforeUpload", "shouldCompressVideoBeforeUpload");
+assert.match(album, /MAX_ALBUM_VIDEO_RECORDING_DURATION_SECONDS = 60/);
+const compressVideo = block(
+  album,
+  "async compressVideoBeforeUpload",
+  "isSuspiciousCompressedVideo"
+);
 assert.match(compressVideo, /compressVideoSizeBytes\(result\.size\)/);
+assert.match(compressVideo, /fail:\s*\(\)\s*=>\s*resolve\(null\)/);
+assert.doesNotMatch(compressVideo, /return \{ filePath, \.\.\.originalInfo \}/);
 assert.match(album, /if\s*\(!uploadSize\)[\s\S]*无法确认视频大小/);
 const uploadChosenVideo = block(album, "async uploadChosenVideo(file) {", "async uploadChosenPhotos(paths) {");
 assert.doesNotMatch(uploadChosenVideo, /Math\.max\(1,/);
+assert.doesNotMatch(uploadChosenVideo, /durationSeconds > /);
+assert.doesNotMatch(uploadChosenVideo, /uploadSize > /);
+assert.doesNotMatch(album, /shouldCompressVideoBeforeUpload/);
+assertOrdered(
+  uploadChosenVideo,
+  [
+    "await this.compressVideoBeforeUpload(originalPath, uploadInfo)",
+    "isUsableRequiredVideoCompression",
+    "await uploadSessionAlbumVideo(this.sessionId, uploadPath)"
+  ],
+  "mandatory video compression before upload"
+);
 assert.match(
   album,
   /import\s*\{\s*runExclusiveAlbumMediaTask\s*\}\s*from\s*["']\.\.\/\.\.\/utils\/albumMediaOperation["'];/

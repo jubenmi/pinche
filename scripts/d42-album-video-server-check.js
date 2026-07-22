@@ -45,6 +45,34 @@ function check(name, run) {
   checks.push({ name, run });
 }
 
+check("admin video upload wiring has no business byte cap and keeps admin authorization", async () => {
+  const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
+  const intentStart = server.indexOf('if (kind === "adminSessionAlbumVideo") {');
+  const intentEnd = server.indexOf("\n\n  const sourceExtension", intentStart);
+  const adminVideoIntent = server.slice(intentStart, intentEnd);
+  const localUploadStart = server.indexOf("async function saveUploadedSessionAlbumVideo");
+  const localUploadEnd = server.indexOf(
+    "\n\nfunction sessionAlbumMediaSignature",
+    localUploadStart
+  );
+  const localVideoUpload = server.slice(localUploadStart, localUploadEnd);
+  const localRouteStart = server.indexOf("const adminSessionAlbumVideoUploadId");
+  const localRouteEnd = server.indexOf(
+    "const providedToken",
+    localRouteStart
+  );
+  const localVideoRoute = server.slice(localRouteStart, localRouteEnd);
+
+  assert.ok(intentStart >= 0 && intentEnd > intentStart);
+  assert.ok(localUploadStart >= 0 && localUploadEnd > localUploadStart);
+  assert.ok(localRouteStart >= 0 && localRouteEnd > localRouteStart);
+  assert.doesNotMatch(adminVideoIntent, /maxBytes:/);
+  assert.doesNotMatch(localVideoUpload, /maxFileBytes:/);
+  assert.doesNotMatch(localVideoUpload, /maxRequestBytes:/);
+  assert.match(adminVideoIntent, /requireRole\(user, "system_admin"\)/);
+  assert.match(localVideoRoute, /requireRole\(user, "system_admin"\)/);
+});
+
 function fakeCosRequest(response = {}) {
   const calls = [];
   const request = (options, onResponse) => {

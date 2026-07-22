@@ -5,13 +5,17 @@ import path from "node:path";
 
 import { badRequest } from "../../http/errors.js";
 import { putCosObject } from "../../storage/cos.js";
-import {
-  MAX_ALBUM_VIDEO_BYTES,
-  validateMultipartAlbumVideoMetadata
-} from "./media.js";
+import { validateMultipartAlbumVideoMetadata } from "./media.js";
 
 export const ALBUM_VIDEO_MULTIPART_HEADER_MAX_BYTES = 64 * 1024;
-export const ALBUM_VIDEO_MULTIPART_OVERHEAD_MAX_BYTES = 256 * 1024;
+
+function optionalPositiveByteLimit(value, label) {
+  if (value === undefined || value === null || value === Infinity) return null;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`invalid multipart ${label} byte limit`);
+  }
+  return value;
+}
 
 function multipartBoundary(contentType) {
   const text = String(contentType || "");
@@ -186,8 +190,8 @@ export async function parseMultipartAlbumVideoStream({
   request,
   contentType,
   tempDir,
-  maxFileBytes = MAX_ALBUM_VIDEO_BYTES,
-  maxRequestBytes = maxFileBytes + ALBUM_VIDEO_MULTIPART_OVERHEAD_MAX_BYTES,
+  maxFileBytes = null,
+  maxRequestBytes = null,
   maxHeaderBytes = ALBUM_VIDEO_MULTIPART_HEADER_MAX_BYTES,
   openFile = open,
   unlinkFile = unlink,
@@ -198,10 +202,13 @@ export async function parseMultipartAlbumVideoStream({
     throw new TypeError("multipart request must be an async iterable");
   }
   if (!tempDir) throw new TypeError("multipart tempDir is required");
-  if (!Number.isSafeInteger(maxFileBytes) || maxFileBytes <= 0) {
-    throw new TypeError("invalid multipart file byte limit");
-  }
-  if (!Number.isSafeInteger(maxRequestBytes) || maxRequestBytes <= maxFileBytes) {
+  const fileByteLimit = optionalPositiveByteLimit(maxFileBytes, "file");
+  const requestByteLimit = optionalPositiveByteLimit(maxRequestBytes, "request");
+  if (
+    fileByteLimit !== null &&
+    requestByteLimit !== null &&
+    requestByteLimit <= fileByteLimit
+  ) {
     throw new TypeError("invalid multipart request byte limit");
   }
 
@@ -236,8 +243,8 @@ export async function parseMultipartAlbumVideoStream({
 
     const writePayload = async (bytes) => {
       if (bytes.length === 0) return;
-      if (fileBytes + bytes.length > maxFileBytes) {
-        throw badRequest(`album video file is too large (maximum ${maxFileBytes} bytes)`);
+      if (fileByteLimit !== null && fileBytes + bytes.length > fileByteLimit) {
+        throw badRequest(`album video file is too large (maximum ${fileByteLimit} bytes)`);
       }
       if (firstBytes.length < 12) {
         const needed = 12 - firstBytes.length;
@@ -283,7 +290,7 @@ export async function parseMultipartAlbumVideoStream({
     for await (const rawChunk of request) {
       const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
       totalBytes += chunk.length;
-      if (totalBytes > maxRequestBytes) {
+      if (requestByteLimit !== null && totalBytes > requestByteLimit) {
         throw badRequest("album video multipart request is too large");
       }
 
