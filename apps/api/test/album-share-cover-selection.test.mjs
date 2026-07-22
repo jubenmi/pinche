@@ -72,6 +72,22 @@ test("selection treats missing dHash as insufficient evidence for deduplication"
   assert.deepEqual(selected.map((image) => image.mediaId), ["hashed", "missing", "also-missing"]);
 });
 
+for (const [label, dHash] of [
+  ["empty string", ""],
+  ["boolean", false],
+  ["fractional number", 1.5],
+  ["malformed string", "not-a-hash"]
+]) {
+  test(`selection treats a ${label} dHash as unavailable duplicate evidence`, () => {
+    const selected = selectAlbumShareImages([
+      candidate("hashed", { quality: 1, dHash: 0n }),
+      candidate(label, { quality: 0.9, dHash })
+    ]);
+
+    assert.deepEqual(selected.map((image) => image.mediaId), ["hashed", label]);
+  });
+}
+
 test("selection applies the quality floor, keeps one, caps at nine, and never replenishes", () => {
   const highAndLow = selectAlbumShareImages([
     candidate("best", { quality: 1, dHash: 0n }),
@@ -132,9 +148,18 @@ test("selection has a total deterministic tie order and leaves caller candidates
   assert.notEqual(first[0], candidates[3]);
 });
 
+test("selection treats finite numeric createdAt values as epoch milliseconds", () => {
+  const selected = selectAlbumShareImages([
+    candidate("later", { quality: 0.8, createdAt: 1000 }),
+    candidate("zero", { quality: 0.8, createdAt: 0 })
+  ]);
+
+  assert.deepEqual(selected.map((image) => image.mediaId), ["zero", "later"]);
+});
+
 test("cropLoss calculates weighted logarithmic aspect-ratio loss", () => {
-  assert.equal(cropLoss({ width: 200, height: 100 }, { width: 100, height: 100, role: "detail" }), Math.log(2));
-  assert.equal(cropLoss({ width: 200, height: 100 }, { width: 100, height: 100, role: "hero" }), Math.log(2) * 2);
+  assert.ok(Math.abs(cropLoss({ width: 200, height: 100 }, { width: 100, height: 100, role: "detail" }) - Math.log(2)) < Number.EPSILON * 8);
+  assert.ok(Math.abs(cropLoss({ width: 200, height: 100 }, { width: 100, height: 100, role: "hero" }) - Math.log(2) * 2) < Number.EPSILON * 8);
 });
 
 test("assignment always places the strongest image in the hero and globally minimizes remaining crop loss", () => {
@@ -152,7 +177,7 @@ test("assignment always places the strongest image in the hero and globally mini
   const assignments = assignAlbumShareImagesToSlots(images, slots);
 
   assert.deepEqual(assignments.map(({ image }) => image.mediaId), ["portrait", "hero", "landscape"]);
-  assert.equal(assignments[1].cropLoss, Math.log(2) * 2);
+  assert.ok(Math.abs(assignments[1].cropLoss - Math.log(2) * 2) < Number.EPSILON * 8);
 });
 
 test("assignment uses lexicographic media IDs to break equal crop-loss totals", () => {
@@ -179,6 +204,54 @@ test("assignment tie breaking compares numeric media IDs as lexicographic string
   );
 
   assert.deepEqual(assignments.map(({ image }) => image.mediaId), ["hero", 10, 2]);
+});
+
+test("assignment treats non-zero equal crop-loss totals as a lexicographic tie", () => {
+  const assignments = assignAlbumShareImagesToSlots(
+    [
+      candidate("hero", { quality: 1, width: 1, height: 1 }),
+      candidate("z", { quality: 0.9, width: 1, height: 1 }),
+      candidate("a", { quality: 0.8, width: 1, height: 2 })
+    ],
+    [
+      { width: 1, height: 1, role: "hero" },
+      { width: 1, height: 3, role: "detail" },
+      { width: 1, height: 10, role: "detail" }
+    ]
+  );
+
+  assert.deepEqual(assignments.map(({ image }) => image.mediaId), ["hero", "a", "z"]);
+});
+
+test("crop and assignment stay finite for extreme positive dimensions", () => {
+  const image = candidate("extreme", { width: Number.MAX_VALUE, height: Number.MIN_VALUE });
+  const detailSlot = { width: Number.MIN_VALUE, height: Number.MAX_VALUE, role: "detail" };
+
+  assert.ok(Number.isFinite(cropLoss(image, detailSlot)));
+  const assignments = assignAlbumShareImagesToSlots(
+    [candidate("hero", { quality: 1 }), image],
+    [{ width: 1, height: 1, role: "hero" }, detailSlot]
+  );
+  assert.ok(Number.isFinite(assignments[1].cropLoss));
+});
+
+test("selection and assignment return isolated top-level images and slots", () => {
+  const selectionInput = candidate("selected", { quality: 1 });
+  const selected = selectAlbumShareImages([selectionInput]);
+  selected[0].quality = 0;
+  selected[0].width = 1;
+
+  assert.equal(selectionInput.quality, 1);
+  assert.equal(selectionInput.width, 1000);
+
+  const assignmentImage = candidate("assigned", { quality: 1 });
+  const assignmentSlot = { width: 100, height: 100, role: "hero" };
+  const assigned = assignAlbumShareImagesToSlots([assignmentImage], [assignmentSlot]);
+  assigned[0].image.width = 1;
+  assigned[0].slot.width = 1;
+
+  assert.equal(assignmentImage.width, 1000);
+  assert.equal(assignmentSlot.width, 100);
 });
 
 test("crop and assignment reject invalid dimensions and slot configurations clearly", () => {

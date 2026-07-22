@@ -14,7 +14,8 @@ function candidateMediaId(candidate) {
 
 function createdAtTime(value) {
   if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
-  if (typeof value !== "string" && typeof value !== "number") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
   const time = Date.parse(value);
   return Number.isFinite(time) ? time : null;
 }
@@ -63,7 +64,7 @@ function normalizeImage(image) {
 }
 
 function hasDHash(image) {
-  return image?.dHash !== undefined && image?.dHash !== null;
+  return typeof image?.dHash === "bigint";
 }
 
 function validatePositiveFiniteDimensions(value, noun) {
@@ -124,10 +125,12 @@ export function selectAlbumShareImages(candidates) {
 export function cropLoss(image, slot) {
   validatePositiveFiniteDimensions(image, "image");
   validatePositiveFiniteDimensions(slot, "slot");
-  const imageAspectRatio = image.width / image.height;
-  const slotAspectRatio = slot.width / slot.height;
   const weight = slot.role === "hero" ? 2 : 1;
-  return Math.abs(Math.log(imageAspectRatio / slotAspectRatio)) * weight;
+  const imageLogAspectRatio = Math.log(image.width) - Math.log(image.height);
+  const slotLogAspectRatio = Math.log(slot.width) - Math.log(slot.height);
+  const loss = Math.abs(imageLogAspectRatio - slotLogAspectRatio) * weight;
+  if (!Number.isFinite(loss)) throw new RangeError("Expected finite crop loss");
+  return loss;
 }
 
 function forEachPermutation(values, visit) {
@@ -158,6 +161,14 @@ function compareAssignmentIds(left, right) {
     if (comparison !== 0) return comparison;
   }
   return 0;
+}
+
+function cropLossTolerance(left, right) {
+  return Number.EPSILON * Math.max(1, Math.abs(left), Math.abs(right)) * 4;
+}
+
+function cropLossesAreEqual(left, right) {
+  return Math.abs(left - right) <= cropLossTolerance(left, right);
 }
 
 export function assignAlbumShareImagesToSlots(images, slots) {
@@ -193,8 +204,9 @@ export function assignAlbumShareImagesToSlots(images, slots) {
       (total, image, index) => total + cropLoss(image, remainingSlots[index]),
       0
     );
-    if (loss < bestLoss - Number.EPSILON
-      || (Math.abs(loss - bestLoss) <= Number.EPSILON && (!bestImages || compareAssignmentIds(permutation, bestImages) < 0))) {
+    if (!bestImages
+      || loss < bestLoss - cropLossTolerance(loss, bestLoss)
+      || (cropLossesAreEqual(loss, bestLoss) && compareAssignmentIds(permutation, bestImages) < 0)) {
       bestLoss = loss;
       bestImages = permutation;
     }
@@ -203,6 +215,6 @@ export function assignAlbumShareImagesToSlots(images, slots) {
   let remainingIndex = 0;
   return slots.map((slot, index) => {
     const image = index === heroIndex ? hero : bestImages[remainingIndex++];
-    return { slot, image, cropLoss: cropLoss(image, slot) };
+    return { slot: { ...slot }, image: { ...image }, cropLoss: cropLoss(image, slot) };
   });
 }
