@@ -201,6 +201,37 @@ test("keeps longest two-line caption copy fully inside the friend caption band",
   }
 });
 
+test("keeps text glyph pixels out of the bottom 56px safe margin in every overlay mode", async (t) => {
+  const black = await source(80, 80, "#000000");
+  for (const [variant, count, height, mode] of [
+    ["friend", 1, 800, "gradient"],
+    ["friend", 7, 800, "caption-band"],
+    ["timeline", 1, 1000, "gradient"],
+    ["timeline", 7, 1000, "caption-band"]
+  ]) {
+    await t.test(`${variant}/${mode}`, async () => {
+      const output = await renderAlbumShareCover({
+        variant,
+        images: Array.from({ length: count }, (_, index) => image(index + 1, black, 80, 80)),
+        scriptName: "gypqj"
+      });
+      const { data, info } = await sharp(output)
+        .extract({ left: 56, top: height - 56, width: 244, height: 56 })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const textPixels = [];
+      for (let offset = 0; offset < data.length; offset += info.channels) {
+        if (data[offset] > 90 && data[offset + 1] > 80 && data[offset + 2] > 70) {
+          const pixelIndex = offset / info.channels;
+          textPixels.push({ x: 56 + pixelIndex % info.width, y: height - 56 + Math.floor(pixelIndex / info.width) });
+          if (textPixels.length === 3) break;
+        }
+      }
+      assert.deepEqual(textPixels, [], `text entered the bottom safe margin at ${JSON.stringify(textPixels)}`);
+    });
+  }
+});
+
 test("is byte-deterministic for the same input", async () => {
   const buffer = await source(120, 80, "#8b5b46");
   const options = {

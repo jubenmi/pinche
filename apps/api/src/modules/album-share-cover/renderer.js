@@ -110,10 +110,10 @@ function overlaySvg(layout, copy) {
   const x = 64;
   const lines = wrapMainText(copy.main);
   const gradient = layout.textMode === "gradient";
-  const subtitleY = height - 56;
+  const subtitleY = height - 62;
   const mainSize = gradient ? 52 : 30;
   const lineHeight = gradient ? 58 : 32;
-  const lastMainY = subtitleY - (gradient ? 48 : 32);
+  const lastMainY = subtitleY - (gradient ? 42 : 26);
   const firstMainY = lastMainY - (lines.length - 1) * lineHeight;
   const labelY = firstMainY - (gradient ? 48 : 22);
   const backdrop = gradient
