@@ -49,6 +49,7 @@ test("builds exact cinematic display copy with and without optional names", () =
 
 test("escapes XML once and truncates names by Unicode code point without splitting emoji", () => {
   assert.equal(escapeAlbumShareCoverXml(`&<>"'`), "&amp;&lt;&gt;&quot;&apos;");
+  assert.equal(escapeAlbumShareCoverXml("&amp;"), "&amp;amp;");
 
   const roleName = `${"叶".repeat(16)}😀尾巴`;
   const scriptName = `${"琼".repeat(20)}😀尾巴`;
@@ -58,6 +59,15 @@ test("escapes XML once and truncates names by Unicode code point without splitti
   assert.equal([...copy.main.match(/「(.+)」/u)[1]].length, 18);
   assert.equal([...copy.subtitle.match(/《(.+)》/u)[1]].length, 22);
   assert.doesNotMatch(copy.main, /[\uD800-\uDFFF](?![\uDC00-\uDFFF])/u);
+});
+
+test("escapes raw display text exactly once at the SVG text insertion boundary", async () => {
+  const rendererSource = await readFile(new URL("../src/modules/album-share-cover/renderer.js", import.meta.url), "utf8");
+  const svgTextLine = rendererSource.match(/function svgTextLine\([\s\S]*?\n}\n\nfunction overlaySvg/);
+  assert.ok(svgTextLine, "expected the private svgTextLine boundary");
+  assert.equal((svgTextLine[0].match(/escapeAlbumShareCoverXml\s*\(/g) ?? []).length, 1);
+  assert.match(svgTextLine[0], />\$\{escapeAlbumShareCoverXml\(text\)\}<\/text>/);
+  assert.doesNotMatch(svgTextLine[0], /escapeAlbumShareCoverXml\s*\(\s*escapeAlbumShareCoverXml\s*\(/);
 });
 
 test("replaces illegal XML 1.0 code points while retaining legal whitespace", () => {
