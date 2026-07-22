@@ -89,6 +89,7 @@ import {
   createSignup,
   createStore,
   createSubscriptionRequest,
+  correctHistoricalSessionStartTime,
   deleteAdminSession,
   purgeSessionAlbumMedia,
   requestSessionAlbumImageDeletion,
@@ -4915,6 +4916,20 @@ async function route(request, response, options = {}) {
       applyMediaResult: (input) => contentModeration.applyMediaResult(input)
     });
     jsonResponse(response, 200, { ok: true, data: callbackResult });
+    return;
+  }
+
+  const sessionTimeCorrectionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/start-time-corrections$/
+  );
+  if (request.method === "POST" && sessionTimeCorrectionId) {
+    const user = await getAuthUser(request);
+    const body = await bodyFor(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await correctHistoricalSessionStartTime(user, sessionTimeCorrectionId, body)
+    });
     return;
   }
 

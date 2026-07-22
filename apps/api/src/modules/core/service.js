@@ -62,6 +62,7 @@ import {
   createSessionRescheduleDedupeKey,
   normalizeSessionRescheduleStartAt
 } from "./session-reschedule.js";
+import { normalizeSessionTimeCorrectionStartAt } from "./session-time-correction.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
 import {
   findOwnedUserImageAssetById,
@@ -4882,6 +4883,75 @@ export async function updateSession(user, id, body) {
   return withDatabaseConnection((connection) =>
     updateSessionWithConnection(connection, user, id, body)
   );
+}
+
+export async function correctHistoricalSessionStartTime(user, sessionId, body = {}) {
+  const id = positiveId(sessionId, "sessionId");
+  return withTransaction((connection) =>
+    correctHistoricalSessionStartTimeInTransaction(connection, user, id, body)
+  );
+}
+
+export async function correctHistoricalSessionStartTimeInTransaction(
+  connection,
+  user,
+  id,
+  body = {}
+) {
+  const [rows] = await connection.query(
+    `SELECT *, CURRENT_TIMESTAMP AS database_now,
+            (start_at <= CURRENT_TIMESTAMP) AS session_started
+       FROM sessions WHERE id = ? FOR UPDATE`,
+    [id]
+  );
+  const session = rows[0];
+  if (!session) {
+    throw notFound("Session not found");
+  }
+  if (Number(session.organizer_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the current session organizer can correct historical time");
+  }
+  if (Number(session.session_started) !== 1) {
+    throw new AppError(409, "SESSION_NOT_HISTORICAL", "Session has not started");
+  }
+
+  let normalized;
+  try {
+    normalized = normalizeSessionTimeCorrectionStartAt(
+      body.startAt,
+      session.start_at,
+      session.database_now
+    );
+  } catch (error) {
+    if (
+      [
+        "INVALID_START_AT",
+        "CORRECTION_START_AT_NOT_PAST",
+        "UNCHANGED_START_AT"
+      ].includes(error.code)
+    ) {
+      throw new AppError(400, error.code, error.message);
+    }
+    throw error;
+  }
+
+  await connection.query("UPDATE sessions SET start_at = ? WHERE id = ?", [
+    normalized.date,
+    id
+  ]);
+  const [auditResult] = await connection.query(
+    `INSERT INTO session_start_time_corrections
+       (session_id, changed_by_user_id, old_start_at, new_start_at)
+     VALUES (?, ?, ?, ?)`,
+    [id, user.user.id, session.start_at, normalized.date]
+  );
+  const updatedSession = await findById(connection, "sessions", id);
+  const correction = await findById(
+    connection,
+    "session_start_time_corrections",
+    auditResult.insertId
+  );
+  return { session: updatedSession, correction };
 }
 
 export async function rescheduleSession(user, sessionId, body = {}) {
