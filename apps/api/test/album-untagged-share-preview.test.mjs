@@ -16,6 +16,10 @@ const serviceSource = await readFile(
   new URL("../src/modules/core/service.js", import.meta.url),
   "utf8"
 );
+const serverSource = await readFile(
+  new URL("../src/server.js", import.meta.url),
+  "utf8"
+);
 
 const claims = {
   sessionId: 10,
@@ -368,4 +372,88 @@ test("public image bytes are reauthorized against the snapshot tag version", asy
     }),
     (error) => error.statusCode === 403
   );
+});
+
+test("custom selection returns only exact eligible IDs and never refills", () => {
+  const candidates = [media(50), media(51), media(52)];
+  const tags = new Map(candidates.map((item) => [item.id, [sharerSeatTag()]]));
+  const selected = selectPublicShareMedia(
+    candidates,
+    tags,
+    privacy([[100]]),
+    claims,
+    { selectedMediaIds: [50, 52] }
+  );
+
+  assert.deepEqual(new Set(selected.map((item) => item.id)), new Set([50, 52]));
+  assert.equal(selected.length, 2);
+  assert.throws(
+    () => selectPublicShareMedia(candidates, tags, privacy([[100]]), claims, {
+      selectedMediaIds: [50, 999]
+    }),
+    (error) => error.statusCode === 409 &&
+      error.code === "ALBUM_PUBLIC_SHARE_SELECTION_CHANGED"
+  );
+});
+
+test("custom selection rejects invalid shape, focus conflicts and video overflow", async () => {
+  const videos = Array.from({ length: 4 }, (_, index) => media(60 + index, {
+    media_type: "video"
+  }));
+  const videoTags = new Map(videos.map((item) => [item.id, [sharerSeatTag()]]));
+  assert.throws(
+    () => selectPublicShareMedia(videos, videoTags, privacy([[100]]), claims, {
+      selectedMediaIds: videos.map((item) => item.id)
+    }),
+    (error) => error.statusCode === 400
+  );
+
+  for (const selectedMediaIds of [
+    [],
+    [1, 1],
+    ["1"],
+    Array.from({ length: 31 }, (_, index) => index + 1)
+  ]) {
+    await assert.rejects(
+      () => createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, {
+        selectedMediaIds,
+        withTransaction: async () => assert.fail("invalid selection must fail before transaction")
+      }),
+      (error) => error.statusCode === 400
+    );
+  }
+  await assert.rejects(
+    () => createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, {
+      focusMediaId: 1,
+      selectedMediaIds: [1],
+      withTransaction: async () => assert.fail("conflicting selection must fail before transaction")
+    }),
+    (error) => error.statusCode === 400
+  );
+});
+
+test("custom snapshot persistence keeps the exact requested scope", async () => {
+  const connection = untaggedShareConnection([media(70), media(71)]);
+  const share = await createOrReuseSessionAlbumPublicShare(
+    { user: { id: 100 } },
+    10,
+    {
+      includeOwnedUntaggedImages: true,
+      selectedMediaIds: [71],
+      withTransaction: async (work) => work(connection)
+    }
+  );
+  assert.deepEqual(share.media_ids, [71]);
+  assert.equal(share.visible_count, 1);
+});
+
+test("share-token route forwards preview inputs and returns untagged count", () => {
+  const route = serverSource.slice(
+    serverSource.indexOf("const sessionAlbumShareTokenId"),
+    serverSource.indexOf("const sessionAlbumPublicSharesId")
+  );
+  assert.match(route, /focusMediaId: body\?\.focusMediaId/);
+  assert.match(route, /includeOwnedUntaggedImages: body\?\.includeOwnedUntaggedImages/);
+  assert.match(route, /selectedMediaIds: body\?\.selectedMediaIds/);
+  assert.match(route, /implicit_untagged_count: share\.implicit_untagged_count/);
 });

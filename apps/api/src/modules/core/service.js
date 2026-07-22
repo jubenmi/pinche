@@ -2236,6 +2236,28 @@ function publicShareMediaPriority(photo, tags, claims) {
   return 2;
 }
 
+export function normalizePublicShareSelectedMediaIds(value) {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 30) {
+    throw badRequest("selectedMediaIds must contain between 1 and 30 media IDs");
+  }
+  const ids = [];
+  const seen = new Set();
+  for (const item of value) {
+    if (
+      typeof item !== "number" ||
+      !Number.isSafeInteger(item) ||
+      item <= 0 ||
+      seen.has(item)
+    ) {
+      throw badRequest("selectedMediaIds must contain unique positive integer IDs");
+    }
+    seen.add(item);
+    ids.push(item);
+  }
+  return ids;
+}
+
 export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claims, options = {}) {
   const ranked = [];
   for (const photo of Array.isArray(candidates) ? candidates : []) {
@@ -2262,7 +2284,30 @@ export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claim
     return Number(right.photo.id) - Number(left.photo.id);
   });
 
+  const selectedMediaIds = normalizePublicShareSelectedMediaIds(
+    options?.selectedMediaIds
+  );
   const requiredMediaId = Number(options?.requiredMediaId || 0);
+  if (selectedMediaIds && requiredMediaId) {
+    throw badRequest("selectedMediaIds cannot be combined with focusMediaId");
+  }
+  if (selectedMediaIds) {
+    const selectedSet = new Set(selectedMediaIds);
+    const selected = ranked
+      .filter(({ photo }) => selectedSet.has(Number(photo.id)))
+      .map(({ photo }) => photo);
+    if (selected.length !== selectedMediaIds.length) {
+      throw new AppError(
+        409,
+        "ALBUM_PUBLIC_SHARE_SELECTION_CHANGED",
+        "The selected album media is no longer available"
+      );
+    }
+    if (selected.filter((photo) => albumMediaType(photo) === "video").length > 3) {
+      throw badRequest("selectedMediaIds can contain at most 3 videos");
+    }
+    return selected;
+  }
   const required = requiredMediaId
     ? ranked.find(({ photo }) => Number(photo.id) === requiredMediaId)
     : null;
@@ -6654,6 +6699,10 @@ export async function getSessionAlbumShareSubject(user, sessionId) {
 export async function createOrReuseSessionAlbumPublicShare(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   const focusMediaId = normalizePublicShareFocusMediaId(options.focusMediaId);
+  const selectedMediaIds = normalizePublicShareSelectedMediaIds(options.selectedMediaIds);
+  if (focusMediaId && selectedMediaIds) {
+    throw badRequest("selectedMediaIds cannot be combined with focusMediaId");
+  }
   const includeOwnedUntaggedImages = options.includeOwnedUntaggedImages === true;
   const runWithTransaction = options.withTransaction || withTransaction;
   return runWithTransaction(async (connection) => {
@@ -6717,7 +6766,8 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     const privacyByUser = await albumPrivacyMap(connection, id, privacyUserIds);
     const selectedMedia = selectPublicShareMedia(photoRows, tagsMap, privacyByUser, claims, {
       requiredMediaId: focusMediaId,
-      allowOwnedUntaggedImages: includeOwnedUntaggedImages
+      allowOwnedUntaggedImages: includeOwnedUntaggedImages,
+      selectedMediaIds: selectedMediaIds || undefined
     });
     if (focusMediaId && !selectedMedia.some((media) => Number(media.id) === focusMediaId)) {
       throw new AppError(
