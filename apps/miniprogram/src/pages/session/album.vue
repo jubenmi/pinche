@@ -1145,7 +1145,10 @@ export default {
     this.sharePreviewUntaggedCount = previewRouteState.untagged;
     this.singleMediaShareRequested = routeState.singleMediaShareRequested;
     this.focusMediaId = routeState.focusMediaId;
-    this.timelineMode = routeState.timelineMode || previewRouteState.sharePreviewRequested;
+    this.timelineMode = routeState.timelineMode;
+    if (previewRouteState.sharePreviewRequested) {
+      this.timelineMode = true;
+    }
     this.albumShareToken = previewRouteState.token || routeState.token;
     this.focusedPublicMode = routeState.focusedPublicMode;
     this.focusedPublicMediaUnavailable = routeState.focusedPublicMediaUnavailable;

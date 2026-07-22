@@ -321,6 +321,13 @@ test("snapshot-local untagged visibility requires an exact current tag version",
     claims,
     { implicitUntaggedByMediaId: new Map() }
   ), false);
+  assert.equal(isAlbumPhotoVisibleInPublicShare(
+    photo,
+    [sharerSeatTag()],
+    privacyByUser,
+    claims,
+    { implicitUntaggedByMediaId: new Map([[40, 7]]) }
+  ), false);
 });
 
 test("implicit untagged media is never eligible as a public share cover", () => {

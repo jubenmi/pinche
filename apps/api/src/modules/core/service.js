@@ -2185,13 +2185,22 @@ export function isAlbumPhotoVisibleInPublicShare(
     return false;
   }
 
+  const mediaId = Number(photo.id);
+  const implicitUntaggedByMediaId = options.implicitUntaggedByMediaId;
+  const hasImplicitSnapshotEntry =
+    implicitUntaggedByMediaId?.has?.(mediaId) === true;
+  const snapshotTagVersion = hasImplicitSnapshotEntry
+    ? implicitUntaggedByMediaId.get(mediaId)
+    : undefined;
+  const snapshotMatches = hasImplicitSnapshotEntry &&
+    Number.isSafeInteger(snapshotTagVersion) &&
+    snapshotTagVersion >= 0 &&
+    snapshotTagVersion === Number(photo.tag_version || 0);
+  if (hasImplicitSnapshotEntry && !snapshotMatches) {
+    return false;
+  }
+
   if (tags.length === 0) {
-    const snapshotTagVersion = options.implicitUntaggedByMediaId?.get(
-      Number(photo.id)
-    );
-    const snapshotMatches = Number.isSafeInteger(snapshotTagVersion) &&
-      snapshotTagVersion >= 0 &&
-      snapshotTagVersion === Number(photo.tag_version || 0);
     return albumMediaType(photo) === "image" &&
       uploaderUserId === sharerUserId &&
       (options.allowOwnedUntaggedImages === true || snapshotMatches);

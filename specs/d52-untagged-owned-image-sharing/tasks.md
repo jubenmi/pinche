@@ -47,7 +47,17 @@
   - [x] 8.4 单图请求显式允许本人未标注图片并显示提示。
 
 - [ ] 9. 聚焦回归与规格收口
-  - [ ] 9.1 运行 D52 API、小程序和迁移聚焦测试。
-  - [ ] 9.2 运行 D48/D50 回归、语法检查和 `git diff --check`。
-  - [ ] 9.3 逐条核对 requirements、design 和 tasks，记录自动验证证据。
-  - [ ] 9.4 在微信开发者工具验证整册、调整、单图和朋友圈流程；未执行时保持未勾选并写明原因。
+  - [x] 9.1 运行 D52 API、小程序和迁移聚焦测试。
+  - [x] 9.2 运行 D48/D50 回归、语法检查和 `git diff --check`。
+  - [x] 9.3 逐条核对 requirements、design 和 tasks，记录自动验证证据。
+  - [ ] 9.4 在微信开发者工具验证整册、调整、单图和朋友圈流程；当前环境未执行真实微信分享，保留待人工验收。
+
+## 自动验证证据（2026-07-22）
+
+- `node --check`：API service、server 和小程序预览 helper 全部通过。
+- D52/D50 聚焦测试：59 项通过，0 项失败；覆盖迁移、摘要兼容、本人/他人资格、隐私否决、标签版本失效、公开图片字节复核、自定义范围、预览路由、菜单门禁、范围调整和单图分享。
+- `node scripts/d48-album-sharing-role-claim-separation-check.js`：通过。
+- `node scripts/d50-album-single-media-sharing-check.js`：通过。
+- `npm run build:mp-weixin --workspace @pinche/miniprogram`：构建成功；仅有既有 Sass deprecation warning。
+- `git diff --check`：通过。
+- Requirements 1–8 均有实现与自动测试证据；Requirement 4/5/6 的微信好友、群和朋友圈真实客户端交互仍由 9.4 人工验收。
