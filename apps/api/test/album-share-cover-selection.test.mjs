@@ -92,6 +92,19 @@ test("selection applies the quality floor, keeps one, caps at nine, and never re
   assert.deepEqual(capped.map((image) => image.mediaId), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
+test("selection never backfills past its sorted top-nine candidate window", () => {
+  const selected = selectAlbumShareImages([
+    candidate("best", { quality: 1, dHash: 0n }),
+    ...Array.from({ length: 8 }, (_, index) => candidate(`duplicate-${index}`, {
+      quality: 0.99 - index / 1000,
+      dHash: 1n
+    })),
+    candidate("later-distinct", { quality: 0.9, dHash: 0b1111111n })
+  ]);
+
+  assert.deepEqual(selected.map((image) => image.mediaId), ["best"]);
+});
+
 test("selection has a total deterministic tie order and leaves caller candidates unchanged", () => {
   const candidates = [
     candidate("10", { quality: 0.8, createdAt: "invalid" }),
@@ -153,6 +166,19 @@ test("assignment uses lexicographic media IDs to break equal crop-loss totals", 
   );
 
   assert.deepEqual(assignments.map(({ image }) => image.mediaId), ["z", "a", "b"]);
+});
+
+test("assignment tie breaking compares numeric media IDs as lexicographic strings", () => {
+  const assignments = assignAlbumShareImagesToSlots(
+    [candidate("hero", { quality: 1 }), candidate(2, { quality: 0.8 }), candidate(10, { quality: 0.7 })],
+    [
+      { width: 100, height: 100, role: "hero" },
+      { width: 100, height: 100, role: "detail" },
+      { width: 100, height: 100, role: "detail" }
+    ]
+  );
+
+  assert.deepEqual(assignments.map(({ image }) => image.mediaId), ["hero", 10, 2]);
 });
 
 test("crop and assignment reject invalid dimensions and slot configurations clearly", () => {

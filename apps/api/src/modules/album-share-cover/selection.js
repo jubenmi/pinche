@@ -103,6 +103,7 @@ export function selectAlbumShareImages(candidates) {
     .filter((candidate) => candidate?.eligible === true)
     .map((candidate, index) => ({ image: normalizeImage(candidate), index }))
     .sort((left, right) => compareCandidates(left.image, right.image) || left.index - right.index)
+    .slice(0, ALBUM_SHARE_MAX_IMAGES)
     .map(({ image }) => image);
 
   const deduped = [];
@@ -151,7 +152,9 @@ function forEachPermutation(values, visit) {
 
 function compareAssignmentIds(left, right) {
   for (let index = 0; index < left.length; index += 1) {
-    const comparison = compareMediaIds(candidateMediaId(left[index]), candidateMediaId(right[index]));
+    const leftId = String(candidateMediaId(left[index]));
+    const rightId = String(candidateMediaId(right[index]));
+    const comparison = leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
     if (comparison !== 0) return comparison;
   }
   return 0;
