@@ -2079,6 +2079,29 @@ test("compressed video size rejects unknown or non-positive values", async () =>
   assert.equal(compressVideoSizeBytes(0), 0);
 });
 
+test("required video compression accepts only a distinct positive output", async () => {
+  const { isUsableRequiredVideoCompression } = await miniProgramHelpers();
+  assert.equal(isUsableRequiredVideoCompression({
+    originalPath: "source.mp4",
+    compressedPath: "compressed.mp4",
+    compressedSize: 1024,
+    suspicious: false
+  }), true);
+  for (const facts of [
+    { originalPath: "source.mp4", compressedPath: "", compressedSize: 1024 },
+    { originalPath: "source.mp4", compressedPath: "source.mp4", compressedSize: 1024 },
+    { originalPath: "source.mp4", compressedPath: "compressed.mp4", compressedSize: 0 },
+    {
+      originalPath: "source.mp4",
+      compressedPath: "compressed.mp4",
+      compressedSize: 1024,
+      suspicious: true
+    }
+  ]) {
+    assert.equal(isUsableRequiredVideoCompression(facts), false);
+  }
+});
+
 test("mini-program business Authorization is restricted to the API origin", async () => {
   const { shouldAttachApiAuthorization } = await miniProgramHelpers();
   const apiOrigin = "https://api.pinche.test";
