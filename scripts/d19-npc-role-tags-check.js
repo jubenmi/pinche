@@ -121,6 +121,6 @@ for (const token of [
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d19-npc-role-tags-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d19-npc-role-tags-check.js"),
   "root check should run d19 npc role tag check"
 );

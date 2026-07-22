@@ -338,11 +338,11 @@ for (const token of [
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d18-session-album-privacy-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d18-session-album-privacy-check.js"),
   "root check should run d18 session album privacy check"
 );
 assert(
-  packageJson.scripts.check.includes("node --check scripts/d18-session-album-privacy-smoke.js"),
+  packageJson.scripts["test:contracts"].includes("node --check scripts/d18-session-album-privacy-smoke.js"),
   "root check should syntax-check d18 album smoke"
 );
 assert(

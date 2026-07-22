@@ -297,7 +297,7 @@ for (const token of [
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d24-npc-self-join-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d24-npc-self-join-check.js"),
   "root check should run d24 npc self join check"
 );
 

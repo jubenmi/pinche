@@ -202,7 +202,7 @@ assert(
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("node scripts/d40-guest-calendar-home-check.js"),
+  packageJson.scripts["test:contracts"].includes("node scripts/d40-guest-calendar-home-check.js"),
   "npm run check must include the D40 guest-calendar check"
 );
 

@@ -143,7 +143,7 @@ for (const forbidden of ["model.address =", "model.name =", "model.city =", "mod
 }
 
 assert(
-  packageJson.scripts.check.includes("node scripts/d36-admin-location-geocode-check.js"),
+  packageJson.scripts["test:contracts"].includes("node scripts/d36-admin-location-geocode-check.js"),
   "npm run check should include D36 geocode check"
 );
 

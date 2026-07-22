@@ -47,7 +47,7 @@ assert(rootPackage.workspaces.includes("apps/admin-web"), "admin-web workspace s
 assert(rootPackage.scripts["dev:admin-web"], "dev:admin-web script should exist");
 assert(rootPackage.scripts["build:admin-web"], "build:admin-web script should exist");
 assert(
-  rootPackage.scripts.check.includes("scripts/d12-admin-web-check.js"),
+  rootPackage.scripts["test:contracts"].includes("scripts/d12-admin-web-check.js"),
   "root check should run d12 check"
 );
 

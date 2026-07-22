@@ -26,7 +26,10 @@ test("D45 automation commands keep unit, release matrix, static checks, and fake
     "node scripts/d45-content-moderation-release-matrix.js"
   );
   for (const command of ["d45:unit", "d45:release-matrix", "d45:check", "d45:smoke"]) {
-    assert.match(rootPackage.scripts.precheck, new RegExp(`npm run ${command.replace(/:/g, "\\:")}`));
+    assert.match(
+      rootPackage.scripts["test:unit"],
+      new RegExp(`npm run ${command.replace(/:/g, "\\:")}`),
+    );
   }
 
   for (const token of [

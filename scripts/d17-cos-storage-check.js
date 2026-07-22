@@ -16,7 +16,7 @@ function read(file) {
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d17-cos-storage-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d17-cos-storage-check.js"),
   "root check should run d17 COS storage check"
 );
 const miniprogramPackageJson = JSON.parse(read("apps/miniprogram/package.json"));

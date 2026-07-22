@@ -4141,7 +4141,7 @@ if (
 ) {
   fail("Root package must expose the miniprogram dev artifact freshness tests");
 }
-if (!rootPackageJson.scripts?.check?.includes("npm run test:miniprogram-dev-artifacts")) {
+if (!rootPackageJson.scripts?.["test:contracts"]?.includes("npm run test:miniprogram-dev-artifacts")) {
   fail("Root check must run the miniprogram dev artifact freshness tests");
 }
 if (

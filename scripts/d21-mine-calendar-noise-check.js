@@ -15,7 +15,7 @@ function assert(condition, message) {
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d21-mine-calendar-noise-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d21-mine-calendar-noise-check.js"),
   "root check should run d21 mine calendar noise check"
 );
 

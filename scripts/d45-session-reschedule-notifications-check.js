@@ -269,7 +269,7 @@ for (const command of [
     `session-reschedule verification must include command: ${command}`
   );
 }
-assertIncludes(packageJson.scripts.check, "npm run session-reschedule:verify");
+assertIncludes(packageJson.scripts["test:contracts"], "npm run session-reschedule:verify");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(

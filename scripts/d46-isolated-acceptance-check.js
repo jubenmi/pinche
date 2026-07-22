@@ -446,7 +446,16 @@ assert.equal(
   "node scripts/d46-author-private-content-api-smoke.js",
   "package.json must reserve the D46 HTTP acceptance command"
 );
-assert.doesNotMatch(packageJson.scripts?.precheck || "", /d46:acceptance/, "root precheck must not run acceptance writes");
-assert.doesNotMatch(packageJson.scripts?.check || "", /d46:acceptance/, "root check must not run acceptance writes");
+const localCheckCommands = [
+  packageJson.scripts?.["check:fast"],
+  packageJson.scripts?.["test:unit"],
+  packageJson.scripts?.["test:contracts"],
+  packageJson.scripts?.check,
+].filter(Boolean).join("\n");
+assert.doesNotMatch(
+  localCheckCommands,
+  /d46:acceptance/,
+  "local check layers must not run D46 acceptance writes",
+);
 
 console.log("D46 isolated acceptance static contract passed.");

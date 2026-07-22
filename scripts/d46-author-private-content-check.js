@@ -138,9 +138,9 @@ assert.match(requirements, /不在本任务中把生产 intake 从 `closed` 切�
 for (const command of ["d46:unit", "d46:check", "d46:smoke"]) {
   assert.equal(typeof rootPackage.scripts[command], "string", `missing root command: ${command}`);
   assert.equal(
-    rootPackage.scripts.precheck.includes(`npm run ${command}`),
+    rootPackage.scripts["test:unit"].includes(`npm run ${command}`),
     true,
-    `precheck missing ${command}`
+    `test:unit missing ${command}`
   );
 }
 assert.match(smoke, /NODE_ENV === "production"/);

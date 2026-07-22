@@ -179,7 +179,10 @@ for (const command of [
   "node scripts/d38-reverse-geocoding-unit-check.js",
   "node --check scripts/d38-city-session-discovery-smoke.js"
 ]) {
-  assert(packageJson.scripts.check.includes(command), `npm run check should include: ${command}`);
+  assert(
+    packageJson.scripts["test:contracts"].includes(command),
+    `npm run test:contracts should include: ${command}`,
+  );
 }
 
 console.log("D38 city session discovery checks passed");

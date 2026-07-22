@@ -78,7 +78,7 @@ assert(detail.includes("/relink"), "detail page must call relink endpoint");
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d16-session-membership-downlisting-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d16-session-membership-downlisting-check.js"),
   "root check should run d16 session membership downlisting check"
 );
 

@@ -261,7 +261,10 @@ assert.match(runbook, /-e D45_PREFLIGHT_CONFIRMATION/);
 
 for (const command of ["d45:unit", "d45:check", "d45:smoke"]) {
   assert.equal(typeof rootPackage.scripts[command], "string", `missing root command: ${command}`);
-  assert.match(rootPackage.scripts.precheck, new RegExp(`npm run ${command.replace(/:/g, "\\:")}`));
+  assert.match(
+    rootPackage.scripts["test:unit"],
+    new RegExp(`npm run ${command.replace(/:/g, "\\:")}`),
+  );
 }
 
 console.log("D45 content moderation static checks passed");

@@ -212,7 +212,7 @@ assertBefore(
   "NPC claim must reload successful server state before post-claim album navigation"
 );
 assert(
-  packageJson.scripts.check.includes("scripts/d29-join-login-gate-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d29-join-login-gate-check.js"),
   "Root check must run D29 join login gate check"
 );
 

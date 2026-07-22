@@ -56,18 +56,18 @@
   - [x] 并发启动两个 fixture migrator，验证一个持锁执行，另一个有界失败且 `schema_migrations` 无重复/部分记录。
   - [x] 运行 D42/D43/D45/D46 迁移相关测试与 `npm run check`，预期全部通过。
 
-- [ ] D51.5 建立 PR CI、真实 MySQL integration 和分层命令。
-  - [ ] 将根 `package.json` 的 81 步命令拆为 `check:fast`、`test:unit`、`test:contracts`、`test:integration`、`build:all` 和聚合 `check`。
-  - [ ] 把纯 `node --check`、源码读取和安全禁令检查归入 `test:contracts`，并保持现有 D 系列命令兼容。
-  - [ ] 新建 `docker-compose.d51-test.yml`，使用隔离 MySQL 8.4、Redis、migrate、API 和 acceptance runner。
-  - [ ] 新建 `scripts/d51-integration-smoke.js`，在任何写入前验证 fixture host/database，真实请求 health、公共目录、mock login 和一个可清理业务读写链路。
-  - [ ] acceptance 结束时统计 fixture 表并清理创建的数据；残留或目标不匹配均返回非零。
-  - [ ] 新建 `.github/workflows/ci.yml`，触发 pull request 与目标分支 push，执行 `npm ci`、fast、unit、contracts、integration、admin build、mp-weixin build 和 API Docker build。
-  - [ ] 修改 `.github/workflows/docker-publish.yml`，发布 job 依赖同一提交 required CI 成功，测试失败前不登录腾讯云仓库。
-  - [ ] 在 CI 中固定 Node 24、MySQL 8.4，并缓存 npm；不缓存构建产物或 fixture 数据库。
-  - [ ] 运行 `npm run check:fast && npm run test:unit && npm run test:contracts`，每组失败能定位到单一命令。
-  - [ ] 运行 `npm run test:integration`，确认空库迁移、真实 API 和 fixture cleanup 通过。
-  - [ ] 运行 `npm run build:all`，确认管理端、小程序和 API image 构建通过。
+- [x] D51.5 建立 PR CI、真实 MySQL integration 和分层命令。
+  - [x] 将根 `package.json` 的 81 步命令拆为 `check:fast`、`test:unit`、`test:contracts`、`test:integration`、`build:all` 和聚合 `check`。
+  - [x] 把纯 `node --check`、源码读取和安全禁令检查归入 `test:contracts`，并保持现有 D 系列命令兼容。
+  - [x] 新建 `docker-compose.d51-test.yml`，使用隔离 MySQL 8.4、Redis、migrate、API 和 acceptance runner。
+  - [x] 新建 `scripts/d51-integration-smoke.js`，在任何写入前验证 fixture host/database，真实请求 health、公共目录、mock login 和一个可清理业务读写链路。
+  - [x] acceptance 结束时统计 fixture 表并清理创建的数据；残留或目标不匹配均返回非零。
+  - [x] 新建 `.github/workflows/ci.yml`，触发 pull request 与目标分支 push，执行 `npm ci`、fast、unit、contracts、integration、admin build、mp-weixin build 和 API Docker build。
+  - [x] 修改 `.github/workflows/docker-publish.yml`，发布 job 依赖同一提交 required CI 成功，测试失败前不登录腾讯云仓库。
+  - [x] 在 CI 中固定 Node 24、MySQL 8.4，并缓存 npm；不缓存构建产物或 fixture 数据库。
+  - [x] 运行 `npm run check:fast && npm run test:unit && npm run test:contracts`，每组失败能定位到单一命令。
+  - [x] 运行 `npm run test:integration`，确认空库迁移、真实 API 和 fixture cleanup 通过。
+  - [x] 运行 `npm run build:all`，确认管理端、小程序和 API image 构建通过。
 
 - [ ] D51.6 抽取 HTTP 内核和 route registry，保持 legacy 单一路径。
   - [ ] 新建 `apps/api/src/http/router.js`，实现 method + pattern 注册、params 解析、route name 和重复路由启动校验。
@@ -208,3 +208,4 @@
 - 2026-07-22：D51.2 完成。`npm run d51:check` 退出码 0，并显式报告 7 个待建模块入口与生产 API 隐式迁移的基线缺口；严格模式仍为 RED。隔离回环端口运行三组 D51 行为测试，结果 11 项中 1 通过、10 失败：两个超限 JSON 请求实际返回 404 而非 413；四组弱生产配置仍输出 `CONFIG_OK`；迁移 parser/checksum/lock 接口缺失；历史重复编号 validator 在 checker 实现前缺失。随后原 `npm run check` 再次退出码 0，证明 RED 未混入既有聚合门禁。
 - 2026-07-22：D51.3 完成。新增 `d51:security` 并接入 `precheck`；专项 19/19 通过，覆盖无正文读取的超限 `Content-Length` 预检、chunked 累计上限、非法 JSON、callback 专用上限、request ID/低敏单行日志、health 脱敏、80ms 测试超时、内存/Redis limiter、429 `Retry-After` 和 Redis 故障 503。`npm run d46:unit && npm run d50:unit && npm run check` 在允许回环监听的隔离环境退出码 0；第一次普通沙箱运行仅因既有 D50 回环监听 `EPERM` 失败，不是代码回归。
 - 2026-07-22：D51.4 完成。`npm run d51:migrations` 35/35 通过，覆盖 SQL 状态机、checksum 漂移/回填、完整文件名 registry、命名锁超时/释放、迁移历史和错误结构；迁移文件治理检查通过。临时 MySQL 8.4 空库首次执行 38 个迁移、第二次 `executed: []`；同步并发试验中第一个 migrator 持锁 15 秒，第二个以 1 秒上限返回 `MIGRATION_LOCK_UNAVAILABLE`，最终 `schema_migrations` 为 38 行、38 个不同版本、0 个缺失 checksum。生产 entrypoint 不再隐式迁移，开发 Compose 显式打开，生产 Compose 继续依赖独立 migrate 服务。`npm run d42:api-lifecycle && npm run d43:unit && npm run d45:unit && npm run d46:unit` 与允许回环监听的 `npm run check` 均退出码 0；`npm run d51:check` 只剩 7 个后续模块入口缺口，不再报告生产隐式迁移。
+- 2026-07-22：D51.5 完成。分层命令契约从 4 组预期失败转为 10/10 通过；`npm run check:fast`、`npm run test:unit`、`npm run test:contracts` 与新的本地聚合 `npm run check` 均退出码 0。`npm run test:integration` 在内部网络启动 MySQL 8.4、Redis 7.4、独立 migrate、API 和 acceptance；同一空库连续迁移两次后记录 38 行、38 个不同版本、0 个缺失 checksum，真实请求 health、DB health、公共目录、mock login 和鉴权用户读取均通过，fixture 的 user/identity/role 由 1/1/1 清理为 0/0/0，专用容器与网络随后删除。`npm run build:all` 成功构建管理端、小程序和 Node 24 API image；小程序仍报告既有受控 vendor Sass legacy/`@import` 警告，留待 D51.14 按任务处理。PR/push CI 使用 Node 24 与 npm cache，并调用上述五层门禁；镜像发布 workflow 通过 reusable CI job 的 `needs` 阻止测试失败前登录仓库。
