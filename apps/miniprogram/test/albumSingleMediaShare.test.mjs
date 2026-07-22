@@ -19,6 +19,39 @@ import {
   singleMediaSharePath,
   singleMediaShareRouteState
 } from "../src/utils/albumSingleMediaShare.js";
+import * as albumSingleMediaShare from "../src/utils/albumSingleMediaShare.js";
+
+test("public album cards show each safe media category instead of repeating the sharer role", () => {
+  assert.equal(typeof albumSingleMediaShare.publicAlbumMediaCaption, "function");
+  assert.equal(
+    albumSingleMediaShare.publicAlbumMediaCaption(
+      { media_type: "image", public_category: "share_subject" },
+      "叶辰"
+    ),
+    "包含 叶辰"
+  );
+  assert.equal(
+    albumSingleMediaShare.publicAlbumMediaCaption(
+      { media_type: "image", public_category: "other" },
+      "叶辰"
+    ),
+    "其他"
+  );
+  assert.equal(
+    albumSingleMediaShare.publicAlbumMediaCaption(
+      { media_type: "image" },
+      "叶辰"
+    ),
+    "其他"
+  );
+  assert.equal(
+    albumSingleMediaShare.publicAlbumMediaCaption(
+      { media_type: "video", public_category: "other" },
+      "叶辰"
+    ),
+    "打开小程序查看视频"
+  );
+});
 
 test("normalizes only positive safe integer media IDs", () => {
   assert.equal(normalizeFocusedMediaId(12), 12);

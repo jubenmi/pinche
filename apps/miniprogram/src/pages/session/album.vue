@@ -660,6 +660,7 @@ import {
   focusedPublicSnapshotProjection,
   isFocusedPublicVideoRequestCurrent,
   normalizeFocusedMediaId,
+  publicAlbumMediaCaption,
   singleMediaShareCardImage,
   singleMediaShareFailClosedPayload,
   singleMediaShareRouteState,
@@ -906,9 +907,6 @@ export default {
         this.shareSubject?.label ||
         ""
       );
-    },
-    publicPhotoCaption() {
-      return this.shareSubjectLabel ? `包含 ${this.shareSubjectLabel}` : "分享照片";
     },
     emptyText() {
       if (this.timelineMode) {
@@ -2992,10 +2990,7 @@ export default {
       return "短视频";
     },
     publicMediaCaption(photo) {
-      if (photo?.media_type === "video") {
-        return "打开小程序查看视频";
-      }
-      return this.publicPhotoCaption;
+      return publicAlbumMediaCaption(photo, this.shareSubjectLabel);
     },
     formatVideoDuration(seconds) {
       const totalSeconds = Math.max(0, Math.round(Number(seconds || 0)));

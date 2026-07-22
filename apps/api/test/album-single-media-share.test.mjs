@@ -10,6 +10,7 @@ import {
   publicShareSnapshotDigest,
   selectPublicShareMedia
 } from "../src/modules/core/service.js";
+import * as coreService from "../src/modules/core/service.js";
 import {
   createApp,
   createPublicAlbumVideoResponse,
@@ -57,6 +58,42 @@ function sharerSeatTag() {
 function tagsFor(candidates) {
   return new Map(candidates.map((media) => [Number(media.id), [sharerSeatTag()]]));
 }
+
+test("public media category distinguishes the shared role from safe other content", () => {
+  assert.equal(typeof coreService.publicAlbumMediaCategory, "function");
+  assert.equal(
+    coreService.publicAlbumMediaCategory([sharerSeatTag()], claims),
+    "share_subject"
+  );
+  assert.equal(
+    coreService.publicAlbumMediaCategory(
+      [{ tag_type: "other", user_id: null }],
+      claims
+    ),
+    "other"
+  );
+  assert.equal(
+    coreService.publicAlbumMediaCategory(
+      [{ tag_type: "session_npc_role", user_id: null }],
+      claims
+    ),
+    "other"
+  );
+});
+
+test("public media response exposes only the safe category and keeps raw tags private", () => {
+  assert.equal(typeof coreService.publicAlbumMediaResponse, "function");
+  const otherTag = { tag_type: "other", user_id: null, label: "内部标签" };
+  const response = coreService.publicAlbumMediaResponse(
+    eligibleMedia(41),
+    [otherTag],
+    claims
+  );
+
+  assert.equal(response.public_category, "other");
+  assert.deepEqual(response.tags, []);
+  assert.equal(JSON.stringify(response).includes(otherTag.label), false);
+});
 
 function focusedShareConnection(photoRows, tagRows) {
   const shares = [];

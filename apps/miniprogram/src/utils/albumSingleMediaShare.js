@@ -157,6 +157,17 @@ export function singleMediaShareCardImage(value, fallback = SINGLE_MEDIA_SHARE_S
   return image || fallback;
 }
 
+export function publicAlbumMediaCaption(photo, shareSubjectLabel = "") {
+  if (photo?.media_type === "video") {
+    return "打开小程序查看视频";
+  }
+  const subject = String(shareSubjectLabel || "").trim();
+  if (photo?.public_category === "share_subject" && subject) {
+    return `包含 ${subject}`;
+  }
+  return "其他";
+}
+
 export function singleMediaShareFailClosedPayload() {
   return Object.freeze({
     title: "该内容暂不可分享",
