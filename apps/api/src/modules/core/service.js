@@ -2413,12 +2413,48 @@ export function isPublicShareSnapshotMediaId(mediaIds, mediaId) {
   return Number.isSafeInteger(id) && id > 0 && mediaIds.includes(id);
 }
 
+export function normalizeImplicitUntaggedMedia(value, options = {}) {
+  let parsed = value;
+  if (parsed === undefined || parsed === null) return [];
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch (error) {
+      throw forbidden("Album share snapshot is invalid");
+    }
+  }
+  if (!Array.isArray(parsed) || parsed.length > 30) {
+    throw forbidden("Album share snapshot is invalid");
+  }
+  const allowed = options.subsetOf
+    ? new Set(options.subsetOf.map(Number))
+    : null;
+  const seen = new Set();
+  return parsed.map((entry) => {
+    const mediaId = Number(entry?.media_id);
+    const tagVersion = Number(entry?.tag_version);
+    if (
+      !Number.isSafeInteger(mediaId) ||
+      mediaId <= 0 ||
+      seen.has(mediaId) ||
+      (allowed && !allowed.has(mediaId)) ||
+      !Number.isSafeInteger(tagVersion) ||
+      tagVersion < 0
+    ) {
+      throw forbidden("Album share snapshot is invalid");
+    }
+    seen.add(mediaId);
+    return { media_id: mediaId, tag_version: tagVersion };
+  });
+}
+
 export function publicShareSnapshotDigest({
   sessionId,
   sharerUserId,
   seatId,
   mediaIds,
-  coverMediaIds
+  coverMediaIds,
+  implicitUntaggedMedia = []
 }) {
   const normalized = {
     sessionId: positiveId(sessionId, "sessionId"),
@@ -2435,6 +2471,13 @@ export function publicShareSnapshotDigest({
       .slice()
       .sort((left, right) => left - right)
   };
+  const normalizedImplicitUntaggedMedia = normalizeImplicitUntaggedMedia(
+    implicitUntaggedMedia,
+    { subsetOf: normalized.mediaIds }
+  ).slice().sort((left, right) => left.media_id - right.media_id);
+  if (normalizedImplicitUntaggedMedia.length > 0) {
+    normalized.implicitUntaggedMedia = normalizedImplicitUntaggedMedia;
+  }
   return crypto.createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
@@ -2458,6 +2501,10 @@ function normalizeSessionAlbumPublicShareRow(row) {
     max: 9,
     subsetOf: mediaIds
   });
+  const implicitUntaggedMedia = normalizeImplicitUntaggedMedia(
+    row.implicit_untagged_media,
+    { subsetOf: mediaIds }
+  );
   const normalized = {
     ...row,
     id: positiveId(row.id, "shareId"),
@@ -2465,14 +2512,16 @@ function normalizeSessionAlbumPublicShareRow(row) {
     sharer_user_id: positiveId(row.sharer_user_id, "sharerUserId"),
     seat_id: positiveId(row.seat_id, "seatId"),
     media_ids: mediaIds,
-    cover_media_ids: coverMediaIds
+    cover_media_ids: coverMediaIds,
+    implicit_untagged_media: implicitUntaggedMedia
   };
   const expectedDigest = publicShareSnapshotDigest({
     sessionId: normalized.session_id,
     sharerUserId: normalized.sharer_user_id,
     seatId: normalized.seat_id,
     mediaIds,
-    coverMediaIds
+    coverMediaIds,
+    implicitUntaggedMedia
   });
   if (String(row.snapshot_digest || "") !== expectedDigest) {
     throw forbidden("Album share snapshot is invalid");
