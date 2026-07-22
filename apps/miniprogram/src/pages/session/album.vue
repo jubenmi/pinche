@@ -1174,6 +1174,9 @@ export default {
   },
   async onShow() {
     if (this.timelineMode) {
+      if (this.loadingAlbum) {
+        return;
+      }
       if (this.consumePreviewReturnRefreshSkip()) {
         return;
       }
