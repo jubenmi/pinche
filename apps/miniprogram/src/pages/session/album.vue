@@ -1,5 +1,5 @@
 <template>
-  <view class="page album-page" :class="{ 'selection-active': !timelineMode && selectionMode }">
+  <view class="page album-page" :class="{ 'selection-active': selectionMode }">
     <AuthIdentityBar v-if="!timelineMode" />
     <FeedbackHost />
 
@@ -10,6 +10,13 @@
       <view class="album-share-preview-title">分享预览</view>
       <view class="album-share-preview-notice">{{ sharePreviewNoticeText }}</view>
       <t-button
+        v-if="!selectionMode"
+        class="button secondary album-share-preview-button"
+        :disabled="albumBusy || !publicAlbumSnapshotLoaded"
+        @tap="openShareSelectionMode"
+      >调整分享内容</t-button>
+      <t-button
+        v-if="!selectionMode"
         class="button album-share-preview-button"
         open-type="share"
         :disabled="!albumShareToken || !shareCoverPrepared"
@@ -239,9 +246,9 @@
             class="photo-card waterfall-photo-card"
             :class="{
               'video-card': photo.media_type === 'video',
-              selectable: !timelineMode && selectionMode && canSelectPhoto(photo),
-              selected: !timelineMode && selectionMode && isPhotoSelected(photo),
-              disabled: !timelineMode && selectionMode && !canSelectPhoto(photo)
+              selectable: selectionMode && canSelectPhoto(photo),
+              selected: selectionMode && isPhotoSelected(photo),
+              disabled: selectionMode && !canSelectPhoto(photo)
             }"
             @tap="togglePhotoSelection(photo)"
             >
@@ -293,7 +300,7 @@
                 </view>
               </view>
               <view
-                v-if="!timelineMode && selectionMode"
+                v-if="selectionMode"
                 class="selection-checkbox"
                 :class="{ selected: isPhotoSelected(photo), disabled: !canSelectPhoto(photo) }"
               >
@@ -371,9 +378,9 @@
             class="photo-card waterfall-photo-card"
             :class="{
               'video-card': photo.media_type === 'video',
-              selectable: !timelineMode && selectionMode && canSelectPhoto(photo),
-              selected: !timelineMode && selectionMode && isPhotoSelected(photo),
-              disabled: !timelineMode && selectionMode && !canSelectPhoto(photo)
+              selectable: selectionMode && canSelectPhoto(photo),
+              selected: selectionMode && isPhotoSelected(photo),
+              disabled: selectionMode && !canSelectPhoto(photo)
             }"
             @tap="togglePhotoSelection(photo)"
             >
@@ -425,7 +432,7 @@
                 </view>
               </view>
               <view
-                v-if="!timelineMode && selectionMode"
+                v-if="selectionMode"
                 class="selection-checkbox"
                 :class="{ selected: isPhotoSelected(photo), disabled: !canSelectPhoto(photo) }"
               >
@@ -496,8 +503,8 @@
       </template>
     </uv-waterfall>
 
-    <root-portal :enable="!timelineMode && selectionMode && !tagSheetPhoto">
-      <view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">
+    <root-portal :enable="selectionMode && !tagSheetPhoto">
+      <view v-if="selectionMode && !tagSheetPhoto" class="album-floating-toolbar">
         <view class="floating-toolbar-button secondary" @tap="toggleSelectionMode">
           取消
         </view>
@@ -509,6 +516,14 @@
           @tap="downloadSelectedPhotos"
         >
           下载所选
+        </view>
+        <view
+          v-else-if="selectionModePurpose === 'share'"
+          class="floating-toolbar-button primary"
+          :class="{ disabled: albumBusy || selectedPhotoCount === 0 }"
+          @tap="saveShareSelection"
+        >
+          保存范围
         </view>
         <view
           v-else
@@ -538,6 +553,13 @@
       @share-status-tap="handleSingleMediaShareStatusTap"
       @primary-action="showFullPublicAlbum"
     />
+
+    <view
+      v-if="previewShowsOwnedUntaggedShareNote"
+      class="preview-untagged-share-note"
+    >
+      未标注，仅在你主动分享后公开
+    </view>
 
     <view
       v-if="focusedPublicMediaUnavailable && publicAlbumSnapshotLoaded"
@@ -692,7 +714,8 @@ import {
 import {
   albumSharePreviewNotice,
   albumSharePreviewRoute,
-  albumSharePreviewRouteState
+  albumSharePreviewRouteState,
+  normalizeAlbumShareSelection
 } from "../../utils/albumSharePreview";
 
 function albumMediaCachePath(photoId, variant = "preview") {
@@ -724,6 +747,7 @@ export default {
       sharePreviewTotal: 0,
       sharePreviewUntaggedCount: 0,
       preparingSharePreview: false,
+      savingShareSelection: false,
       singleMediaShareRequested: false,
       focusedPublicMode: false,
       focusedPublicMediaUnavailable: false,
@@ -821,6 +845,17 @@ export default {
         return "hidden";
       }
       return this.singleMediaShareAuthority.currentEntry(this.previewCurrentPhoto?.id)?.status || "hidden";
+    },
+    previewShowsOwnedUntaggedShareNote() {
+      const photo = this.previewCurrentPhoto;
+      return Boolean(
+        !this.timelineMode &&
+        this.previewOverlayVisible &&
+        photo?.media_type === "image" &&
+        photo?.is_mine &&
+        Array.isArray(photo?.tags) &&
+        photo.tags.length === 0
+      );
     },
     previewMediaProgress() {
       const result = {};
@@ -1066,6 +1101,7 @@ export default {
         this.uploading ||
         this.downloading ||
         this.preparingSharePreview ||
+        this.savingShareSelection ||
         this.savingTags ||
         Boolean(this.deletingPhotoId)
       );
@@ -1082,6 +1118,9 @@ export default {
       }
       if (this.preparingSharePreview) {
         return "正在生成分享预览...";
+      }
+      if (this.savingShareSelection) {
+        return "正在更新分享范围...";
       }
       if (this.savingTags) {
         return "正在保存标注...";
@@ -1218,7 +1257,12 @@ export default {
   methods: {
     apiUrl,
     showShareMenus() {
-      if (!this.timelineMode || !this.albumShareToken || !this.shareCoverPrepared) {
+      if (
+        !this.timelineMode ||
+        this.selectionMode ||
+        !this.albumShareToken ||
+        !this.shareCoverPrepared
+      ) {
         if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
           uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
         }
@@ -1306,7 +1350,10 @@ export default {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/album/share-token`,
           method: "POST",
-          data: { focusMediaId: mediaId }
+          data: {
+            focusMediaId: mediaId,
+            includeOwnedUntaggedImages: true
+          }
         });
         const data = dataOf(response) || {};
         const token = typeof data.token === "string" ? data.token.trim() : "";
@@ -4130,6 +4177,79 @@ export default {
       this.selectedPhotoIds = [];
       this.topActionsFloating = false;
     },
+    openShareSelectionMode() {
+      if (
+        !this.sharePreviewMode ||
+        !this.publicAlbumSnapshotLoaded ||
+        this.albumBusy ||
+        this.photos.length === 0
+      ) {
+        return;
+      }
+      this.closePhotoPreview();
+      this.tagSheetPhoto = null;
+      this.bulkTagging = false;
+      this.selectedTagKeys = [];
+      this.selectionMode = true;
+      this.selectionModePurpose = "share";
+      this.selectedPhotoIds = this.photos.map((photo) => Number(photo.id));
+      this.topActionsFloating = false;
+      this.showShareMenus();
+    },
+    async saveShareSelection() {
+      if (
+        !this.sharePreviewMode ||
+        !this.selectionMode ||
+        this.selectionModePurpose !== "share" ||
+        this.albumBusy
+      ) {
+        return;
+      }
+      const selection = normalizeAlbumShareSelection(
+        this.photos,
+        this.selectedPhotoIds
+      );
+      if (!selection.ok) {
+        showToast({ title: selection.error, icon: "none" });
+        return;
+      }
+      this.savingShareSelection = true;
+      try {
+        const response = await request({
+          url: `/api/sessions/${this.sessionId}/album/share-token`,
+          method: "POST",
+          data: {
+            includeOwnedUntaggedImages: true,
+            selectedMediaIds: selection.ids
+          }
+        });
+        const data = dataOf(response) || {};
+        const route = albumSharePreviewRoute({
+          sessionId: this.sessionId,
+          token: data.token,
+          total: data.visible_count,
+          untagged: data.implicit_untagged_count
+        });
+        if (!route) {
+          throw albumMediaError(
+            "ALBUM_PUBLIC_SHARE_RESPONSE_INVALID",
+            "分享范围更新失败，请稍后再试"
+          );
+        }
+        if (typeof uni !== "undefined" && typeof uni.redirectTo === "function") {
+          uni.redirectTo({ url: route });
+        }
+      } catch (error) {
+        showModal({
+          title: "分享范围已变化",
+          content: error?.userMessage || "部分内容已不可分享，请返回后重试。",
+          showCancel: false,
+          confirmText: "知道了"
+        });
+      } finally {
+        this.savingShareSelection = false;
+      }
+    },
     openTagSelectionMode() {
       if (this.timelineMode || this.albumBusy || this.taggablePhotos.length === 0) {
         return;
@@ -4144,7 +4264,7 @@ export default {
       this.topActionsFloating = false;
     },
     toggleSelectionMode() {
-      if (this.timelineMode || this.albumBusy) {
+      if ((this.timelineMode && !this.sharePreviewMode) || this.albumBusy) {
         return;
       }
       if (!this.selectionMode) {
@@ -4155,6 +4275,7 @@ export default {
       this.selectionModePurpose = "tag";
       this.selectedPhotoIds = [];
       this.updateTopActionsFloating();
+      this.showShareMenus();
     },
     canSelectPhoto(photo) {
       if (!this.selectionMode) {
@@ -4163,13 +4284,24 @@ export default {
       if (this.selectionModePurpose === "download") {
         return this.isDownloadableAlbumImage(photo);
       }
+      if (this.selectionModePurpose === "share") {
+        return Boolean(
+          this.sharePreviewMode &&
+          this.photos.some((item) => Number(item.id) === Number(photo?.id))
+        );
+      }
       return Boolean(photo.can_tag);
     },
     isPhotoSelected(photo) {
       return this.selectedPhotoIds.includes(Number(photo.id));
     },
     togglePhotoSelection(photo) {
-      if (this.timelineMode || !this.selectionMode || this.albumBusy || !this.canSelectPhoto(photo)) {
+      if (
+        (this.timelineMode && this.selectionModePurpose !== "share") ||
+        !this.selectionMode ||
+        this.albumBusy ||
+        !this.canSelectPhoto(photo)
+      ) {
         return;
       }
       const photoId = Number(photo.id);
@@ -4177,7 +4309,17 @@ export default {
         this.selectedPhotoIds = this.selectedPhotoIds.filter((id) => id !== photoId);
         return;
       }
-      this.selectedPhotoIds = [...this.selectedPhotoIds, photoId];
+      const nextIds = [...this.selectedPhotoIds, photoId];
+      if (this.selectionModePurpose === "share") {
+        const selection = normalizeAlbumShareSelection(this.photos, nextIds);
+        if (!selection.ok) {
+          showToast({ title: selection.error, icon: "none" });
+          return;
+        }
+        this.selectedPhotoIds = [...selection.ids];
+        return;
+      }
+      this.selectedPhotoIds = nextIds;
     },
     openBulkTagSheet() {
       if (
@@ -4282,6 +4424,22 @@ export default {
 
 .album-share-preview-button {
   margin-top: 20rpx;
+}
+
+.preview-untagged-share-note {
+  position: fixed;
+  top: 116rpx;
+  left: 50%;
+  z-index: 10020;
+  max-width: 560rpx;
+  padding: 12rpx 18rpx;
+  border-radius: 999rpx;
+  background: rgba(22, 28, 26, 0.82);
+  color: #ffffff;
+  font-size: 22rpx;
+  line-height: 1.4;
+  text-align: center;
+  transform: translateX(-50%);
 }
 
 .album-page {

@@ -126,8 +126,32 @@ test("share preview uses safe state, accurate notice and native share gating", (
   assert.match(albumPageSource, /albumSharePreviewNotice\(\{/);
   assert.match(albumPageSource, /v-if="sharePreviewMode"/);
   assert.match(albumPageSource, /open-type="share"/);
-  assert.match(
-    albumPageSource,
-    /if \(!this\.timelineMode \|\| !this\.albumShareToken \|\| !this\.shareCoverPrepared\)/
+  const shareMenuBlock = albumPageSource.slice(
+    albumPageSource.indexOf("showShareMenus() {"),
+    albumPageSource.indexOf("async prepareShareCoverUrl")
   );
+  assert.match(shareMenuBlock, /!this\.timelineMode/);
+  assert.match(shareMenuBlock, /this\.selectionMode/);
+  assert.match(shareMenuBlock, /!this\.albumShareToken/);
+  assert.match(shareMenuBlock, /!this\.shareCoverPrepared/);
+});
+
+test("preview adjustment keeps an independent exact share selection", () => {
+  assert.match(albumPageSource, />调整分享内容</);
+  assert.match(albumPageSource, /selectionModePurpose === 'share'/);
+  assert.match(albumPageSource, /openShareSelectionMode/);
+  assert.match(albumPageSource, /normalizeAlbumShareSelection\(/);
+  assert.match(albumPageSource, /async saveShareSelection\(\)/);
+  assert.match(albumPageSource, /selectedMediaIds: selection\.ids/);
+});
+
+test("single-image sharing explicitly allows an owned untagged image and explains exposure", () => {
+  const start = albumPageSource.indexOf("async prepareSingleMediaShare(photo");
+  const singleShareBlock = albumPageSource.slice(
+    start,
+    albumPageSource.indexOf("handleSingleMediaShareStatusTap", start)
+  );
+  assert.match(singleShareBlock, /includeOwnedUntaggedImages: true/);
+  assert.match(albumPageSource, /未标注，仅在你主动分享后公开/);
+  assert.match(albumPageSource, /previewShowsOwnedUntaggedShareNote/);
 });
