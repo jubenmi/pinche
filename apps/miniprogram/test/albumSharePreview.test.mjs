@@ -136,6 +136,23 @@ test("share preview uses safe state, accurate notice and native share gating", (
   assert.match(shareMenuBlock, /!this\.shareCoverPrepared/);
 });
 
+test("share preview initial load is not invalidated by the first onShow refresh", () => {
+  const onShowBlock = albumPageSource.slice(
+    albumPageSource.indexOf("async onShow()"),
+    albumPageSource.indexOf("onHide()")
+  );
+  const timelineBlock = onShowBlock.slice(
+    onShowBlock.indexOf("if (this.timelineMode)"),
+    onShowBlock.indexOf("const auth = getCurrentUser()")
+  );
+
+  assert.match(timelineBlock, /if \(this\.loadingAlbum\) \{\s*return;\s*\}/);
+  assert.ok(
+    timelineBlock.indexOf("if (this.loadingAlbum)") <
+      timelineBlock.indexOf("await this.albumMediaRefresh?.refresh()")
+  );
+});
+
 test("preview adjustment keeps an independent exact share selection", () => {
   assert.match(albumPageSource, />调整分享内容</);
   assert.match(albumPageSource, /<root-portal :enable="selectionMode && !tagSheetPhoto">/);
