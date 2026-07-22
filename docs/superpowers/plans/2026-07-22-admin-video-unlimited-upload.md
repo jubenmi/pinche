@@ -118,7 +118,7 @@ Expected: the large-size acceptance tests fail with 413 and the long-duration te
 
 - [ ] **Step 4: Implement positive-only duration and byte validation**
 
-In `media.js`, remove `MAX_ALBUM_VIDEO_BYTES`, `payloadTooLarge`, and the maximum comparison. Keep the positive safe-integer rule:
+In `media.js`, remove `payloadTooLarge` and the maximum comparison. Keep the exported `MAX_ALBUM_VIDEO_BYTES` constant temporarily because the multipart parser still imports it until Task 2; the metadata validator must no longer use it. Keep the positive safe-integer rule:
 
 ```js
 function normalizeByteSize(value, { required = true } = {}) {
@@ -161,6 +161,7 @@ git commit -m "feat(api): remove admin video metadata caps"
 **Files:**
 - Modify: `scripts/d42-album-video-stream-check.js:60-115, 130-170`
 - Modify: `scripts/d42-album-video-server-check.js:1-90`
+- Modify: `apps/api/src/modules/album-video/media.js:1-10`
 - Modify: `apps/api/src/modules/album-video/multipart-stream.js:1-20, 180-230, 270-305`
 - Modify: `apps/api/src/server.js:340-350, 2104-2135, 2615-2640`
 
@@ -227,7 +228,7 @@ Expected: the parser rejects null limits with `invalid multipart file byte limit
 
 - [ ] **Step 4: Implement optional streaming limits**
 
-Remove the `MAX_ALBUM_VIDEO_BYTES` import. Normalize null/undefined/Infinity to no limit and positive safe integers to finite limits:
+Remove the `MAX_ALBUM_VIDEO_BYTES` import from `multipart-stream.js`, then delete the now-unused export from `media.js`. Normalize null/undefined/Infinity to no limit and positive safe integers to finite limits:
 
 ```js
 function optionalPositiveByteLimit(value, label) {
@@ -280,7 +281,7 @@ Expected: all commands pass; explicit finite multipart caps still reject oversiz
 - [ ] **Step 7: Commit Task 2**
 
 ```bash
-git add apps/api/src/modules/album-video/multipart-stream.js apps/api/src/server.js scripts/d42-album-video-stream-check.js scripts/d42-album-video-server-check.js
+git add apps/api/src/modules/album-video/media.js apps/api/src/modules/album-video/multipart-stream.js apps/api/src/server.js scripts/d42-album-video-stream-check.js scripts/d42-album-video-server-check.js
 git commit -m "feat(api): uncap admin video transfer size"
 ```
 
