@@ -25,7 +25,8 @@ export const requiredSchemaTables = Object.freeze([
   "user_image_assets",
   "user_image_asset_cleanup_jobs",
   "user_image_object_cleanup_jobs",
-  "user_image_upload_operations"
+  "user_image_upload_operations",
+  "session_start_time_corrections"
 ]);
 
 export function serverConnectionOptions() {

@@ -172,13 +172,15 @@ git commit -m "test: define historical session time correction"
 
 ### Task 2: 建立迁移与事务服务的 RED/GREEN 循环
 
+> 进度：已完成；权限、生命周期、更新、审计与失败传播共 9/9 定向测试通过。
+
 **Files:**
 - Create: `apps/api/migrations/0033_session_start_time_corrections.sql`
 - Create: `apps/api/test/session-time-correction-service.test.mjs`
 - Modify: `apps/api/src/modules/core/service.js`
 - Modify: `apps/api/src/db/mysql.js`
 
-- [ ] **Step 1: 写事务服务失败测试**
+- [x] **Step 1: 写事务服务失败测试**
 
 测试使用 fake connection 锁定 SQL 边界，并验证非车头、未来车局、成功更新与审计：
 
@@ -261,13 +263,13 @@ test("updates only start_at and appends one audit row", async () => {
 });
 ```
 
-- [ ] **Step 2: 运行事务测试并确认按预期失败**
+- [x] **Step 2: 运行事务测试并确认按预期失败**
 
 Run: `node --test apps/api/test/session-time-correction-service.test.mjs`
 
 Expected: FAIL，`correctHistoricalSessionStartTimeInTransaction` 尚未导出。
 
-- [ ] **Step 3: 新增审计表迁移并纳入 readiness**
+- [x] **Step 3: 新增审计表迁移并纳入 readiness**
 
 创建完整迁移：
 
@@ -294,7 +296,7 @@ CREATE TABLE session_start_time_corrections (
 "session_start_time_corrections",
 ```
 
-- [ ] **Step 4: 实现最小事务服务**
+- [x] **Step 4: 实现最小事务服务**
 
 在 `service.js` 导入 helper，并增加事务入口。校验错误保留独立 code：
 
@@ -359,13 +361,13 @@ export async function correctHistoricalSessionStartTimeInTransaction(
 }
 ```
 
-- [ ] **Step 5: 运行事务与 helper 测试并确认转绿**
+- [x] **Step 5: 运行事务与 helper 测试并确认转绿**
 
 Run: `node --test apps/api/test/session-time-correction*.test.mjs`
 
 Expected: PASS，纯 helper 与 service 测试全部通过。
 
-- [ ] **Step 6: 提交迁移与事务服务**
+- [x] **Step 6: 提交迁移与事务服务**
 
 ```bash
 git add apps/api/migrations/0033_session_start_time_corrections.sql apps/api/src/db/mysql.js apps/api/src/modules/core/service.js apps/api/test/session-time-correction-service.test.mjs
