@@ -3,11 +3,14 @@ import {
   isAlbumPhotoVisibleInPublicShare,
   isPublicShareSnapshotMediaId,
   normalizePublicShareSnapshotIds,
-  publicShareCoverGridLayout,
   publicShareSnapshotDigest,
   selectPublicShareCoverMedia,
   selectPublicShareMedia
 } from "../apps/api/src/modules/core/service.js";
+import {
+  ALBUM_SHARE_COVER_VARIANTS,
+  albumShareCoverLayout
+} from "../apps/api/src/modules/album-share-cover/layouts.js";
 
 const claims = { sessionId: 10, sharerUserId: 100, seatId: 1000 };
 const openPrivacy = (ids) => new Map(
@@ -296,26 +299,21 @@ assert.equal(
   "cover selection is bounded to nine images"
 );
 
-const expectedLayouts = [
-  [1],
-  [2],
-  [3],
-  [2, 2],
-  [3, 2],
-  [3, 3],
-  [3, 3, 1],
-  [3, 3, 2],
-  [3, 3, 3]
-];
-for (let count = 1; count <= 9; count += 1) {
-  assert.deepEqual(
-    publicShareCoverGridLayout(count).rowCounts,
-    expectedLayouts[count - 1],
-    `cover layout for ${count} images matches Moments-style rows`
-  );
+const expectedCoverOutputs = {
+  friend: { width: 1000, height: 800 },
+  timeline: { width: 1000, height: 1000 }
+};
+for (const [variant, output] of Object.entries(ALBUM_SHARE_COVER_VARIANTS)) {
+  for (let count = 1; count <= 9; count += 1) {
+    const layout = albumShareCoverLayout(variant, count);
+    assert.deepEqual(output, expectedCoverOutputs[variant], `${variant} output dimensions are stable`);
+    assert.deepEqual(layout.output, expectedCoverOutputs[variant], `${variant} layout output is stable`);
+    assert.equal(layout.slots.length, count, `${variant} layout has ${count} slots`);
+    assert.equal(layout.slots[0].role, "hero", `${variant} layout starts with its hero slot`);
+  }
 }
 
-console.log("D48 safe cover candidate and 1-9 grid cases passed (12)");
+console.log("D48 safe cover candidate and dual-channel 1-9 layout cases passed (21)");
 
 if (!process.argv.includes("--unit")) {
   await import("./d23-album-share-join-policy-smoke.js");
