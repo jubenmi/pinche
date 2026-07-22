@@ -138,8 +138,12 @@ test("share preview uses safe state, accurate notice and native share gating", (
 
 test("preview adjustment keeps an independent exact share selection", () => {
   assert.match(albumPageSource, />调整分享内容</);
+  assert.match(albumPageSource, /<root-portal :enable="selectionMode && !tagSheetPhoto">/);
   assert.match(albumPageSource, /selectionModePurpose === 'share'/);
   assert.match(albumPageSource, /openShareSelectionMode/);
+  assert.match(albumPageSource, /!this\.sharePreviewMode \|\|/);
+  assert.match(albumPageSource, /this\.timelineMode && !this\.sharePreviewMode/);
+  assert.match(albumPageSource, /this\.timelineMode && this\.selectionModePurpose !== "share"/);
   assert.match(albumPageSource, /normalizeAlbumShareSelection\(/);
   assert.match(albumPageSource, /async saveShareSelection\(\)/);
   assert.match(albumPageSource, /selectedMediaIds: selection\.ids/);

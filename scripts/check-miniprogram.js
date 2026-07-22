@@ -2504,11 +2504,11 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Album page must use native page scrolling; wrapping the album in scroll-view hides the fixed selection toolbar in WeChat DevTools");
   }
   if (
-    albumSource.includes('<cover-view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">') ||
-    !albumSource.includes('<root-portal :enable="!timelineMode && selectionMode && !tagSheetPhoto">') ||
-    !albumSource.includes('<view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">')
+    albumSource.includes('<cover-view v-if="selectionMode && !tagSheetPhoto" class="album-floating-toolbar">') ||
+    !albumSource.includes('<root-portal :enable="selectionMode && !tagSheetPhoto">') ||
+    !albumSource.includes('<view v-if="selectionMode && !tagSheetPhoto" class="album-floating-toolbar">')
   ) {
-    fail("Album selection toolbar must render in a root-portal view so it survives scroll and selection rerenders");
+    fail("Album selection toolbar must render in a root-portal view for member and share-preview selection");
   }
   if (
     !albumFloatingToolbarStyle.includes("height: 132rpx") ||
@@ -3516,11 +3516,20 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   for (const requiredAlbumReadOnlyText of [
     'v-if="!timelineMode && (canUpload || photos.length || taggablePhotos.length)"',
-    'class="album-filter-panel album-toolbar-filter-panel"',
-    'v-if="!timelineMode && selectionMode"'
+    'class="album-filter-panel album-toolbar-filter-panel"'
   ]) {
     if (!albumSource.includes(requiredAlbumReadOnlyText)) {
       fail(`Album timeline mode must hide member-only controls: ${requiredAlbumReadOnlyText}`);
+    }
+  }
+  for (const requiredSharePreviewSelectionText of [
+    '<root-portal :enable="selectionMode && !tagSheetPhoto">',
+    "!this.sharePreviewMode ||",
+    '(this.timelineMode && !this.sharePreviewMode)',
+    '(this.timelineMode && this.selectionModePurpose !== "share")'
+  ]) {
+    if (!albumSource.includes(requiredSharePreviewSelectionText)) {
+      fail(`Album timeline selection must remain limited to explicit share preview: ${requiredSharePreviewSelectionText}`);
     }
   }
   if (
