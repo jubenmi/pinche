@@ -8,6 +8,7 @@
     "test:album-image": "node --test test/album-image-*.test.mjs",
     "test:mysql-timezone": "node --test test/mysql-timezone.test.mjs",
     "test:session-reschedule": "node --test test/session-reschedule*.test.mjs",
+    "test:session-time-correction": "node --test test/session-time-correction*.test.mjs",
     "job:album-image-cleanup": "node src/jobs/album-image-cleanup.js",
     "job:album-image-backfill": "node src/jobs/backfill-album-image-object-keys.js",
     "job:content-moderation-retry": "node src/jobs/content-moderation-retry.js",
