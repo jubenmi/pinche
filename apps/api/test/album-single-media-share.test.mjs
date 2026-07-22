@@ -91,9 +91,10 @@ function focusedShareConnection(photoRows, tagRows) {
           sharer_user_id: values[1],
           seat_id: values[2],
           media_ids: values[3],
-          snapshot_digest: values[4],
-          cover_media_ids: values[5],
-          expires_at: values[6],
+          implicit_untagged_media: values[4],
+          snapshot_digest: values[5],
+          cover_media_ids: values[6],
+          expires_at: values[7],
           revoked_at: null
         };
         shares.push(share);
@@ -233,7 +234,7 @@ test("focused album shares validate the focus ID and expose it through the share
   assert.match(serviceSource, /ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE/);
   assert.match(
     serviceSource,
-    /selectPublicShareMedia\(photoRows, tagsMap, privacyByUser, claims, \{\s*requiredMediaId: focusMediaId\s*\}\)/
+    /selectPublicShareMedia\(photoRows, tagsMap, privacyByUser, claims, \{\s*requiredMediaId: focusMediaId,\s*allowOwnedUntaggedImages: includeOwnedUntaggedImages,\s*selectedMediaIds:/
   );
   assert.match(serviceSource, /focus_media_id: focusMediaId \|\| null/);
 
@@ -242,7 +243,7 @@ test("focused album shares validate the focus ID and expose it through the share
     serverSource.indexOf("const sessionAlbumPublicSharesId")
   );
   assert.match(serverSource, /const body = await bodyFor\(request\)/);
-  assert.match(shareTokenRoute, /\{ focusMediaId: body\?\.focusMediaId \}/);
+  assert.match(shareTokenRoute, /focusMediaId: body\?\.focusMediaId/);
   assert.match(shareTokenRoute, /focus_media_id: share\.focus_media_id/);
 });
 

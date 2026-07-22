@@ -5914,7 +5914,11 @@ async function route(request, response, options = {}) {
     const share = await createOrReuseSessionAlbumPublicShare(
       user,
       sessionAlbumShareTokenId,
-      { focusMediaId: body?.focusMediaId }
+      {
+        focusMediaId: body?.focusMediaId,
+        includeOwnedUntaggedImages: body?.includeOwnedUntaggedImages,
+        selectedMediaIds: body?.selectedMediaIds
+      }
     );
     const exp = tokenPositiveInteger(
       Math.floor(new Date(share.expires_at).getTime() / 1000),
@@ -5936,6 +5940,7 @@ async function route(request, response, options = {}) {
         share_subject: share.share_subject,
         share_owner: share.share_owner,
         focus_media_id: share.focus_media_id,
+        implicit_untagged_count: share.implicit_untagged_count,
         visible_count: share.visible_count,
         photo_count: share.photo_count,
         video_count: share.video_count,
