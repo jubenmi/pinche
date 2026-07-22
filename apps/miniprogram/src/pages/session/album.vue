@@ -640,6 +640,7 @@ import {
   canOpenAlbumMediaPreview,
   canReuseVideoUrl,
   compressVideoSizeBytes,
+  isUsableRequiredVideoCompression,
   shouldAttachApiAuthorization,
   transitionAlbumVideoViewerFailure,
   videoUrlExpiresAt
@@ -674,14 +675,14 @@ function albumMediaCachePath(photoId, variant = "preview") {
   return root ? `${root}/session-album-${photoId}-${variant}.jpg` : "";
 }
 
-// D32 admin album video keeps short video upload scoped to system_admin testing.
+// Admin album video upload remains scoped to system_admin. The 60-second value
+// controls only WeChat camera recording; selected album videos have no duration cap.
 const MAX_ALBUM_PHOTO_UPLOAD_BYTES = 4 * 1024 * 1024;
 const ALBUM_PHOTO_COMPRESS_QUALITY = 85;
 const ALBUM_PHOTO_COMPRESS_WIDTH = 2048;
 const ALBUM_PHOTO_COMPRESS_HEIGHT = 2048;
-const MAX_ALBUM_VIDEO_DURATION_SECONDS = 60;
-const MIN_ALBUM_VIDEO_COMPRESS_BYTES = 20 * 1024 * 1024;
-const MAX_ALBUM_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_ALBUM_VIDEO_RECORDING_DURATION_SECONDS = 60;
+const VIDEO_COMPRESSION_SUSPICIOUS_MIN_ORIGINAL_BYTES = 20 * 1024 * 1024;
 
 export default {
   components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost, AlbumImageViewer },
@@ -3098,7 +3099,7 @@ export default {
         mediaType: ["image", "video"],
         sourceType: ["album", "camera"],
         sizeType: ["original"],
-        maxDuration: MAX_ALBUM_VIDEO_DURATION_SECONDS,
+        maxDuration: MAX_ALBUM_VIDEO_RECORDING_DURATION_SECONDS,
         success: async (result) => {
           const selection = classifyAlbumMediaSelection(result);
           if (selection.kind === "invalid") {
@@ -3355,14 +3356,18 @@ export default {
     },
     async compressVideoBeforeUpload(filePath, originalInfo = {}) {
       if (typeof wx === "undefined" || typeof wx.compressVideo !== "function") {
-        return { filePath, ...originalInfo };
+        return null;
       }
       return new Promise((resolve) => {
         wx.compressVideo({
           src: filePath,
           quality: "medium",
           success: async (result) => {
-            const compressedPath = result.tempFilePath || filePath;
+            const compressedPath = result.tempFilePath || "";
+            if (!compressedPath) {
+              resolve(null);
+              return;
+            }
             const compressedInfo = await this.getVideoFileInfo(compressedPath);
             const reportedSizeBytes = compressVideoSizeBytes(result.size);
             resolve({
@@ -3373,12 +3378,9 @@ export default {
               duration: compressedInfo.duration || originalInfo.duration || null
             });
           },
-          fail: () => resolve({ filePath, ...originalInfo })
+          fail: () => resolve(null)
         });
       });
-    },
-    shouldCompressVideoBeforeUpload(originalSize) {
-      return !(originalSize > 0 && originalSize <= MIN_ALBUM_VIDEO_COMPRESS_BYTES);
     },
     isSuspiciousCompressedVideo(compressed = {}, originalInfo = {}) {
       const compressedSize = Number(compressed.size || 0);
@@ -3389,7 +3391,7 @@ export default {
       }
       return (
         durationSeconds >= 5 &&
-        originalSize > MIN_ALBUM_VIDEO_COMPRESS_BYTES &&
+        originalSize > VIDEO_COMPRESSION_SUSPICIOUS_MIN_ORIGINAL_BYTES &&
         compressedSize < originalSize * 0.01 &&
         compressedSize < 512 * 1024
       );
@@ -3397,7 +3399,7 @@ export default {
     confirmVideoUpload({ durationSeconds, uploadSize }) {
       return new Promise((resolve) => {
         showModal({
-          title: "上传短视频",
+          title: "上传视频",
           content: `时长 ${this.formatVideoDuration(durationSeconds)}，预计上传 ${this.formatFileSize(uploadSize)}。上传后按相册隐私展示。`,
           confirmText: "上传",
           cancelText: "取消",
@@ -3428,19 +3430,12 @@ export default {
             const durationSeconds = Math.ceil(
               Number(file.duration || originalInfo.duration || 0)
             );
-            if (durationSeconds > MAX_ALBUM_VIDEO_DURATION_SECONDS) {
-              showToast({ title: "视频最长支持 60 秒，请先剪辑后再上传", icon: "none" });
-              this.statusText = "";
-              return;
-            }
             if (!durationSeconds) {
               showToast({ title: "无法读取视频时长，请换一个视频", icon: "none" });
               this.statusText = "";
               return;
             }
             const originalSize = Number(file.size || originalInfo.size || 0);
-            let uploadPath = originalPath;
-            let uploadSize = originalSize;
             let uploadInfo = {
               filePath: originalPath,
               size: originalSize,
@@ -3448,26 +3443,23 @@ export default {
               height: originalInfo.height || null,
               duration: durationSeconds
             };
-            const shouldCompressVideo = this.shouldCompressVideoBeforeUpload(originalSize);
-            if (shouldCompressVideo) {
-              this.statusText = "正在压缩视频...";
-              const compressed = await this.compressVideoBeforeUpload(originalPath, uploadInfo);
-              const compressedSize = Number(compressed.size || 0);
-              const compressedUsable =
-                compressed.filePath !== originalPath &&
-                compressedSize > 0 &&
-                !this.isSuspiciousCompressedVideo(compressed, uploadInfo);
-              const useCompressed = compressedUsable && (!originalSize || compressedSize < originalSize);
-              if (useCompressed) {
-                uploadPath = compressed.filePath;
-                uploadSize = compressedSize;
-                uploadInfo = compressed;
-              } else if (originalSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
-                showToast({ title: "压缩后视频异常，请先剪辑或压缩后再上传", icon: "none" });
-                this.statusText = "压缩后视频异常，请先剪辑或压缩后再上传。";
-                return;
-              }
+            this.statusText = "正在压缩视频...";
+            const compressed = await this.compressVideoBeforeUpload(originalPath, uploadInfo);
+            const compressedSize = Number(compressed?.size || 0);
+            const suspicious = this.isSuspiciousCompressedVideo(compressed || {}, uploadInfo);
+            if (!isUsableRequiredVideoCompression({
+              originalPath,
+              compressedPath: compressed?.filePath,
+              compressedSize,
+              suspicious
+            })) {
+              showToast({ title: "视频压缩失败，请先压缩后再上传", icon: "none" });
+              this.statusText = "视频必须成功压缩后才能上传。";
+              return;
             }
+            const uploadPath = compressed.filePath;
+            let uploadSize = compressedSize;
+            uploadInfo = compressed;
             const finalUploadInfo = await this.getVideoFileInfo(uploadPath);
             uploadSize = Number(finalUploadInfo.size || uploadSize || 0);
             if (!uploadSize) {
@@ -3481,11 +3473,6 @@ export default {
               filePath: uploadPath,
               size: uploadSize
             };
-            if (uploadSize > MAX_ALBUM_VIDEO_UPLOAD_BYTES) {
-              showToast({ title: "视频文件过大，请压缩或剪辑后再上传", icon: "none" });
-              this.statusText = "";
-              return;
-            }
             const confirmed = await this.confirmVideoUpload({ durationSeconds, uploadSize });
             if (!confirmed) {
               this.statusText = "";

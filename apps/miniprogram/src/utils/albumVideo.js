@@ -8,6 +8,25 @@ export function compressVideoSizeBytes(sizeKilobytes) {
   return Math.round(size * 1024);
 }
 
+export function isUsableRequiredVideoCompression({
+  originalPath,
+  compressedPath,
+  compressedSize,
+  suspicious = false
+} = {}) {
+  const source = String(originalPath || "");
+  const output = String(compressedPath || "");
+  const size = Number(compressedSize);
+  return Boolean(
+    source &&
+      output &&
+      output !== source &&
+      Number.isSafeInteger(size) &&
+      size > 0 &&
+      suspicious !== true
+  );
+}
+
 export function shouldAttachApiAuthorization(url, apiBase) {
   const rawUrl = String(url || "").trim();
   const rawApiBase = String(apiBase || "").trim();

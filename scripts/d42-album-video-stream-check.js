@@ -85,6 +85,22 @@ await withTempDir(async (tempDir) => {
 console.log("PASS multipart stream preserves multi-MB boundary-like video bytes with bounded tail state");
 
 await withTempDir(async (tempDir) => {
+  const boundary = "admin-video-unlimited";
+  const payload = Buffer.concat([MP4_HEADER, Buffer.alloc(4096, 0x61)]);
+  const result = await parseMultipartAlbumVideoStream({
+    request: Readable.from(chunksOf(multipart(boundary, payload), 127)),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    tempDir,
+    maxFileBytes: null,
+    maxRequestBytes: null
+  });
+  assert.equal(result.byteSize, payload.length);
+  await result.cleanup();
+  await assertDirectoryEmpty(tempDir);
+});
+console.log("PASS multipart stream supports explicit uncapped admin uploads");
+
+await withTempDir(async (tempDir) => {
   const boundary = "d42-first-chunk-payload";
   const payload = Buffer.concat([
     MP4_HEADER,

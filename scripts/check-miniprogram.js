@@ -2283,24 +2283,33 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   for (const requiredD32AlbumVideoText of [
     // D32 admin album video: media_type === "image" and media_type === "video".
-    "D32 admin album video",
-    "MAX_ALBUM_VIDEO_DURATION_SECONDS",
-    "MIN_ALBUM_VIDEO_COMPRESS_BYTES = 20 * 1024 * 1024",
+    "MAX_ALBUM_VIDEO_RECORDING_DURATION_SECONDS",
+    "VIDEO_COMPRESSION_SUSPICIOUS_MIN_ORIGINAL_BYTES = 20 * 1024 * 1024",
     "wx.chooseMedia",
     "wx.compressVideo",
     "chooseAlbumMedia",
     "classifyAlbumMediaSelection",
     "canUploadVideo",
-    "shouldCompressVideoBeforeUpload",
+    "isUsableRequiredVideoCompression",
     "isSuspiciousCompressedVideo",
-    "originalSize > 0 && originalSize <= MIN_ALBUM_VIDEO_COMPRESS_BYTES",
-    "压缩后视频异常",
+    "视频必须成功压缩后才能上传",
     "media_type === \"image\"",
     "media_type === \"video\"",
     "打开小程序查看视频"
   ]) {
     if (!albumSource.includes(requiredD32AlbumVideoText)) {
       fail(`D32 admin album video flow is missing ${requiredD32AlbumVideoText}`);
+    }
+  }
+  for (const forbiddenD32AlbumVideoText of [
+    "MAX_ALBUM_VIDEO_DURATION_SECONDS",
+    "MIN_ALBUM_VIDEO_COMPRESS_BYTES",
+    "MAX_ALBUM_VIDEO_UPLOAD_BYTES",
+    "shouldCompressVideoBeforeUpload",
+    "视频最长支持 60 秒"
+  ]) {
+    if (albumSource.includes(forbiddenD32AlbumVideoText)) {
+      fail(`D32 admin album video flow must not keep ${forbiddenD32AlbumVideoText}`);
     }
   }
   const albumVideoPreviewPhotoSource = methodBody(albumSource, "previewPhoto");

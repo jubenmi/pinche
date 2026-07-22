@@ -343,8 +343,6 @@ const SESSION_REVIEW_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_REVIEW_MULTIPART_MAX_BYTES = SESSION_REVIEW_UPLOAD_MAX_BYTES + 64 * 1024;
 const SESSION_ALBUM_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_ALBUM_MULTIPART_MAX_BYTES = SESSION_ALBUM_UPLOAD_MAX_BYTES + 64 * 1024;
-const SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
-const SESSION_ALBUM_VIDEO_MULTIPART_MAX_BYTES = SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES + 256 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
@@ -2124,7 +2122,6 @@ async function createCosDirectUploadIntent({ kind, extension, user, userId, sess
       region: config.cos.region,
       key,
       uploadPath: `/${key}`,
-      maxBytes: SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES,
       contentType: "video/mp4",
       headers: { "x-cos-forbid-overwrite": "true" }
     };
@@ -2626,9 +2623,7 @@ async function saveUploadedSessionAlbumVideo(request, userId, sessionId) {
   const upload = await parseMultipartAlbumVideoStream({
     request,
     contentType,
-    tempDir: sessionAlbumVideoSourceUploadDir,
-    maxFileBytes: SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES,
-    maxRequestBytes: SESSION_ALBUM_VIDEO_MULTIPART_MAX_BYTES
+    tempDir: sessionAlbumVideoSourceUploadDir
   });
   try {
     const videoFilename = `${uploadFilenameBase(`admin-video-${sessionId}`, userId)}.mp4`;
