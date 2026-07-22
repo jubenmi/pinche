@@ -146,15 +146,15 @@ test("authoritative video metadata rejects missing and zero byte sizes", async (
   }
 });
 
-test("authoritative video metadata rejects objects larger than 100MB", async () => {
+test("authoritative video metadata accepts a positive size larger than 100MB", async () => {
   const { validateAlbumVideoObject } = await apiMediaHelpers();
-  assert.throws(
-    () => validateAlbumVideoObject({
+  assert.deepEqual(
+    validateAlbumVideoObject({
       byteSize: MAX_VIDEO_BYTES + 1,
       contentType: "video/mp4",
       headerBytes: MP4_HEADER
     }),
-    (error) => [400, 413].includes(Number(error?.statusCode || error?.status || error?.httpStatus))
+    { byteSize: MAX_VIDEO_BYTES + 1, contentType: "video/mp4" }
   );
 });
 
@@ -333,11 +333,6 @@ for (const { name, metadata, expectedStatus } of [
     expectedStatus: 400
   },
   {
-    name: "oversized authoritative metadata",
-    metadata: { byteSize: MAX_VIDEO_BYTES + 1, contentType: "video/mp4" },
-    expectedStatus: 413
-  },
-  {
     name: "non-MP4 authoritative metadata",
     metadata: { byteSize: VIDEO_BYTES.length, contentType: "image/jpeg" },
     expectedStatus: 400
@@ -362,6 +357,29 @@ for (const { name, metadata, expectedStatus } of [
     assert.equal(rangeCalls, 0);
   });
 }
+
+test("object inspection accepts positive authoritative metadata larger than 100MB", async () => {
+  const { inspectSessionAlbumVideoObject } = await apiMediaHelpers();
+  let rangeCalls = 0;
+  const result = await inspectSessionAlbumVideoObject({
+    sourceUrl: "sessions/10/video/large.mp4",
+    storageAdapter: {
+      getMetadata: async () => ({
+        byteSize: MAX_VIDEO_BYTES + 1,
+        contentType: "video/mp4"
+      }),
+      readRange: async () => {
+        rangeCalls += 1;
+        return MP4_HEADER;
+      }
+    }
+  });
+  assert.deepEqual(result, {
+    byteSize: MAX_VIDEO_BYTES + 1,
+    contentType: "video/mp4"
+  });
+  assert.equal(rangeCalls, 1);
+});
 
 test("object inspection rejects invalid bytes reported by storage", async () => {
   const { inspectSessionAlbumVideoObject } = await apiMediaHelpers();
@@ -511,16 +529,16 @@ test("multipart validation rejects bytes without an MP4 ftyp header", async () =
   );
 });
 
-test("multipart validation rejects an upload larger than 100MB", async () => {
-  const { validateMultipartAlbumVideo } = await apiMediaHelpers();
-  assert.throws(
-    () => validateMultipartAlbumVideo({
-      bytes: VIDEO_BYTES,
+test("multipart metadata accepts a positive size larger than 100MB", async () => {
+  const { validateMultipartAlbumVideoMetadata } = await apiMediaHelpers();
+  assert.deepEqual(
+    validateMultipartAlbumVideoMetadata({
       byteSize: MAX_VIDEO_BYTES + 1,
       contentType: "video/mp4",
-      filename: "clip.mp4"
+      filename: "clip.mp4",
+      headerBytes: MP4_HEADER
     }),
-    (error) => [400, 413].includes(Number(error?.statusCode || error?.status || error?.httpStatus))
+    { byteSize: MAX_VIDEO_BYTES + 1, contentType: "video/mp4" }
   );
 });
 
@@ -532,11 +550,14 @@ test("COS visible upload headers accept an in-limit MP4", async () => {
   );
 });
 
-test("COS visible upload headers reject a length over 100MB", async () => {
+test("COS visible upload headers accept a positive length over 100MB", async () => {
   const { validateCosAlbumVideoHeaders } = await apiMediaHelpers();
-  assert.throws(
-    () => validateCosAlbumVideoHeaders({ contentLength: String(MAX_VIDEO_BYTES + 1), contentType: "video/mp4" }),
-    (error) => [400, 413].includes(Number(error?.statusCode || error?.status || error?.httpStatus))
+  assert.deepEqual(
+    validateCosAlbumVideoHeaders({
+      contentLength: String(MAX_VIDEO_BYTES + 1),
+      contentType: "video/mp4"
+    }),
+    { byteSize: MAX_VIDEO_BYTES + 1, contentType: "video/mp4" }
   );
 });
 
@@ -559,11 +580,11 @@ test("COS visible content-length alone validates size and defers MIME", async ()
   );
 });
 
-test("COS visible content-length alone rejects an oversized upload", async () => {
+test("COS visible content-length alone accepts a positive size over 100MB", async () => {
   const { validateCosAlbumVideoHeaders } = await apiMediaHelpers();
-  assert.throws(
-    () => validateCosAlbumVideoHeaders({ contentLength: String(MAX_VIDEO_BYTES + 1) }),
-    (error) => [400, 413].includes(Number(error?.statusCode || error?.status || error?.httpStatus))
+  assert.deepEqual(
+    validateCosAlbumVideoHeaders({ contentLength: String(MAX_VIDEO_BYTES + 1) }),
+    { byteSize: MAX_VIDEO_BYTES + 1 }
   );
 });
 
@@ -1484,11 +1505,6 @@ test("video creation validates admin, bound source, duration, and optional dimen
     },
     {
       user: CREATION_USER,
-      body: creationBody({ durationSeconds: 61 }),
-      expectedStatus: 400
-    },
-    {
-      user: CREATION_USER,
       body: creationBody({ videoWidth: 0 }),
       expectedStatus: 400
     },
@@ -1519,6 +1535,28 @@ test("video creation validates admin, bound source, duration, and optional dimen
     );
   }
   assert.equal(dependencyCalls, 0);
+});
+
+test("video creation allows an admin duration above 60 seconds", async () => {
+  const { createSessionAlbumVideo } = await apiCoreService();
+  let inspections = 0;
+  await assert.rejects(
+    createSessionAlbumVideo(
+      CREATION_USER,
+      CREATION_SESSION_ID,
+      creationBody({ durationSeconds: 3_600 }),
+      {
+        withDatabaseConnection: async (run) => run({}),
+        authorizeSessionAlbumVideoCreate: async () => {},
+        inspectObject: async () => {
+          inspections += 1;
+          throw new Error("stop after duration validation");
+        }
+      }
+    ),
+    /stop after duration validation/
+  );
+  assert.equal(inspections, 1);
 });
 
 test("video creation requires an explicit authoritative object inspector", async () => {

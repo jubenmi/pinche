@@ -4,10 +4,6 @@ import { AppError, badRequest, notFound } from "../../http/errors.js";
 
 export const MAX_ALBUM_VIDEO_BYTES = 100 * 1024 * 1024;
 
-function payloadTooLarge(message) {
-  return new AppError(413, "PAYLOAD_TOO_LARGE", message);
-}
-
 function rangeNotSatisfiable(message = "Requested byte range is not satisfiable") {
   return new AppError(416, "RANGE_NOT_SATISFIABLE", message);
 }
@@ -22,9 +18,6 @@ function normalizeByteSize(value, { required = true } = {}) {
     : value;
   if (!Number.isSafeInteger(normalized) || normalized <= 0) {
     throw badRequest("album video byte size must be a positive integer");
-  }
-  if (normalized > MAX_ALBUM_VIDEO_BYTES) {
-    throw payloadTooLarge(`album video must not exceed ${MAX_ALBUM_VIDEO_BYTES} bytes`);
   }
   return normalized;
 }

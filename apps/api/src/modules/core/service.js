@@ -78,7 +78,6 @@ import {
 
 export { normalizeSessionReviewAlbumPhotoIds } from "./session-review.js";
 
-const ALBUM_VIDEO_MAX_DURATION_SECONDS = 60;
 const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
 const ALBUM_VIDEO_PROCESSING_STATUSES = new Set(["processing", "ready", "failed"]);
 const SESSION_ALBUM_PUBLIC_SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -602,11 +601,7 @@ function albumMediaProcessingStatus(row = {}) {
 }
 
 function albumVideoDurationSeconds(value) {
-  const durationSeconds = requiredPositiveInteger(value, "durationSeconds");
-  if (durationSeconds > ALBUM_VIDEO_MAX_DURATION_SECONDS) {
-    throw badRequest("durationSeconds must be at most 60 seconds");
-  }
-  return durationSeconds;
+  return requiredPositiveInteger(value, "durationSeconds");
 }
 
 function albumVideoContentType(value) {
