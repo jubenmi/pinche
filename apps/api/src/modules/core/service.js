@@ -2155,14 +2155,19 @@ async function requirePublicAlbumShareSeat(connection, claims) {
   return { ...normalized, seat };
 }
 
-export function isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, claims) {
+export function isAlbumPhotoVisibleInPublicShare(
+  photo,
+  tags,
+  privacyByUser,
+  claims,
+  options = {}
+) {
   const { sessionId, sharerUserId, seatId } = normalizeAlbumShareClaims(claims);
   if (
     Number(photo.session_id) !== sessionId ||
     photo.status !== "active" ||
     !isModerationPublished(photo.moderation_status) ||
-    !Array.isArray(tags) ||
-    tags.length === 0
+    !Array.isArray(tags)
   ) {
     return false;
   }
@@ -2173,16 +2178,29 @@ export function isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, cla
     return false;
   }
 
-  const hasSharerSeatTag = tags.some(
-    (tag) => tag.tag_type === "seat" && Number(tag.seat_id) === seatId
-  );
   const uploaderUserId = Number(photo.uploader_user_id || 0);
-  if (!uploaderUserId || (!hasSharerSeatTag && uploaderUserId !== sharerUserId)) {
+  if (!uploaderUserId) return false;
+  const uploaderPrivacy = privacyByUser.get(uploaderUserId) || albumPrivacy();
+  if (!uploaderPrivacy.allow_uploaded_visible) {
     return false;
   }
 
-  const uploaderPrivacy = privacyByUser.get(uploaderUserId) || albumPrivacy();
-  if (!uploaderPrivacy.allow_uploaded_visible) {
+  if (tags.length === 0) {
+    const snapshotTagVersion = options.implicitUntaggedByMediaId?.get(
+      Number(photo.id)
+    );
+    const snapshotMatches = Number.isSafeInteger(snapshotTagVersion) &&
+      snapshotTagVersion >= 0 &&
+      snapshotTagVersion === Number(photo.tag_version || 0);
+    return albumMediaType(photo) === "image" &&
+      uploaderUserId === sharerUserId &&
+      (options.allowOwnedUntaggedImages === true || snapshotMatches);
+  }
+
+  const hasSharerSeatTag = tags.some(
+    (tag) => tag.tag_type === "seat" && Number(tag.seat_id) === seatId
+  );
+  if (!hasSharerSeatTag && uploaderUserId !== sharerUserId) {
     return false;
   }
 
@@ -2214,6 +2232,7 @@ function publicShareMediaPriority(photo, tags, claims) {
   );
   if (uploadedBySharer && taggedWithSharerSeat) return 0;
   if (taggedWithSharerSeat) return 1;
+  if (tags.length === 0) return 3;
   return 2;
 }
 
@@ -2221,7 +2240,13 @@ export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claim
   const ranked = [];
   for (const photo of Array.isArray(candidates) ? candidates : []) {
     const tags = tagsMap.get(Number(photo.id)) || [];
-    if (!isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, claims)) {
+    if (!isAlbumPhotoVisibleInPublicShare(
+      photo,
+      tags,
+      privacyByUser,
+      claims,
+      options
+    )) {
       continue;
     }
     ranked.push({
@@ -6620,6 +6645,7 @@ export async function getSessionAlbumShareSubject(user, sessionId) {
 export async function createOrReuseSessionAlbumPublicShare(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
   const focusMediaId = normalizePublicShareFocusMediaId(options.focusMediaId);
+  const includeOwnedUntaggedImages = options.includeOwnedUntaggedImages === true;
   const runWithTransaction = options.withTransaction || withTransaction;
   return runWithTransaction(async (connection) => {
     const session = await requireSessionAlbumOpen(connection, id);
@@ -6681,7 +6707,8 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     }
     const privacyByUser = await albumPrivacyMap(connection, id, privacyUserIds);
     const selectedMedia = selectPublicShareMedia(photoRows, tagsMap, privacyByUser, claims, {
-      requiredMediaId: focusMediaId
+      requiredMediaId: focusMediaId,
+      allowOwnedUntaggedImages: includeOwnedUntaggedImages
     });
     if (focusMediaId && !selectedMedia.some((media) => Number(media.id) === focusMediaId)) {
       throw new AppError(
@@ -6702,6 +6729,15 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       selectedMedia.map((photo) => Number(photo.id)),
       { max: 30 }
     );
+    const implicitUntaggedMedia = normalizeImplicitUntaggedMedia(
+      selectedMedia
+        .filter((photo) => (tagsMap.get(Number(photo.id)) || []).length === 0)
+        .map((photo) => ({
+          media_id: Number(photo.id),
+          tag_version: Number(photo.tag_version || 0)
+        })),
+      { subsetOf: mediaIds }
+    );
     const coverMediaIds = selectPublicShareCoverMedia(
       selectedMedia,
       tagsMap,
@@ -6711,7 +6747,8 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     const snapshotDigest = publicShareSnapshotDigest({
       ...claims,
       mediaIds,
-      coverMediaIds
+      coverMediaIds,
+      implicitUntaggedMedia
     });
     const [reusableRows] = await connection.query(
       `
@@ -6737,16 +6774,19 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
         `
           INSERT INTO session_album_public_shares
             (
-              session_id, sharer_user_id, seat_id, media_ids,
+              session_id, sharer_user_id, seat_id, media_ids, implicit_untagged_media,
               snapshot_digest, cover_media_ids, expires_at
             )
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           id,
           user.user.id,
           seat.id,
           JSON.stringify(mediaIds),
+          implicitUntaggedMedia.length > 0
+            ? JSON.stringify(implicitUntaggedMedia)
+            : null,
           snapshotDigest,
           JSON.stringify(coverMediaIds),
           expiresAt
@@ -6766,6 +6806,7 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       share_id: share.id,
       expires_at: share.expires_at,
       media_ids: share.media_ids,
+      implicit_untagged_media: share.implicit_untagged_media,
       cover_media_ids: share.cover_media_ids,
       share_subject: albumShareSubjectForSeat(seat),
       share_owner: {
@@ -6773,6 +6814,7 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
         avatar_url: seat.sharer_avatar_url || ""
       },
       focus_media_id: focusMediaId || null,
+      implicit_untagged_count: share.implicit_untagged_media.length,
       visible_count: selectedMedia.length,
       photo_count: photoCount,
       video_count: videoCount
