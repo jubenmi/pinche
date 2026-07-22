@@ -35,6 +35,13 @@ test("albumShareImageQuality uses the 40/20/20/20 normalized formula", () => {
   ) < Number.EPSILON);
 });
 
+test("albumShareImageQuality saturates resolution for extreme finite dimensions", () => {
+  assert.equal(
+    albumShareImageQuality({ width: Number.MAX_VALUE, height: Number.MAX_VALUE }),
+    0.2
+  );
+});
+
 test("exposureScore is highest at middle luminance and clamps its range", () => {
   assert.equal(exposureScore(0), 0);
   assert.equal(exposureScore(127.5), 1);
@@ -95,6 +102,13 @@ test("selection applies the quality floor, keeps one, caps at nine, and never re
     candidate("low", { quality: 0.64, dHash: 0b1111111n })
   ]);
   assert.deepEqual(highAndLow.map((image) => image.mediaId), ["best"]);
+
+  const atFloor = selectAlbumShareImages([
+    candidate("best", { quality: 1, dHash: 0n }),
+    candidate("at-floor", { quality: 0.65, dHash: 0b1111111n }),
+    candidate("below-floor", { quality: 0.649, dHash: 0b1111111n })
+  ]);
+  assert.deepEqual(atFloor.map((image) => image.mediaId), ["best", "at-floor"]);
 
   const onlyBelowFloor = selectAlbumShareImages([
     candidate("single", { quality: 0, dHash: 0n })
@@ -217,6 +231,23 @@ test("assignment treats non-zero equal crop-loss totals as a lexicographic tie",
       { width: 1, height: 1, role: "hero" },
       { width: 1, height: 3, role: "detail" },
       { width: 1, height: 10, role: "detail" }
+    ]
+  );
+
+  assert.deepEqual(assignments.map(({ image }) => image.mediaId), ["hero", "a", "z"]);
+});
+
+test("assignment treats proportional detail slots as an equal-cost lexicographic tie", () => {
+  const assignments = assignAlbumShareImagesToSlots(
+    [
+      candidate("hero", { quality: 1, width: 1, height: 1 }),
+      candidate("a", { quality: 0.8, width: 1, height: 1 }),
+      candidate("z", { quality: 0.9, width: 2, height: 1 })
+    ],
+    [
+      { width: 1, height: 1, role: "hero" },
+      { width: 2, height: 1, role: "detail" },
+      { width: 200, height: 100, role: "detail" }
     ]
   );
 

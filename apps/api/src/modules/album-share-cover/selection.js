@@ -74,10 +74,26 @@ function validatePositiveFiniteDimensions(value, noun) {
   }
 }
 
+function resolutionScore(image) {
+  const width = Number(image?.width);
+  const height = Number(image?.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return 0;
+  }
+  return width >= 2_000_000 / height ? 1 : clamp01(width * height / 2_000_000);
+}
+
+function logAspectRatio(width, height) {
+  const ratio = width / height;
+  return Number.isFinite(ratio) && ratio > 0
+    ? Math.log(ratio)
+    : Math.log(width) - Math.log(height);
+}
+
 export function albumShareImageQuality(image) {
   const sharpness = clamp01(image?.sharpness);
   const exposure = clamp01(image?.exposure);
-  const resolution = clamp01((Number(image?.width) * Number(image?.height)) / 2_000_000);
+  const resolution = resolutionScore(image);
   const relevance = clamp01(image?.relevance);
   return sharpness * 0.4 + exposure * 0.2 + resolution * 0.2 + relevance * 0.2;
 }
@@ -126,8 +142,8 @@ export function cropLoss(image, slot) {
   validatePositiveFiniteDimensions(image, "image");
   validatePositiveFiniteDimensions(slot, "slot");
   const weight = slot.role === "hero" ? 2 : 1;
-  const imageLogAspectRatio = Math.log(image.width) - Math.log(image.height);
-  const slotLogAspectRatio = Math.log(slot.width) - Math.log(slot.height);
+  const imageLogAspectRatio = logAspectRatio(image.width, image.height);
+  const slotLogAspectRatio = logAspectRatio(slot.width, slot.height);
   const loss = Math.abs(imageLogAspectRatio - slotLogAspectRatio) * weight;
   if (!Number.isFinite(loss)) throw new RangeError("Expected finite crop loss");
   return loss;
@@ -164,7 +180,8 @@ function compareAssignmentIds(left, right) {
 }
 
 function cropLossTolerance(left, right) {
-  return Number.EPSILON * Math.max(1, Math.abs(left), Math.abs(right)) * 4;
+  // At most eight loss terms are summed, so allow a bounded 32-ULP-scale margin.
+  return Number.EPSILON * Math.max(1, Math.abs(left), Math.abs(right)) * 32;
 }
 
 function cropLossesAreEqual(left, right) {
