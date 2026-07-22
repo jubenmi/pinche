@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -7,6 +8,11 @@ import {
   albumSharePreviewRouteState,
   normalizeAlbumShareSelection
 } from "../src/utils/albumSharePreview.js";
+
+const albumPageSource = await readFile(
+  new URL("../src/pages/session/album.vue", import.meta.url),
+  "utf8"
+);
 
 test("builds an encoded share-preview route only from valid required fields", () => {
   assert.equal(
@@ -94,4 +100,34 @@ test("preview helper results are immutable", () => {
   const selection = normalizeAlbumShareSelection([{ id: 1, media_type: "image" }], [1]);
   assert.equal(Object.isFrozen(selection), true);
   assert.equal(Object.isFrozen(selection.ids), true);
+});
+
+test("member page prepares a preview explicitly instead of creating an album token on load", () => {
+  assert.match(albumPageSource, />预览并分享</);
+  assert.match(albumPageSource, /@tap="prepareAlbumSharePreview"/);
+  assert.match(albumPageSource, /async prepareAlbumSharePreview\(\)/);
+  assert.match(albumPageSource, /includeOwnedUntaggedImages: true/);
+  assert.match(albumPageSource, /albumSharePreviewRoute\(\{/);
+
+  const onLoadBlock = albumPageSource.slice(
+    albumPageSource.indexOf("async onLoad(options)"),
+    albumPageSource.indexOf("async onShow()")
+  );
+  const onShowBlock = albumPageSource.slice(
+    albumPageSource.indexOf("async onShow()"),
+    albumPageSource.indexOf("onHide()")
+  );
+  assert.equal(onLoadBlock.includes("ensureAlbumShareToken"), false);
+  assert.equal(onShowBlock.includes("ensureAlbumShareToken"), false);
+});
+
+test("share preview uses safe state, accurate notice and native share gating", () => {
+  assert.match(albumPageSource, /albumSharePreviewRouteState\(options\)/);
+  assert.match(albumPageSource, /albumSharePreviewNotice\(\{/);
+  assert.match(albumPageSource, /v-if="sharePreviewMode"/);
+  assert.match(albumPageSource, /open-type="share"/);
+  assert.match(
+    albumPageSource,
+    /if \(!this\.timelineMode \|\| !this\.albumShareToken \|\| !this\.shareCoverPrepared\)/
+  );
 });
