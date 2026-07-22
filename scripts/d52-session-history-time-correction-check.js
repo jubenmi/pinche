@@ -15,6 +15,8 @@ const correctionHelper = read("apps/api/src/modules/core/session-time-correction
 const rescheduleHelper = read("apps/api/src/modules/core/session-reschedule.js");
 const service = read("apps/api/src/modules/core/service.js");
 const server = read("apps/api/src/server.js");
+const miniCorrectionHelper = read("apps/miniprogram/src/utils/sessionTimeCorrection.js");
+const managePage = read("apps/miniprogram/src/pages/session/manage.vue");
 const apiPackage = JSON.parse(read("apps/api/package.json"));
 const rootPackage = JSON.parse(read("package.json"));
 
@@ -68,5 +70,20 @@ assertIncludes(
   "npm run session-time-correction:verify",
   "root check must include D52 verification"
 );
+
+assertIncludes(miniCorrectionHelper, "export function canCorrectHistoricalSession");
+assertIncludes(miniCorrectionHelper, "export function validateHistoricalTimeCorrection");
+assertIncludes(miniCorrectionHelper, "仅修正历史记录，不会重新发车");
+assertIncludes(managePage, 'v-if="canReschedule"');
+assertIncludes(managePage, 'v-if="canCorrectHistoricalTime"');
+assertIncludes(managePage, "纠正时间");
+assertIncludes(managePage, "openHistoricalCorrectionPicker");
+assertIncludes(managePage, "historicalCorrectionPickerVisible");
+assertIncludes(managePage, ':end="historicalCorrectionMaximum"');
+assertIncludes(managePage, "buildHistoricalTimeCorrectionConfirmation");
+assertIncludes(managePage, "validateHistoricalTimeCorrection");
+assertIncludes(managePage, "historicalTimeCorrectionErrorText");
+assertIncludes(managePage, "historicalTimeCorrectionErrorRequiresRefresh");
+assertIncludes(managePage, "`/api/sessions/${this.sessionId}/start-time-corrections`");
 
 console.log("D52 session history time correction check passed");

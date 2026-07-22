@@ -57,6 +57,14 @@
         >
           改期
         </t-button>
+        <t-button
+          v-if="canCorrectHistoricalTime"
+          class="mini-button muted"
+          :disabled="busyAction"
+          @tap="openHistoricalCorrectionPicker"
+        >
+          纠正时间
+        </t-button>
         <t-button class="mini-button muted" :disabled="busyAction" @tap="subscribeSignupReminder">
           申请提醒
         </t-button>
@@ -79,6 +87,17 @@
           @confirm="confirmRescheduleSelection"
           @cancel="closeReschedulePicker"
           @close="closeReschedulePicker"
+        />
+        <t-date-time-picker
+          title="纠正历史开本时间"
+          :mode="['date', 'minute']"
+          format="YYYY-MM-DD HH:mm"
+          :visible="historicalCorrectionPickerVisible"
+          :value="historicalCorrectionValue"
+          :end="historicalCorrectionMaximum"
+          @confirm="confirmHistoricalCorrectionSelection"
+          @cancel="closeHistoricalCorrectionPicker"
+          @close="closeHistoricalCorrectionPicker"
         />
       </view>
       <view v-if="session.id" class="overview-pinned">
@@ -234,6 +253,13 @@ import {
   rescheduleErrorText as formatRescheduleErrorText,
   validateRescheduleSelection
 } from "../../utils/sessionReschedule";
+import {
+  buildHistoricalTimeCorrectionConfirmation,
+  canCorrectHistoricalSession,
+  historicalTimeCorrectionErrorRequiresRefresh,
+  historicalTimeCorrectionErrorText,
+  validateHistoricalTimeCorrection
+} from "../../utils/sessionTimeCorrection";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
 import { showActionSheet, showModal, showToast } from "../../utils/tdesignFeedback";
 
@@ -268,7 +294,10 @@ export default {
       cancelReason: "",
       reschedulePickerVisible: false,
       rescheduleValue: "",
-      rescheduleMinimum: ""
+      rescheduleMinimum: "",
+      historicalCorrectionPickerVisible: false,
+      historicalCorrectionValue: "",
+      historicalCorrectionMaximum: ""
     };
   },
   computed: {
@@ -289,6 +318,9 @@ export default {
     },
     canReschedule() {
       return canRescheduleSession(this.session.start_at);
+    },
+    canCorrectHistoricalTime() {
+      return canCorrectHistoricalSession(this.session.start_at);
     },
     seatSummary() {
       const seats = this.session.seats || [];
@@ -631,6 +663,79 @@ export default {
     },
     rescheduleErrorText(error) {
       return formatRescheduleErrorText(error);
+    },
+    openHistoricalCorrectionPicker() {
+      if (this.busyAction || !this.canCorrectHistoricalTime) {
+        return;
+      }
+      this.historicalCorrectionValue = formatSessionStartAt(this.session.start_at);
+      this.historicalCorrectionMaximum = formatSessionStartAt(new Date());
+      this.historicalCorrectionPickerVisible = true;
+    },
+    closeHistoricalCorrectionPicker() {
+      this.historicalCorrectionPickerVisible = false;
+    },
+    confirmHistoricalCorrectionSelection(event) {
+      const selectedValue = event?.detail?.value || this.historicalCorrectionValue;
+      this.historicalCorrectionValue = selectedValue;
+      this.historicalCorrectionPickerVisible = false;
+      const validation = validateHistoricalTimeCorrection(
+        selectedValue,
+        this.session.start_at,
+        new Date()
+      );
+      if (!validation.valid) {
+        this.statusText = validation.message;
+        return;
+      }
+      this.showHistoricalCorrectionConfirmation(validation.startAt);
+    },
+    showHistoricalCorrectionConfirmation(startAt) {
+      showModal({
+        title: "确认纠正时间",
+        content: buildHistoricalTimeCorrectionConfirmation({
+          oldStartAt: this.session.start_at,
+          newStartAt: startAt
+        }),
+        confirmText: "确认纠正",
+        cancelText: "再检查一下",
+        success: (result) => {
+          if (result.confirm) {
+            this.correctHistoricalTime(startAt);
+          }
+        }
+      });
+    },
+    async correctHistoricalTime(startAt) {
+      if (this.busyAction) {
+        return;
+      }
+      const auth = await this.ensureManageActionLogin();
+      if (!auth) {
+        return;
+      }
+      this.busyAction = true;
+      this.busyText = "正在纠正历史时间，请稍候...";
+      try {
+        await request({
+          url: `/api/sessions/${this.sessionId}/start-time-corrections`,
+          method: "POST",
+          data: { startAt }
+        });
+        await this.reload();
+        this.historicalCorrectionValue = "";
+        this.statusText = "历史时间已纠正。";
+        showToast({ title: "历史时间已纠正", icon: "none" });
+      } catch (error) {
+        const message = historicalTimeCorrectionErrorText(error);
+        if (historicalTimeCorrectionErrorRequiresRefresh(error)) {
+          await this.reload();
+        }
+        this.statusText = message;
+      } finally {
+        this.busyAction = false;
+        this.busyText = "";
+      }
     },
     async loadSession() {
       try {

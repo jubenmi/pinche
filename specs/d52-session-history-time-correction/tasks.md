@@ -592,11 +592,13 @@ git commit -m "test(miniprogram): define historical time correction UI rules"
 
 ### Task 5: 在车头管理页接入历史时间纠错
 
+> 进度：已完成；管理页静态契约、D52 15 个定向测试和小程序构建通过。
+
 **Files:**
 - Modify: `apps/miniprogram/src/pages/session/manage.vue`
 - Modify: `scripts/d52-session-history-time-correction-check.js`
 
-- [ ] **Step 1: 收紧静态契约以建立管理页红灯**
+- [x] **Step 1: 收紧静态契约以建立管理页红灯**
 
 增加以下断言后运行检查：
 
@@ -604,7 +606,8 @@ git commit -m "test(miniprogram): define historical time correction UI rules"
 assert.match(manage, /v-if="canCorrectHistoricalTime"/);
 assert.match(manage, />\s*纠正时间\s*</);
 assert.match(manage, /\/start-time-corrections/);
-assert.match(manage, /仅修正历史记录，不会重新发车/);
+assert.match(correctionHelper, /仅修正历史记录，不会重新发车/);
+assert.match(manage, /buildHistoricalTimeCorrectionConfirmation/);
 assert.match(manage, /historicalCorrectionPickerVisible/);
 ```
 
@@ -612,7 +615,7 @@ Run: `node scripts/d52-session-history-time-correction-check.js`
 
 Expected: FAIL，指出管理页尚未实现入口和提交。
 
-- [ ] **Step 2: 增加互斥入口和 picker**
+- [x] **Step 2: 增加互斥入口和 picker**
 
 在总览操作区紧邻“改期”增加：
 
@@ -646,7 +649,7 @@ canCorrectHistoricalTime() {
 }
 ```
 
-- [ ] **Step 3: 增加确认、提交和刷新**
+- [x] **Step 3: 增加确认、提交和刷新**
 
 methods 使用独立 helper，并以现有 `busyAction` 防重入：
 
@@ -678,7 +681,7 @@ async correctHistoricalTime(startAt) {
 
 确认弹窗必须使用 `buildHistoricalTimeCorrectionConfirmation`，标题“确认纠正时间”，确认按钮“确认纠正”，取消按钮“再检查一下”。
 
-- [ ] **Step 4: 运行 D52 定向验证与小程序构建**
+- [x] **Step 4: 运行 D52 定向验证与小程序构建**
 
 Run: `npm run session-time-correction:verify`
 
@@ -688,7 +691,7 @@ Run: `npm run build:mp-weixin`
 
 Expected: PASS，UniApp 构建退出码 0。
 
-- [ ] **Step 5: 提交管理页功能**
+- [x] **Step 5: 提交管理页功能**
 
 ```bash
 git add apps/miniprogram/src/pages/session/manage.vue scripts/d52-session-history-time-correction-check.js package.json apps/api/package.json
