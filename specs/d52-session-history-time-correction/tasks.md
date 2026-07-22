@@ -452,11 +452,13 @@ git commit -m "feat(api): expose historical time correction"
 
 ### Task 4: 建立小程序 helper 的 RED/GREEN 循环
 
+> 进度：已完成；入口、选择、确认与错误文案共 6/6 单测通过。
+
 **Files:**
 - Create: `apps/miniprogram/test/sessionTimeCorrection.test.mjs`
 - Create: `apps/miniprogram/src/utils/sessionTimeCorrection.js`
 
-- [ ] **Step 1: 写端侧失败测试**
+- [x] **Step 1: 写端侧失败测试**
 
 ```js
 import assert from "node:assert/strict";
@@ -507,13 +509,13 @@ test("confirmation and server errors use historical-correction copy", () => {
 });
 ```
 
-- [ ] **Step 2: 运行端侧测试并确认按预期失败**
+- [x] **Step 2: 运行端侧测试并确认按预期失败**
 
 Run: `node --test apps/miniprogram/test/sessionTimeCorrection.test.mjs`
 
 Expected: FAIL，端侧 helper 尚不存在。
 
-- [ ] **Step 3: 实现端侧纯 helper**
+- [x] **Step 3: 实现端侧纯 helper**
 
 复用 `@pinche/shared` 的北京时间解析与格式化：
 
@@ -575,13 +577,13 @@ export function historicalTimeCorrectionErrorText(error) {
 }
 ```
 
-- [ ] **Step 4: 运行端侧测试并确认转绿**
+- [x] **Step 4: 运行端侧测试并确认转绿**
 
 Run: `node --test apps/miniprogram/test/sessionTimeCorrection.test.mjs`
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交端侧 helper**
+- [x] **Step 5: 提交端侧 helper**
 
 ```bash
 git add apps/miniprogram/test/sessionTimeCorrection.test.mjs apps/miniprogram/src/utils/sessionTimeCorrection.js
