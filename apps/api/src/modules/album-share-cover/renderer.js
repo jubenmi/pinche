@@ -6,6 +6,7 @@ import { assignAlbumShareImagesToSlots } from "./selection.js";
 
 const BACKGROUND = "#F4EBDD";
 const FONT_FAMILY = '"Noto Sans CJK SC", "PingFang SC", sans-serif';
+const SOURCE_JOB_CONCURRENCY = 2;
 
 function validateImages(images) {
   if (!Array.isArray(images)) throw new TypeError("album share cover images must be an array");
@@ -40,14 +41,49 @@ function insetSlot(slot, output, normalizedGutter) {
   return { left, top, width, height };
 }
 
-async function orientImage(image) {
-  const buffer = await sharp(image.buffer, { failOn: "error" }).rotate().toBuffer();
-  const metadata = await sharp(buffer).metadata();
-  if (!Number.isInteger(metadata.width) || !Number.isInteger(metadata.height)
-    || metadata.width <= 0 || metadata.height <= 0) {
+async function mapSourceJobs(values, mapper) {
+  const results = new Array(values.length);
+  let nextIndex = 0;
+  let failure = null;
+  const worker = async () => {
+    while (nextIndex < values.length && !failure) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = await mapper(values[index], index);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  };
+  const workers = Array.from(
+    { length: Math.min(SOURCE_JOB_CONCURRENCY, values.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
+  if (failure) throw failure;
+  return results;
+}
+
+function orientedDimensions(metadata) {
+  if (Number.isInteger(metadata.autoOrient?.width) && Number.isInteger(metadata.autoOrient?.height)) {
+    return metadata.autoOrient;
+  }
+  const swapDimensions = [5, 6, 7, 8].includes(metadata.orientation);
+  return {
+    width: swapDimensions ? metadata.height : metadata.width,
+    height: swapDimensions ? metadata.width : metadata.height
+  };
+}
+
+async function inspectImageMetadata(image) {
+  const metadata = await sharp(image.buffer, { failOn: "error" }).metadata();
+  const dimensions = orientedDimensions(metadata);
+  if (!Number.isInteger(dimensions.width) || !Number.isInteger(dimensions.height)
+    || dimensions.width <= 0 || dimensions.height <= 0) {
     throw new TypeError("album share cover image has invalid decoded dimensions");
   }
-  return { ...image, buffer, width: metadata.width, height: metadata.height };
+  return { ...image, width: dimensions.width, height: dimensions.height };
 }
 
 function hasFocus(image) {
@@ -78,20 +114,31 @@ function focusedCrop(image, target) {
 
 async function renderTile(image, target) {
   if (hasFocus(image)) {
-    return sharp(image.buffer)
+    return sharp(image.buffer, { failOn: "error" })
+      .rotate()
       .extract(focusedCrop(image, target))
       .resize(target.width, target.height, { fit: "cover", position: "centre" })
       .toBuffer();
   }
 
   try {
-    return await sharp(image.buffer)
+    return await sharp(image.buffer, { failOn: "error" })
+      .rotate()
       .resize(target.width, target.height, { fit: "cover", position: "attention" })
       .toBuffer();
-  } catch {
-    return sharp(image.buffer)
-      .resize(target.width, target.height, { fit: "cover", position: "centre" })
-      .toBuffer();
+  } catch (attentionError) {
+    try {
+      return await sharp(image.buffer, { failOn: "error" })
+        .rotate()
+        .resize(target.width, target.height, { fit: "cover", position: "centre" })
+        .toBuffer();
+    } catch (centreError) {
+      throw new AggregateError(
+        [attentionError, centreError],
+        "album share cover attention and centre crops both failed",
+        { cause: attentionError }
+      );
+    }
   }
 }
 
@@ -142,13 +189,13 @@ export async function renderAlbumShareCover({
   const layout = albumShareCoverLayout(variant, images.length);
   validateImages(images);
 
-  const orientedImages = await Promise.all(images.map(orientImage));
+  const orientedImages = await mapSourceJobs(images, inspectImageMetadata);
   const assignments = assignAlbumShareImagesToSlots(orientedImages, layout.slots);
   const placements = assignments.map(({ slot, image }) => ({
     image,
     target: insetSlot(slot, layout.output, layout.gutter)
   }));
-  const tileBuffers = await Promise.all(placements.map(({ image, target }) => renderTile(image, target)));
+  const tileBuffers = await mapSourceJobs(placements, ({ image, target }) => renderTile(image, target));
   const composites = placements.map(({ target }, index) => ({
     input: tileBuffers[index],
     left: target.left,

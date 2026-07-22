@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import sharp from "sharp";
@@ -59,6 +60,16 @@ test("escapes XML once and truncates names by Unicode code point without splitti
   assert.doesNotMatch(copy.main, /[\uD800-\uDFFF](?![\uDC00-\uDFFF])/u);
 });
 
+test("replaces illegal XML 1.0 code points while retaining legal whitespace", () => {
+  const invalid = "A\0\u0001\u000b\u000c\uD800\uFFFE\uFFFF\t\n\rB";
+  const sanitized = "A�������\t\n\rB";
+  assert.equal(albumShareCoverCopy({ roleName: invalid }).main, `这一晚，我是「${sanitized}」`);
+  assert.equal(
+    escapeAlbumShareCoverXml(`&<>"'${invalid}`),
+    `&amp;&lt;&gt;&quot;&apos;${sanitized}`
+  );
+});
+
 test("renders JPEGs at exact dimensions for both variants and every supported image count", async (t) => {
   const colors = ["#b44732", "#345d71", "#b28a45", "#536345", "#7b5365", "#cb7650", "#57688b", "#886b42", "#607459"];
   const buffers = await Promise.all(colors.map((color, index) => source(180 + index * 7, 130 + index * 5, color)));
@@ -85,6 +96,23 @@ test("rejects empty, excessive, malformed, and unsupported renderer input clearl
     /1.*9|count/i
   );
   await assert.rejects(() => renderAlbumShareCover({ variant: "friend", images: [{ id: 1, width: 40, height: 30, quality: 1 }] }), /buffer/i);
+});
+
+test("preserves both Sharp failures when attention and centre crops fail", async () => {
+  const complete = await source(100, 100, "#123456");
+  const truncated = complete.subarray(0, complete.length - 10);
+  await sharp(truncated, { failOn: "error" }).metadata();
+
+  await assert.rejects(
+    () => renderAlbumShareCover({ variant: "friend", images: [image(1, truncated, 100, 100)] }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.match(error.message, /attention.*centre.*failed/i);
+      assert.equal(error.errors.length, 2);
+      assert.equal(error.cause, error.errors[0]);
+      return true;
+    }
+  );
 });
 
 test("keeps outer tiles flush while exposing warm-ivory internal gutters", async () => {
@@ -174,13 +202,21 @@ test("auto-orients EXIF sources before cropping and strips final metadata", asyn
 
 test("renders long special-character names without double escaping or SVG parse errors", async () => {
   const buffer = await source(100, 100, "#6d5442");
-  const output = await renderAlbumShareCover({
+  const rawMetacharacters = await renderAlbumShareCover({
     variant: "timeline",
     images: [image(1, buffer, 100, 100)],
-    roleName: `<&"'>😀${"角".repeat(30)}`,
-    scriptName: `<&"'>😀${"海".repeat(30)}`
+    roleName: `<&"'>\0\u0001\u000b\u000c\uD800\uFFFE\uFFFF😀${"角".repeat(30)}`,
+    scriptName: `<&"'>\0\u0001\u000b\u000c\uD800\uFFFE\uFFFF😀${"海".repeat(30)}`
   });
-  assert.equal((await sharp(output).metadata()).format, "jpeg");
+  const preescapedLookingInput = await renderAlbumShareCover({
+    variant: "timeline",
+    images: [image(1, buffer, 100, 100)],
+    roleName: "&amp;",
+    scriptName: "&amp;"
+  });
+  assert.equal((await sharp(rawMetacharacters).metadata()).format, "jpeg");
+  assert.equal((await sharp(preescapedLookingInput).metadata()).format, "jpeg");
+  assert.notDeepEqual(rawMetacharacters, preescapedLookingInput);
 });
 
 test("keeps longest two-line caption copy fully inside the friend caption band", async () => {
@@ -228,8 +264,43 @@ test("keeps text glyph pixels out of the bottom 56px safe margin in every overla
         }
       }
       assert.deepEqual(textPixels, [], `text entered the bottom safe margin at ${JSON.stringify(textPixels)}`);
+
+      const visibleText = await sharp(output)
+        .extract({ left: 56, top: height - 230, width: 244, height: 168 })
+        .raw()
+        .toBuffer();
+      let visibleGlyphPixels = 0;
+      for (let offset = 0; offset < visibleText.length; offset += 3) {
+        if (visibleText[offset] > 90 && visibleText[offset + 1] > 80 && visibleText[offset + 2] > 70) {
+          visibleGlyphPixels += 1;
+        }
+      }
+      assert.ok(visibleGlyphPixels > 20, `expected visible text glyphs, found ${visibleGlyphPixels}`);
     });
   }
+});
+
+test("bounds source processing to two Sharp jobs without materializing oriented full-resolution buffers", async () => {
+  const rendererSource = await readFile(new URL("../src/modules/album-share-cover/renderer.js", import.meta.url), "utf8");
+  assert.match(rendererSource, /SOURCE_JOB_CONCURRENCY\s*=\s*2/);
+  assert.doesNotMatch(rendererSource, /Promise\.all\((?:images|placements)\.map|async function orientImage/);
+
+  const largeBuffer = await sharp({
+    create: { width: 2048, height: 2048, channels: 3, background: "#685040" }
+  }).png().toBuffer();
+  const images = Array.from({ length: 9 }, (_, index) => image(index + 1, largeBuffer, 2048, 2048));
+  let maximumActiveJobs = 0;
+  const poll = setInterval(() => {
+    maximumActiveJobs = Math.max(maximumActiveJobs, sharp.counters().process);
+  }, 1);
+  let output;
+  try {
+    output = await renderAlbumShareCover({ variant: "timeline", images });
+  } finally {
+    clearInterval(poll);
+  }
+  assert.ok(maximumActiveJobs <= 2, `expected at most 2 active Sharp jobs, observed ${maximumActiveJobs}`);
+  assert.deepEqual([(await sharp(output).metadata()).width, (await sharp(output).metadata()).height], [1000, 1000]);
 });
 
 test("is byte-deterministic for the same input", async () => {
