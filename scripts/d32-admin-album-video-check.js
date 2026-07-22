@@ -59,14 +59,14 @@ for (const token of [
   assert(migration.includes(token), `D32 migration should include ${token}`);
 }
 
-assertIncludes("apps/api/src/modules/core/service.js", "ALBUM_VIDEO_MAX_DURATION_SECONDS");
+assertIncludes("apps/api/src/modules/core/service.js", "albumVideoDurationSeconds");
 assertIncludes("apps/api/src/modules/core/service.js", "createSessionAlbumVideo");
 assertIncludes("apps/api/src/modules/core/service.js", "updateSessionAlbumVideoProcessingResult");
 assertIncludes("apps/api/src/modules/core/service.js", "getVisibleSessionAlbumVideoForPlayback");
 assertIncludes("apps/api/src/modules/core/service.js", "processing_status");
 assertIncludes("apps/api/src/modules/core/service.js", "media_type");
 assertIncludes("apps/api/src/modules/core/service.js", "media: photos");
-assertIncludes("apps/api/src/modules/core/service.js", "durationSeconds must be at most 60 seconds");
+assertNotIncludes("apps/api/src/modules/core/service.js", "durationSeconds must be at most 60 seconds");
 
 assertIncludes("apps/api/src/server.js", "adminSessionAlbumVideo");
 assertIncludes("apps/api/src/server.js", "handleSessionAlbumVideoProcessingCallback");
@@ -78,7 +78,7 @@ assertIncludes("apps/api/src/server.js", "signedAlbumVideoUrl");
 assertIncludes("apps/api/src/server.js", "signedAlbumVideoSnapshotUrl");
 assertIncludes("apps/api/src/server.js", "ci-process");
 assertIncludes("apps/api/src/server.js", "snapshot");
-assertIncludes("apps/api/src/server.js", "SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES");
+assertNotIncludes("apps/api/src/server.js", "SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES");
 assertIncludes("apps/api/src/server.js", "uploads/session-album/videos/source/");
 assertIncludes("apps/api/src/server.js", "readyOnCreate: true");
 assertNotIncludes(
@@ -133,7 +133,14 @@ assertIncludes(".env.production.example", "COS_CI_CALLBACK_TOKEN=");
 assertIncludes("apps/miniprogram/src/utils/api.js", "uploadSessionAlbumVideo");
 assertIncludes("apps/miniprogram/src/utils/api.js", "adminSessionAlbumVideo");
 
-assertIncludes("apps/miniprogram/src/pages/session/album.vue", "MAX_ALBUM_VIDEO_DURATION_SECONDS");
+assertIncludes(
+  "apps/miniprogram/src/pages/session/album.vue",
+  "MAX_ALBUM_VIDEO_RECORDING_DURATION_SECONDS"
+);
+assertIncludes("apps/miniprogram/src/pages/session/album.vue", "isUsableRequiredVideoCompression");
+assertNotIncludes("apps/miniprogram/src/pages/session/album.vue", "MAX_ALBUM_VIDEO_DURATION_SECONDS");
+assertNotIncludes("apps/miniprogram/src/pages/session/album.vue", "MAX_ALBUM_VIDEO_UPLOAD_BYTES");
+assertNotIncludes("apps/miniprogram/src/pages/session/album.vue", "shouldCompressVideoBeforeUpload");
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "wx.chooseMedia");
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "wx.compressVideo");
 assertIncludes("apps/miniprogram/src/pages/session/album.vue", "chooseAlbumMedia");
@@ -162,7 +169,7 @@ assertIncludes("apps/admin-web/src/components/SessionAlbumWorkspace.vue", "video
 assertIncludes("scripts/check-miniprogram.js", "D32 admin album video");
 assertIncludes("scripts/check-miniprogram.js", "wx.chooseMedia");
 assertIncludes("scripts/check-miniprogram.js", "wx.compressVideo");
-assertIncludes("scripts/check-miniprogram.js", "MAX_ALBUM_VIDEO_DURATION_SECONDS");
+assertIncludes("scripts/check-miniprogram.js", "MAX_ALBUM_VIDEO_RECORDING_DURATION_SECONDS");
 assertIncludes("scripts/check-miniprogram.js", "media_type === \"image\"");
 
 assertIncludes("package.json", "node scripts/d32-admin-album-video-check.js");
