@@ -254,6 +254,41 @@ test("assignment treats proportional detail slots as an equal-cost lexicographic
   assert.deepEqual(assignments.map(({ image }) => image.mediaId), ["hero", "a", "z"]);
 });
 
+test("assignment tie tolerance remains bounded from the exact numeric minimum", () => {
+  const epsilon = Number.EPSILON;
+  const images = [
+    candidate("hero", { quality: 1, width: 1, height: 1 }),
+    candidate("z", { quality: 0.9, width: 1 + 3 * epsilon, height: 1 }),
+    candidate("y", { quality: 0.8, width: 1 + 588 * epsilon, height: 1 }),
+    candidate("x", { quality: 0.7, width: 1 + 388 * epsilon, height: 1 })
+  ];
+  const slots = [
+    { width: 1, height: 1, role: "hero" },
+    ...[116, 131, 145].map((offset) => ({
+      width: 1 + offset * epsilon,
+      height: 1,
+      role: "detail"
+    }))
+  ];
+  const permutations = (values) => values.length <= 1
+    ? [values]
+    : values.flatMap((value, index) => permutations([
+      ...values.slice(0, index),
+      ...values.slice(index + 1)
+    ]).map((rest) => [value, ...rest]));
+  const totals = permutations(images.slice(1)).map((permutation) => permutation.reduce(
+    (total, image, index) => total + cropLoss(image, slots[index + 1]),
+    0
+  ));
+  const minimumLoss = Math.min(...totals);
+
+  const assignments = assignAlbumShareImagesToSlots(images, slots);
+  const chosenLoss = assignments.slice(1).reduce((total, assignment) => total + assignment.cropLoss, 0);
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(minimumLoss), Math.abs(chosenLoss)) * 32;
+
+  assert.ok(chosenLoss <= minimumLoss + tolerance);
+});
+
 test("crop and assignment stay finite for extreme positive dimensions", () => {
   const image = candidate("extreme", { width: Number.MAX_VALUE, height: Number.MIN_VALUE });
   const detailSlot = { width: Number.MIN_VALUE, height: Number.MAX_VALUE, role: "detail" };

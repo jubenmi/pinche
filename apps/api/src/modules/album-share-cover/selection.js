@@ -214,17 +214,23 @@ export function assignAlbumShareImagesToSlots(images, slots) {
   const remainingImages = ranked.slice(1);
   const remainingSlots = slots.filter((_, index) => index !== heroIndex);
 
-  let bestImages = null;
-  let bestLoss = Infinity;
+  let minimumLoss = Infinity;
   forEachPermutation(remainingImages, (permutation) => {
     const loss = permutation.reduce(
       (total, image, index) => total + cropLoss(image, remainingSlots[index]),
       0
     );
-    if (!bestImages
-      || loss < bestLoss - cropLossTolerance(loss, bestLoss)
-      || (cropLossesAreEqual(loss, bestLoss) && compareAssignmentIds(permutation, bestImages) < 0)) {
-      bestLoss = loss;
+    if (loss < minimumLoss) minimumLoss = loss;
+  });
+
+  let bestImages = null;
+  forEachPermutation(remainingImages, (permutation) => {
+    const loss = permutation.reduce(
+      (total, image, index) => total + cropLoss(image, remainingSlots[index]),
+      0
+    );
+    if (cropLossesAreEqual(loss, minimumLoss)
+      && (!bestImages || compareAssignmentIds(permutation, bestImages) < 0)) {
       bestImages = permutation;
     }
   });
