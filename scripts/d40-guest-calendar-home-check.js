@@ -44,7 +44,7 @@ const home = read("apps/miniprogram/src/pages/index/index.vue");
 const calendar = read("apps/miniprogram/src/components/SessionCalendar.vue");
 const detail = read("apps/miniprogram/src/pages/session/detail.vue");
 const share = read("apps/miniprogram/src/pages/session/share.vue");
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 const service = read("apps/api/src/modules/core/service.js");
 
 assert(

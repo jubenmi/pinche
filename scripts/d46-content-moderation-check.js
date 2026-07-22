@@ -75,7 +75,7 @@ const [
   migration31
 ] = await Promise.all([
   text("package.json"),
-  text("apps/api/src/server.js"),
+  text("apps/api/src/legacy-app.js"),
   text("apps/api/src/modules/core/service.js"),
   text("apps/api/src/modules/album-image/upload-service.js"),
   text("apps/api/src/modules/user-image-assets/service.js"),

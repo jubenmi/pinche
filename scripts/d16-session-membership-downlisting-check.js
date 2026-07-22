@@ -30,7 +30,7 @@ assert(
 );
 assert(service.includes("user_hidden_at = NULL"), "relink must restore signup entry");
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(server.includes("hideMySignup"), "server must import signup hide service");
 assert(server.includes("relinkMySessionMembership"), "server must import relink service");
 assert(server.includes("/hide"), "server must expose hide routes");

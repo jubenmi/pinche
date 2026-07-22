@@ -106,7 +106,7 @@ test("D46 reader closes for disabled actions, mismatched rows, and terminal priv
 
 test("D46 profile and catalog reads merge only authenticated author projections", async () => {
   const [server, core] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8")
   ]);
   const profileStart = server.indexOf('request.method === "GET" && url.pathname === "/api/users/me"');

@@ -86,7 +86,7 @@ assert(
   "Discovery should round distance only while formatting the response"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(
   server.includes('request.method === "POST"') &&
     server.includes('url.pathname === "/api/sessions/discovery"'),

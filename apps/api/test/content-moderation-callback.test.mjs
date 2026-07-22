@@ -230,7 +230,7 @@ test("unknown DataId and a recorded old attempt remain idempotent stale callback
 });
 
 test("server wires the authenticated callback before the generic JSON body parser", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const route = server.indexOf('/api/internal/content-moderation/tencent-video/callback');
   const genericBody = server.indexOf("const body = await bodyFor(request)");
   assert.ok(route > 0 && route < genericBody);

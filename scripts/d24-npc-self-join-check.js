@@ -230,7 +230,7 @@ assert(
   "rejectSignup must handle NPC role signups without touching seat status"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(
   server.includes("claimSessionNpcRole") &&
     server.includes("sessionNpcRoleClaimId") &&

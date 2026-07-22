@@ -244,7 +244,7 @@ assert(
   "mergeCatalogReviewItem must merge private items into public approved targets"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 for (const token of [
   "createPrivateStore",
   "createPrivateScript",

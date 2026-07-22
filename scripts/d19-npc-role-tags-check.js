@@ -39,7 +39,7 @@ for (const token of [
   assert(service.includes(token), `service must include ${token}`);
 }
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 for (const token of [
   "listSessionNpcRoles",
   "createSessionNpcRole",

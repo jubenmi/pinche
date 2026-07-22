@@ -169,7 +169,7 @@ test("organizer session media counts include only published active media without
 test("unapproved direct media reads retain a 404 response while emitting a safe denial metric", async () => {
   const [service, server] = await Promise.all([
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/server.js", import.meta.url), "utf8")
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8")
   ]);
   assert.match(service, /function moderationUnpublishedNotFound\(subjectType\)/);
   for (const subjectType of ["album_image", "album_video"]) {

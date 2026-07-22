@@ -9,13 +9,14 @@ import {
 } from "../src/jobs/content-moderation-retry.js";
 
 test("retry worker imports the controlled server moderation runtime without starting an HTTP listener", async () => {
-  const [workerSource, serverSource] = await Promise.all([
+  const [workerSource, serverSource, entrypointSource] = await Promise.all([
     readFile(new URL("../src/jobs/content-moderation-retry.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/server.js", import.meta.url), "utf8")
   ]);
   assert.match(workerSource, /import \{ contentModeration \} from "\.\.\/server\.js"/);
   assert.match(serverSource, /export const contentModeration = createContentModerationService/);
-  assert.match(serverSource, /if \(import\.meta\.url === `file:\/\/\$\{process\.argv\[1\]\}`\)/);
+  assert.match(entrypointSource, /pathToFileURL\(process\.argv\[1\]\)\.href === import\.meta\.url/);
 
   const imported = spawnSync(
     process.execPath,

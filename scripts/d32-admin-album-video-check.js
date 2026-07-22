@@ -68,28 +68,28 @@ assertIncludes("apps/api/src/modules/core/service.js", "media_type");
 assertIncludes("apps/api/src/modules/core/service.js", "media: photos");
 assertNotIncludes("apps/api/src/modules/core/service.js", "durationSeconds must be at most 60 seconds");
 
-assertIncludes("apps/api/src/server.js", "adminSessionAlbumVideo");
-assertIncludes("apps/api/src/server.js", "handleSessionAlbumVideoProcessingCallback");
-assertIncludes("apps/api/src/server.js", "parseSessionAlbumVideoProcessingCallback");
-assertIncludes("apps/api/src/server.js", "/api/cos/ci/session-album-video-callback");
-assertIncludes("apps/api/src/server.js", "^\\/api\\/admin\\/sessions\\/(\\d+)\\/album\\/videos$");
-assertIncludes("apps/api/src/server.js", "^\\/api\\/session-album\\/media\\/(\\d+)\\/video-url$");
-assertIncludes("apps/api/src/server.js", "signedAlbumVideoUrl");
-assertIncludes("apps/api/src/server.js", "signedAlbumVideoSnapshotUrl");
-assertIncludes("apps/api/src/server.js", "ci-process");
-assertIncludes("apps/api/src/server.js", "snapshot");
-assertNotIncludes("apps/api/src/server.js", "SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES");
-assertIncludes("apps/api/src/server.js", "uploads/session-album/videos/source/");
-assertIncludes("apps/api/src/server.js", "readyOnCreate: true");
+assertIncludes("apps/api/src/legacy-app.js", "adminSessionAlbumVideo");
+assertIncludes("apps/api/src/legacy-app.js", "handleSessionAlbumVideoProcessingCallback");
+assertIncludes("apps/api/src/legacy-app.js", "parseSessionAlbumVideoProcessingCallback");
+assertIncludes("apps/api/src/legacy-app.js", "/api/cos/ci/session-album-video-callback");
+assertIncludes("apps/api/src/legacy-app.js", "^\\/api\\/admin\\/sessions\\/(\\d+)\\/album\\/videos$");
+assertIncludes("apps/api/src/legacy-app.js", "^\\/api\\/session-album\\/media\\/(\\d+)\\/video-url$");
+assertIncludes("apps/api/src/legacy-app.js", "signedAlbumVideoUrl");
+assertIncludes("apps/api/src/legacy-app.js", "signedAlbumVideoSnapshotUrl");
+assertIncludes("apps/api/src/legacy-app.js", "ci-process");
+assertIncludes("apps/api/src/legacy-app.js", "snapshot");
+assertNotIncludes("apps/api/src/legacy-app.js", "SESSION_ALBUM_VIDEO_UPLOAD_MAX_BYTES");
+assertIncludes("apps/api/src/legacy-app.js", "uploads/session-album/videos/source/");
+assertIncludes("apps/api/src/legacy-app.js", "readyOnCreate: true");
 assertNotIncludes(
-  "apps/api/src/server.js",
+  "apps/api/src/legacy-app.js",
   "localFallbackReady: !isCosUploadStorageEnabled()",
   "COS-enabled videos waiting for cloud transcode"
 );
 assertIncludes("apps/api/src/modules/core/service.js", "readyOnCreate");
 assertIncludes("apps/api/src/modules/core/service.js", "readyOnCreate ? sourceUrl : null");
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 const videoRouteStart = server.indexOf("const sessionAlbumMediaVideoFileId");
 const videoRouteEnd = server.indexOf("if (request.method === \"POST\" && url.pathname === \"/api/users/me/avatar\")", videoRouteStart);
 const videoRouteSnippet = server.slice(videoRouteStart, videoRouteEnd);

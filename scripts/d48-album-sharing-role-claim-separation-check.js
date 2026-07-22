@@ -67,7 +67,7 @@ for (const token of [
   assert(service.includes(token), `D48 service contract is missing: ${token}`);
 }
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 for (const token of [
   "version: 2",
   "shareId",

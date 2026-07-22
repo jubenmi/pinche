@@ -19,6 +19,46 @@ function finding(code, message) {
   return { code, message };
 }
 
+const LEGACY_ROUTE_LINE_LIMIT = 6_537;
+
+export function validateHttpKernelBoundary({ entrypointSource, legacySource }) {
+  const findings = [];
+  const entrypointLines = entrypointSource.split(/\r?\n/).length;
+  const legacyLines = legacySource.split(/\r?\n/).length;
+
+  if (entrypointLines > 80) {
+    findings.push(finding(
+      "SERVER_ENTRYPOINT_GREW",
+      `apps/api/src/server.js has ${entrypointLines} lines; the process entrypoint limit is 80`
+    ));
+  }
+  if (/url\.pathname|["'`]\/api\/|\bwithTransaction\b|\breadBody\b/.test(entrypointSource)) {
+    findings.push(finding(
+      "SERVER_BUSINESS_ROUTE",
+      "apps/api/src/server.js must not contain business routing, transactions, or body parsing"
+    ));
+  }
+  if (!/export\s+(?:async\s+)?function\s+legacyRoute\b/.test(legacySource)) {
+    findings.push(finding(
+      "LEGACY_ROUTE_BOUNDARY_MISSING",
+      "apps/api/src/legacy-app.js must expose the explicit legacyRoute fallback"
+    ));
+  }
+  if (legacyLines > LEGACY_ROUTE_LINE_LIMIT) {
+    findings.push(finding(
+      "LEGACY_ROUTE_GREW",
+      `apps/api/src/legacy-app.js has ${legacyLines} lines; new behavior must use a module router`
+    ));
+  }
+  if (/\.listen\s*\(|\bcreateServer\s*\(/.test(legacySource)) {
+    findings.push(finding(
+      "LEGACY_OWNS_HTTP_LIFECYCLE",
+      "apps/api/src/legacy-app.js must not own server creation or listening"
+    ));
+  }
+  return findings;
+}
+
 export function validateMigrationFilenames(
   filenames,
   { historicalDuplicates = historicalDuplicatePrefixes } = {}
@@ -108,6 +148,11 @@ export function collectD51Findings() {
     .filter((filename) => filename.endsWith(".sql"))
     .sort();
   findings.push(...validateMigrationFilenames(migrations));
+
+  findings.push(...validateHttpKernelBoundary({
+    entrypointSource: read("apps/api/src/server.js"),
+    legacySource: read("apps/api/src/legacy-app.js")
+  }));
 
   return findings;
 }

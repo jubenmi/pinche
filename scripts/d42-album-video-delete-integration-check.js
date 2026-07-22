@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { cleanupAlbumVideoBeforeDelete } from "../apps/api/src/modules/album-video/lifecycle.js";
-import { deleteUploadedObject } from "../apps/api/src/server.js";
+import { deleteUploadedObject } from "../apps/api/src/legacy-app.js";
 import { deleteCosObject } from "../apps/api/src/storage/cos.js";
 
 const COS_CONFIG = {
@@ -32,7 +32,7 @@ function cosResponse(statusCode) {
   };
 }
 
-const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
+const server = await readFile(new URL("../apps/api/src/legacy-app.js", import.meta.url), "utf8");
 const service = await readFile(new URL("../apps/api/src/modules/core/service.js", import.meta.url), "utf8");
 
 assert.match(server, /requestSessionAlbumImageDeletion\(user, sessionAlbumPhotoId\)/);

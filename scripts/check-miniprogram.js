@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
-const apiServerPath = path.join(root, "apps/api/src/server.js");
+const apiServerPath = path.join(root, "apps/api/src/legacy-app.js");
 const miniprogramRoot = path.join(root, "apps/miniprogram");
 const srcRoot = path.join(miniprogramRoot, "src");
 const pagesJsonPath = path.join(srcRoot, "pages.json");

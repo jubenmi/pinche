@@ -409,7 +409,7 @@ test("retry does not retire an attempt or audit when its conditional requeue los
 });
 
 test("server injects provider attempts and stale proposal transition into the moderation service", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const serviceStart = source.indexOf("const contentModeration = createContentModerationService({");
   const serviceEnd = source.indexOf("async function applyApprovedTextProposal", serviceStart);
   const serviceDefinition = source.slice(serviceStart, serviceEnd);

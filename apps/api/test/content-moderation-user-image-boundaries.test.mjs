@@ -320,7 +320,7 @@ test("review photo replacement schedules only displaced asset cleanup anchors", 
 });
 
 test("server finalizes COS and local avatar/review uploads into assets and gates raw reads", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   assert.match(server, /createUserImageAssetUploadService/);
   assert.match(server, /insertUserImageAsset/);
   assert.match(server, /findUserImageAssetReadStateByPath/);
@@ -404,7 +404,7 @@ test("mini program finalizes direct avatar and review uploads instead of treatin
 });
 
 test("server exposes an owner-authenticated user image asset status route", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   assert.match(server, /userImageAssetStatusMatch/);
   assert.match(server, /api\\\/uploads\\\/user-image/);
   assert.match(server, /findOwnedUserImageAssetById/);

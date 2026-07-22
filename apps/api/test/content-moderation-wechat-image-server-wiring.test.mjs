@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("enabled WeChat image moderation wires post-commit finalize hooks to verified storage and identity", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const uploads = server.slice(
     server.indexOf("const albumImageUploads = createAlbumImageUploadService"),
     server.indexOf("async function isPersistedAlbumImageAuthorization")
@@ -22,7 +22,7 @@ test("enabled WeChat image moderation wires post-commit finalize hooks to verifi
 });
 
 test("image intake is checked before legacy, multipart, and direct COS paths accept new content", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   for (const marker of ["async function createCosDirectUploadIntent", "async function authorizeCosDirectUpload"]) {
     const start = server.indexOf(marker);
     const segment = server.slice(start, start + 5_000);
@@ -43,7 +43,7 @@ test("image intake is checked before legacy, multipart, and direct COS paths acc
 });
 
 test("avatar and review-photo upload intents and multipart writes use the persisted image policy", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const directIntent = server.slice(
     server.indexOf("async function createCosDirectUploadIntent"),
     server.indexOf("function normalizeCosHeaders")

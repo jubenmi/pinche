@@ -94,7 +94,7 @@ for (const token of [
   assert(albumPeopleSource.includes(token), `album people should separate role labels from account names: ${token}`);
 }
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 for (const token of [
   "SESSION_ALBUM_DISPLAY_JPG_RULE",
   "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip",

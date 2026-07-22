@@ -10,7 +10,7 @@ import {
 test("video inspection preserves COS ETag as the immutable moderation version", async () => {
   const [media, server] = await Promise.all([
     readFile(new URL("../src/modules/album-video/media.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/server.js", import.meta.url), "utf8")
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8")
   ]);
   assert.match(media, /etag:\s*metadata\.etag/);
   assert.match(server, /return \{ \.\.\.metadata, etag \}/);
@@ -57,7 +57,7 @@ test("every video business transaction locks settings before authorization and b
 test("video intake is closed before object inspection and media insertion", async () => {
   const [service, server] = await Promise.all([
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/server.js", import.meta.url), "utf8")
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8")
   ]);
   const createVideo = service.slice(
     service.indexOf("export async function createSessionAlbumVideo"),

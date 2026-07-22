@@ -22,7 +22,7 @@ const service = readFileSync(
   "utf8"
 );
 const server = readFileSync(
-  new URL("../apps/api/src/server.js", import.meta.url),
+  new URL("../apps/api/src/legacy-app.js", import.meta.url),
   "utf8"
 );
 const env = readFileSync(new URL("../apps/api/src/config/env.js", import.meta.url), "utf8");

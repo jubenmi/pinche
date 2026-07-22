@@ -66,7 +66,7 @@ assert(
   "D50 service must reject an unavailable focused media item with ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 for (const token of [
   "focusMediaId",
   "focus_media_id",

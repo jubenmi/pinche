@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { requiredSchemaTables } from "../apps/api/src/db/mysql.js";
 
 const serverSource = await readFile(
-  new URL("../apps/api/src/server.js", import.meta.url),
+  new URL("../apps/api/src/app/create-app.js", import.meta.url),
   "utf8"
 );
 

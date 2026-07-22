@@ -168,7 +168,7 @@ assert(
   "claimSessionNpcRole must use dynamic join phone requirement instead of unconditional phone gating"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 const claimNpcRoleRoute = sourceSliceAfter(server, "const sessionNpcRoleClaimId = idMatch");
 assert(
   claimNpcRoleRoute.includes("const user = await getAuthUser(request)") &&

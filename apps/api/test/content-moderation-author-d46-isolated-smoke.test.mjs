@@ -379,7 +379,8 @@ test("D46 local author video capability closes on tampering, expiry, or record c
 });
 
 test("D46 server wiring gates test target, fake provider, and local author video bytes behind the strict runtime", async () => {
-  const [server, smoke] = await Promise.all([
+  const [server, entrypoint, smoke] = await Promise.all([
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/server.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/content-moderation/d46-isolated-smoke.js", import.meta.url), "utf8")
   ]);
@@ -408,8 +409,8 @@ test("D46 server wiring gates test target, fake provider, and local author video
   assert.match(server, /getVisibleSessionAlbumVideoForPlayback/);
   assert.match(server, /allowLocalD46Preview:\s*d46IsolatedSmokeRuntimeEnabled\s*===\s*true/);
   assert.match(
-    server,
-    /const listenOptions\s*=\s*d46IsolatedSmokeRuntimeEnabled\s*\?\s*\{\s*port:\s*config\.port,\s*host:\s*["']127\.0\.0\.1["']\s*\}\s*:\s*\{\s*port:\s*config\.port\s*\}/
+    entrypoint,
+    /process\.env\.D46_SMOKE_ISOLATED\s*===\s*["']1["'][\s\S]*host:\s*["']127\.0\.0\.1["']/
   );
   assert.doesNotMatch(server, /d46-smoke[\s\S]{0,220}getVisibleSessionAlbumVideoForPlayback/);
 });

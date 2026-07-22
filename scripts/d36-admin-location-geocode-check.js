@@ -41,7 +41,7 @@ function functionBody(source, name) {
 }
 
 const apiConfig = read("apps/api/src/config/env.js");
-const apiServer = read("apps/api/src/server.js");
+const apiServer = read("apps/api/src/legacy-app.js");
 const adminApi = read("apps/admin-web/src/api.js");
 const storeDrawer = read("apps/admin-web/src/components/StoreDrawer.vue");
 const packageJson = JSON.parse(read("package.json"));

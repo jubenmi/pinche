@@ -295,7 +295,7 @@ test("unknown trace IDs are idempotent successes and cannot call the media state
 });
 
 test("server isolates official GET URL verification from secure POST event parsing and sensitive fields", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const callbackPath = '"/api/internal/content-moderation/wechat-image/callback"';
   const getRoute = server.indexOf(callbackPath);
   const postRoute = server.indexOf(callbackPath, getRoute + callbackPath.length);

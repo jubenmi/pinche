@@ -51,7 +51,7 @@ assert(
   "root check should run d12 check"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(server.includes("/api/admin/web-login/tickets"), "server should expose admin web login routes");
 assert(server.includes("deleteStore"), "server should retain store hard delete route");
 assert(server.includes("deleteScript"), "server should retain script hard delete route");

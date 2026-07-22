@@ -88,7 +88,8 @@ function assertNoServiceProperty(serviceName, serviceBlock, propertyName) {
 }
 
 const runtimeGuard = readRequired("apps/api/src/modules/content-moderation/d46-isolated-smoke.js");
-const server = readRequired("apps/api/src/server.js");
+const server = readRequired("apps/api/src/legacy-app.js");
+const entrypoint = readRequired("apps/api/src/server.js");
 const apiEnv = readRequired("apps/api/src/config/env.js");
 const compose = readRequired("docker-compose.d46-smoke.yml");
 const launcher = readRequired("scripts/d46-api-smoke-server.mjs");
@@ -231,8 +232,8 @@ assert.match(server, /\/api\/testing\/d46-smoke-target/, "server must expose onl
 assert.match(server, /d46IsolatedSmokeRuntimeEnabled/, "target probe must use the strict D46 runtime gate");
 assert.match(server, /allowLocalD46Preview:\s*d46IsolatedSmokeRuntimeEnabled\s*===\s*true/, "local image fallback must be strict-D46 only");
 assert.match(
-  server,
-  /const listenOptions\s*=\s*d46IsolatedSmokeRuntimeEnabled\s*\?\s*\{\s*port:\s*config\.port,\s*host:\s*["']127\.0\.0\.1["']\s*\}\s*:\s*\{\s*port:\s*config\.port\s*\}/,
+  entrypoint,
+  /process\.env\.D46_SMOKE_ISOLATED\s*===\s*["']1["'][\s\S]*host:\s*["']127\.0\.0\.1["']/,
   "direct D46 startup must bind only loopback"
 );
 

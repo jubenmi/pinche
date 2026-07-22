@@ -43,7 +43,7 @@ function block(source, start, end) {
   return source.slice(from, to < 0 ? source.length : to);
 }
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 const apiMedia = read("apps/api/src/modules/album-video/media.js");
 const albumPage = read("apps/miniprogram/src/pages/session/album.vue");
 const viewer = read("apps/miniprogram/src/components/AlbumImageViewer.vue");
