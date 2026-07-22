@@ -4919,6 +4919,20 @@ async function route(request, response, options = {}) {
     return;
   }
 
+  const sessionTimeCorrectionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/start-time-corrections$/
+  );
+  if (request.method === "POST" && sessionTimeCorrectionId) {
+    const user = await getAuthUser(request);
+    const body = await bodyFor(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await correctHistoricalSessionStartTime(user, sessionTimeCorrectionId, body)
+    });
+    return;
+  }
+
   const body = await bodyFor(request);
 
   const adminModerationRoute = await adminModerationApi({
@@ -5743,19 +5757,6 @@ async function route(request, response, options = {}) {
       { ok: true, data: moderated ?? await createSession(user, body) },
       moderatedTextHeaders(moderated)
     );
-    return;
-  }
-
-  const sessionTimeCorrectionId = idMatch(
-    url.pathname,
-    /^\/api\/sessions\/(\d+)\/start-time-corrections$/
-  );
-  if (request.method === "POST" && sessionTimeCorrectionId) {
-    const user = await getAuthUser(request);
-    jsonResponse(response, 200, {
-      ok: true,
-      data: await correctHistoricalSessionStartTime(user, sessionTimeCorrectionId, body)
-    });
     return;
   }
 

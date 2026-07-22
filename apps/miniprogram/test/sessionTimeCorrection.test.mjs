@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   buildHistoricalTimeCorrectionConfirmation,
   canCorrectHistoricalSession,
+  canCurrentOrganizerCorrectHistoricalSession,
   historicalTimeCorrectionErrorRequiresRefresh,
   historicalTimeCorrectionErrorText,
+  mergeHistoricalTimeCorrectionSession,
   validateHistoricalTimeCorrection
 } from "../src/utils/sessionTimeCorrection.js";
 
@@ -15,6 +17,54 @@ test("history correction is available only after the start second", () => {
   assert.equal(canCorrectHistoricalSession("2026-07-22T08:00:00.999Z", now), true);
   assert.equal(canCorrectHistoricalSession("2026-07-22T08:00:01Z", now), false);
   assert.equal(canCorrectHistoricalSession("invalid", now), false);
+});
+
+test("history correction entry requires the current organizer", () => {
+  const session = {
+    start_at: "2026-06-20T10:30:00Z",
+    organizer_user_id: 7
+  };
+  assert.equal(canCurrentOrganizerCorrectHistoricalSession(session, 7, now), true);
+  assert.equal(canCurrentOrganizerCorrectHistoricalSession(session, 8, now), false);
+  assert.equal(
+    canCurrentOrganizerCorrectHistoricalSession(
+      { ...session, start_at: "2026-07-22T08:00:01Z" },
+      7,
+      now
+    ),
+    false
+  );
+});
+
+test("successful correction response updates time without dropping loaded management data", () => {
+  const currentSession = {
+    id: 42,
+    organizer_user_id: 7,
+    start_at: "2026-06-20T10:30:00Z",
+    seats: [{ id: 1, status: "confirmed" }]
+  };
+  assert.deepEqual(
+    mergeHistoricalTimeCorrectionSession(currentSession, {
+      session: {
+        id: 42,
+        organizer_user_id: 7,
+        start_at: "2026-06-20T11:30:00Z"
+      }
+    }),
+    {
+      id: 42,
+      organizer_user_id: 7,
+      start_at: "2026-06-20T11:30:00Z",
+      seats: [{ id: 1, status: "confirmed" }]
+    }
+  );
+  assert.equal(
+    mergeHistoricalTimeCorrectionSession(currentSession, {
+      session: { id: 99, start_at: "2026-06-20T11:30:00Z" }
+    }),
+    null
+  );
+  assert.equal(mergeHistoricalTimeCorrectionSession(currentSession, {}), null);
 });
 
 test("accepts a changed Beijing wall time that is already past", () => {

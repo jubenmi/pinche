@@ -8,10 +8,42 @@ function wholeSeconds(value) {
   return Math.floor(value.getTime() / 1000);
 }
 
+function positiveId(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function canCorrectHistoricalSession(startAt, now = new Date()) {
   const start = parseBusinessDateTime(startAt);
   const current = parseBusinessDateTime(now);
   return Boolean(start && current && wholeSeconds(start) <= wholeSeconds(current));
+}
+
+export function canCurrentOrganizerCorrectHistoricalSession(
+  session,
+  currentUserId,
+  now = new Date()
+) {
+  const organizerUserId = positiveId(session?.organizer_user_id);
+  const userId = positiveId(currentUserId);
+  return Boolean(
+    organizerUserId !== null &&
+      userId === organizerUserId &&
+      canCorrectHistoricalSession(session?.start_at, now)
+  );
+}
+
+export function mergeHistoricalTimeCorrectionSession(currentSession, correctionResult) {
+  const currentSessionId = positiveId(currentSession?.id);
+  const correctedSession = correctionResult?.session;
+  if (
+    currentSessionId === null ||
+    positiveId(correctedSession?.id) !== currentSessionId ||
+    !parseBusinessDateTime(correctedSession?.start_at)
+  ) {
+    return null;
+  }
+  return { ...currentSession, ...correctedSession };
 }
 
 export function validateHistoricalTimeCorrection(selected, currentStartAt, now = new Date()) {

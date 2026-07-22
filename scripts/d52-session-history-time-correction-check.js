@@ -72,6 +72,8 @@ assertIncludes(
 );
 
 assertIncludes(miniCorrectionHelper, "export function canCorrectHistoricalSession");
+assertIncludes(miniCorrectionHelper, "export function canCurrentOrganizerCorrectHistoricalSession");
+assertIncludes(miniCorrectionHelper, "export function mergeHistoricalTimeCorrectionSession");
 assertIncludes(miniCorrectionHelper, "export function validateHistoricalTimeCorrection");
 assertIncludes(miniCorrectionHelper, "仅修正历史记录，不会重新发车");
 assertIncludes(managePage, 'v-if="canReschedule"');
@@ -84,6 +86,8 @@ assertIncludes(managePage, "buildHistoricalTimeCorrectionConfirmation");
 assertIncludes(managePage, "validateHistoricalTimeCorrection");
 assertIncludes(managePage, "historicalTimeCorrectionErrorText");
 assertIncludes(managePage, "historicalTimeCorrectionErrorRequiresRefresh");
+assertIncludes(managePage, "canCurrentOrganizerCorrectHistoricalSession");
+assertIncludes(managePage, "mergeHistoricalTimeCorrectionSession");
 assertIncludes(managePage, "`/api/sessions/${this.sessionId}/start-time-corrections`");
 
 console.log("D52 session history time correction check passed");

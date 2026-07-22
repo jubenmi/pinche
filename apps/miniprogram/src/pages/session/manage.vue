@@ -255,9 +255,10 @@ import {
 } from "../../utils/sessionReschedule";
 import {
   buildHistoricalTimeCorrectionConfirmation,
-  canCorrectHistoricalSession,
+  canCurrentOrganizerCorrectHistoricalSession,
   historicalTimeCorrectionErrorRequiresRefresh,
   historicalTimeCorrectionErrorText,
+  mergeHistoricalTimeCorrectionSession,
   validateHistoricalTimeCorrection
 } from "../../utils/sessionTimeCorrection";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
@@ -283,6 +284,7 @@ export default {
     return {
       sessionId: "",
       session: {},
+      currentUserId: 0,
       signups: [],
       sessionManageExtensions,
       joinPolicy: "review_required",
@@ -320,7 +322,7 @@ export default {
       return canRescheduleSession(this.session.start_at);
     },
     canCorrectHistoricalTime() {
-      return canCorrectHistoricalSession(this.session.start_at);
+      return canCurrentOrganizerCorrectHistoricalSession(this.session, this.currentUserId);
     },
     seatSummary() {
       const seats = this.session.seats || [];
@@ -539,6 +541,7 @@ export default {
       this.statusText = "登录后可继续管理发车。";
       return;
     }
+    this.currentUserId = Number(auth.user?.id || 0);
     this.sessionId = options.id || "";
     this.reload();
   },
@@ -551,6 +554,7 @@ export default {
         this.statusText = "登录后可继续管理发车。";
         return null;
       }
+      this.currentUserId = Number(auth.user?.id || 0);
       return auth;
     },
     async reload() {
@@ -717,17 +721,30 @@ export default {
       this.busyAction = true;
       this.busyText = "正在纠正历史时间，请稍候...";
       try {
-        await request({
+        const response = await request({
           url: `/api/sessions/${this.sessionId}/start-time-corrections`,
           method: "POST",
           data: { startAt }
         });
-        await this.reload();
+        const correctedSession = mergeHistoricalTimeCorrectionSession(
+          this.session,
+          dataOf(response)
+        );
+        if (!correctedSession) {
+          await this.reload();
+          this.statusText = "时间可能已纠正，请手动刷新确认。";
+          return;
+        }
+        this.session = normalizeAuthorPrivateSession(correctedSession);
+        this.syncSessionSettings();
         this.historicalCorrectionValue = "";
         this.statusText = "历史时间已纠正。";
         showToast({ title: "历史时间已纠正", icon: "none" });
       } catch (error) {
         const message = historicalTimeCorrectionErrorText(error);
+        if (error?.statusCode === 403) {
+          this.session = { ...this.session, organizer_user_id: null };
+        }
         if (historicalTimeCorrectionErrorRequiresRefresh(error)) {
           await this.reload();
         }
