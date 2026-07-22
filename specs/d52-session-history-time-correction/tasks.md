@@ -29,11 +29,13 @@
 
 ### Task 1: 建立服务端时间边界的 RED/GREEN 循环
 
+> 进度：已完成；纯 helper 已按预期红灯并以 3/3 单测转绿。
+
 **Files:**
 - Create: `apps/api/test/session-time-correction.test.mjs`
 - Create: `apps/api/src/modules/core/session-time-correction.js`
 
-- [ ] **Step 1: 写纯 helper 失败测试**
+- [x] **Step 1: 写纯 helper 失败测试**
 
 创建测试，覆盖合法时区、秒级精度、缺时区、非法日期、未来目标和相同时间：
 
@@ -81,13 +83,13 @@ test("rejects a target that is not past and a second-precision no-op", () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认按预期失败**
+- [x] **Step 2: 运行测试并确认按预期失败**
 
 Run: `node --test apps/api/test/session-time-correction.test.mjs`
 
 Expected: FAIL，错误指出 `session-time-correction.js` 不存在或未导出目标函数。
 
-- [ ] **Step 3: 写最小纯 helper 实现**
+- [x] **Step 3: 写最小纯 helper 实现**
 
 实现独立模块；显式 ISO 解析规则与现有 reschedule 保持一致，但生命周期方向相反：
 
@@ -155,13 +157,13 @@ export function normalizeSessionTimeCorrectionStartAt(value, currentStartAt, now
 }
 ```
 
-- [ ] **Step 4: 运行纯 helper 测试并确认转绿**
+- [x] **Step 4: 运行纯 helper 测试并确认转绿**
 
 Run: `node --test apps/api/test/session-time-correction.test.mjs`
 
 Expected: PASS，3 个测试全部通过。
 
-- [ ] **Step 5: 提交服务端时间边界**
+- [x] **Step 5: 提交服务端时间边界**
 
 ```bash
 git add apps/api/test/session-time-correction.test.mjs apps/api/src/modules/core/session-time-correction.js
