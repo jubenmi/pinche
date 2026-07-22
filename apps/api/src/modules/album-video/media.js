@@ -2,8 +2,6 @@ import { open } from "node:fs/promises";
 
 import { AppError, badRequest, notFound } from "../../http/errors.js";
 
-export const MAX_ALBUM_VIDEO_BYTES = 100 * 1024 * 1024;
-
 function rangeNotSatisfiable(message = "Requested byte range is not satisfiable") {
   return new AppError(416, "RANGE_NOT_SATISFIABLE", message);
 }
