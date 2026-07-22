@@ -89,6 +89,7 @@ import {
   createSignup,
   createStore,
   createSubscriptionRequest,
+  correctHistoricalSessionStartTime,
   deleteAdminSession,
   purgeSessionAlbumMedia,
   requestSessionAlbumImageDeletion,
@@ -5742,6 +5743,19 @@ async function route(request, response, options = {}) {
       { ok: true, data: moderated ?? await createSession(user, body) },
       moderatedTextHeaders(moderated)
     );
+    return;
+  }
+
+  const sessionTimeCorrectionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/start-time-corrections$/
+  );
+  if (request.method === "POST" && sessionTimeCorrectionId) {
+    const user = await getAuthUser(request);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await correctHistoricalSessionStartTime(user, sessionTimeCorrectionId, body)
+    });
     return;
   }
 

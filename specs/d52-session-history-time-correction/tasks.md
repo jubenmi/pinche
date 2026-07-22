@@ -376,32 +376,33 @@ git commit -m "feat(api): persist historical time corrections"
 
 ### Task 3: 接入独立 API 路由与静态契约
 
+> 进度：已完成；独立路由、路由顺序和验证接线通过静态契约，API 9/9 通过。
+
 **Files:**
 - Create: `scripts/d52-session-history-time-correction-check.js`
 - Modify: `apps/api/src/server.js`
 - Modify: `apps/api/package.json`
 - Modify: `package.json`
 
-- [ ] **Step 1: 写跨层失败契约**
+- [x] **Step 1: 写跨层失败契约**
 
-静态检查读取迁移、helper、service、server、管理页和 package scripts，并至少断言：
+静态检查先读取迁移、helper、service、server 和 package scripts；管理页断言在 Task 5 加入：
 
 ```js
 assert.match(migration, /CREATE TABLE session_start_time_corrections/i);
 assert.match(service, /export async function correctHistoricalSessionStartTime/);
 assert.match(server, /start-time-corrections/);
 assert.match(reschedule, /normalizedTimestamp <= now/);
-assert.match(manage, /纠正时间/);
 assert.match(rootPackage.scripts["session-time-correction:verify"], /session-time-correction/);
 ```
 
-- [ ] **Step 2: 运行静态契约并确认路由缺失红灯**
+- [x] **Step 2: 运行静态契约并确认路由缺失红灯**
 
 Run: `node scripts/d52-session-history-time-correction-check.js`
 
 Expected: FAIL，指出 server 尚未注册 `/start-time-corrections`。
 
-- [ ] **Step 3: 注册独立路由**
+- [x] **Step 3: 注册独立路由**
 
 在 generic session route 之前导入并调用服务：
 
@@ -420,7 +421,7 @@ if (request.method === "POST" && sessionTimeCorrectionId) {
 }
 ```
 
-- [ ] **Step 4: 接入定向验证命令**
+- [x] **Step 4: 接入定向验证命令**
 
 `apps/api/package.json` 增加：
 
@@ -436,13 +437,13 @@ if (request.method === "POST" && sessionTimeCorrectionId) {
 
 并把 `npm run session-time-correction:verify` 加入根 `check`，位于 session reschedule 回归附近。
 
-- [ ] **Step 5: 运行服务端定向验证**
+- [x] **Step 5: 运行服务端定向验证**
 
 Run: `npm --workspace apps/api run test:session-time-correction`
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交 API 路由与验证接线**
+- [x] **Step 6: 提交 API 路由与验证接线**
 
 ```bash
 git add scripts/d52-session-history-time-correction-check.js apps/api/src/server.js apps/api/package.json package.json
