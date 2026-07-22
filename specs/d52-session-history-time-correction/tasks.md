@@ -700,28 +700,30 @@ git commit -m "feat(miniprogram): correct historical session time"
 
 ### Task 6: 完成全量回归、文档勾选与最终提交
 
+> 进度：已完成；独立审查问题已修复并复审为 merge-ready，全部自动化验证通过。
+
 **Files:**
 - Modify: `specs/d52-session-history-time-correction/tasks.md`
 
-- [ ] **Step 1: 运行现有未来改期回归**
+- [x] **Step 1: 运行现有未来改期回归**
 
 Run: `npm --workspace apps/api run test:session-reschedule`
 
 Expected: PASS，现有未来时间、成员确认和通知测试全部通过。
 
-- [ ] **Step 2: 运行根检查**
+- [x] **Step 2: 运行根检查**
 
 Run: `npm run check`
 
 Expected: PASS，退出码 0。
 
-- [ ] **Step 3: 再次运行小程序生产构建**
+- [x] **Step 3: 再次运行小程序生产构建**
 
 Run: `npm run build:mp-weixin`
 
 Expected: PASS，退出码 0。
 
-- [ ] **Step 4: 检查补丁完整性和改动范围**
+- [x] **Step 4: 检查补丁完整性和改动范围**
 
 Run: `git diff --check`
 
@@ -731,11 +733,23 @@ Run: `git status --short`
 
 Expected: 只包含 D52 文件或用户原有的无关改动；不得暂存或修改无关文件。
 
-- [ ] **Step 5: 更新本清单的勾选与验证记录**
+- [x] **Step 4a: 修复独立审查发现的端侧问题**
+
+先补失败测试，再修复以下两点：
+
+- “纠正时间”入口同时校验当前登录用户就是最新 `organizer_user_id`；负责人变更后不得保留入口。
+- 成功提交后直接合并接口返回的权威 `session`，不得依赖会吞掉加载错误的 `reload()` 后误报成功。
+- 增加真实 HTTP 端点测试，并让该接口先鉴权、后解析请求体，确保未登录请求稳定返回 `401`。
+
+Run: `node --test apps/miniprogram/test/sessionTimeCorrection.test.mjs`
+
+Expected: 新增测试先因 helper 未导出而失败，完成最小实现后全部通过。
+
+- [x] **Step 5: 更新本清单的勾选与验证记录**
 
 将实际完成步骤改为 `[x]`，并在文末记录每条验证命令、退出码和未执行的外部联调项。不能把未运行的检查标记为通过。
 
-- [ ] **Step 6: 提交验证记录**
+- [x] **Step 6: 提交验证记录**
 
 ```bash
 git add specs/d52-session-history-time-correction/tasks.md
@@ -744,16 +758,21 @@ git commit -m "docs: record D52 verification"
 
 ## D52 验收清单
 
-- [ ] 历史车局显示“纠正时间”，未来车局仍只显示“改期”。
-- [ ] 只有当前车头可以调用历史纠错接口。
-- [ ] 原时间和目标时间都必须是过去时间。
-- [ ] 秒级相同、非法时区和未来目标被稳定拒绝。
-- [ ] 时间更新和追加审计位于同一事务。
-- [ ] 不修改状态、座位、报名、相册、游后感或聊天。
-- [ ] 不创建站内通知，不发送微信订阅消息。
-- [ ] 普通未来改期回归保持通过。
-- [ ] D52 定向验证、根检查和小程序构建通过。
+- [x] 历史车局显示“纠正时间”，未来车局仍只显示“改期”。
+- [x] 只有当前车头可以调用历史纠错接口。
+- [x] 原时间和目标时间都必须是过去时间。
+- [x] 秒级相同、非法时区和未来目标被稳定拒绝。
+- [x] 时间更新和追加审计位于同一事务。
+- [x] 不修改状态、座位、报名、相册、游后感或聊天。
+- [x] 不创建站内通知，不发送微信订阅消息。
+- [x] 普通未来改期回归保持通过。
+- [x] D52 定向验证、根检查和小程序构建通过。
 
 ## 验证记录
 
 - 2026-07-22：requirements 与 design 已获用户确认；implementation plan 已生成，业务代码尚未开始。
+- 2026-07-22：隔离 worktree 初始化时发现 `packages/talk` 子模块未初始化；远端 SSH 不可用且沙箱拒绝本地 hardlink clone，最终以同一固定提交 `58c7c70` 的本地 `--no-hardlinks` clone 恢复环境。恢复后既有 API 改期 22/22、小程序改期 11/11 通过。
+- 2026-07-22：D52 采用 TDD 完成；服务端 helper 首次因模块缺失红灯，事务测试首次因导出缺失红灯，端侧 helper 首次因模块缺失红灯，管理页契约首次因入口缺失红灯，随后分别转绿。
+- 2026-07-22：独立审查发现入口未核对当前车头、成功后依赖吞错刷新，以及端点鉴权顺序缺少 HTTP 覆盖；均以新增失败测试复现后修复。复审结论为 merge-ready，无 Critical 或 Important 问题。
+- 2026-07-22：最终 `npm run session-time-correction:verify` 通过（API 10/10、小程序 8/8、静态契约通过）；未来改期回归 22/22 通过；最新 `npm run check` 退出码 0；最新 `npm run build:mp-weixin` 退出码 0；`git diff --check` 退出码 0。构建只报告仓库既有的 UniApp 更新提示与 Sass `@import`/legacy API 弃用警告。
+- 2026-07-22：未连接真实业务数据库执行迁移，也未在微信开发者工具进行人工点击联调；本次完成范围为迁移、服务、HTTP、小程序代码、自动化测试与生产构建验证。
