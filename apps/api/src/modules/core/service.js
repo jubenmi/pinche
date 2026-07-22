@@ -2554,6 +2554,15 @@ function normalizeSessionAlbumPublicShareRow(row) {
   return normalized;
 }
 
+function implicitUntaggedByMediaIdForShare(share) {
+  return new Map(
+    (share?.implicit_untagged_media || []).map((entry) => [
+      Number(entry.media_id),
+      Number(entry.tag_version)
+    ])
+  );
+}
+
 async function loadSessionAlbumPublicShareWithConnection(connection, claims) {
   const normalizedClaims = normalizeAlbumShareClaims(claims);
   const shareId = positiveId(claims.shareId ?? claims.share_id, "shareId");
@@ -6955,6 +6964,9 @@ export async function listPublicSessionAlbumShare(claims) {
     );
     const owner = ownerRows[0] || {};
     const snapshotIds = snapshotContext?.share.media_ids || [];
+    const implicitUntaggedByMediaId = implicitUntaggedByMediaIdForShare(
+      snapshotContext?.share
+    );
     const snapshotClause = isSnapshotShare
       ? `AND photo.id IN (${snapshotIds.map(() => "?").join(", ")})`
       : "";
@@ -6997,7 +7009,8 @@ export async function listPublicSessionAlbumShare(claims) {
           photo,
           tags,
           privacyByUser,
-          normalizedClaims
+          normalizedClaims,
+          { implicitUntaggedByMediaId }
         )
       ) {
         continue;
@@ -7494,7 +7507,9 @@ export async function updateSessionAlbumPhotoTags(user, photoId, body = {}) {
   const id = positiveId(photoId, "photoId");
   const tagKeys = normalizeAlbumTagKeys(body);
   return withTransaction(async (connection) => {
-    const photo = await findById(connection, "session_album_photos", id);
+    const photo = await findById(connection, "session_album_photos", id, {
+      forUpdate: true
+    });
     if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
     }
@@ -7537,9 +7552,16 @@ export async function updateSessionAlbumPhotoTags(user, photoId, body = {}) {
         ]
       );
     }
+    await connection.query(
+      `UPDATE session_album_photos
+       SET tag_version = tag_version + 1
+       WHERE id = ?`,
+      [id]
+    );
 
     return {
       id,
+      tag_version: Number(photo.tag_version || 0) + 1,
       tags: tags.map((tag) => ({
         key: tag.key,
         tag_type: tag.tag_type,
@@ -7876,10 +7898,11 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
   });
 }
 
-export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
+export async function getPublicSessionAlbumPhotoForMedia(claims, photoId, options = {}) {
   const id = positiveId(photoId, "photoId");
   const normalizedClaims = normalizeAlbumShareClaims(claims);
-  return withDatabaseConnection(async (connection) => {
+  const withConnection = options.withConnection || withDatabaseConnection;
+  return withConnection(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id);
     if (!photo || photo.status !== "active") {
       throw notFound("Album photo not found");
@@ -7893,8 +7916,10 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
     if (Number(photo.session_id) !== normalizedClaims.sessionId) {
       throw forbidden("Album photo is outside this public share");
     }
+    let snapshotShare = null;
     if (claims.shareId ?? claims.share_id) {
       const { share } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
+      snapshotShare = share;
       if (!isPublicShareSnapshotMediaId(share.media_ids, id)) {
         throw forbidden("Album photo is outside this public share");
       }
@@ -7912,7 +7937,15 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId) {
         ...tags.map((tag) => tag.user_id).filter(Boolean)
       ]
     );
-    if (!isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, normalizedClaims)) {
+    if (!isAlbumPhotoVisibleInPublicShare(
+      photo,
+      tags,
+      privacyByUser,
+      normalizedClaims,
+      {
+        implicitUntaggedByMediaId: implicitUntaggedByMediaIdForShare(snapshotShare)
+      }
+    )) {
       throw forbidden("Album photo is not visible in this public share");
     }
     return photo;
@@ -7971,8 +8004,10 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
     if (Number(media.session_id) !== normalizedClaims.sessionId) {
       throw forbidden("Album video is outside this public share");
     }
+    let snapshotShare = null;
     if (claims.shareId ?? claims.share_id) {
       const { share } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
+      snapshotShare = share;
       if (!isPublicShareSnapshotMediaId(share.media_ids, id)) {
         throw forbidden("Album video is outside this public share");
       }
@@ -7990,7 +8025,15 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
         ...tags.map((tag) => tag.user_id).filter(Boolean)
       ]
     );
-    if (!isAlbumPhotoVisibleInPublicShare(media, tags, privacyByUser, normalizedClaims)) {
+    if (!isAlbumPhotoVisibleInPublicShare(
+      media,
+      tags,
+      privacyByUser,
+      normalizedClaims,
+      {
+        implicitUntaggedByMediaId: implicitUntaggedByMediaIdForShare(snapshotShare)
+      }
+    )) {
       throw forbidden("Album video is not visible in this public share");
     }
     return media;
@@ -8035,7 +8078,15 @@ export async function getPublicSessionAlbumVideoForPlayback(claims, mediaId, opt
         ...tags.map((tag) => tag.user_id).filter(Boolean)
       ]
     );
-    if (!isAlbumPhotoVisibleInPublicShare(media, tags, privacyByUser, normalizedClaims)) {
+    if (!isAlbumPhotoVisibleInPublicShare(
+      media,
+      tags,
+      privacyByUser,
+      normalizedClaims,
+      {
+        implicitUntaggedByMediaId: implicitUntaggedByMediaIdForShare(share)
+      }
+    )) {
       throw forbidden("Album video is not visible in this public share");
     }
     return media;

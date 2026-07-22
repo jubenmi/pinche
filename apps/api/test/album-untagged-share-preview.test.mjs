@@ -4,10 +4,18 @@ import test from "node:test";
 
 import {
   createOrReuseSessionAlbumPublicShare,
+  getPublicSessionAlbumPhotoForMedia,
+  isAlbumPhotoVisibleInPublicShare,
   normalizeImplicitUntaggedMedia,
   publicShareSnapshotDigest,
+  selectPublicShareCoverMedia,
   selectPublicShareMedia
 } from "../src/modules/core/service.js";
+
+const serviceSource = await readFile(
+  new URL("../src/modules/core/service.js", import.meta.url),
+  "utf8"
+);
 
 const claims = {
   sessionId: 10,
@@ -29,6 +37,48 @@ function media(id, overrides = {}) {
     tag_version: 2,
     created_at: new Date(Date.UTC(2026, 6, 22, 0, 0, id)).toISOString(),
     ...overrides
+  };
+}
+
+function publicUntaggedPhotoConnection(photo, snapshotTagVersion) {
+  const share = {
+    id: 50,
+    session_id: 10,
+    sharer_user_id: 100,
+    seat_id: 1000,
+    media_ids: [Number(photo.id)],
+    implicit_untagged_media: [{
+      media_id: Number(photo.id),
+      tag_version: snapshotTagVersion
+    }],
+    cover_media_ids: [],
+    revoked_at: null,
+    expires_at: "2099-01-01T00:00:00.000Z"
+  };
+  share.snapshot_digest = publicShareSnapshotDigest({
+    sessionId: share.session_id,
+    sharerUserId: share.sharer_user_id,
+    seatId: share.seat_id,
+    mediaIds: share.media_ids,
+    coverMediaIds: share.cover_media_ids,
+    implicitUntaggedMedia: share.implicit_untagged_media
+  });
+  return {
+    async query(sql) {
+      if (sql.includes("SELECT * FROM session_album_photos WHERE id = ?")) {
+        return [[photo]];
+      }
+      if (sql.includes("FROM session_album_public_shares")) return [[share]];
+      if (sql.includes("FROM sessions session")) {
+        return [[{ id: 10, status: "completed" }]];
+      }
+      if (sql.includes("FROM session_seats") && sql.includes("confirmed_user_id")) {
+        return [[{ id: 1000, confirmed_user_id: 100, status: "confirmed" }]];
+      }
+      if (sql.includes("FROM session_album_photo_tags")) return [[]];
+      if (sql.includes("FROM session_album_privacy")) return [[]];
+      throw new Error(`Unexpected public untagged photo query: ${sql}`);
+    }
   };
 }
 
@@ -240,4 +290,82 @@ test("share creation persists and reuses snapshot-local untagged versions", asyn
   ]);
   assert.equal(first.implicit_untagged_count, 1);
   assert.equal(second.share_id, first.share_id);
+});
+
+test("snapshot-local untagged visibility requires an exact current tag version", () => {
+  const photo = media(40, { tag_version: 8 });
+  const privacyByUser = privacy([[100]]);
+
+  assert.equal(isAlbumPhotoVisibleInPublicShare(
+    photo,
+    [],
+    privacyByUser,
+    claims,
+    { implicitUntaggedByMediaId: new Map([[40, 8]]) }
+  ), true);
+  assert.equal(isAlbumPhotoVisibleInPublicShare(
+    photo,
+    [],
+    privacyByUser,
+    claims,
+    { implicitUntaggedByMediaId: new Map([[40, 7]]) }
+  ), false);
+  assert.equal(isAlbumPhotoVisibleInPublicShare(
+    photo,
+    [],
+    privacyByUser,
+    claims,
+    { implicitUntaggedByMediaId: new Map() }
+  ), false);
+});
+
+test("implicit untagged media is never eligible as a public share cover", () => {
+  const photo = media(41, { image_width: 1600, image_height: 1200 });
+  assert.deepEqual(
+    selectPublicShareCoverMedia(
+      [photo],
+      new Map([[41, []]]),
+      privacy([[100]]),
+      claims
+    ),
+    []
+  );
+});
+
+test("tag writes increment the version and public readers pass snapshot context", () => {
+  assert.match(
+    serviceSource,
+    /UPDATE session_album_photos\s+SET tag_version = tag_version \+ 1\s+WHERE id = \?/
+  );
+  assert.match(serviceSource, /function implicitUntaggedByMediaIdForShare\(share\)/);
+  const publicReadCalls = [...serviceSource.matchAll(
+    /isAlbumPhotoVisibleInPublicShare\([\s\S]{0,180}?implicitUntaggedByMediaId:/g
+  )];
+  assert.ok(publicReadCalls.length >= 3);
+  assert.match(
+    serviceSource,
+    /isAlbumPhotoVisibleInPublicShare\([\s\S]{0,180}?\{ implicitUntaggedByMediaId \}/
+  );
+});
+
+test("public image bytes are reauthorized against the snapshot tag version", async () => {
+  const photo = media(42, { tag_version: 5 });
+  const publicClaims = {
+    version: 2,
+    shareId: 50,
+    sessionId: 10,
+    sharerUserId: 100,
+    seatId: 1000
+  };
+  const visible = await getPublicSessionAlbumPhotoForMedia(publicClaims, 42, {
+    withConnection: async (work) => work(publicUntaggedPhotoConnection(photo, 5))
+  });
+  assert.equal(visible.id, 42);
+
+  await assert.rejects(
+    () => getPublicSessionAlbumPhotoForMedia(publicClaims, 42, {
+      withConnection: async (work) => work(publicUntaggedPhotoConnection(photo, 4))
+    }),
+    (error) => error.statusCode === 403
+  );
 });
