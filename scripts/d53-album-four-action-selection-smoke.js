@@ -177,11 +177,11 @@ function publicAlbumPath(sessionId, token) {
   return `/api/sessions/${sessionId}/album/public-share?token=${encodeURIComponent(token)}`;
 }
 
-async function assertSelectionInvalid(sessionId, ownerToken, mediaIds, label) {
+async function assertShareRequestInvalid(sessionId, ownerToken, body, label) {
   const rejected = await request(
     "POST",
     `/api/sessions/${sessionId}/album/share-token`,
-    { mediaIds },
+    body,
     ownerToken,
     409
   );
@@ -190,6 +190,10 @@ async function assertSelectionInvalid(sessionId, ownerToken, mediaIds, label) {
     "ALBUM_PUBLIC_SHARE_SELECTION_INVALID",
     `${label} must fail as one selected-share request`
   );
+}
+
+async function assertSelectionInvalid(sessionId, ownerToken, mediaIds, label) {
+  return assertShareRequestInvalid(sessionId, ownerToken, { mediaIds }, label);
 }
 
 async function main() {
@@ -271,6 +275,12 @@ async function main() {
   );
   assert.equal(all.data.visible_count, 32, "all scope must retain every current eligible medium");
   assert.ok(all.data.share_id);
+  const publicAll = await request("GET", publicAlbumPath(fixture.session.id, all.data.token));
+  assert.deepEqual(
+    new Set(publicAll.data.photos.map((photo) => Number(photo.id))),
+    new Set(mediaIds),
+    "an initial all snapshot must expose the exact 32-ID eligible set"
+  );
 
   const selectedIds = mediaIds.slice(0, 31);
   const selected = await request(
@@ -294,6 +304,16 @@ async function main() {
     [mediaIds[0], mediaIds[0]],
     "duplicate selection"
   );
+  for (const [label, body] of [
+    ["scope plus selected IDs", { scope: "all", mediaIds: [mediaIds[0]] }],
+    ["scope plus focus ID", { scope: "all", focusMediaId: mediaIds[0] }],
+    ["selected IDs plus focus ID", { mediaIds: [mediaIds[0]], focusMediaId: mediaIds[0] }],
+    ["zero selected ID", { mediaIds: [0] }],
+    ["string selected ID", { mediaIds: [String(mediaIds[0])] }],
+    ["fractional selected ID", { mediaIds: [1.5] }]
+  ]) {
+    await assertShareRequestInvalid(fixture.session.id, owner.token, body, label);
+  }
   for (const [label, unavailableId] of [
     ["cross-session medium", crossSessionMediaId],
     ["author-private medium", authorPrivateMediaId],

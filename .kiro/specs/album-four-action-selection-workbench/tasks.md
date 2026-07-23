@@ -10,31 +10,31 @@
 
 - 严格按编号顺序实施，先建立失败测试或静态契约，再做最小实现。
 - 每完成一个子任务立即更新本文件；父任务只有在全部子任务完成后才能勾选。
-- 当前阶段只完成三件套，不把以下任务提前标为完成。
+- 实施已于 2026-07-23 启动；只在获得代码或验证证据后勾选任务。
 - 不回滚或覆盖 `package-lock.json`、`specs/d48-album-sharing-role-claim-separation/tasks.md`、`design-exports/`、`docs/design*`、`docs/evidence/`、`output/` 等现有工作区修改。
 - 不恢复分享预览页，不增加“全部 / 多选”动作层，不改变现有公开资格和角色认领规则。
 
 ## 任务
 
-- [ ] 1. Spec 与现状预检
-  - [ ] 1.1 阅读本 spec 的 `requirements.md`、`design.md` 和 `tasks.md`。
-  - [ ] 1.2 检查 dirty working tree，记录并避开所有既有修改和未跟踪资产。
-  - [ ] 1.3 对照 `album.vue` 的普通操作区、三个 selection purpose、筛选 watcher、浮动工具栏和微信分享回调。
-  - [ ] 1.4 对照 `server.js` 与 core service 的 `focusMediaId`、30 项快照、9 项封面和 token 隔离。
-  - [ ] 1.5 对照 `share.vue`，确认新招募入口使用 `/pages/session/share?id=...` 且不传新的 `entry=album`。
+- [x] 1. Spec 与现状预检
+  - [x] 1.1 阅读本 spec 的 `requirements.md`、`design.md` 和 `tasks.md`。
+  - [x] 1.2 检查 dirty working tree，记录并避开所有既有修改和未跟踪资产。
+  - [x] 1.3 对照 `album.vue` 的普通操作区、三个 selection purpose、筛选 watcher、浮动工具栏和微信分享回调。
+  - [x] 1.4 对照 `server.js` 与 core service 的 `focusMediaId`、30 项快照、9 项封面和 token 隔离。
+  - [x] 1.5 对照 `share.vue`，确认新招募入口使用 `/pages/session/share?id=...` 且不传新的 `entry=album`。
 
-- [ ] 2. 建立专项失败契约
-  - [ ] 2.1 新建 `scripts/d53-album-four-action-selection-check.js`，断言普通操作区按顺序存在 `分享`、`下载`、`标注`、`招募`。
-  - [ ] 2.2 在检查中断言旧顶部文案 `预览并分享`、`全部下载`、`多选下载`、`批量标注` 不再作为普通状态按钮。
-  - [ ] 2.3 在检查中断言分享和下载分别直接进入 `selectionModePurpose = "share"` 与 `"download"`。
-  - [ ] 2.4 在检查中断言分享底栏包含 `分享全部`、`分享选中`，下载底栏包含 `下载全部`、`下载选中`，且未选时“选中”按钮禁用。
-  - [ ] 2.5 在检查中断言分享使用独立图标、招募使用人物加号图标、标注保持绿色主样式。
-  - [ ] 2.6 在检查中断言 share / download 模式切换筛选不清空选择，下载选中从完整 `downloadablePhotos` 解析。
-  - [ ] 2.7 在检查中断言招募进入角色邀请页且不传 `entry=album`。
+- [x] 2. 建立专项失败契约
+  - [x] 2.1 新建 `scripts/d53-album-four-action-selection-check.js`，断言普通操作区按顺序存在 `分享`、`下载`、`标注`、`招募`。
+  - [x] 2.2 在检查中断言旧顶部文案 `预览并分享`、`全部下载`、`多选下载`、`批量标注` 不再作为普通状态按钮。
+  - [x] 2.3 在检查中断言分享和下载分别直接进入 `selectionModePurpose = "share"` 与 `"download"`。
+  - [x] 2.4 在检查中断言分享底栏包含 `分享全部`、`分享选中`，下载底栏包含 `下载全部`、`下载选中`，且未选时“选中”按钮禁用。
+  - [x] 2.5 在检查中断言分享使用独立图标、招募使用人物加号图标、标注保持绿色主样式。
+  - [x] 2.6 在检查中断言 share / download 模式切换筛选不清空选择，下载选中从完整 `downloadablePhotos` 解析。
+  - [x] 2.7 在检查中断言招募进入角色邀请页且不传 `entry=album`。
   - [x] 2.8 新建 `apps/api/test/album-share-selection.test.mjs`，覆盖显式 all、精确 selected、互斥输入、31 项以上 ID、9 项封面和摘要稳定性。
   - [x] 2.9 在 `package.json` 增加 `d53:unit` 与 `d53:check`，先运行并确认因功能未实现而失败。
 
-- [ ] 3. 扩展分享范围纯契约
+- [x] 3. 扩展分享范围纯契约
   - [x] 3.1 在 `apps/api/src/modules/core/service.js` 增加分享输入规范化 helper，输出且只输出 `legacy`、`all`、`selected` 或 `focus` 一种模式。
   - [x] 3.2 让 helper 拒绝 `scope`、`mediaIds` 和 `focusMediaId` 的任何冲突组合。
   - [x] 3.3 让 selected 模式拒绝空数组、重复 ID、非安全正整数和非数组输入。
@@ -42,7 +42,7 @@
   - [x] 3.5 更新 `publicShareSnapshotDigest()` 和快照行规范化，使 31 项以上完整集合摘要稳定且仍校验封面子集。
   - [x] 3.6 运行 `npm run d53:unit`，确认纯契约测试通过。
 
-- [ ] 4. 实现服务端全部与选中分享
+- [x] 4. 实现服务端全部与选中分享
   - [x] 4.1 修改 `apps/api/src/server.js`，把 `scope`、`mediaIds` 和 `focusMediaId` 传入分享服务。
   - [x] 4.2 修改 `createOrReuseSessionAlbumPublicShare()`，为新客户端显式分流 all、selected 和 focus，同时保留无字段 legacy 行为。
   - [x] 4.3 all 模式使用现有统一公开资格函数返回提交时全部符合条件的媒体，不应用 30 项或视频数量裁剪。
