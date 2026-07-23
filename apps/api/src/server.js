@@ -354,6 +354,8 @@ const SESSION_REVIEW_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_REVIEW_MULTIPART_MAX_BYTES = SESSION_REVIEW_UPLOAD_MAX_BYTES + 64 * 1024;
 const SESSION_ALBUM_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const SESSION_ALBUM_MULTIPART_MAX_BYTES = SESSION_ALBUM_UPLOAD_MAX_BYTES + 64 * 1024;
+// Keep generic JSON buffering bounded before route-level authentication while allowing large media selections.
+export const JSON_BODY_MAX_BYTES = 1024 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
@@ -1587,7 +1589,7 @@ async function readRawBody(request, maxBytes = Infinity) {
 }
 
 async function readJsonBody(request) {
-  const rawBody = await readRawBody(request);
+  const rawBody = await readRawBody(request, JSON_BODY_MAX_BYTES);
   if (rawBody.length === 0) {
     return {};
   }
@@ -1604,7 +1606,7 @@ function isBodyMethod(method) {
   return ["POST", "PATCH", "PUT"].includes(method);
 }
 
-async function bodyFor(request) {
+export async function bodyFor(request) {
   if (!isBodyMethod(request.method)) {
     return {};
   }
@@ -1612,8 +1614,26 @@ async function bodyFor(request) {
   try {
     return await readJsonBody(request);
   } catch (error) {
+    if (error instanceof AppError) throw error;
     throw new AppError(400, "INVALID_JSON", "Request body must be valid JSON");
   }
+}
+
+export function publicShareTokenOptions(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+  const options = {};
+  for (const key of [
+    "scope",
+    "mediaIds",
+    "focusMediaId",
+    "includeOwnedUntaggedImages",
+    "selectedMediaIds"
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      options[key] = body[key];
+    }
+  }
+  return options;
 }
 
 function safeTextEqual(left, right) {
@@ -6109,14 +6129,11 @@ async function route(request, response, options = {}) {
   );
   if (request.method === "POST" && sessionAlbumShareTokenId) {
     const user = await getAuthUser(request);
+    const shareOptions = publicShareTokenOptions(body);
     const share = await createOrReuseSessionAlbumPublicShare(
       user,
       sessionAlbumShareTokenId,
-      {
-        focusMediaId: body?.focusMediaId,
-        includeOwnedUntaggedImages: body?.includeOwnedUntaggedImages,
-        selectedMediaIds: body?.selectedMediaIds
-      }
+      shareOptions
     );
     const exp = tokenPositiveInteger(
       Math.floor(new Date(share.expires_at).getTime() / 1000),
@@ -6175,7 +6192,10 @@ async function route(request, response, options = {}) {
     if (claims.sessionId !== Number(publicSessionAlbumShareId)) {
       throw forbidden("album share token is invalid");
     }
-    const album = await listPublicSessionAlbumShare(claims);
+    const album = await listPublicSessionAlbumShare(claims, {
+      cursor: url.searchParams.get("cursor"),
+      limit: url.searchParams.get("limit")
+    });
     jsonResponse(response, 200, {
       ok: true,
       data: attachPublicSessionAlbumMediaUrls(album, claims, albumShareToken)

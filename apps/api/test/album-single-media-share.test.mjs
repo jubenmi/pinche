@@ -147,7 +147,7 @@ function focusedShareConnection(photoRows, tagRows) {
   };
 }
 
-test("selectPublicShareMedia seeds an eligible required image and keeps the 30-media cap", () => {
+test("selectPublicShareMedia seeds an eligible required image without truncating static photos", () => {
   const candidates = Array.from({ length: 35 }, (_, index) => eligibleMedia(index + 1));
   const selected = selectPublicShareMedia(
     candidates,
@@ -158,8 +158,8 @@ test("selectPublicShareMedia seeds an eligible required image and keeps the 30-m
   );
 
   assert.equal(selected[0].id, 1);
-  assert.equal(selected.length, 30);
-  assert.equal(new Set(selected.map((media) => media.id)).size, 30);
+  assert.equal(selected.length, 35);
+  assert.equal(new Set(selected.map((media) => media.id)).size, 35);
 });
 
 test("selectPublicShareMedia includes a required ready video and counts it toward the three-video cap", () => {
@@ -247,7 +247,7 @@ test("createOrReuseSessionAlbumPublicShare persists and reuses an eligible focus
   assert.equal(second.focus_media_id, 1);
 });
 
-test("createOrReuseSessionAlbumPublicShare persists a safe max-nine cover authorization snapshot", async () => {
+test("createOrReuseSessionAlbumPublicShare persists a safe visual candidate snapshot for a max-nine cover", async () => {
   const safeRolePhotos = Array.from({ length: 14 }, (_, index) => eligibleMedia(index + 1));
   const groupPhoto = eligibleMedia(20);
   const otherUploaderPhoto = eligibleMedia(21, { uploader_user_id: 200 });
@@ -288,8 +288,8 @@ test("createOrReuseSessionAlbumPublicShare persists a safe max-nine cover author
 
   assert.equal(typeof persisted.media_ids, "string");
   assert.equal(typeof persisted.cover_media_ids, "string");
-  assert.deepEqual(persistedCoverMediaIds, [14, 13, 12, 11, 10, 9, 8, 7, 6]);
-  assert.equal(persistedCoverMediaIds.length, 9);
+  assert.deepEqual(persistedCoverMediaIds, [14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 24]);
+  assert.equal(persistedCoverMediaIds.length, 15);
   assert.equal(persistedCoverMediaIds.every((mediaId) => persistedMediaIds.includes(mediaId)), true);
   for (const excludedId of [20, 21, 22, 23]) {
     assert.equal(persistedCoverMediaIds.includes(excludedId), false);
@@ -297,6 +297,26 @@ test("createOrReuseSessionAlbumPublicShare persists a safe max-nine cover author
   assert.deepEqual(first.cover_media_ids, persistedCoverMediaIds);
   assert.equal(second.share_id, first.share_id);
   assert.equal(connection.shares.length, 1);
+});
+
+test("createOrReuseSessionAlbumPublicShare retains all eligible static photos beyond thirty", async () => {
+  const photos = Array.from({ length: 31 }, (_, index) => eligibleMedia(index + 1));
+  const connection = focusedShareConnection(
+    photos,
+    photos.map((photo) => ({ photo_id: photo.id, ...sharerSeatTag() }))
+  );
+
+  const share = await createOrReuseSessionAlbumPublicShare(
+    { user: { id: 100 } },
+    10,
+    { withTransaction: async (work) => work(connection) }
+  );
+
+  assert.equal(share.media_ids.length, 31);
+  assert.equal(share.cover_media_ids.length, 30);
+  assert.deepEqual(share.cover_media_ids, Array.from({ length: 30 }, (_, index) => 31 - index));
+  assert.equal(new Set(share.media_ids).size, 31);
+  assert(share.cover_media_ids.every((mediaId) => share.media_ids.includes(mediaId)));
 });
 
 function publicCoverConnection(options = {}) {
@@ -529,7 +549,11 @@ test("focused album shares validate the focus ID and expose it through the share
     serverSource.indexOf("const sessionAlbumPublicSharesId")
   );
   assert.match(serverSource, /const body = await bodyFor\(request\)/);
-  assert.match(shareTokenRoute, /focusMediaId: body\?\.focusMediaId/);
+  assert.match(shareTokenRoute, /const shareOptions = publicShareTokenOptions\(body\)/);
+  assert.match(
+    shareTokenRoute,
+    /createOrReuseSessionAlbumPublicShare\(\s*user,\s*sessionAlbumShareTokenId,\s*shareOptions\s*\)/
+  );
   assert.match(shareTokenRoute, /focus_media_id: share\.focus_media_id/);
 });
 
