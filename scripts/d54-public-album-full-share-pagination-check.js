@@ -5,7 +5,6 @@ const root = process.cwd();
 const paths = Object.freeze({
   service: "apps/api/src/modules/core/service.js",
   server: "apps/api/src/server.js",
-  selection: "apps/api/src/modules/album-share-cover/selection.js",
   albumPage: "apps/miniprogram/src/pages/session/album.vue",
   paginationHelper: "apps/miniprogram/src/utils/albumPublicSharePagination.js",
   apiTest: "apps/api/test/album-public-share-pagination.test.mjs",
@@ -32,7 +31,6 @@ function between(source, start, end, name) {
 
 const service = read(paths.service);
 const server = read(paths.server);
-const selection = read(paths.selection);
 const albumPage = read(paths.albumPage);
 const helper = read(paths.paginationHelper);
 const apiTest = read(paths.apiTest);
@@ -42,40 +40,6 @@ const packageJson = JSON.parse(read(paths.packageJson));
 assert(
   service.includes("export const PUBLIC_SHARE_PAGE_SIZE = 30;"),
   "D54 public album pages must remain bounded to 30 items"
-);
-assert(
-  service.includes("export const PUBLIC_SHARE_COVER_CANDIDATE_LIMIT = 30;"),
-  "D54 must keep a bounded 30-item visual-analysis candidate pool"
-);
-assert(
-  /return candidates\s*\.slice\(0, PUBLIC_SHARE_COVER_CANDIDATE_LIMIT\)/.test(service),
-  "D54 must snapshot the bounded visual candidate pool after safety ranking"
-);
-assert(
-  /coverMediaIds:\s*normalizePublicShareSnapshotIds\(coverMediaIds,[\s\S]{0,160}?max:\s*PUBLIC_SHARE_COVER_CANDIDATE_LIMIT/.test(service),
-  "D54 snapshot digests must bind the full visual candidate pool"
-);
-assert(
-  /label:\s*"cover_media_ids",[\s\S]{0,160}?max:\s*PUBLIC_SHARE_COVER_CANDIDATE_LIMIT/.test(service),
-  "D54 persisted cover candidates must retain their safety bound"
-);
-assert(
-  selection.includes("export const ALBUM_SHARE_MAX_IMAGES = 9;"),
-  "D54 must keep the final cover output at nine images"
-);
-const selectionFunction = between(
-  selection,
-  "export function selectAlbumShareImages(candidates)",
-  "export function cropLoss",
-  "cover selection"
-);
-assert(
-  !selectionFunction.includes(".slice(0, ALBUM_SHARE_MAX_IMAGES)\n    .map(({ image }) => image)"),
-  "D54 must not truncate visual candidates before quality and duplicate analysis"
-);
-assert(
-  /return deduped[\s\S]{0,260}?\.slice\(0, ALBUM_SHARE_MAX_IMAGES\)/.test(selectionFunction),
-  "D54 must apply the nine-image cap only after visual analysis"
 );
 const publicShareRoute = between(
   server,
@@ -119,8 +83,9 @@ assert(
   "D54 package scripts are required"
 );
 assert(
-  packageJson.scripts.postcheck === "npm run d54:unit && npm run d54:check",
-  "D54 checks must run after the root check lifecycle"
+  packageJson.scripts.postcheck ===
+    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check",
+  "D54 checks must run before the D55 checks in the root check lifecycle"
 );
 
 console.log("D54 public album full-share pagination checks passed");

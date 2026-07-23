@@ -7,10 +7,6 @@ import {
   selectPublicShareCoverMedia,
   selectPublicShareMedia
 } from "../apps/api/src/modules/core/service.js";
-import {
-  ALBUM_SHARE_COVER_VARIANTS,
-  albumShareCoverLayout
-} from "../apps/api/src/modules/album-share-cover/layouts.js";
 
 const claims = { sessionId: 10, sharerUserId: 100, seatId: 1000 };
 const openPrivacy = (ids) => new Map(
@@ -162,7 +158,7 @@ const selected = selectPublicShareMedia(
   openPrivacy([100, 200]),
   claims
 );
-assert.equal(selected.length, 30, "a public share snapshot contains at most 30 media items");
+assert.equal(selected.length, 43, "a public share snapshot retains all static media");
 assert.equal(
   selected.filter((item) => item.media_type === "video").length,
   3,
@@ -174,9 +170,14 @@ assert.deepEqual(
   "sharer-uploaded role media is selected before other-uploaded role media"
 );
 assert.equal(
-  selected.slice(18).every((item) => Number(item.uploader_user_id) === 200),
+  selected.slice(18, 33).every((item) => Number(item.uploader_user_id) === 200),
   true,
   "other-uploaded role media is selected before sharer-uploaded scene media"
+);
+assert.equal(
+  selected.slice(33).every((item) => Number(item.uploader_user_id) === 100),
+  true,
+  "sharer-uploaded scene media remains in the full snapshot"
 );
 
 const sameTime = "2026-07-19T12:00:00.000Z";
@@ -295,25 +296,11 @@ assert.equal(
     openPrivacy([100]),
     claims
   ).length,
-  9,
-  "cover selection is bounded to nine images"
+  3,
+  "cover selection is bounded to three client Canvas inputs"
 );
 
-const expectedCoverOutputs = {
-  friend: { width: 1000, height: 800 },
-  timeline: { width: 1000, height: 1000 }
-};
-for (const [variant, output] of Object.entries(ALBUM_SHARE_COVER_VARIANTS)) {
-  for (let count = 1; count <= 9; count += 1) {
-    const layout = albumShareCoverLayout(variant, count);
-    assert.deepEqual(output, expectedCoverOutputs[variant], `${variant} output dimensions are stable`);
-    assert.deepEqual(layout.output, expectedCoverOutputs[variant], `${variant} layout output is stable`);
-    assert.equal(layout.slots.length, count, `${variant} layout has ${count} slots`);
-    assert.equal(layout.slots[0].role, "hero", `${variant} layout starts with its hero slot`);
-  }
-}
-
-console.log("D48 safe cover candidate and dual-channel 1-9 layout cases passed (21)");
+console.log("D48 safe three-image cover candidate cases passed (3)");
 
 if (!process.argv.includes("--unit")) {
   await import("./d23-album-share-join-policy-smoke.js");
