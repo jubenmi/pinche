@@ -189,17 +189,74 @@ test("public share prepares separate local Canvas covers and never forwards serv
   assert.ok(publicLoadBlock.indexOf("this.prepareAlbumShareCovers(data") < publicLoadBlock.indexOf("this.refreshWaterfall()"));
 });
 
-test("share cover local-preview map only reuses downloaded local media, never original image URLs", () => {
+test("share cover local-preview map only reuses recipe-selected local media and consumes preview handoff", () => {
+  const localPreviewStart = albumPageSource.indexOf("albumShareLocalPreviewByMediaId(recipe");
   const localPreviewBlock = albumPageSource.slice(
-    albumPageSource.indexOf("albumShareLocalPreviewByMediaId()"),
-    albumPageSource.indexOf("prepareAlbumShareCovers(data", albumPageSource.indexOf("albumShareLocalPreviewByMediaId()"))
+    localPreviewStart,
+    albumPageSource.indexOf("prepareAlbumShareCovers(data", localPreviewStart)
   );
+  assert.match(localPreviewBlock, /recipe/);
+  assert.match(localPreviewBlock, /takeAlbumShareLocalPreviewHandoff/);
+  assert.match(localPreviewBlock, /token:\s*this\.albumShareToken/);
   assert.match(localPreviewBlock, /visiblePhotoMedia/);
   assert.match(localPreviewBlock, /thumbnail/);
   assert.match(localPreviewBlock, /preview/);
   assert.equal(localPreviewBlock.includes("image_url"), false);
   assert.equal(localPreviewBlock.includes("preview_url"), false);
   assert.equal(localPreviewBlock.includes("display_url"), false);
+});
+
+test("direct token response snapshots local recipe previews before either Canvas channel starts", () => {
+  const ensureTokenBlock = albumPageSource.slice(
+    albumPageSource.indexOf("async ensureAlbumShareToken()"),
+    albumPageSource.indexOf("inferredSeatRoleName", albumPageSource.indexOf("async ensureAlbumShareToken()"))
+  );
+  assert.match(ensureTokenBlock, /this\.albumShareToken = data\.token \|\| ""/);
+  assert.match(ensureTokenBlock, /this\.prepareAlbumShareCovers\(data\)/);
+
+  const preparationStart = albumPageSource.indexOf("prepareAlbumShareCovers(data)");
+  const preparationBlock = albumPageSource.slice(
+    preparationStart,
+    albumPageSource.indexOf("resetAlbumShareCovers({", preparationStart)
+  );
+  assert.match(
+    preparationBlock,
+    /const localPreviewByMediaId = this\.albumShareLocalPreviewByMediaId\(recipe\)/
+  );
+  assert.ok(
+    preparationBlock.indexOf("const localPreviewByMediaId") <
+      preparationBlock.indexOf("startAlbumShareCoverPreparation")
+  );
+  assert.match(preparationBlock, /localPreviewByMediaId,/);
+});
+
+test("preview navigation remembers selected local previews and cleans failed navigation", () => {
+  const previewStart = albumPageSource.indexOf("async prepareAlbumSharePreview()");
+  const previewBlock = albumPageSource.slice(
+    previewStart,
+    albumPageSource.indexOf("async ensureAlbumShareToken()", previewStart)
+  );
+  assert.match(previewBlock, /rememberAlbumShareLocalPreviewHandoff/);
+  assert.match(previewBlock, /recipe:\s*data\.cover_recipe/);
+  assert.match(previewBlock, /this\.albumShareLocalPreviewByMediaId\(data\.cover_recipe/);
+  assert.match(previewBlock, /forgetAlbumShareLocalPreviewHandoff/);
+  assert.ok(
+    previewBlock.indexOf("rememberAlbumShareLocalPreviewHandoff") <
+      previewBlock.indexOf("uni.navigateTo")
+  );
+});
+
+test("public preview clears every pending local handoff when the token is rejected", () => {
+  const publicLoadStart = albumPageSource.indexOf("async loadPublicAlbum()");
+  const publicLoadBlock = albumPageSource.slice(
+    publicLoadStart,
+    albumPageSource.indexOf("resetPublicSharePagination() {", publicLoadStart)
+  );
+  const publicLoadCatch = publicLoadBlock.slice(publicLoadBlock.indexOf("} catch (error) {"));
+  assert.match(
+    publicLoadCatch,
+    /forgetAlbumShareLocalPreviewHandoff\(\{\s*token:\s*this\.albumShareToken\s*\}\)/
+  );
 });
 
 test("public body pagination is not part of share-cover currentness", () => {

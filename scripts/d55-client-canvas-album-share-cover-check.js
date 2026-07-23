@@ -235,6 +235,28 @@ includesAll(
   ],
   "privacy-safe cover recipe read"
 );
+const createShare = between(
+  service,
+  "export async function createOrReuseSessionAlbumPublicShare(",
+  "export async function listSessionAlbum(",
+  "member share-token creation"
+);
+includesAll(
+  createShare,
+  [
+    "selectedMediaById",
+    "for (const mediaId of share.cover_media_ids)",
+    "publicShareCoverPriority",
+    "publicShareCoverRecipeMedia",
+    "PUBLIC_SHARE_COVER_CANDIDATE_LIMIT",
+    "cover_media: coverMedia"
+  ],
+  "privacy-safe persisted cover projection for share-token creation"
+);
+check(
+  !/(getObject|readUploadedSessionAlbumPhotoObject|sharp\s*\()/.test(createShare),
+  "Share-token cover projection must not read or analyze image objects"
+);
 
 const apiSourceFiles = walk("apps/api/src");
 const retiredServerCoverDirectoryFiles = apiSourceFiles.filter((file) =>
@@ -313,6 +335,49 @@ const attachPublicMedia = between(
   "async function sessionAlbumThumbnailBuffer(",
   "public album URL projection"
 );
+const coverRecipeSerializer = between(
+  server,
+  "export function sessionAlbumPublicCoverRecipe(",
+  "export function sessionAlbumShareTokenResponse(",
+  "shared public cover recipe serializer"
+);
+includesAll(
+  coverRecipeSerializer,
+  [
+    'version: "client-canvas-v1"',
+    "images",
+    "thumbnail_url:",
+    "sessionAlbumPublicMediaPath(",
+    '"thumbnail"',
+    "width:",
+    "height:",
+    "focus_x:",
+    "focus_y:",
+    "if (images.length === 3) break"
+  ],
+  "shared versioned cover recipe serializer"
+);
+const shareTokenResponse = between(
+  server,
+  "export function sessionAlbumShareTokenResponse(",
+  "export function attachPublicSessionAlbumMediaUrls(",
+  "share-token response serializer"
+);
+includesAll(
+  shareTokenResponse,
+  [
+    "cover_recipe: sessionAlbumPublicCoverRecipe(",
+    "share.cover_media",
+    "albumShareToken",
+    "token: albumShareToken"
+  ],
+  "share-token recipe response"
+);
+check(
+  !/\b(?:cover_media|cover_media_ids|cover_url|timeline_cover_url|photo_url|storage_object_key|uploader_user_id|tags)\s*:/
+    .test(shareTokenResponse),
+  "Share-token DTO serializer must not expose cover candidates, old URLs, or storage internals"
+);
 const publicRecipeResult = between(
   attachPublicMedia,
   "const result = {",
@@ -323,16 +388,9 @@ includesAll(
   publicRecipeResult,
   [
     "cover_recipe:",
-    'version: "client-canvas-v1"',
-    "images: coverMedia.map",
-    "thumbnail_url:",
-    '"thumbnail"',
-    "width:",
-    "height:",
-    "focus_x:",
-    "focus_y:"
+    "sessionAlbumPublicCoverRecipe(coverMedia, claims, albumShareToken)"
   ],
-  "public versioned cover recipe"
+  "public DTO shared cover recipe wiring"
 );
 check(
   !/\b(?:cover_url|timeline_cover_url)\s*:/.test(publicRecipeResult),
@@ -349,11 +407,22 @@ check(
   "Public share-token DTO must not expose old server-composite cover URLs"
 );
 includesAll(
+  shareTokenRoute,
+  [
+    "const albumShareToken = signSessionAlbumShareToken(claims)",
+    "data: sessionAlbumShareTokenResponse(share, claims, albumShareToken)"
+  ],
+  "public share-token DTO recipe serialization"
+);
+includesAll(
   apiRecipeTest,
   [
     "legacyCoverMediaIds",
+    "share-token response returns the same minimal signed Canvas recipe contract",
     'version, "client-canvas-v1"',
     'url.searchParams.get("variant"), "thumbnail"',
+    '"cover_media_ids"',
+    '"storage_object_key"',
     '"cover_url"',
     '"timeline_cover_url"'
   ],
@@ -465,6 +534,33 @@ includesAll(
   ],
   "channel-local share-cover helper"
 );
+const localPreviewHandoff = between(
+  cover,
+  "export const ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF_TTL_MS",
+  "export function albumShareCoverRecipe(",
+  "bounded local preview handoff"
+);
+includesAll(
+  localPreviewHandoff,
+  [
+    "2 * 60 * 1000",
+    "ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF_LIMIT = 4",
+    "albumShareCanvasRecipeDigest",
+    "normalizeAlbumShareCoverRecipe",
+    "albumShareLocalImagePath",
+    "expiresAt",
+    "pruneAlbumShareLocalPreviewHandoffs",
+    "rememberAlbumShareLocalPreviewHandoff",
+    "takeAlbumShareLocalPreviewHandoff",
+    "forgetAlbumShareLocalPreviewHandoff",
+    "albumShareLocalPreviewHandoffs.delete(identity)"
+  ],
+  "bounded TTL local preview handoff"
+);
+check(
+  !/(?:localStorage|sessionStorage|setStorage|setStorageSync|console\.)/.test(localPreviewHandoff),
+  "Local preview handoff must remain memory-only and must not log token-bound state"
+);
 check(
   !/(https?:\/\/|thumbnail_url|cover_url|timeline_cover_url)/.test(
     between(cover, "export function albumShareImage(", "export function createAlbumShareRequestAuthority(", "safe share image")
@@ -482,7 +578,11 @@ includesAll(
     "createAlbumShareCanvasRuntime",
     "createAlbumShareCanvasPreparation",
     "uni.canvasToTempFilePath",
-    "localPreviewByMediaId: this.albumShareLocalPreviewByMediaId()",
+    "const localPreviewByMediaId = this.albumShareLocalPreviewByMediaId(recipe)",
+    "localPreviewByMediaId,",
+    "rememberAlbumShareLocalPreviewHandoff",
+    "takeAlbumShareLocalPreviewHandoff",
+    "forgetAlbumShareLocalPreviewHandoff",
     "thumbnailUrlResolver: this.normalizeAlbumMediaUrl",
     "albumShareCoverPreparationIsCurrent",
     "onHide()",
@@ -500,7 +600,12 @@ includesAll(
     "远程 URL 永远不能作为分享 imageUrl",
     "一个渠道 Canvas 失败会使用该渠道静态图",
     "不阻塞另一个渠道",
-    "鉴权变更会阻止旧分享 token"
+    "鉴权变更会阻止旧分享 token",
+    "只保存配方前三项可信路径并且只消费一次",
+    "拒绝 token 或语义配方不匹配",
+    "交接过期、远程路径与显式清理",
+    "最多保留四个分享并淘汰最旧条目",
+    "失效 token 可一次清理"
   ],
   "share-cover isolation regression tests"
 );
@@ -508,7 +613,10 @@ includesAll(
   miniPreviewTest,
   [
     "public share prepares separate local Canvas covers",
-    "share cover local-preview map only reuses downloaded local media",
+    "share cover local-preview map only reuses recipe-selected local media",
+    "direct token response snapshots local recipe previews",
+    "preview navigation remembers selected local previews",
+    "public preview clears every pending local handoff",
     "public body pagination is not part of share-cover currentness"
   ],
   "album-page Canvas integration regression tests"

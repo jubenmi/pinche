@@ -1,10 +1,15 @@
 import {
   albumShareCanvasRecipeDigest,
-  albumShareLocalImagePath
+  albumShareLocalImagePath,
+  normalizeAlbumShareCoverRecipe
 } from "./albumShareCanvas.js";
 
 export const ALBUM_SHARE_FRIEND_FALLBACK = "/static/art/album-share-friend.jpg";
 export const ALBUM_SHARE_TIMELINE_FALLBACK = "/static/art/album-share-timeline.jpg";
+export const ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF_TTL_MS = 2 * 60 * 1000;
+
+const ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF_LIMIT = 4;
+const albumShareLocalPreviewHandoffs = new Map();
 
 function trimmedString(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -26,6 +31,115 @@ function localShareImagePath(value) {
     return path;
   }
   return albumShareLocalImagePath(path);
+}
+
+function handoffNow(options = {}) {
+  const value = Number(options?.now);
+  return Number.isFinite(value) && value >= 0 ? value : Date.now();
+}
+
+function albumShareLocalPreviewHandoffIdentity({ token, recipe } = {}) {
+  const normalizedToken = trimmedString(token);
+  const recipeDigest = albumShareCanvasRecipeDigest(recipe);
+  if (!normalizedToken || !recipeDigest) return "";
+  return JSON.stringify([normalizedToken, recipeDigest]);
+}
+
+function pruneAlbumShareLocalPreviewHandoffs(now) {
+  for (const [identity, entry] of albumShareLocalPreviewHandoffs) {
+    if (!entry || Number(entry.expiresAt) <= now) {
+      albumShareLocalPreviewHandoffs.delete(identity);
+    }
+  }
+}
+
+function albumShareHandoffLocalPath(localPreviewByMediaId, image) {
+  try {
+    if (typeof localPreviewByMediaId === "function") {
+      return albumShareLocalImagePath(localPreviewByMediaId(image.id, image));
+    }
+    if (localPreviewByMediaId instanceof Map) {
+      return albumShareLocalImagePath(
+        localPreviewByMediaId.get(image.id) ||
+          localPreviewByMediaId.get(String(image.id))
+      );
+    }
+    if (localPreviewByMediaId && typeof localPreviewByMediaId === "object") {
+      return albumShareLocalImagePath(localPreviewByMediaId[image.id]);
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+export function rememberAlbumShareLocalPreviewHandoff(
+  { token, recipe, localPreviewByMediaId } = {},
+  options = {}
+) {
+  const identity = albumShareLocalPreviewHandoffIdentity({ token, recipe });
+  const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
+  if (!identity || !normalizedRecipe) return false;
+
+  const localPaths = new Map();
+  for (const image of normalizedRecipe.images) {
+    const localPath = albumShareHandoffLocalPath(localPreviewByMediaId, image);
+    if (localPath) localPaths.set(String(image.id), localPath);
+  }
+  if (localPaths.size === 0) {
+    albumShareLocalPreviewHandoffs.delete(identity);
+    return false;
+  }
+
+  const now = handoffNow(options);
+  pruneAlbumShareLocalPreviewHandoffs(now);
+  albumShareLocalPreviewHandoffs.delete(identity);
+  while (albumShareLocalPreviewHandoffs.size >= ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF_LIMIT) {
+    const oldestIdentity = albumShareLocalPreviewHandoffs.keys().next().value;
+    albumShareLocalPreviewHandoffs.delete(oldestIdentity);
+  }
+  albumShareLocalPreviewHandoffs.set(identity, {
+    expiresAt: now + ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF_TTL_MS,
+    localPaths
+  });
+  return true;
+}
+
+export function takeAlbumShareLocalPreviewHandoff(
+  { token, recipe } = {},
+  options = {}
+) {
+  const now = handoffNow(options);
+  pruneAlbumShareLocalPreviewHandoffs(now);
+  const identity = albumShareLocalPreviewHandoffIdentity({ token, recipe });
+  if (!identity) return new Map();
+  const entry = albumShareLocalPreviewHandoffs.get(identity);
+  if (!entry) return new Map();
+  albumShareLocalPreviewHandoffs.delete(identity);
+  return new Map(entry.localPaths);
+}
+
+export function forgetAlbumShareLocalPreviewHandoff({ token, recipe } = {}) {
+  const normalizedToken = trimmedString(token);
+  if (!normalizedToken) return false;
+  const identity = albumShareLocalPreviewHandoffIdentity({ token: normalizedToken, recipe });
+  if (identity) return albumShareLocalPreviewHandoffs.delete(identity);
+
+  let deleted = false;
+  for (const candidateIdentity of albumShareLocalPreviewHandoffs.keys()) {
+    let candidateToken = "";
+    try {
+      const parsed = JSON.parse(candidateIdentity);
+      candidateToken = Array.isArray(parsed) ? trimmedString(parsed[0]) : "";
+    } catch {
+      candidateToken = "";
+    }
+    if (candidateToken === normalizedToken) {
+      albumShareLocalPreviewHandoffs.delete(candidateIdentity);
+      deleted = true;
+    }
+  }
+  return deleted;
 }
 
 export function albumShareCoverRecipe(response = {}) {

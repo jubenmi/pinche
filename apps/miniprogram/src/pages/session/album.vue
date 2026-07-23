@@ -729,13 +729,17 @@ import {
   albumShareMenus,
   albumShareTimelinePayload,
   createAlbumShareRequestAuthority,
-  startAlbumShareCoverPreparation
+  forgetAlbumShareLocalPreviewHandoff,
+  rememberAlbumShareLocalPreviewHandoff,
+  startAlbumShareCoverPreparation,
+  takeAlbumShareLocalPreviewHandoff
 } from "../../utils/albumShareCover";
 import {
   albumShareLocalImagePath,
   canUseAlbumShareCanvasIdExport as canUseLegacyAlbumShareCanvasIdExport,
   createAlbumShareCanvasPreparation,
   createAlbumShareCanvasRuntime,
+  normalizeAlbumShareCoverRecipe,
   releaseAlbumShareCanvasTempPath as releaseAlbumShareCanvasTempFile
 } from "../../utils/albumShareCanvas";
 import { showWechatShareMenus } from "../../utils/share";
@@ -1551,15 +1555,18 @@ export default {
     albumShareLocalPreviewPath(value) {
       return albumShareLocalImagePath(value);
     },
-    albumShareLocalPreviewByMediaId() {
-      const localPreviewByMediaId = new Map();
-      for (const photo of this.photos || []) {
-        const photoId = photo?.id;
-        if (photoId === undefined || photoId === null) continue;
-        const visibleMedia = this.visiblePhotoMedia?.[String(photoId)] || {};
+    albumShareLocalPreviewByMediaId(recipe) {
+      const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
+      const localPreviewByMediaId = takeAlbumShareLocalPreviewHandoff({
+        token: this.albumShareToken,
+        recipe: normalizedRecipe
+      });
+      for (const image of normalizedRecipe?.images || []) {
+        const photoId = String(image.id);
+        const visibleMedia = this.visiblePhotoMedia?.[photoId] || {};
         const localPreview = this.albumShareLocalPreviewPath(visibleMedia.preview) ||
           this.albumShareLocalPreviewPath(visibleMedia.thumbnail);
-        if (localPreview) localPreviewByMediaId.set(String(photoId), localPreview);
+        if (localPreview) localPreviewByMediaId.set(photoId, localPreview);
       }
       return localPreviewByMediaId;
     },
@@ -1589,6 +1596,7 @@ export default {
       const coverRequest = this.albumShareRequestAuthority.beginCoverRequest(this.albumShareToken);
       const canvasPreparation = this.ensureAlbumShareCanvasPreparation();
       const canvasRequest = canvasPreparation?.beginRequest();
+      const localPreviewByMediaId = this.albumShareLocalPreviewByMediaId(recipe);
       return startAlbumShareCoverPreparation({
         response: { cover_recipe: recipe },
         prepare: (kind, coverRecipe) => {
@@ -1600,7 +1608,7 @@ export default {
             kind,
             recipe: coverRecipe,
             title: this.albumShareTitle(),
-            localPreviewByMediaId: this.albumShareLocalPreviewByMediaId(),
+            localPreviewByMediaId,
             thumbnailUrlResolver: this.normalizeAlbumMediaUrl,
             request: canvasRequest
           });
@@ -1896,6 +1904,7 @@ export default {
       }
       this.preparingSharePreview = true;
       this.statusText = "";
+      let previewHandoff = null;
       try {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/album/share-token`,
@@ -1903,6 +1912,14 @@ export default {
           data: { includeOwnedUntaggedImages: true }
         });
         const data = dataOf(response) || {};
+        previewHandoff = {
+          token: data.token,
+          recipe: data.cover_recipe
+        };
+        rememberAlbumShareLocalPreviewHandoff({
+          ...previewHandoff,
+          localPreviewByMediaId: this.albumShareLocalPreviewByMediaId(data.cover_recipe)
+        });
         const route = albumSharePreviewRoute({
           sessionId: this.sessionId,
           token: data.token,
@@ -1915,10 +1932,41 @@ export default {
             "分享预览准备失败，请稍后再试"
           );
         }
-        if (typeof uni !== "undefined" && typeof uni.navigateTo === "function") {
-          uni.navigateTo({ url: route });
+        if (typeof uni === "undefined" || typeof uni.navigateTo !== "function") {
+          throw albumMediaError(
+            "ALBUM_PUBLIC_SHARE_NAVIGATION_UNAVAILABLE",
+            "分享预览准备失败，请稍后再试"
+          );
         }
+        await new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = (callback, value) => {
+            if (settled) return;
+            settled = true;
+            callback(value);
+          };
+          let pending;
+          try {
+            pending = uni.navigateTo({
+              url: route,
+              success: (result) => finish(resolve, result),
+              fail: (error) => finish(reject, error)
+            });
+          } catch (error) {
+            finish(reject, error);
+            return;
+          }
+          if (pending && typeof pending.then === "function") {
+            pending.then(
+              (result) => finish(resolve, result),
+              (error) => finish(reject, error)
+            );
+          }
+        });
       } catch (error) {
+        if (previewHandoff) {
+          forgetAlbumShareLocalPreviewHandoff(previewHandoff);
+        }
         this.statusText = error?.userMessage || "分享预览准备失败，请稍后再试。";
         showModal({
           title: "暂时无法分享",
@@ -2395,6 +2443,9 @@ export default {
         if (!this.isCurrentAlbumListRequest(listRequest)) {
           return;
         }
+        forgetAlbumShareLocalPreviewHandoff({
+          token: this.albumShareToken
+        });
         this.mediaLoadSerial += 1;
         this.photos = [];
         this.pruneUnpublishedAlbumMediaState(this.photos);

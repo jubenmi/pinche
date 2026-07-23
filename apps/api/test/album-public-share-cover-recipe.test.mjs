@@ -6,7 +6,9 @@ import {
   listPublicSessionAlbumShare,
   publicShareSnapshotDigest
 } from "../src/modules/core/service.js";
-import { attachPublicSessionAlbumMediaUrls } from "../src/server.js";
+import * as apiServer from "../src/server.js";
+
+const { attachPublicSessionAlbumMediaUrls } = apiServer;
 
 const claims = {
   version: 2,
@@ -110,6 +112,11 @@ test("new public-share snapshots persist only three ordered cover media IDs", as
 
   assert.deepEqual(JSON.parse(fixture.shares[0].cover_media_ids), [4, 3, 2]);
   assert.deepEqual(share.cover_media_ids, [4, 3, 2]);
+  assert.deepEqual(share.cover_media, [
+    { id: 4, image_width: 1200, image_height: 800, focus_x: 0.5, focus_y: 0.5 },
+    { id: 3, image_width: 1200, image_height: 800, focus_x: 0.5, focus_y: 0.5 },
+    { id: 2, image_width: 1200, image_height: 800, focus_x: 0.5, focus_y: 0.5 }
+  ]);
 });
 
 function legacyShareRecipeConnection() {
@@ -222,4 +229,94 @@ test("public share projects a privacy-safe client Canvas cover recipe from legac
   assert.equal(JSON.stringify(result).includes("/private/source/"), false);
   assert.equal(JSON.stringify(result).includes("uploader_user_id"), false);
   assert.equal(JSON.stringify(result).includes("tag_type"), false);
+});
+
+test("share-token response returns the same minimal signed Canvas recipe contract", () => {
+  assert.equal(typeof apiServer.sessionAlbumShareTokenResponse, "function");
+  const share = {
+    session_id: 10,
+    share_id: 50,
+    share_subject: { type: "seat", seat_id: 1000, label: "Sharer" },
+    share_owner: { nickname: "Sharer", avatar_url: "" },
+    focus_media_id: null,
+    implicit_untagged_count: 0,
+    visible_count: 3,
+    photo_count: 3,
+    video_count: 0,
+    expires_at: "2099-01-01T00:00:00.000Z",
+    cover_media_ids: [4, 2, 1],
+    cover_media: [
+      {
+        id: 4,
+        image_width: 1600,
+        image_height: 1200,
+        focus_x: 0.25,
+        focus_y: 0.75,
+        storage_object_key: "must-not-leak/4.jpg",
+        photo_url: "/private/source/4.jpg",
+        uploader_user_id: 100,
+        tags: [{ tag_type: "seat" }]
+      },
+      {
+        id: 2,
+        image_width: 900,
+        image_height: 1200,
+        focus_x: 0.5,
+        focus_y: 0.5
+      },
+      {
+        id: 1,
+        image_width: 1200,
+        image_height: 1600,
+        focus_x: 0.8,
+        focus_y: 0.2
+      }
+    ]
+  };
+
+  const result = apiServer.sessionAlbumShareTokenResponse(
+    share,
+    claims,
+    "issued-album-share-token"
+  );
+  const renewed = apiServer.sessionAlbumShareTokenResponse(
+    share,
+    claims,
+    "renewed-album-share-token"
+  );
+
+  assert.deepEqual(
+    result.cover_recipe.images.map(({ thumbnail_url, ...image }) => image),
+    [
+      { id: 4, width: 1600, height: 1200, focus_x: 0.25, focus_y: 0.75 },
+      { id: 2, width: 900, height: 1200, focus_x: 0.5, focus_y: 0.5 },
+      { id: 1, width: 1200, height: 1600, focus_x: 0.8, focus_y: 0.2 }
+    ]
+  );
+  assert.equal(result.cover_recipe.version, "client-canvas-v1");
+  for (const image of result.cover_recipe.images) {
+    const url = new URL(image.thumbnail_url, "http://localhost");
+    assert.equal(url.pathname, `/api/session-album/public-share/photos/${image.id}/image`);
+    assert.equal(url.searchParams.get("variant"), "thumbnail");
+    assert.ok(url.searchParams.get("token"));
+  }
+  assert.notEqual(
+    result.cover_recipe.images[0].thumbnail_url,
+    renewed.cover_recipe.images[0].thumbnail_url
+  );
+  for (const field of [
+    "cover_media",
+    "cover_media_ids",
+    "cover_url",
+    "timeline_cover_url",
+    "photo_url",
+    "storage_object_key",
+    "uploader_user_id",
+    "tags"
+  ]) {
+    assert.equal(field in result, false, field);
+    assert.equal(JSON.stringify(result).includes(`"${field}"`), false, field);
+  }
+  assert.equal(JSON.stringify(result).includes("must-not-leak"), false);
+  assert.equal(JSON.stringify(result).includes("/private/source/"), false);
 });

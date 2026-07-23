@@ -14,6 +14,7 @@ import {
   createAlbumShareRequestAuthority,
   startAlbumShareCoverPreparation
 } from "../src/utils/albumShareCover.js";
+import * as albumShareCover from "../src/utils/albumShareCover.js";
 import { createAlbumShareCanvasPreparation } from "../src/utils/albumShareCanvas.js";
 
 const semanticCoverImage = (id, query, overrides = {}) => ({
@@ -434,4 +435,189 @@ test("鉴权变更会阻止旧分享 token 响应启动封面或菜单回调", a
   assert.equal(appliedToken, "");
   assert.equal(coverPreparationCalls, 0);
   assert.equal(menuUpdates, 0);
+});
+
+test("本地预览交接只保存配方前三项可信路径并且只消费一次", () => {
+  assert.equal(typeof albumShareCover.rememberAlbumShareLocalPreviewHandoff, "function");
+  assert.equal(typeof albumShareCover.takeAlbumShareLocalPreviewHandoff, "function");
+  const recipe = {
+    version: "client-canvas-v1",
+    images: [
+      semanticCoverImage(1, "token=a"),
+      semanticCoverImage(2, "token=b"),
+      semanticCoverImage(3, "token=c"),
+      semanticCoverImage(4, "token=d")
+    ]
+  };
+  const localPreviewByMediaId = new Map([
+    ["1", "wxfile://tmp/one.jpg"],
+    ["2", "/tmp/two.jpg"],
+    ["3", "http://tmp/three.jpg"],
+    ["4", "wxfile://tmp/four.jpg"]
+  ]);
+
+  assert.equal(albumShareCover.rememberAlbumShareLocalPreviewHandoff({
+    token: "share-token-once",
+    recipe,
+    localPreviewByMediaId
+  }, { now: 1_000 }), true);
+  assert.deepEqual(
+    [...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+      token: "share-token-once",
+      recipe
+    }, { now: 1_001 })],
+    [
+      ["1", "wxfile://tmp/one.jpg"],
+      ["2", "/tmp/two.jpg"],
+      ["3", "http://tmp/three.jpg"]
+    ]
+  );
+  assert.deepEqual(
+    [...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+      token: "share-token-once",
+      recipe
+    }, { now: 1_002 })],
+    []
+  );
+});
+
+test("本地预览交接拒绝 token 或语义配方不匹配且不消耗正确条目", () => {
+  assert.equal(typeof albumShareCover.rememberAlbumShareLocalPreviewHandoff, "function");
+  const recipe = {
+    version: "client-canvas-v1",
+    images: [semanticCoverImage(11, "token=initial")]
+  };
+  const renewedRecipe = {
+    version: "client-canvas-v1",
+    images: [semanticCoverImage(11, "token=renewed")]
+  };
+  const differentRecipe = {
+    version: "client-canvas-v1",
+    images: [semanticCoverImage(12, "token=initial")]
+  };
+  albumShareCover.rememberAlbumShareLocalPreviewHandoff({
+    token: "share-token-match",
+    recipe,
+    localPreviewByMediaId: new Map([["11", "wxfile://tmp/eleven.jpg"]])
+  }, { now: 2_000 });
+
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "different-token",
+    recipe
+  }, { now: 2_001 })], []);
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "share-token-match",
+    recipe: differentRecipe
+  }, { now: 2_002 })], []);
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "share-token-match",
+    recipe: renewedRecipe
+  }, { now: 2_003 })], [["11", "wxfile://tmp/eleven.jpg"]]);
+});
+
+test("本地预览交接过期、远程路径与显式清理均安全关闭", () => {
+  assert.equal(typeof albumShareCover.takeAlbumShareLocalPreviewHandoff, "function");
+  assert.equal(
+    albumShareCover.ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF_TTL_MS,
+    2 * 60 * 1000
+  );
+  const recipe = {
+    version: "client-canvas-v1",
+    images: [
+      semanticCoverImage(21, "token=a"),
+      semanticCoverImage(22, "token=b"),
+      semanticCoverImage(23, "token=c")
+    ]
+  };
+  albumShareCover.rememberAlbumShareLocalPreviewHandoff({
+    token: "share-token-expired",
+    recipe,
+    localPreviewByMediaId: {
+      21: "https://cdn.example.test/full.jpg",
+      22: "/api/session-album/original/22",
+      23: "wxfile://tmp/twenty-three.jpg"
+    }
+  }, { now: 3_000 });
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "share-token-expired",
+    recipe
+  }, { now: 3_001 })], [["23", "wxfile://tmp/twenty-three.jpg"]]);
+  albumShareCover.rememberAlbumShareLocalPreviewHandoff({
+    token: "share-token-expired",
+    recipe,
+    localPreviewByMediaId: { 23: "wxfile://tmp/twenty-three.jpg" }
+  }, { now: 3_002 });
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "share-token-expired",
+    recipe
+  }, {
+    now: 3_002 + albumShareCover.ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF_TTL_MS
+  })], []);
+
+  albumShareCover.rememberAlbumShareLocalPreviewHandoff({
+    token: "share-token-forgotten",
+    recipe,
+    localPreviewByMediaId: { 23: "wxfile://tmp/twenty-three.jpg" }
+  }, { now: 4_000 });
+  assert.equal(albumShareCover.forgetAlbumShareLocalPreviewHandoff({
+    token: "share-token-forgotten",
+    recipe
+  }), true);
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "share-token-forgotten",
+    recipe
+  }, { now: 4_001 })], []);
+});
+
+test("本地预览交接最多保留四个分享并淘汰最旧条目", () => {
+  assert.equal(typeof albumShareCover.rememberAlbumShareLocalPreviewHandoff, "function");
+  const recipe = {
+    version: "client-canvas-v1",
+    images: [semanticCoverImage(31, "token=stable")]
+  };
+  for (let index = 1; index <= 5; index += 1) {
+    assert.equal(albumShareCover.rememberAlbumShareLocalPreviewHandoff({
+      token: `bounded-token-${index}`,
+      recipe,
+      localPreviewByMediaId: { 31: `wxfile://tmp/bounded-${index}.jpg` }
+    }, { now: 5_000 + index }), true);
+  }
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "bounded-token-1",
+    recipe
+  }, { now: 5_010 })], []);
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "bounded-token-2",
+    recipe
+  }, { now: 5_010 })], [["31", "wxfile://tmp/bounded-2.jpg"]]);
+});
+
+test("失效 token 可一次清理该 token 的所有未消费配方", () => {
+  const recipeA = {
+    version: "client-canvas-v1",
+    images: [semanticCoverImage(41, "token=a")]
+  };
+  const recipeB = {
+    version: "client-canvas-v1",
+    images: [semanticCoverImage(42, "token=b")]
+  };
+  for (const [recipe, id] of [[recipeA, 41], [recipeB, 42]]) {
+    albumShareCover.rememberAlbumShareLocalPreviewHandoff({
+      token: "invalidated-token",
+      recipe,
+      localPreviewByMediaId: { [id]: `wxfile://tmp/${id}.jpg` }
+    }, { now: 6_000 });
+  }
+
+  assert.equal(albumShareCover.forgetAlbumShareLocalPreviewHandoff({
+    token: "invalidated-token"
+  }), true);
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "invalidated-token",
+    recipe: recipeA
+  }, { now: 6_001 })], []);
+  assert.deepEqual([...albumShareCover.takeAlbumShareLocalPreviewHandoff({
+    token: "invalidated-token",
+    recipe: recipeB
+  }, { now: 6_001 })], []);
 });

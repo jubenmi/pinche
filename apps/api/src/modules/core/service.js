@@ -6960,6 +6960,20 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       (photo) => albumMediaType(photo) === "image"
     ).length;
     const videoCount = selectedMedia.length - photoCount;
+    const selectedMediaById = new Map(
+      selectedMedia.map((photo) => [Number(photo.id), photo])
+    );
+    const coverMedia = [];
+    for (const mediaId of share.cover_media_ids) {
+      const photo = selectedMediaById.get(Number(mediaId));
+      if (!photo) continue;
+      const tags = tagsMap.get(Number(mediaId)) || [];
+      if (publicShareCoverPriority(photo, tags, privacyByUser, claims) === null) {
+        continue;
+      }
+      coverMedia.push(publicShareCoverRecipeMedia(photo));
+      if (coverMedia.length === PUBLIC_SHARE_COVER_CANDIDATE_LIMIT) break;
+    }
     return {
       session_id: id,
       share_id: share.id,
@@ -6967,6 +6981,7 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       media_ids: share.media_ids,
       implicit_untagged_media: share.implicit_untagged_media,
       cover_media_ids: share.cover_media_ids,
+      cover_media: coverMedia,
       share_subject: albumShareSubjectForSeat(seat),
       share_owner: {
         nickname: seat.sharer_nickname || "车友",

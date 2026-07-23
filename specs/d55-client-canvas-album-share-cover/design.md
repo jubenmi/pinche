@@ -36,6 +36,8 @@
 
 `cover_recipe` 是公开 DTO 的唯一封面输入。服务端不返回 `cover_media_ids`、标签或原图地址。
 
+创建/复用分享时，服务端还会按持久化 `cover_media_ids` 顺序，从本次已通过角色、审核和隐私筛选的媒体元数据中投影最多 3 项内部 `cover_media`。分享 token DTO 与公开相册 DTO 复用同一个 recipe 序列化器，并用本次签发的相册 share token 绑定 640px 缩略图 capability；token DTO 不下发 `cover_media`、`cover_media_ids` 或存储内部字段。
+
 ### 2.2 删除项
 
 删除 `/api/session-album/public-shares/:shareId/cover`，以及以下服务器专用模块和接线：
@@ -61,6 +63,8 @@
 
 `albumShareCover.js` 改为处理 recipe 和本地 Canvas 结果；保留已有的好友/朋友圈分通道就绪状态、菜单门禁和本地降级图。`album.vue` 在首屏公开分享响应到达后开始预热，但不等待正文分页结束；失败只回退对应渠道。
 
+成员页进入公开预览页前，将 recipe 选中的最多 3 个可信本地预览放入 `albumShareCover.js` 的模块内存交接。交接按 share token 与忽略临时签名参数的 recipe 语义摘要共同绑定，最多 4 项、固定 2 分钟 TTL、一次消费；公开预览页即使已清空 `visiblePhotoMedia`，也会先消费并与当前本地映射合并，再同时交给两个 Canvas 渠道。交接不进入 storage、路由参数或日志，导航失败或公开 token 被拒绝时立即清理。
+
 ## 4. 布局和文案
 
 | 渠道 | 1 图 | 2 图 | 3 图 |
@@ -74,6 +78,7 @@
 
 - recipe 为空、图片源解析（本地预览及其缩略图兜底）失败、Canvas 不可用或导出失败：回退为现有渠道本地图；
 - 新 token、请求失效、页面隐藏/卸载：取消或忽略旧任务并清理内存映射；
+- 跨预览页的本地路径只允许短期模块内存交接，且只接受 `albumShareLocalImagePath` 验证后的 recipe 媒体路径；
 - 本地临时路径仅在当前页面会话缓存，不能作为长期授权 URL；
 - 所有 recipe 缩略图仍通过现有公开媒体 capability 路由动态复核，不向客户端暴露原图或封面候选列表之外的内容；
 - share 路由不再有封面 JPEG 缓存命中，消除服务端封面对象读取和 Sharp CPU/内存峰值。

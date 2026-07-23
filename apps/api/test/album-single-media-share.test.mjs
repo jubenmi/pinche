@@ -356,9 +356,17 @@ test("focused album shares validate the focus ID and expose it through the share
     serverSource.indexOf("const sessionAlbumShareTokenId"),
     serverSource.indexOf("const sessionAlbumPublicSharesId")
   );
+  const shareTokenResponse = serverSource.slice(
+    serverSource.indexOf("export function sessionAlbumShareTokenResponse("),
+    serverSource.indexOf("export function attachPublicSessionAlbumMediaUrls(")
+  );
   assert.match(serverSource, /const body = await bodyFor\(request\)/);
   assert.match(shareTokenRoute, /focusMediaId: body\?\.focusMediaId/);
-  assert.match(shareTokenRoute, /focus_media_id: share\.focus_media_id/);
+  assert.match(
+    shareTokenRoute,
+    /data: sessionAlbumShareTokenResponse\(share, claims, albumShareToken\)/
+  );
+  assert.match(shareTokenResponse, /focus_media_id: share\.focus_media_id/);
 });
 
 test("createOrReuseSessionAlbumPublicShare rejects invalid supplied focus IDs as unavailable", async () => {

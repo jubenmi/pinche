@@ -3394,6 +3394,61 @@ function sessionAlbumPublicVideoUrlPath(mediaId) {
   return `/api/session-album/public-share/media/${mediaId}/video-url`;
 }
 
+export function sessionAlbumPublicCoverRecipe(
+  coverMedia,
+  claims,
+  albumShareToken
+) {
+  const images = [];
+  for (const media of Array.isArray(coverMedia) ? coverMedia : []) {
+    const id = Number(media?.id);
+    if (!Number.isSafeInteger(id) || id <= 0) continue;
+    images.push({
+      id,
+      thumbnail_url: sessionAlbumPublicMediaPath(
+        id,
+        claims,
+        albumShareToken,
+        "thumbnail"
+      ),
+      width: Number(media.image_width) || null,
+      height: Number(media.image_height) || null,
+      focus_x: Number.isFinite(Number(media.focus_x)) ? Number(media.focus_x) : 0.5,
+      focus_y: Number.isFinite(Number(media.focus_y)) ? Number(media.focus_y) : 0.5
+    });
+    if (images.length === 3) break;
+  }
+  return {
+    version: "client-canvas-v1",
+    images
+  };
+}
+
+export function sessionAlbumShareTokenResponse(
+  share,
+  claims,
+  albumShareToken
+) {
+  return {
+    session_id: share.session_id,
+    share_id: share.share_id,
+    share_subject: share.share_subject,
+    share_owner: share.share_owner,
+    focus_media_id: share.focus_media_id,
+    implicit_untagged_count: share.implicit_untagged_count,
+    visible_count: share.visible_count,
+    photo_count: share.photo_count,
+    video_count: share.video_count,
+    cover_recipe: sessionAlbumPublicCoverRecipe(
+      share.cover_media,
+      claims,
+      albumShareToken
+    ),
+    token: albumShareToken,
+    expires_at: new Date(Number(claims.exp) * 1000).toISOString()
+  };
+}
+
 export function attachPublicSessionAlbumMediaUrls(
   album,
   claims,
@@ -3434,22 +3489,7 @@ export function attachPublicSessionAlbumMediaUrls(
   });
   const result = {
     ...publicAlbum,
-    cover_recipe: {
-      version: "client-canvas-v1",
-      images: coverMedia.map((media) => ({
-        id: Number(media.id),
-        thumbnail_url: sessionAlbumPublicMediaPath(
-          media.id,
-          claims,
-          albumShareToken,
-          "thumbnail"
-        ),
-        width: Number(media.image_width) || null,
-        height: Number(media.image_height) || null,
-        focus_x: Number.isFinite(Number(media.focus_x)) ? Number(media.focus_x) : 0.5,
-        focus_y: Number.isFinite(Number(media.focus_y)) ? Number(media.focus_y) : 0.5
-      }))
-    },
+    cover_recipe: sessionAlbumPublicCoverRecipe(coverMedia, claims, albumShareToken),
     visible_count: photos.length,
     photos,
     media: photos
@@ -5830,21 +5870,10 @@ async function route(request, response, options = {}) {
       seatId: Number(share.share_subject.seat_id),
       exp
     };
+    const albumShareToken = signSessionAlbumShareToken(claims);
     jsonResponse(response, 200, {
       ok: true,
-      data: {
-        session_id: share.session_id,
-        share_id: share.share_id,
-        share_subject: share.share_subject,
-        share_owner: share.share_owner,
-        focus_media_id: share.focus_media_id,
-        implicit_untagged_count: share.implicit_untagged_count,
-        visible_count: share.visible_count,
-        photo_count: share.photo_count,
-        video_count: share.video_count,
-        token: signSessionAlbumShareToken(claims),
-        expires_at: new Date(exp * 1000).toISOString()
-      }
+      data: sessionAlbumShareTokenResponse(share, claims, albumShareToken)
     });
     return;
   }
