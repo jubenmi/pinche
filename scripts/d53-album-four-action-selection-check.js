@@ -575,6 +575,16 @@ const readyLayer = findTemplateElements(
   (element) => hasStaticClass(element, "album-share-ready-layer")
 );
 assert(readyLayer.length === 1, "album must have one active-share ready layer");
+const readyLayerPortals = findTemplateElements(
+  albumTemplate,
+  (element) =>
+    element.tag === "root-portal" &&
+    findTemplateElements(element, (child) => hasStaticClass(child, "album-share-ready-layer")).length > 0
+);
+assert(
+  readyLayerPortals.length === 0,
+  "active-share ready layer must remain in the page render tree so its native CTA is not clipped"
+);
 const readyShareButtons = findTemplateElements(
   readyLayer[0],
   (element) =>
