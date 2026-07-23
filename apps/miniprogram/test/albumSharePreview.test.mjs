@@ -246,6 +246,26 @@ test("preview navigation remembers selected local previews and cleans failed nav
   );
 });
 
+test("preview token response is authority-guarded before parsing, handoff, or navigation", () => {
+  const previewStart = albumPageSource.indexOf("async prepareAlbumSharePreview()");
+  const previewBlock = albumPageSource.slice(
+    previewStart,
+    albumPageSource.indexOf("async ensureAlbumShareToken()", previewStart)
+  );
+  assert.match(previewBlock, /loadCurrentAlbumShareTokenResponse\(\{/);
+  assert.match(previewBlock, /requestAuthority:\s*this\.albumShareRequestAuthority/);
+  assert.match(previewBlock, /load:\s*\(\)\s*=>\s*request\(\{/);
+  assert.match(previewBlock, /if \(!response\) \{\s*return;\s*\}/);
+  const staleGuard = previewBlock.indexOf("if (!response)");
+  for (const sideEffect of [
+    "const data = dataOf(response)",
+    "rememberAlbumShareLocalPreviewHandoff",
+    "uni.navigateTo"
+  ]) {
+    assert.ok(staleGuard < previewBlock.indexOf(sideEffect), sideEffect);
+  }
+});
+
 test("public preview clears every pending local handoff when the token is rejected", () => {
   const publicLoadStart = albumPageSource.indexOf("async loadPublicAlbum()");
   const publicLoadBlock = albumPageSource.slice(

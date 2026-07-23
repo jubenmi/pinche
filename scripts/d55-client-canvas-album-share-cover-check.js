@@ -528,11 +528,29 @@ includesAll(
     "ALBUM_SHARE_FRIEND_FALLBACK",
     "ALBUM_SHARE_TIMELINE_FALLBACK",
     "albumShareLocalImagePath",
+    "loadCurrentAlbumShareTokenResponse",
     '["friend", "timeline"]',
     "albumShareFriendPayload",
     "albumShareTimelinePayload"
   ],
   "channel-local share-cover helper"
+);
+const currentTokenResponseLoader = between(
+  cover,
+  "export async function loadCurrentAlbumShareTokenResponse(",
+  "export function albumShareCoverPreparationIsCurrent(",
+  "current share-token response loader"
+);
+includesAll(
+  currentTokenResponseLoader,
+  [
+    "beginTokenRequest()",
+    "await load()",
+    "isTokenRequestCurrent(ticket)",
+    "return null",
+    "throw error"
+  ],
+  "current share-token response authority gate"
 );
 const localPreviewHandoff = between(
   cover,
@@ -594,6 +612,35 @@ includesAll(
   ],
   "album page Canvas node, preparation, sharing, and lifecycle wiring"
 );
+const previewPreparation = between(
+  albumPage,
+  "async prepareAlbumSharePreview()",
+  "async ensureAlbumShareToken()",
+  "share-preview token preparation"
+);
+includesAll(
+  previewPreparation,
+  [
+    "loadCurrentAlbumShareTokenResponse({",
+    "requestAuthority: this.albumShareRequestAuthority",
+    "load: () => request({",
+    "if (!response)",
+    "return;",
+    "rememberAlbumShareLocalPreviewHandoff",
+    "uni.navigateTo"
+  ],
+  "share-preview stale-response guard"
+);
+for (const sideEffect of [
+  "const data = dataOf(response)",
+  "rememberAlbumShareLocalPreviewHandoff",
+  "uni.navigateTo"
+]) {
+  check(
+    previewPreparation.indexOf("if (!response)") < previewPreparation.indexOf(sideEffect),
+    `Share-preview stale response must return before side effect: ${sideEffect}`
+  );
+}
 includesAll(
   miniCoverTest,
   [
@@ -605,7 +652,10 @@ includesAll(
     "拒绝 token 或语义配方不匹配",
     "交接过期、远程路径与显式清理",
     "最多保留四个分享并淘汰最旧条目",
-    "失效 token 可一次清理"
+    "失效 token 可一次清理",
+    "鉴权失效后静默关闭且不触发 current 副作用",
+    "请求仍有效时原样返回",
+    "当前分享预览 token 请求错误保持原错误传播"
   ],
   "share-cover isolation regression tests"
 );
@@ -616,6 +666,7 @@ includesAll(
     "share cover local-preview map only reuses recipe-selected local media",
     "direct token response snapshots local recipe previews",
     "preview navigation remembers selected local previews",
+    "preview token response is authority-guarded",
     "public preview clears every pending local handoff",
     "public body pagination is not part of share-cover currentness"
   ],

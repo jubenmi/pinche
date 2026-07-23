@@ -730,6 +730,7 @@ import {
   albumShareTimelinePayload,
   createAlbumShareRequestAuthority,
   forgetAlbumShareLocalPreviewHandoff,
+  loadCurrentAlbumShareTokenResponse,
   rememberAlbumShareLocalPreviewHandoff,
   startAlbumShareCoverPreparation,
   takeAlbumShareLocalPreviewHandoff
@@ -1906,11 +1907,17 @@ export default {
       this.statusText = "";
       let previewHandoff = null;
       try {
-        const response = await request({
-          url: `/api/sessions/${this.sessionId}/album/share-token`,
-          method: "POST",
-          data: { includeOwnedUntaggedImages: true }
+        const response = await loadCurrentAlbumShareTokenResponse({
+          requestAuthority: this.albumShareRequestAuthority,
+          load: () => request({
+            url: `/api/sessions/${this.sessionId}/album/share-token`,
+            method: "POST",
+            data: { includeOwnedUntaggedImages: true }
+          })
         });
+        if (!response) {
+          return;
+        }
         const data = dataOf(response) || {};
         previewHandoff = {
           token: data.token,

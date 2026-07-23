@@ -437,6 +437,56 @@ test("鉴权变更会阻止旧分享 token 响应启动封面或菜单回调", a
   assert.equal(menuUpdates, 0);
 });
 
+test("分享预览 token 响应在鉴权失效后静默关闭且不触发 current 副作用", async () => {
+  assert.equal(typeof albumShareCover.loadCurrentAlbumShareTokenResponse, "function");
+  const authority = createAlbumShareRequestAuthority();
+  let resolveLoad;
+  let currentSideEffects = 0;
+  const pending = albumShareCover.loadCurrentAlbumShareTokenResponse({
+    requestAuthority: authority,
+    load: () => new Promise((resolve) => {
+      resolveLoad = resolve;
+    })
+  });
+
+  authority.invalidate();
+  resolveLoad({ data: { token: "stale-token" } });
+  const response = await pending;
+  if (response) currentSideEffects += 1;
+
+  assert.equal(response, null);
+  assert.equal(currentSideEffects, 0);
+});
+
+test("分享预览 token 响应在请求仍有效时原样返回", async () => {
+  assert.equal(typeof albumShareCover.loadCurrentAlbumShareTokenResponse, "function");
+  const authority = createAlbumShareRequestAuthority();
+  const expected = { data: { token: "current-token" } };
+
+  const response = await albumShareCover.loadCurrentAlbumShareTokenResponse({
+    requestAuthority: authority,
+    load: async () => expected
+  });
+
+  assert.equal(response, expected);
+});
+
+test("当前分享预览 token 请求错误保持原错误传播", async () => {
+  assert.equal(typeof albumShareCover.loadCurrentAlbumShareTokenResponse, "function");
+  const authority = createAlbumShareRequestAuthority();
+  const expected = new Error("preview token failed");
+
+  await assert.rejects(
+    () => albumShareCover.loadCurrentAlbumShareTokenResponse({
+      requestAuthority: authority,
+      load: async () => {
+        throw expected;
+      }
+    }),
+    (error) => error === expected
+  );
+});
+
 test("本地预览交接只保存配方前三项可信路径并且只消费一次", () => {
   assert.equal(typeof albumShareCover.rememberAlbumShareLocalPreviewHandoff, "function");
   assert.equal(typeof albumShareCover.takeAlbumShareLocalPreviewHandoff, "function");

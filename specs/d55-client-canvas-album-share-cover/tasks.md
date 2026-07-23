@@ -21,8 +21,9 @@
   - [x] 4.1 更新 D48/D50/D54/D52（删除或替换）静态检查，新增 D55 单元与静态门禁。
     - D55 静态门禁先因缺少 package 接线、旧 D23/D48/D54/通用小程序断言与 Docker 字体依赖失败，更新后 `npm run d55:check` 通过；无关的 D52 历史时间修正门禁保留。
   - [ ] 4.2 运行聚焦测试、小程序构建、完整 `npm run check`、`git diff --check` 与开发者工具刷新。
-    - 自动验证：最终复核后 postcheck 无重叠覆盖 101 项（`npm run d54:unit` 52/52 + `npm run d55:unit` 49/49）；四个聚焦小程序套件 67/67，`npm run check`、fresh `npm run build:mp-weixin`、`node scripts/check-miniprogram.js`、D55 obsolete scan 与 `git diff --check` 均通过。
-    - 包体硬门禁：main package 1,568,676 bytes / 1,572,864 bytes，较修复前 1,566,409 bytes 增加 2,267 bytes，剩余 4,188 bytes；未放宽 1.5 MiB 上限。
+    - 自动验证：最终复核后 postcheck 无重叠覆盖 105 项（`npm run d54:unit` 53/53 + `npm run d55:unit` 52/52）；分享封面与预览聚焦套件 39/39，`npm run check`、fresh `npm run build:mp-weixin`、`node scripts/check-miniprogram.js`、D55 obsolete scan 与 `git diff --check` 均通过。
+    - 包体硬门禁：main package 1,569,266 bytes / 1,572,864 bytes，较修复前 1,566,409 bytes 增加 2,857 bytes，剩余 3,598 bytes；未放宽 1.5 MiB 上限。
     - 未完成：微信开发者工具刷新与真机分享验收。
   - [ ] 4.3 将更新后的提交合并入 `develop` 并等待 CI；成功后才恢复 `main`、`publish` 提升。
   - [x] 4.4 完成最终复核修复的 RED/GREEN、D55/D54、构建、全量检查、1.5 MiB 包体硬门禁与 obsolete scan。
+  - [x] 4.5 修复分享预览 token 响应的鉴权/卸载竞态：复用请求 authority，在任何交接或导航副作用前静默丢弃过期响应。

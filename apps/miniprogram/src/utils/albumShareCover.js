@@ -200,6 +200,27 @@ export function createAlbumShareRequestAuthority() {
   };
 }
 
+export async function loadCurrentAlbumShareTokenResponse({
+  requestAuthority,
+  load
+} = {}) {
+  if (
+    typeof requestAuthority?.beginTokenRequest !== "function" ||
+    typeof requestAuthority?.isTokenRequestCurrent !== "function" ||
+    typeof load !== "function"
+  ) {
+    throw new TypeError("album share token response requires request authority and loader");
+  }
+  const ticket = requestAuthority.beginTokenRequest();
+  try {
+    const response = await load();
+    return requestAuthority.isTokenRequestCurrent(ticket) ? response : null;
+  } catch (error) {
+    if (!requestAuthority.isTokenRequestCurrent(ticket)) return null;
+    throw error;
+  }
+}
+
 export function albumShareCoverPreparationIsCurrent({
   requestAuthority,
   coverRequest,
