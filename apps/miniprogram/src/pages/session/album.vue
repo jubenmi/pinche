@@ -703,7 +703,8 @@ import {
   albumShareFriendPayload,
   albumShareImage,
   albumShareMenus,
-  albumShareTimelinePayload
+  albumShareTimelinePayload,
+  startAlbumShareCoverPreparation
 } from "../../utils/albumShareCover";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
@@ -767,6 +768,8 @@ export default {
       shareTimelineCoverUrl: "",
       shareFriendCoverPrepared: false,
       shareTimelineCoverPrepared: false,
+      albumShareCoverRequestSerial: 0,
+      albumShareTokenRequestSerial: 0,
       shareCounts: { total: 0, photos: 0, videos: 0 },
       albumSession: null,
       photos: [],
@@ -1307,25 +1310,44 @@ export default {
       if (remote) return remote;
       return this.prepareShareCoverUrl(albumShareImage(kind, ""), { normalize: false });
     },
-    async prepareAlbumShareCovers(data) {
-      const coverUrls = albumShareCoverResponse(data);
-      const [friend, timeline] = await Promise.all([
-        this.prepareAlbumShareCoverUrl("friend", coverUrls.friend),
-        this.prepareAlbumShareCoverUrl("timeline", coverUrls.timeline)
-      ]);
-      return { friend, timeline };
+    prepareAlbumShareCovers(data, { isCurrent = () => true } = {}) {
+      const requestSerial = this.albumShareCoverRequestSerial + 1;
+      const token = this.albumShareToken;
+      this.albumShareCoverRequestSerial = requestSerial;
+      return startAlbumShareCoverPreparation({
+        response: data,
+        prepare: (kind, remoteUrl) => this.prepareAlbumShareCoverUrl(kind, remoteUrl),
+        isCurrent: () => (
+          requestSerial === this.albumShareCoverRequestSerial &&
+          token === this.albumShareToken &&
+          isCurrent() === true
+        ),
+        onPrepared: (kind, imageUrl) => {
+          this.applyAlbumShareCover(kind, imageUrl);
+          this.showShareMenus();
+        }
+      });
     },
     resetAlbumShareCovers() {
+      this.albumShareCoverRequestSerial += 1;
       this.shareFriendCoverUrl = "";
       this.shareTimelineCoverUrl = "";
       this.shareFriendCoverPrepared = false;
       this.shareTimelineCoverPrepared = false;
     },
-    applyAlbumShareCovers(covers = {}) {
-      this.shareFriendCoverUrl = String(covers.friend || "").trim();
-      this.shareTimelineCoverUrl = String(covers.timeline || "").trim();
-      this.shareFriendCoverPrepared = Boolean(this.shareFriendCoverUrl);
-      this.shareTimelineCoverPrepared = Boolean(this.shareTimelineCoverUrl);
+    applyAlbumShareCover(kind, imageUrl) {
+      const preparedUrl = String(imageUrl || "").trim();
+      if (kind === "friend") {
+        this.shareFriendCoverUrl = preparedUrl;
+        this.shareFriendCoverPrepared = Boolean(preparedUrl);
+        return;
+      }
+      if (kind === "timeline") {
+        this.shareTimelineCoverUrl = preparedUrl;
+        this.shareTimelineCoverPrepared = Boolean(preparedUrl);
+        return;
+      }
+      throw new TypeError("album share cover kind must be friend or timeline");
     },
     albumShareTitle() {
       return `我在《${this.albumScriptName || "剧本待定"}》中饰演「${
@@ -1605,6 +1627,8 @@ export default {
       if (this.timelineMode || !this.sessionId) {
         return;
       }
+      const shareTokenRequestSerial = this.albumShareTokenRequestSerial + 1;
+      this.albumShareTokenRequestSerial = shareTokenRequestSerial;
       if (!this.canRequestAlbumShareToken()) {
         this.albumShareToken = "";
         this.shareSubject = null;
@@ -1622,16 +1646,22 @@ export default {
           method: "POST"
         });
         const data = dataOf(response) || {};
+        if (shareTokenRequestSerial !== this.albumShareTokenRequestSerial) {
+          return;
+        }
         this.albumShareToken = data.token || "";
         this.shareSubject = data.share_subject || this.localAlbumShareSubject();
         this.shareOwner = data.share_owner || null;
-        this.applyAlbumShareCovers(await this.prepareAlbumShareCovers(data));
+        this.prepareAlbumShareCovers(data);
         this.shareCounts = {
           total: Number(data.visible_count || 0),
           photos: Number(data.photo_count || 0),
           videos: Number(data.video_count || 0)
         };
       } catch (error) {
+        if (shareTokenRequestSerial !== this.albumShareTokenRequestSerial) {
+          return;
+        }
         this.albumShareToken = "";
         this.shareSubject = null;
         this.shareOwner = null;
@@ -1869,14 +1899,15 @@ export default {
             if (this.timelineMode) {
               this.resetAlbumShareCovers();
               this.showShareMenus();
-              const preparedCovers = await this.prepareAlbumShareCovers(data);
               if (!this.isCurrentAlbumListRequest(listRequest)) {
                 return null;
               }
               this.albumSession = this.albumSessionSummary(data);
               this.shareSubject = data.share_subject || this.shareSubject;
               this.shareOwner = data.share_owner || this.shareOwner;
-              this.applyAlbumShareCovers(preparedCovers);
+              this.prepareAlbumShareCovers(data, {
+                isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
+              });
               this.shareCounts = {
                 total: Number(data.visible_count || 0),
                 photos: Number(data.photo_count || 0),
@@ -1993,7 +2024,6 @@ export default {
           return;
         }
         const data = dataOf(response) || {};
-        const preparedCovers = await this.prepareAlbumShareCovers(data);
         if (!this.isCurrentAlbumListRequest(listRequest)) {
           return;
         }
@@ -2010,7 +2040,9 @@ export default {
         this.albumSession = this.albumSessionSummary(data);
         this.shareSubject = data.share_subject || this.shareSubject;
         this.shareOwner = data.share_owner || this.shareOwner;
-        this.applyAlbumShareCovers(preparedCovers);
+        this.prepareAlbumShareCovers(data, {
+          isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
+        });
         this.shareCounts = {
           total: Number(data.visible_count || 0),
           photos: Number(data.photo_count || 0),

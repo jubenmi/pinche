@@ -8,7 +8,8 @@ import {
   albumShareFriendPayload,
   albumShareImage,
   albumShareMenus,
-  albumShareTimelinePayload
+  albumShareTimelinePayload,
+  startAlbumShareCoverPreparation
 } from "../src/utils/albumShareCover.js";
 
 test("两个渠道使用不同本地降级图", () => {
@@ -76,4 +77,35 @@ test("好友与时间线使用各自的微信分享返回结构", () => {
       imageUrl: "timeline-cover"
     }
   );
+});
+
+test("好友封面完成后不等待慢速时间线封面，并跳过过期结果", async () => {
+  let resolveFriend;
+  let resolveTimeline;
+  let current = true;
+  const prepared = [];
+  const jobs = startAlbumShareCoverPreparation({
+    response: {
+      friend_cover_url: "friend-generated",
+      timeline_cover_url: "timeline-generated"
+    },
+    prepare(kind) {
+      return new Promise((resolve) => {
+        if (kind === "friend") resolveFriend = resolve;
+        else resolveTimeline = resolve;
+      });
+    },
+    isCurrent: () => current,
+    onPrepared: (kind, imageUrl) => prepared.push({ kind, imageUrl })
+  });
+
+  await Promise.resolve();
+  resolveFriend("friend-ready");
+  await jobs[0];
+  assert.deepEqual(prepared, [{ kind: "friend", imageUrl: "friend-ready" }]);
+
+  current = false;
+  resolveTimeline("timeline-late");
+  await jobs[1];
+  assert.deepEqual(prepared, [{ kind: "friend", imageUrl: "friend-ready" }]);
 });

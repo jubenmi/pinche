@@ -3530,7 +3530,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (albumSource.includes("data.cover_url") || albumSource.includes("data.timeline_cover_url")) {
     fail("Album page must consume generated cover URLs through albumShareCoverResponse");
   }
-  if ((albumSource.match(/this\.prepareAlbumShareCovers\(data\)/g) || []).length < 3) {
+  if ((albumSource.match(/this\.prepareAlbumShareCovers\(data(?:,|\))/g) || []).length < 3) {
     fail("Album share token, initial public load, and public refresh must prepare both cover channels");
   }
   const ensureAlbumShareTokenSource = methodBody(albumSource, "ensureAlbumShareToken");
