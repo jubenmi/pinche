@@ -605,7 +605,10 @@ export function createAlbumShareCanvasPreparation({
         const work = Promise.resolve(rendered)
           .then((result) => normalizedRendererResult(result, kind))
           .then((result) => {
-            if (!workIsCurrent(request)) return failure(kind, "stale_request");
+            if (!workIsCurrent(request)) {
+              if (result.ok) releasePath(result.path);
+              return failure(kind, "stale_request");
+            }
             if (result.ok) cachedPaths.set(cacheKey, result.path);
             return result.ok
               ? { ...result, cached: false }
