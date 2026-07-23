@@ -2671,9 +2671,15 @@ export async function loadSessionAlbumPublicShare(claims) {
   );
 }
 
-export async function getPublicSessionAlbumShareCoverMedia(shareId, expectedCoverDigest) {
+export async function getPublicSessionAlbumShareCoverMedia(
+  shareId,
+  expectedCoverDigest,
+  options = {}
+) {
   const id = positiveId(shareId, "shareId");
-  return withDatabaseConnection(async (connection) => {
+  const runWithDatabaseConnection =
+    options.withDatabaseConnection || withDatabaseConnection;
+  return runWithDatabaseConnection(async (connection) => {
     const [shareRows] = await connection.query(
       `
         SELECT *
@@ -2697,8 +2703,8 @@ export async function getPublicSessionAlbumShareCoverMedia(shareId, expectedCove
       sharerUserId: share.sharer_user_id,
       seatId: share.seat_id
     };
-    await requireSessionAlbumOpen(connection, share.session_id);
-    await requirePublicAlbumShareSeat(connection, claims);
+    const session = await requireSessionAlbumOpen(connection, share.session_id);
+    const { seat } = await requirePublicAlbumShareSeat(connection, claims);
     const placeholders = share.cover_media_ids.map(() => "?").join(", ");
     const [photoRows] = await connection.query(
       `
@@ -2727,15 +2733,20 @@ export async function getPublicSessionAlbumShareCoverMedia(shareId, expectedCove
     for (const mediaId of share.cover_media_ids) {
       const photo = photosById.get(mediaId);
       const tags = tagsMap.get(mediaId) || [];
-      if (
-        !photo ||
-        publicShareCoverPriority(photo, tags, privacyByUser, claims) === null
-      ) {
+      const priority = photo
+        ? publicShareCoverPriority(photo, tags, privacyByUser, claims)
+        : null;
+      if (priority === null) {
         throw forbidden("Album share cover is no longer available");
       }
-      media.push(photo);
+      media.push({ ...photo, public_cover_priority: priority });
     }
-    return { share, media };
+    return {
+      share,
+      media,
+      scriptName: String(session.script_name_snapshot || "").trim(),
+      roleName: String(seat.role_name || "").trim()
+    };
   });
 }
 
@@ -6895,6 +6906,8 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
         })),
       { subsetOf: mediaIds }
     );
+    // Stage one snapshots authorized, metadata-safe candidates only. A later
+    // actual-buffer quality stage may remove candidates but must never add one.
     const coverMediaIds = selectPublicShareCoverMedia(
       selectedMedia,
       tagsMap,
