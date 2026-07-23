@@ -2208,6 +2208,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   const albumSource = fs.existsSync(path.join(srcRoot, "pages/session/album.vue"))
     ? fs.readFileSync(path.join(srcRoot, "pages/session/album.vue"), "utf8")
     : "";
+  const albumShareCoverUtilPath = path.join(srcRoot, "utils/albumShareCover.js");
+  const albumShareCoverUtilSource = fs.existsSync(albumShareCoverUtilPath)
+    ? fs.readFileSync(albumShareCoverUtilPath, "utf8")
+    : "";
   const albumImageViewerPath = path.join(srcRoot, "components/AlbumImageViewer.vue");
   const albumImageViewerSource = fs.existsSync(albumImageViewerPath)
     ? fs.readFileSync(albumImageViewerPath, "utf8")
@@ -2919,7 +2923,11 @@ if (!fs.existsSync(pagesJsonPath)) {
     'source: "wechat_share"',
     "source: \"wechat_timeline\"",
     "albumTimelineQuery",
-    "shareCoverUrl",
+    "shareFriendCoverUrl",
+    "shareTimelineCoverUrl",
+    "shareFriendCoverPrepared",
+    "shareTimelineCoverPrepared",
+    "prepareAlbumShareCovers",
     "showWechatShareMenus",
     "(!this.timelineMode && !token)"
   ]) {
@@ -2929,6 +2937,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const albumOnLoadSource = methodBody(albumSource, "onLoad");
   const albumOnShowSource = methodBody(albumSource, "onShow");
+  const albumOnUnloadSource = methodBody(albumSource, "onUnload");
   const previewPhotoSource = methodBody(albumSource, "previewPhoto");
   assertBefore(
     albumOnLoadSource,
@@ -3485,6 +3494,9 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!albumShareAppMessageSource.includes("imageUrl:")) {
     fail("Album friend/group sharing must set a privacy-safe imageUrl instead of using the live page screenshot");
   }
+  if (!albumShareAppMessageSource.includes("this.albumFriendShareImage()")) {
+    fail("Album friend/group sharing must use the friend cover getter");
+  }
   const albumShareTitleSource = methodBody(albumSource, "albumShareTitle");
   if (
     !albumShareTitleSource.includes("albumScriptName") ||
@@ -3504,7 +3516,49 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!albumShareTimelineSource.includes("query:") || albumShareTimelineSource.includes("path:")) {
     fail("Album Moments sharing must return query only");
   }
+  if (!albumShareTimelineSource.includes("this.albumTimelineShareImage()")) {
+    fail("Album Moments sharing must use the timeline cover getter");
+  }
+  if (
+    !albumShareCoverUtilSource.includes("ALBUM_SHARE_FRIEND_FALLBACK") ||
+    !albumShareCoverUtilSource.includes("ALBUM_SHARE_TIMELINE_FALLBACK") ||
+    !albumShareCoverUtilSource.includes("friend_cover_url") ||
+    !albumShareCoverUtilSource.includes("cover_url") ||
+    !albumShareCoverUtilSource.includes("timeline_cover_url")
+  ) {
+    fail("Album sharing must normalize two generated cover response URLs with both local fallbacks");
+  }
+  if (albumSource.includes("data.cover_url") || albumSource.includes("data.timeline_cover_url")) {
+    fail("Album page must consume generated cover URLs through albumShareCoverResponse");
+  }
+  if ((albumSource.match(/this\.prepareAlbumShareCovers\(data(?:,|\))/g) || []).length < 3) {
+    fail("Album share token, initial public load, and public refresh must prepare both cover channels");
+  }
   const ensureAlbumShareTokenSource = methodBody(albumSource, "ensureAlbumShareToken");
+  const invalidateAlbumShareStateSource = methodBody(albumSource, "invalidateAlbumShareState");
+  const handleAlbumAuthChangeSource = methodBody(albumSource, "handleAlbumAuthChange");
+  if (
+    !ensureAlbumShareTokenSource.includes("beginTokenRequest") ||
+    !ensureAlbumShareTokenSource.includes("isTokenRequestCurrent(shareTokenRequest)") ||
+    !albumSource.includes("beginCoverRequest") ||
+    !albumSource.includes("isCoverRequestCurrent") ||
+    !handleAlbumAuthChangeSource.includes("this.invalidateAlbumShareState()") ||
+    !albumOnUnloadSource.includes("this.invalidateAlbumShareState()")
+  ) {
+    fail("Album sharing must invalidate stale token and cover preparations after an account change or unload");
+  }
+  for (const requiredInvalidationText of [
+    "albumShareRequestAuthority.invalidate()",
+    'this.albumShareToken = ""',
+    "this.shareSubject = null",
+    "this.shareCounts = { total: 0, photos: 0, videos: 0 }",
+    "this.albumSession = null",
+    "this.showShareMenus()"
+  ]) {
+    if (!invalidateAlbumShareStateSource.includes(requiredInvalidationText)) {
+      fail(`Album auth invalidation must clear share state: ${requiredInvalidationText}`);
+    }
+  }
   assertBefore(
     ensureAlbumShareTokenSource,
     "canRequestAlbumShareToken",
