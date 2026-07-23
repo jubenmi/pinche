@@ -437,7 +437,7 @@
 
   1. 删除被替代的 `openRecruitment`、重复 member menu 分支和重复 payload 拼装；
   2. 确认 D56 没有复制 D55 Canvas/recipe 实现；
-  3. 若仍超限，用项目现有 `sharp` 依赖把两张分享降级 JPEG 保持原尺寸重新编码为 quality 70：
+  3. 若仍超限，用项目现有 `sharp` 依赖把两张分享降级 JPEG 保持原尺寸重新编码。优先 quality 70；若诊断证明 quality 70 反而增大既有压缩图片，则记录字节和视觉检查，并选择能恢复 1.5 MiB 上限的最高有效质量（本次为 quality 20）：
 
      ```bash
      node --input-type=module -e 'import sharp from "sharp"; for (const file of ["apps/miniprogram/src/static/art/album-share-friend.jpg","apps/miniprogram/src/static/art/album-share-timeline.jpg"]) { const next = await sharp(file).jpeg({quality:70,mozjpeg:true}).toBuffer(); await sharp(next).toFile(`${file}.next`); }'
