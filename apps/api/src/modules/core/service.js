@@ -2368,6 +2368,70 @@ function normalizePublicShareFocusMediaId(value) {
   return value;
 }
 
+function publicShareSelectionInvalid() {
+  return new AppError(
+    409,
+    "ALBUM_PUBLIC_SHARE_SELECTION_INVALID",
+    "The selected album media is not available to share"
+  );
+}
+
+export function normalizeSessionAlbumPublicShareScope(options = {}) {
+  const input = options && typeof options === "object" ? options : {};
+  const hasScope = input.scope !== undefined;
+  const hasMediaIds = input.mediaIds !== undefined;
+  const hasFocusMediaId = input.focusMediaId !== undefined;
+  const specifiedCount = Number(hasScope) + Number(hasMediaIds) + Number(hasFocusMediaId);
+  if (specifiedCount > 1) throw publicShareSelectionInvalid();
+
+  if (hasScope) {
+    if (input.scope !== "all") throw publicShareSelectionInvalid();
+    return { mode: "all", focusMediaId: null, mediaIds: [] };
+  }
+  if (hasMediaIds) {
+    if (!Array.isArray(input.mediaIds) || input.mediaIds.length === 0) {
+      throw publicShareSelectionInvalid();
+    }
+    const mediaIds = [];
+    const seen = new Set();
+    for (const value of input.mediaIds) {
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || seen.has(value)) {
+        throw publicShareSelectionInvalid();
+      }
+      seen.add(value);
+      mediaIds.push(value);
+    }
+    return { mode: "selected", focusMediaId: null, mediaIds };
+  }
+  if (hasFocusMediaId) {
+    return {
+      mode: "focus",
+      focusMediaId: normalizePublicShareFocusMediaId(input.focusMediaId),
+      mediaIds: []
+    };
+  }
+  return { mode: "legacy", focusMediaId: null, mediaIds: [] };
+}
+
+export function selectEligiblePublicShareMedia(
+  candidates,
+  tagsMap,
+  privacyByUser,
+  claims,
+  options = {}
+) {
+  return (Array.isArray(candidates) ? candidates : []).filter((photo) => {
+    const tags = tagsMap.get(Number(photo.id)) || [];
+    return isAlbumPhotoVisibleInPublicShare(
+      photo,
+      tags,
+      privacyByUser,
+      claims,
+      options
+    );
+  });
+}
+
 const PUBLIC_SHARE_SAFE_SCENE_TAG_TYPES = new Set([
   "npc",
   "session_npc_role",
@@ -2455,6 +2519,8 @@ export function normalizePublicShareSnapshotIds(value, options = {}) {
   if (
     !Array.isArray(parsed) ||
     (!allowEmpty && parsed.length === 0) ||
+    !Number.isSafeInteger(max) && max !== Number.POSITIVE_INFINITY ||
+    max < 1 ||
     parsed.length > max
   ) {
     throw forbidden("Album share snapshot is invalid");
@@ -2608,17 +2674,18 @@ export function publicShareSnapshotDigest({
   coverMediaIds,
   implicitUntaggedMedia = []
 }) {
+  const normalizedMediaIds = normalizePublicShareSnapshotIds(mediaIds);
   const normalized = {
     sessionId: positiveId(sessionId, "sessionId"),
     sharerUserId: positiveId(sharerUserId, "sharerUserId"),
     seatId: positiveId(seatId, "seatId"),
-    mediaIds: normalizePublicShareSnapshotIds(mediaIds)
+    mediaIds: normalizedMediaIds
       .slice()
       .sort((left, right) => left - right),
     coverMediaIds: normalizePublicShareSnapshotIds(coverMediaIds, {
       allowEmpty: true,
       max: PUBLIC_SHARE_COVER_CANDIDATE_LIMIT,
-      subsetOf: mediaIds
+      subsetOf: normalizedMediaIds
     })
       .slice()
       .sort((left, right) => left - right)
@@ -6868,10 +6935,11 @@ export async function getSessionAlbumShareSubject(user, sessionId) {
 
 export async function createOrReuseSessionAlbumPublicShare(user, sessionId, options = {}) {
   const id = positiveId(sessionId, "sessionId");
-  const focusMediaId = normalizePublicShareFocusMediaId(options.focusMediaId);
+  const shareScope = normalizeSessionAlbumPublicShareScope(options);
+  const focusMediaId = shareScope.focusMediaId;
   const selectedMediaIds = normalizePublicShareSelectedMediaIds(options.selectedMediaIds);
-  if (focusMediaId && selectedMediaIds) {
-    throw badRequest("selectedMediaIds cannot be combined with focusMediaId");
+  if (selectedMediaIds && shareScope.mode !== "legacy") {
+    throw badRequest("selectedMediaIds cannot be combined with an explicit share scope");
   }
   const includeOwnedUntaggedImages = options.includeOwnedUntaggedImages === true;
   const runWithTransaction = options.withTransaction || withTransaction;
@@ -6934,11 +7002,35 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       }
     }
     const privacyByUser = await albumPrivacyMap(connection, id, privacyUserIds);
-    const selectedMedia = selectPublicShareMedia(photoRows, tagsMap, privacyByUser, claims, {
-      requiredMediaId: focusMediaId,
-      allowOwnedUntaggedImages: includeOwnedUntaggedImages,
-      selectedMediaIds: selectedMediaIds || undefined
-    });
+    const eligibleMedia = selectEligiblePublicShareMedia(
+      photoRows,
+      tagsMap,
+      privacyByUser,
+      claims,
+      {
+        // The new four-action client is itself an explicit sharing surface.
+        // Keep the D52 opt-in eligibility for the sharer's own untagged images.
+        allowOwnedUntaggedImages: shareScope.mode === "all" ||
+          shareScope.mode === "selected"
+      }
+    );
+    let selectedMedia;
+    if (shareScope.mode === "all") {
+      selectedMedia = eligibleMedia;
+    } else if (shareScope.mode === "selected") {
+      const selectedIds = new Set(shareScope.mediaIds);
+      const eligibleIds = new Set(eligibleMedia.map((media) => Number(media.id)));
+      if (shareScope.mediaIds.some((mediaId) => !eligibleIds.has(mediaId))) {
+        throw publicShareSelectionInvalid();
+      }
+      selectedMedia = eligibleMedia.filter((media) => selectedIds.has(Number(media.id)));
+    } else {
+      selectedMedia = selectPublicShareMedia(photoRows, tagsMap, privacyByUser, claims, {
+        requiredMediaId: focusMediaId,
+        allowOwnedUntaggedImages: includeOwnedUntaggedImages,
+        selectedMediaIds: selectedMediaIds || undefined
+      });
+    }
     if (focusMediaId && !selectedMedia.some((media) => Number(media.id) === focusMediaId)) {
       throw new AppError(
         409,
