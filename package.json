@@ -39,6 +39,7 @@
     "d40:smoke": "node scripts/d40-guest-calendar-home-smoke.js",
     "d48:check": "node scripts/d48-album-sharing-role-claim-separation-check.js",
     "d48:smoke": "node scripts/d48-album-sharing-role-claim-separation-smoke.js",
+    "d52:check": "node scripts/d52-adaptive-album-share-cover-check.js",
     "d50:unit": "node --test apps/api/test/album-single-media-share.test.mjs apps/miniprogram/test/albumSingleMediaShare.test.mjs",
     "d50:check": "node scripts/d50-album-single-media-sharing-check.js",
     "d8:qa": "node scripts/d8-qa-check.js",

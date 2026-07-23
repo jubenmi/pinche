@@ -101,9 +101,10 @@ assert(
   albumPage.match(/this\.albumSession = this\.albumSessionSummary\(data\);/g)?.length >= 3,
   "public album refresh must preserve header metadata when onLoad and onShow race"
 );
+const singleMediaShareHelper = read("apps/miniprogram/src/utils/albumSingleMediaShare.js");
 assert(
-  albumPage.includes("shareCoverUrl") && albumPage.includes("ticket-landscape.jpg"),
-  "album sharing must use a safe generated cover with ticket fallback"
+  singleMediaShareHelper.includes("ticket-landscape.jpg"),
+  "single-media sharing must retain its dedicated ticket fallback"
 );
 
 const invitePage = read("apps/miniprogram/src/pages/session/share.vue");
