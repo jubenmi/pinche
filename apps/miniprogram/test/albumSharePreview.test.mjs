@@ -138,6 +138,48 @@ test("share preview uses safe state, accurate notice and native share gating", (
   assert.match(shareMenuBlock, /timelineReady:\s*this\.shareTimelineCoverPrepared/);
 });
 
+test("public share prepares separate local Canvas covers and never forwards server composite URLs", () => {
+  assert.match(albumPageSource, /<canvas[\s\S]*id="album-share-friend-canvas"[\s\S]*type="2d"/);
+  assert.match(albumPageSource, /<canvas[\s\S]*id="album-share-timeline-canvas"[\s\S]*type="2d"/);
+  assert.match(albumPageSource, /createAlbumShareCanvasPreparation/);
+  assert.match(albumPageSource, /createAlbumShareCanvasRuntime/);
+  assert.match(albumPageSource, /uni\.canvasToTempFilePath/);
+  assert.match(albumPageSource, /canvas:\s*canvasHandle\.canvas/);
+  assert.match(albumPageSource, /canUseAlbumShareCanvasIdExport\(\)/);
+  assert.match(albumPageSource, /canvasId:\s*canvasHandle\.canvasId/);
+
+  const coverPreparationBlock = albumPageSource.slice(
+    albumPageSource.indexOf("prepareAlbumShareCovers(data"),
+    albumPageSource.indexOf("resetAlbumShareCovers", albumPageSource.indexOf("prepareAlbumShareCovers(data"))
+  );
+  assert.match(coverPreparationBlock, /cover_recipe/);
+  assert.match(coverPreparationBlock, /localPreviewByMediaId/);
+  assert.match(coverPreparationBlock, /thumbnailUrlResolver:\s*this\.normalizeAlbumMediaUrl/);
+  assert.equal(coverPreparationBlock.includes("cover_url"), false);
+  assert.equal(coverPreparationBlock.includes("timeline_cover_url"), false);
+  assert.equal(coverPreparationBlock.includes("friend_cover_url"), false);
+
+  const publicLoadBlock = albumPageSource.slice(
+    albumPageSource.indexOf("async loadPublicAlbum()"),
+    albumPageSource.indexOf("async loadMorePublicAlbum()", albumPageSource.indexOf("async loadPublicAlbum()"))
+  );
+  assert.ok(publicLoadBlock.indexOf("this.photos =") < publicLoadBlock.indexOf("this.prepareAlbumShareCovers(data"));
+  assert.ok(publicLoadBlock.indexOf("this.prepareAlbumShareCovers(data") < publicLoadBlock.indexOf("this.refreshWaterfall()"));
+});
+
+test("share cover local-preview map only reuses downloaded local media, never original image URLs", () => {
+  const localPreviewBlock = albumPageSource.slice(
+    albumPageSource.indexOf("albumShareLocalPreviewByMediaId()"),
+    albumPageSource.indexOf("prepareAlbumShareCovers(data", albumPageSource.indexOf("albumShareLocalPreviewByMediaId()"))
+  );
+  assert.match(localPreviewBlock, /visiblePhotoMedia/);
+  assert.match(localPreviewBlock, /thumbnail/);
+  assert.match(localPreviewBlock, /preview/);
+  assert.equal(localPreviewBlock.includes("image_url"), false);
+  assert.equal(localPreviewBlock.includes("preview_url"), false);
+  assert.equal(localPreviewBlock.includes("display_url"), false);
+});
+
 test("share preview initial load is not invalidated by the first onShow refresh", () => {
   const onShowBlock = albumPageSource.slice(
     albumPageSource.indexOf("async onShow()"),

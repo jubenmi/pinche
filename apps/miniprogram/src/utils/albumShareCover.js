@@ -11,11 +11,22 @@ function fallbackFor(kind) {
   throw new TypeError("album share cover kind must be friend or timeline");
 }
 
-export function albumShareCoverResponse(response = {}) {
-  return {
-    friend: trimmedString(response?.friend_cover_url) || trimmedString(response?.cover_url),
-    timeline: trimmedString(response?.timeline_cover_url)
-  };
+function localShareImagePath(value) {
+  const path = trimmedString(value);
+  if (!path) return "";
+  if (
+    path === ALBUM_SHARE_FRIEND_FALLBACK ||
+    path === ALBUM_SHARE_TIMELINE_FALLBACK ||
+    /^(wxfile:\/\/|file:\/\/|\/tmp\/|\/private\/|\/var\/)/.test(path)
+  ) {
+    return path;
+  }
+  return "";
+}
+
+export function albumShareCoverRecipe(response = {}) {
+  const recipe = response?.cover_recipe;
+  return recipe && typeof recipe === "object" && !Array.isArray(recipe) ? recipe : null;
 }
 
 export function albumShareMenus({ token, friendReady, timelineReady } = {}) {
@@ -27,7 +38,7 @@ export function albumShareMenus({ token, friendReady, timelineReady } = {}) {
 }
 
 export function albumShareImage(kind, imageUrl) {
-  return trimmedString(imageUrl) || fallbackFor(kind);
+  return localShareImagePath(imageUrl) || fallbackFor(kind);
 }
 
 export function createAlbumShareRequestAuthority() {
@@ -70,13 +81,13 @@ export function startAlbumShareCoverPreparation({
   if (typeof prepare !== "function") {
     throw new TypeError("album share cover preparation requires prepare");
   }
-  const coverUrls = albumShareCoverResponse(response);
+  const recipe = albumShareCoverRecipe(response);
   return ["friend", "timeline"].map((kind) => Promise.resolve()
-    .then(() => prepare(kind, coverUrls[kind]))
-    .catch(() => "")
-    .then((imageUrl) => {
+    .then(() => prepare(kind, recipe))
+    .catch(() => null)
+    .then((result) => {
       if (isCurrent() !== true) return false;
-      onPrepared(kind, trimmedString(imageUrl));
+      onPrepared(kind, albumShareImage(kind, result?.ok === true ? result.path : result));
       return true;
     })
   );
