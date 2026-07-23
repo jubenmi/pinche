@@ -162,7 +162,7 @@
 - Modify: `apps/miniprogram/src/pages/session/album.vue`
 - Test: `apps/miniprogram/test/albumShareEntry.test.mjs`
 
-- [ ] **Step 2.1：写操作栏结构失败测试**
+- [x] **Step 2.1：写操作栏结构失败测试**
 
   从 `album.vue` 读取 template/style，并断言：
 
@@ -178,7 +178,7 @@
   assert.match(recruitButton, /open-type/);
   ```
 
-- [ ] **Step 2.2：运行 RED**
+- [x] **Step 2.2：运行 RED**
 
   Run:
 
@@ -188,7 +188,7 @@
 
   Expected: FAIL 于隐私文字、180rpx 列宽、按钮顺序和招募 navigation。
 
-- [ ] **Step 2.3：修改模板和样式**
+- [x] **Step 2.3：修改模板和样式**
 
   - 隐私按钮只保留图标及无障碍名称；
   - 第一排右列与按钮均为 78rpx，并保留现有相近的 12rpx 圆角；
@@ -197,7 +197,7 @@
   - 招募按钮使用 `data-album-share="recruit"` 和动态 `open-type`；
   - 删除 `openRecruitment()` 的页面跳转。
 
-- [ ] **Step 2.4：接入招募 token 预热**
+- [x] **Step 2.4：接入招募 token 预热**
 
   在成员 `loadAlbum()` 当前响应应用完成后，非阻塞执行 `prepareRecruitInvite()`；请求固定为：
 
@@ -215,11 +215,11 @@
   showToast({ title: "正在准备招募分享，请稍后再点", icon: "none" });
   ```
 
-- [ ] **Step 2.5：接入 `onShareAppMessage` 招募分支**
+- [x] **Step 2.5：接入 `onShareAppMessage` 招募分支**
 
   先调用 `albumShareAppMessageIntent(options)`；recruit 只读取 `recruitInviteToken` 并调用 `recruitmentSharePayload`。返回 `null` 时使用现有 fail-closed payload，不读取 active/default/single token。
 
-- [ ] **Step 2.6：运行测试并提交**
+- [x] **Step 2.6：运行测试并提交**
 
   Run:
 

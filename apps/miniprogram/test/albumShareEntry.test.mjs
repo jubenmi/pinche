@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -167,4 +168,152 @@ test("album share entry coordinator invalidates a running job and skips stale qu
   await coordinator.whenIdle();
 
   assert.deepEqual(order, ["startA", "endA"]);
+});
+
+function sourceBlock(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  assert.notEqual(start, -1, `missing ${startMarker}`);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(end, -1, `missing ${endMarker}`);
+  return source.slice(start, end);
+}
+
+test("album toolbar uses an icon-only privacy control and ordered native recruit share", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const template = sourceBlock(source, "<template>", "<script>");
+  const style = sourceBlock(source, "<style", "</style>");
+  const privacyButton = sourceBlock(
+    template,
+    'class="button secondary album-privacy-action"',
+    "</t-button>"
+  );
+  const actionGroup = sourceBlock(
+    template,
+    'class="album-action-groups"',
+    "</view>\n\n        <view class=\"album-filter-panel"
+  );
+  const recruitIconIndex = actionGroup.indexOf('src="/static/icons/album-recruit.svg"');
+  const recruitButtonStart = actionGroup.lastIndexOf("<t-button", recruitIconIndex);
+  const recruitButtonEnd = actionGroup.indexOf("</t-button>", recruitIconIndex);
+  const recruitButton = actionGroup.slice(recruitButtonStart, recruitButtonEnd);
+
+  assert.ok(privacyButton.includes('aria-label="相册隐私"'));
+  assert.doesNotMatch(privacyButton, />\s*隐私\s*</);
+  assert.match(style, /grid-template-columns:\s*minmax\(0, 1fr\)\s+78rpx/);
+  assert.match(
+    style,
+    /\.album-privacy-action[\s\S]*width:\s*78rpx[\s\S]*height:\s*78rpx/
+  );
+  assert.match(style, /\.album-privacy-action[\s\S]*border-radius:\s*12rpx/);
+
+  const shareIndex = actionGroup.indexOf("album-share.svg");
+  const downloadIndex = actionGroup.indexOf("album-download.svg");
+  const recruitIndex = actionGroup.indexOf("album-recruit.svg");
+  const tagIndex = actionGroup.indexOf("album-tag-white.svg");
+  assert.ok(shareIndex < downloadIndex);
+  assert.ok(downloadIndex < recruitIndex);
+  assert.ok(recruitIndex < tagIndex);
+  assert.match(recruitButton, /data-album-share="recruit"/);
+  assert.match(recruitButton, /:open-type="recruitInviteToken \? 'share' : ''"/);
+  assert.match(recruitButton, /@tap="handleRecruitShareTap"/);
+  assert.doesNotMatch(source, /openRecruitment/);
+  assert.doesNotMatch(source, /navigateTo\(\{ url: `\/pages\/session\/share/);
+});
+
+test("album page prewarms recruit authority and fail-closes recruit app-message sharing", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    source,
+    /import\s+\{[\s\S]*albumShareAppMessageIntent[\s\S]*recruitmentSharePayload[\s\S]*createAlbumShareEntryAuthority[\s\S]*\}\s+from "\.\.\/\.\.\/utils\/albumShareEntry";/
+  );
+  assert.match(source, /recruitInviteToken:\s*""/);
+  assert.match(source, /recruitInviteGeneration:\s*0/);
+  assert.match(source, /recruitInvitePromise:\s*null/);
+
+  const loadAlbum = sourceBlock(source, "async loadAlbum() {", "async loadPublicAlbum() {");
+  assert.match(loadAlbum, /this\.prepareRecruitInvite\(\)/);
+  const prepareRecruit = sourceBlock(
+    source,
+    "prepareRecruitInvite() {",
+    "handleRecruitShareTap() {"
+  );
+  assert.match(prepareRecruit, /url:\s*`\/api\/sessions\/\$\{this\.sessionId\}\/join-invite-token`/);
+  assert.match(prepareRecruit, /method:\s*"POST"/);
+  assert.match(prepareRecruit, /data:\s*\{\s*\}/);
+  assert.match(prepareRecruit, /this\.isCurrentRecruitInviteRequest\(requestContext\)/);
+  assert.doesNotMatch(prepareRecruit, /albumBusy|albumShareReadyVisible|statusText/);
+
+  const recruitTap = sourceBlock(
+    source,
+    "handleRecruitShareTap() {",
+    "toggleSelectionMode() {"
+  );
+  assert.match(recruitTap, /this\.prepareRecruitInvite\(\)/);
+  assert.match(recruitTap, /正在准备招募分享，请稍后再点/);
+  assert.doesNotMatch(recruitTap, /navigateTo/);
+
+  const appMessage = sourceBlock(source, "onShareAppMessage(options) {", "watch: {");
+  assert.ok(
+    appMessage.indexOf("albumShareAppMessageIntent(options") <
+      appMessage.indexOf("if (intent.kind")
+  );
+  const recruitBranch = sourceBlock(
+    appMessage,
+    "if (intent.kind === ALBUM_SHARE_INTENT.RECRUIT)",
+    "if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE)"
+  );
+  assert.match(recruitBranch, /inviteToken:\s*this\.recruitInviteToken/);
+  assert.match(recruitBranch, /recruitmentSharePayload/);
+  assert.match(recruitBranch, /singleMediaShareFailClosedPayload\(\)/);
+  assert.doesNotMatch(recruitBranch, /activeAlbumShare|albumShareToken|singleMediaShareAuthority/);
+});
+
+test("member onShow silently reprimes a missing recruit token before the preview refresh shortcut", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const onShow = sourceBlock(source, "async onShow() {", "onHide() {");
+  const prewarm = "if (this.sessionId && this.currentUserId && !this.recruitInviteToken)";
+  const prewarmIndex = onShow.indexOf(prewarm);
+  const skipRefreshIndex = onShow.indexOf("if (skipRefresh && !accountChanged)");
+
+  assert.notEqual(prewarmIndex, -1);
+  assert.ok(prewarmIndex < skipRefreshIndex);
+  assert.match(onShow, /this\.prepareRecruitInvite\(\)/);
+  assert.doesNotMatch(onShow, /await this\.prepareRecruitInvite\(\)/);
+});
+
+test("recruit share titles include script, store, and Beijing-formatted start time", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const sessionTitle = sourceBlock(
+    source,
+    "albumShareSessionTitle() {",
+    "albumFriendShareImage() {"
+  );
+  const appMessage = sourceBlock(source, "onShareAppMessage(options) {", "watch: {");
+  const recruitBranch = sourceBlock(
+    appMessage,
+    "if (intent.kind === ALBUM_SHARE_INTENT.RECRUIT)",
+    "if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE)"
+  );
+
+  assert.match(
+    source,
+    /import\s+\{[\s\S]*formatBeijingDateTime[\s\S]*\}\s+from "@pinche\/shared";/
+  );
+  assert.match(
+    sessionTitle,
+    /return `\$\{this\.albumScriptName \|\| "剧本待定"\}｜\$\{this\.albumStoreName \|\| "店家待定"\}｜\$\{formatBeijingDateTime\(this\.albumSession\?\.start_at, "时间待定"\)\}`/
+  );
+  assert.match(recruitBranch, /title:\s*this\.albumShareSessionTitle\(\)/);
 });

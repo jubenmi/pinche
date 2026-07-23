@@ -82,6 +82,7 @@
           <t-button
             class="button secondary album-privacy-action"
             :disabled="albumBusy"
+            aria-label="相册隐私"
             @tap="goPrivacy"
           >
             <view class="album-privacy-button-content">
@@ -90,7 +91,6 @@
                 src="/static/icons/album-privacy.svg"
                 mode="aspectFit"
               />
-              <text>隐私</text>
             </view>
           </t-button>
         </view>
@@ -132,6 +132,24 @@
             </view>
           </t-button>
           <t-button
+            class="album-command"
+            size="extra-small"
+            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
+            :disabled="albumBusy"
+            :open-type="recruitInviteToken ? 'share' : ''"
+            data-album-share="recruit"
+            @tap="handleRecruitShareTap"
+          >
+            <view class="album-command-content">
+              <t-image
+                class="album-command-icon"
+                src="/static/icons/album-recruit.svg"
+                mode="aspectFit"
+              />
+              <text class="album-command-label">招募</text>
+            </view>
+          </t-button>
+          <t-button
             class="album-command album-tag-command tag-action"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; border-color: #1f6f5b; background: #1f6f5b; color: #ffffff; font-size: 23rpx; font-weight: 700; line-height: 52rpx; --td-button-default-bg-color: #1f6f5b; --td-button-default-color: #ffffff; --td-button-default-border-color: #1f6f5b;"
@@ -145,22 +163,6 @@
                 mode="aspectFit"
               />
               <text class="album-command-label">标注</text>
-            </view>
-          </t-button>
-          <t-button
-            class="album-command"
-            size="extra-small"
-            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
-            :disabled="albumBusy"
-            @tap="openRecruitment"
-          >
-            <view class="album-command-content">
-              <t-image
-                class="album-command-icon"
-                src="/static/icons/album-recruit.svg"
-                mode="aspectFit"
-              />
-              <text class="album-command-label">招募</text>
             </view>
           </t-button>
         </view>
@@ -705,6 +707,7 @@ import {
 } from "../../utils/api";
 import {
   albumMediaError,
+  formatBeijingDateTime,
   isApprovedAlbumImageDownloadCandidate,
   isModerationPublished
 } from "@pinche/shared";
@@ -749,6 +752,12 @@ import {
   createAlbumShareRequestAuthority,
   startAlbumShareCoverPreparation
 } from "../../utils/albumShareCover";
+import {
+  ALBUM_SHARE_INTENT,
+  albumShareAppMessageIntent,
+  recruitmentSharePayload,
+  createAlbumShareEntryAuthority
+} from "../../utils/albumShareEntry";
 import {
   albumShareLocalImagePath,
   canUseAlbumShareCanvasIdExport as canUseLegacyAlbumShareCanvasIdExport,
@@ -813,6 +822,10 @@ export default {
       albumShareRequestVersion: 0,
       albumSharePreparing: false,
       albumShareReadyVisible: false,
+      recruitInviteToken: "",
+      recruitInviteGeneration: 0,
+      recruitInvitePromise: null,
+      recruitInviteAuthority: createAlbumShareEntryAuthority(),
       singleMediaShareRequested: false,
       focusedPublicMode: false,
       focusedPublicMediaUnavailable: false,
@@ -1261,6 +1274,9 @@ export default {
     }
     const auth = getCurrentUser();
     const accountChanged = this.handleAlbumAuthChange(auth);
+    if (this.sessionId && this.currentUserId && !this.recruitInviteToken) {
+      this.prepareRecruitInvite();
+    }
     const skipRefresh = this.consumePreviewReturnRefreshSkip();
     if (skipRefresh && !accountChanged) {
       return;
@@ -1270,6 +1286,7 @@ export default {
     }
   },
   onHide() {
+    this.invalidateRecruitInviteShare();
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
     this.disposeAlbumShareCanvasPreparation();
@@ -1279,6 +1296,7 @@ export default {
   onUnload() {
     if (!this.timelineMode) {
       this.invalidateAlbumShareState();
+      this.invalidateRecruitInviteShare();
     }
     this.resetSingleMediaShareState();
     this.cancelSelectionMode({ force: true });
@@ -1300,22 +1318,34 @@ export default {
     }
   },
   onShareAppMessage(options) {
-    if (options?.from === "button" && options?.target?.dataset?.albumShare === "active") {
+    const intent = albumShareAppMessageIntent(options, {
+      timelineMode: this.timelineMode
+    });
+    if (intent.kind === ALBUM_SHARE_INTENT.RECRUIT) {
+      return (
+        recruitmentSharePayload({
+          sessionId: this.sessionId,
+          inviteToken: this.recruitInviteToken,
+          title: this.albumShareSessionTitle()
+        }) || singleMediaShareFailClosedPayload()
+      );
+    }
+    if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE) {
       return this.activeAlbumSharePayload();
     }
-    if (options?.from === "button") {
-      const mediaId = normalizeFocusedMediaId(options?.target?.dataset?.mediaId);
-      if (mediaId) {
-        const entry = this.singleMediaShareAuthority.entryFor(mediaId);
-        if (entry?.status === "ready" && entry.path) {
-          return {
-            title: entry.title || this.albumShareTitle(),
-            path: entry.path,
-            imageUrl: entry.imageUrl || ""
-          };
-        }
-        return singleMediaShareFailClosedPayload();
+    if (intent.kind === ALBUM_SHARE_INTENT.SINGLE) {
+      const entry = this.singleMediaShareAuthority.entryFor(intent.mediaId);
+      if (entry?.status === "ready" && entry.path) {
+        return {
+          title: entry.title || this.albumShareTitle(),
+          path: entry.path,
+          imageUrl: entry.imageUrl || ""
+        };
       }
+      return singleMediaShareFailClosedPayload();
+    }
+    if (intent.kind === ALBUM_SHARE_INTENT.UNKNOWN) {
+      return singleMediaShareFailClosedPayload();
     }
     const albumShareToken = this.timelineMode
       ? this.albumShareToken
@@ -1778,7 +1808,7 @@ export default {
       }》`;
     },
     albumShareSessionTitle() {
-      return `${this.albumScriptName || "剧本待定"}｜${this.albumStoreName || "店家待定"}`;
+      return `${this.albumScriptName || "剧本待定"}｜${this.albumStoreName || "店家待定"}｜${formatBeijingDateTime(this.albumSession?.start_at, "时间待定")}`;
     },
     albumFriendShareImage() {
       const coverUrl = !this.timelineMode && this.activeAlbumShareToken
@@ -2069,6 +2099,7 @@ export default {
       const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
       if (accountChanged) {
         this.invalidateAlbumShareState();
+        this.invalidateRecruitInviteShare();
         this.resetSingleMediaShareState();
         this.cancelSelectionMode({ force: true });
         this.clearActiveAlbumShareState({ hideMenus: true });
@@ -2397,6 +2428,7 @@ export default {
         this.listThumbnailLoadedById = {};
         this.listThumbnailFailedById = {};
         this.mediaLoadSerial += 1;
+        this.invalidateRecruitInviteShare();
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.albumSession = this.albumSessionSummary(data);
@@ -2413,11 +2445,13 @@ export default {
         }
         this.applyAlbumNavigationTitle();
         this.albumMediaRefresh?.schedule();
+        this.prepareRecruitInvite();
       } catch (error) {
         if (!this.isCurrentAlbumListRequest(listRequest)) {
           return;
         }
         if (error?.statusCode === 401 || error?.statusCode === 403) {
+          this.invalidateRecruitInviteShare();
           this.mediaLoadSerial += 1;
           this.photos = [];
           this.pruneUnpublishedAlbumMediaState(this.photos);
@@ -4785,11 +4819,96 @@ export default {
       this.selectedPhotoIds = [];
       this.topActionsFloating = false;
     },
-    openRecruitment() {
-      if (this.timelineMode || this.albumBusy || !this.sessionId) {
+    beginRecruitInviteRequest() {
+      const authorityRequest = this.recruitInviteAuthority.begin({
+        sessionId: this.sessionId,
+        userId: this.currentUserId,
+        mediaVersion: this.mediaLoadSerial
+      });
+      if (!authorityRequest) {
+        return null;
+      }
+      return {
+        authorityRequest,
+        sessionId: String(this.sessionId || ""),
+        userId: String(this.currentUserId || ""),
+        generation: this.recruitInviteGeneration
+      };
+    },
+    isCurrentRecruitInviteRequest(requestContext) {
+      return Boolean(
+        requestContext &&
+          !this.timelineMode &&
+          requestContext.sessionId === String(this.sessionId || "") &&
+          requestContext.userId === String(this.currentUserId || "") &&
+          requestContext.generation === this.recruitInviteGeneration &&
+          this.recruitInviteAuthority.isCurrent(requestContext.authorityRequest)
+      );
+    },
+    invalidateRecruitInviteShare() {
+      this.recruitInviteGeneration += 1;
+      this.recruitInviteToken = "";
+      this.recruitInvitePromise = null;
+      this.recruitInviteAuthority.invalidate();
+    },
+    prepareRecruitInvite() {
+      if (
+        this.timelineMode ||
+        !this.sessionId ||
+        !this.currentUserId
+      ) {
+        return Promise.resolve("");
+      }
+      const requestContext = this.beginRecruitInviteRequest();
+      if (!requestContext) {
+        return Promise.resolve("");
+      }
+      if (this.recruitInviteToken) {
+        return Promise.resolve(this.recruitInviteToken);
+      }
+      if (this.recruitInvitePromise) {
+        return this.recruitInvitePromise;
+      }
+
+      let requestPromise;
+      requestPromise = request({
+        url: `/api/sessions/${this.sessionId}/join-invite-token`,
+        method: "POST",
+        data: {}
+      })
+        .then((response) => {
+          if (!this.isCurrentRecruitInviteRequest(requestContext)) {
+            return "";
+          }
+          const token = typeof dataOf(response)?.token === "string"
+            ? dataOf(response).token.trim()
+            : "";
+          this.recruitInviteToken = token;
+          return token;
+        })
+        .catch(() => {
+          if (this.isCurrentRecruitInviteRequest(requestContext)) {
+            this.recruitInviteToken = "";
+          }
+          return "";
+        })
+        .finally(() => {
+          if (
+            this.isCurrentRecruitInviteRequest(requestContext) &&
+            this.recruitInvitePromise === requestPromise
+          ) {
+            this.recruitInvitePromise = null;
+          }
+        });
+      this.recruitInvitePromise = requestPromise;
+      return requestPromise;
+    },
+    handleRecruitShareTap() {
+      if (this.timelineMode || !this.sessionId || this.recruitInviteToken) {
         return;
       }
-      uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}` });
+      this.prepareRecruitInvite();
+      showToast({ title: "正在准备招募分享，请稍后再点", icon: "none" });
     },
     toggleSelectionMode() {
       if (this.timelineMode || this.albumBusy) {
@@ -5185,7 +5304,7 @@ export default {
 
 .album-primary-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 180rpx;
+  grid-template-columns: minmax(0, 1fr) 78rpx;
   gap: 12rpx;
 }
 
@@ -5227,14 +5346,17 @@ export default {
 }
 
 .album-privacy-action {
-  padding: 0 18rpx;
+  width: 78rpx;
+  min-width: 78rpx;
+  height: 78rpx;
+  padding: 0;
 }
 
 .album-privacy-button-content {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10rpx;
+  gap: 0;
   width: 100%;
   min-width: 0;
 }
@@ -5309,7 +5431,7 @@ export default {
 }
 
 .album-tag-command {
-  grid-column: 3;
+  grid-column: 4;
   border-color: #1f6f5b;
   background: #1f6f5b;
   color: #ffffff;
