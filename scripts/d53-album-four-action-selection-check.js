@@ -34,17 +34,83 @@ function parseTemplateExpression(expression, label) {
   }
 }
 
-function walk(node, visit) {
+function staticValue(node) {
+  const literal = literalValue(node);
+  if (literal !== undefined || node?.type === "NullLiteral") {
+    return { known: true, value: literal };
+  }
+  if (node?.type === "BigIntLiteral") {
+    try {
+      return { known: true, value: BigInt(node.value) };
+    } catch {
+      return { known: false };
+    }
+  }
+  if (isIdentifier(node, "undefined")) return { known: true, value: undefined };
+  if (isIdentifier(node, "NaN")) return { known: true, value: Number.NaN };
+  if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return { known: true, value: node.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join("") };
+  }
+  if (node?.type === "UnaryExpression") {
+    const argument = staticValue(node.argument);
+    if (!argument.known) return argument;
+    if (node.operator === "!") return { known: true, value: !argument.value };
+    if (node.operator === "void") return { known: true, value: undefined };
+    if (node.operator === "+") return { known: true, value: Number(argument.value) };
+    if (node.operator === "-" && typeof argument.value === "number") {
+      return { known: true, value: -argument.value };
+    }
+  }
+  return { known: false };
+}
+
+function isStaticallyFalsy(node) {
+  const value = staticValue(node);
+  return value.known && !Boolean(value.value);
+}
+
+function isStaticallyTruthy(node) {
+  const value = staticValue(node);
+  return value.known && Boolean(value.value);
+}
+
+function walkReachable(node, visit) {
   if (!node || typeof node !== "object") return;
   if (Array.isArray(node)) {
-    for (const child of node) walk(child, visit);
+    for (const child of node) walkReachable(child, visit);
     return;
   }
   if (typeof node.type !== "string") return;
+  if (node.type === "IfStatement") {
+    if (isStaticallyTruthy(node.test)) {
+      visit(node);
+      walkReachable(node.test, visit);
+      walkReachable(node.consequent, visit);
+      return;
+    }
+    if (isStaticallyFalsy(node.test)) {
+      if (node.alternate) walkReachable(node.alternate, visit);
+      return;
+    }
+  }
+  if (node.type === "ConditionalExpression") {
+    if (isStaticallyTruthy(node.test)) {
+      visit(node);
+      walkReachable(node.test, visit);
+      walkReachable(node.consequent, visit);
+      return;
+    }
+    if (isStaticallyFalsy(node.test)) {
+      visit(node);
+      walkReachable(node.test, visit);
+      walkReachable(node.alternate, visit);
+      return;
+    }
+  }
   visit(node);
   for (const [key, value] of Object.entries(node)) {
     if (["comments", "end", "extra", "loc", "start", "tokens"].includes(key)) continue;
-    if (value && typeof value === "object") walk(value, visit);
+    if (value && typeof value === "object") walkReachable(value, visit);
   }
 }
 
@@ -54,14 +120,17 @@ function walkTemplate(node, visit) {
     for (const child of node) walkTemplate(child, visit);
     return;
   }
-  if (node.type === 1) visit(node);
+  if (node.type === 1) {
+    if (hasStaticFalsyIf(node)) return;
+    visit(node);
+  }
   if (node.children) walkTemplate(node.children, visit);
   if (node.branches) walkTemplate(node.branches, visit);
 }
 
-function findNodes(node, predicate) {
+function findReachableNodes(node, predicate) {
   const matches = [];
-  walk(node, (candidate) => {
+  walkReachable(node, (candidate) => {
     if (predicate(candidate)) matches.push(candidate);
   });
   return matches;
@@ -163,7 +232,7 @@ function optionMethod(options, section, name, scriptSource) {
 }
 
 function assignmentsToThisProperty(node, name) {
-  return findNodes(
+  return findReachableNodes(
     node.body,
     (candidate) =>
       candidate.type === "AssignmentExpression" && isThisMember(candidate.left, name)
@@ -177,7 +246,7 @@ function assignsLiteral(node, property, value) {
 }
 
 function containsObjectProperty(node, name, value) {
-  return findNodes(node.body, (candidate) => {
+  return findReachableNodes(node.body, (candidate) => {
     if (candidate.type !== "ObjectExpression") return false;
     const property = objectProperty(candidate, name);
     return property?.type === "ObjectProperty" && literalValue(property.value) === value;
@@ -185,7 +254,7 @@ function containsObjectProperty(node, name, value) {
 }
 
 function containsObjectPropertyIdentifier(node, name, identifier) {
-  return findNodes(node.body, (candidate) => {
+  return findReachableNodes(node.body, (candidate) => {
     if (candidate.type !== "ObjectExpression") return false;
     const property = objectProperty(candidate, name);
     return property?.type === "ObjectProperty" && isIdentifier(property.value, identifier);
@@ -193,14 +262,14 @@ function containsObjectPropertyIdentifier(node, name, identifier) {
 }
 
 function hasDownloadableFilter(node, property) {
-  return findNodes(node.body, (candidate) => {
+  return findReachableNodes(node.body, (candidate) => {
     if (candidate.type !== "CallExpression" || keyName(candidate.callee?.property) !== "filter") return false;
     return isThisMember(candidate.callee.object, property);
   }).length > 0;
 }
 
 function containsEquality(node, property, value) {
-  return findNodes(node, (candidate) => {
+  return findReachableNodes(node, (candidate) => {
     if (candidate.type !== "BinaryExpression" || !["===", "=="].includes(candidate.operator)) return false;
     return (
       (isThisMember(candidate.left, property) && literalValue(candidate.right) === value) ||
@@ -221,7 +290,7 @@ function isNestedIn(ancestor, node) {
 }
 
 function assertSelectionPersistsAcrossFilter(watcher, name) {
-  const tagGuards = findNodes(
+  const tagGuards = findReachableNodes(
     watcher.node.body,
     (candidate) => candidate.type === "IfStatement" && containsEquality(candidate.test, "selectionModePurpose", "tag")
   );
@@ -255,17 +324,18 @@ function directive(element, name, argument) {
   );
 }
 
-function hasFalseIf(element) {
-  const condition = directive(element, "if", undefined) || element.props.find(
+function hasStaticFalsyIf(element) {
+  const condition = element.props.find(
     (property) => property.type === 7 && property.name === "if"
   );
   if (!condition?.exp) return false;
-  return literalValue(parseTemplateExpression(condition.exp, "v-if")) === false;
+  return isStaticallyFalsy(parseTemplateExpression(condition.exp, "v-if"));
 }
 
 function templateText(node) {
   if (!node || typeof node !== "object") return "";
   if (Array.isArray(node)) return node.map(templateText).join("");
+  if (node.type === 1 && hasStaticFalsyIf(node)) return "";
   if (node.type === 2) return node.content;
   return templateText(node.children || []);
 }
@@ -284,7 +354,7 @@ function hasDisabledWhenSelectionIsEmpty(element, label) {
   const binding = directive(element, "bind", "disabled");
   assert(binding?.exp, `${label} must bind :disabled`);
   const expression = parseTemplateExpression(binding.exp, `${label} :disabled`);
-  return findNodes(expression, (candidate) => {
+  return findReachableNodes(expression, (candidate) => {
     if (candidate.type !== "BinaryExpression" || !["===", "=="].includes(candidate.operator)) return false;
     return (
       (isIdentifier(candidate.left, "selectedPhotoCount") && literalValue(candidate.right) === 0) ||
@@ -298,7 +368,7 @@ function findAction(elements, label, method) {
     (element) => templateText(element).trim().includes(label) && tapBindsMethod(element, method)
   );
   assert(matches.length === 1, `${label} must bind ${method} on its action element`);
-  assert(!hasFalseIf(matches[0]), `${label} must not be hidden with v-if=\"false\"`);
+  assert(!hasStaticFalsyIf(matches[0]), `${label} must not be hidden with a static falsy v-if`);
   return matches[0];
 }
 
@@ -317,25 +387,25 @@ function exportedFunction(program, name, label) {
   throw new Error(`${label} must export ${name}`);
 }
 
-function functionNamed(program, name, label) {
-  const match = findNodes(
-    program,
-    (candidate) =>
-      (candidate.type === "FunctionDeclaration" || candidate.type === "FunctionExpression") &&
-      candidate.id?.name === name
-  ).at(-1);
-  assert(match, `${label} must define ${name}`);
+function topLevelAsyncFunction(program, name, label) {
+  const match = program.program.body.find(
+    (statement) =>
+      statement.type === "FunctionDeclaration" &&
+      statement.async &&
+      statement.id?.name === name
+  );
+  assert(match, `${label} must define top-level async ${name}()`);
   return match;
 }
 
 function callsIdentifier(node, name) {
-  return findNodes(node.body, (candidate) =>
+  return findReachableNodes(node.body, (candidate) =>
     candidate.type === "CallExpression" && isIdentifier(candidate.callee, name)
   ).length > 0;
 }
 
 function hasReturnObject(node, propertyName, expectedValue) {
-  return findNodes(node.body, (candidate) => {
+  return findReachableNodes(node.body, (candidate) => {
     if (candidate.type !== "ReturnStatement" || candidate.argument?.type !== "ObjectExpression") return false;
     const property = objectProperty(candidate.argument, propertyName);
     return property?.type === "ObjectProperty" && literalValue(property.value) === expectedValue;
@@ -343,13 +413,13 @@ function hasReturnObject(node, propertyName, expectedValue) {
 }
 
 function variableDeclarator(node, name) {
-  return findNodes(node.body, (candidate) =>
+  return findReachableNodes(node.body, (candidate) =>
     candidate.type === "VariableDeclarator" && isIdentifier(candidate.id, name)
   ).at(-1);
 }
 
 function templateLiteralNavigatesToRecruitment(node) {
-  return findNodes(node.body, (candidate) => {
+  return findReachableNodes(node.body, (candidate) => {
     if (candidate.type !== "TemplateLiteral" || candidate.expressions.length !== 1) return false;
     const [prefix, suffix] = candidate.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw);
     return (
@@ -361,7 +431,7 @@ function templateLiteralNavigatesToRecruitment(node) {
 }
 
 function containsAlbumEntryParameter(node) {
-  return findNodes(node.body, (candidate) => {
+  return findReachableNodes(node.body, (candidate) => {
     if (candidate.type === "StringLiteral") return candidate.value.includes("entry=album");
     if (candidate.type === "TemplateLiteral") {
       return candidate.quasis.some((quasi) => (quasi.value.cooked ?? quasi.value.raw).includes("entry=album"));
@@ -391,7 +461,7 @@ for (const token of ["scope: \"all\"", "mediaIds", "ALBUM_PUBLIC_SHARE_SELECTION
 
 const actionGroup = findTemplateElements(albumTemplate, (element) => hasStaticClass(element, "album-action-groups"));
 assert(actionGroup.length === 1, "album must contain exactly one .album-action-groups element");
-assert(!hasFalseIf(actionGroup[0]), ".album-action-groups must not be hidden with v-if=\"false\"");
+assert(!hasStaticFalsyIf(actionGroup[0]), ".album-action-groups must not be hidden with a static falsy v-if");
 const groupActions = actionGroup[0].children.filter((child) => child.type === 1);
 const expectedActions = [
   ["分享", "openShareSelectionMode"],
@@ -453,8 +523,8 @@ assert(!containsAlbumEntryParameter(recruitmentMethod.node), "recruitment must n
 const shareScopeNormalizer = exportedFunction(serviceProgram, "normalizeSessionAlbumPublicShareScope", "public share scope normalizer");
 const specifiedCount = variableDeclarator(shareScopeNormalizer, "specifiedCount");
 assert(
-  specifiedCount?.init && ["hasScope", "hasMediaIds", "hasFocusMediaId"].every((name) => findNodes(specifiedCount.init, (node) => isIdentifier(node, name)).length > 0) &&
-    findNodes(shareScopeNormalizer.body, (node) =>
+  specifiedCount?.init && ["hasScope", "hasMediaIds", "hasFocusMediaId"].every((name) => findReachableNodes(specifiedCount.init, (node) => isIdentifier(node, name)).length > 0) &&
+    findReachableNodes(shareScopeNormalizer.body, (node) =>
       node.type === "BinaryExpression" && node.operator === ">" && isIdentifier(node.left, "specifiedCount") && literalValue(node.right) === 1
     ).length > 0 &&
     callsIdentifier(shareScopeNormalizer, "publicShareSelectionInvalid"),
@@ -480,12 +550,12 @@ assert(
 );
 const shareTokenOptions = exportedFunction(serverProgram, "publicShareTokenOptions", "share token option forwarding");
 assert(
-  findNodes(shareTokenOptions.body, (node) =>
+  findReachableNodes(shareTokenOptions.body, (node) =>
     node.type === "ForOfStatement" &&
     node.right?.type === "ArrayExpression" &&
     ["scope", "mediaIds", "focusMediaId"].every((value) => node.right.elements.some((element) => literalValue(element) === value))
   ).length > 0 &&
-    findNodes(shareTokenOptions.body, (node) =>
+    findReachableNodes(shareTokenOptions.body, (node) =>
       node.type === "CallExpression" &&
       memberPath(node.callee)?.join(".") === "Object.prototype.hasOwnProperty.call" &&
       isIdentifier(node.arguments[0], "body") &&
@@ -493,13 +563,13 @@ assert(
     ).length > 0,
   "share-token forwarding must copy only explicitly supplied scope fields"
 );
-const route = functionNamed(serverProgram, "route", "share-token route");
+const route = topLevelAsyncFunction(serverProgram, "route", "share-token route");
 const shareOptions = variableDeclarator(route, "shareOptions");
 assert(
   shareOptions?.init?.type === "CallExpression" &&
     isIdentifier(shareOptions.init.callee, "publicShareTokenOptions") &&
     isIdentifier(shareOptions.init.arguments[0], "body") &&
-    findNodes(route.body, (node) =>
+    findReachableNodes(route.body, (node) =>
       node.type === "CallExpression" &&
       isIdentifier(node.callee, "createOrReuseSessionAlbumPublicShare") &&
       node.arguments.some((argument) => isIdentifier(argument, "shareOptions"))
