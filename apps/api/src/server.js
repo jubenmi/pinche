@@ -6175,7 +6175,10 @@ async function route(request, response, options = {}) {
     if (claims.sessionId !== Number(publicSessionAlbumShareId)) {
       throw forbidden("album share token is invalid");
     }
-    const album = await listPublicSessionAlbumShare(claims);
+    const album = await listPublicSessionAlbumShare(claims, {
+      cursor: url.searchParams.get("cursor"),
+      limit: url.searchParams.get("limit")
+    });
     jsonResponse(response, 200, {
       ok: true,
       data: attachPublicSessionAlbumMediaUrls(album, claims, albumShareToken)
