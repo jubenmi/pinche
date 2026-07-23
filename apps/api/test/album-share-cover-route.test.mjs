@@ -44,6 +44,7 @@ function coverDependencies(overrides = {}) {
     cacheGet: 0,
     cacheSet: 0
   };
+  const cacheGetKeys = new Set();
   const rendered = [];
   const backingCache = new AlbumShareCoverCache({
     maxEntries: 8,
@@ -53,6 +54,7 @@ function coverDependencies(overrides = {}) {
   const cache = {
     get(key) {
       counts.cacheGet += 1;
+      cacheGetKeys.add(key);
       return backingCache.get(key);
     },
     set(key, value) {
@@ -97,7 +99,7 @@ function coverDependencies(overrides = {}) {
     };
   }
   if (overrides.includeCache !== false) dependencies.cache = overrides.cache || cache;
-  return { dependencies, counts, rendered };
+  return { dependencies, counts, cacheGetKeys, rendered };
 }
 
 async function listenCoverServer(app, { port = 0, host = "127.0.0.1" } = {}) {
@@ -139,12 +141,13 @@ async function coverRequest(baseUrl, query = "token=digest-a") {
   return fetch(`${baseUrl}/api/session-album/public-shares/17/cover?${query}`);
 }
 
-async function waitFor(predicate, label) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+async function waitFor(predicate, label, { timeoutMs = 1_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.fail(`timed out waiting for ${label}`);
+  assert.fail(`timed out after ${timeoutMs}ms waiting for ${label}`);
 }
 
 test("HTTP lifecycle helper rejects listen errors and safely ignores non-listening closes", async () => {
@@ -473,8 +476,9 @@ test("the sixty-fifth distinct generation key receives a stable safe 503", async
       (_, index) => coverRequest(baseUrl, `token=bounded-${index}`)
     );
     await waitFor(
-      () => fixture.counts.load === 64 && fixture.counts.cacheGet >= 66,
-      "64 authorized and registered generation keys"
+      () => fixture.counts.load === 64 && fixture.cacheGetKeys.size === 64,
+      "64 authorized and registered generation keys",
+      { timeoutMs: 5_000 }
     );
     let overflow;
     let overflowError = null;
