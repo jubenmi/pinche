@@ -140,3 +140,34 @@ test("一个渠道预检失败不阻塞另一个渠道的就绪回调", async ()
     { kind: "timeline", imageUrl: "" }
   ]);
 });
+
+test("时间线先失败完成后，仍会等待并接收好友的就绪回调", async () => {
+  let resolveFriend;
+  let rejectTimeline;
+  const prepared = [];
+  const jobs = startAlbumShareCoverPreparation({
+    response: {
+      friend_cover_url: "friend-generated",
+      timeline_cover_url: "timeline-generated"
+    },
+    prepare(kind) {
+      return new Promise((resolve, reject) => {
+        if (kind === "friend") resolveFriend = resolve;
+        else rejectTimeline = reject;
+      });
+    },
+    onPrepared: (kind, imageUrl) => prepared.push({ kind, imageUrl })
+  });
+
+  await Promise.resolve();
+  rejectTimeline(new Error("timeline unavailable"));
+  await jobs[1];
+  assert.deepEqual(prepared, [{ kind: "timeline", imageUrl: "" }]);
+
+  resolveFriend("friend-ready");
+  await jobs[0];
+  assert.deepEqual(prepared, [
+    { kind: "timeline", imageUrl: "" },
+    { kind: "friend", imageUrl: "friend-ready" }
+  ]);
+});
