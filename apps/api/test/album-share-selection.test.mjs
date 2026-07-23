@@ -178,6 +178,29 @@ test("all scope stores every currently eligible medium without the legacy item o
   assert.ok(result.cover_media_ids.every((id) => result.media_ids.includes(id)));
 });
 
+test("no-field legacy sharing retains its bounded selection while focus retains the requested medium", async () => {
+  const photos = Array.from({ length: 40 }, (_, index) => media(index + 1, {
+    media_type: index >= 35 ? "video" : "image"
+  }));
+  const connection = shareConnection(photos);
+  const transaction = async (work) => work(connection);
+
+  const legacy = await createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, {
+    withTransaction: transaction
+  });
+  assert.equal(legacy.focus_media_id, null);
+  assert.equal(legacy.visible_count, 30);
+  assert.equal(legacy.video_count, 3);
+
+  const focused = await createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, {
+    focusMediaId: 36,
+    withTransaction: transaction
+  });
+  assert.equal(focused.focus_media_id, 36);
+  assert.equal(focused.media_ids.includes(36), true);
+  assert.equal(focused.visible_count, 30);
+});
+
 test("selected scope persists only the exact eligible set in stable album order", async () => {
   const photos = Array.from({ length: 32 }, (_, index) => media(index + 1));
   const connection = shareConnection(photos);
