@@ -2650,14 +2650,6 @@ export function publicShareSnapshotDigest({
   return crypto.createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
-export function publicShareCoverMediaIdsDigest(coverMediaIds) {
-  const ids = normalizePublicShareSnapshotIds(coverMediaIds, {
-    allowEmpty: true,
-    max: PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT
-  });
-  return crypto.createHash("sha256").update(JSON.stringify(ids)).digest("hex");
-}
-
 function normalizeSessionAlbumPublicShareRow(row) {
   if (!row) throw forbidden("Album share is no longer available");
   const mediaIds = normalizePublicShareSnapshotIds(row.media_ids, {
@@ -2738,94 +2730,6 @@ export async function loadSessionAlbumPublicShare(claims) {
   return withDatabaseConnection((connection) =>
     loadSessionAlbumPublicShareWithConnection(connection, claims)
   );
-}
-
-export async function getPublicSessionAlbumShareCoverMedia(
-  shareId,
-  expectedCoverDigest,
-  options = {}
-) {
-  const id = positiveId(shareId, "shareId");
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError("options must be an object");
-  }
-  if (
-    options.withDatabaseConnection !== undefined &&
-    typeof options.withDatabaseConnection !== "function"
-  ) {
-    throw new TypeError("withDatabaseConnection must be a function");
-  }
-  const runWithDatabaseConnection =
-    options.withDatabaseConnection || withDatabaseConnection;
-  return runWithDatabaseConnection(async (connection) => {
-    const [shareRows] = await connection.query(
-      `
-        SELECT *
-        FROM session_album_public_shares
-        WHERE id = ?
-          AND revoked_at IS NULL
-          AND expires_at > CURRENT_TIMESTAMP
-        LIMIT 1
-      `,
-      [id]
-    );
-    const share = normalizeSessionAlbumPublicShareRow(shareRows[0]);
-    if (share.cover_media_ids.length === 0) {
-      throw notFound("Album share cover not found");
-    }
-    if (publicShareCoverMediaIdsDigest(share.cover_media_ids) !== expectedCoverDigest) {
-      throw forbidden("Album share cover token is invalid");
-    }
-    const claims = {
-      sessionId: share.session_id,
-      sharerUserId: share.sharer_user_id,
-      seatId: share.seat_id
-    };
-    const session = await requireSessionAlbumOpen(connection, share.session_id);
-    const { seat } = await requirePublicAlbumShareSeat(connection, claims);
-    const placeholders = share.cover_media_ids.map(() => "?").join(", ");
-    const [photoRows] = await connection.query(
-      `
-        SELECT *
-        FROM session_album_photos
-        WHERE id IN (${placeholders})
-          AND session_id = ?
-      `,
-      [...share.cover_media_ids, share.session_id]
-    );
-    const photosById = new Map(photoRows.map((photo) => [Number(photo.id), photo]));
-    const tagsMap = await albumTagsForPhotos(connection, share.cover_media_ids);
-    const privacyUserIds = [];
-    for (const photo of photoRows) {
-      privacyUserIds.push(photo.uploader_user_id);
-      for (const tag of tagsMap.get(Number(photo.id)) || []) {
-        if (tag.user_id) privacyUserIds.push(tag.user_id);
-      }
-    }
-    const privacyByUser = await albumPrivacyMap(
-      connection,
-      share.session_id,
-      privacyUserIds
-    );
-    const media = [];
-    for (const mediaId of share.cover_media_ids) {
-      const photo = photosById.get(mediaId);
-      const tags = tagsMap.get(mediaId) || [];
-      const priority = photo
-        ? publicShareCoverPriority(photo, tags, privacyByUser, claims)
-        : null;
-      if (priority === null) {
-        throw forbidden("Album share cover is no longer available");
-      }
-      media.push({ ...photo, public_cover_priority: priority });
-    }
-    return {
-      share,
-      media,
-      scriptName: String(session.script_name_snapshot || "").trim(),
-      roleName: String(seat.role_name || "").trim()
-    };
-  });
 }
 
 async function markSignupReviewEligible(connection, signupId) {
