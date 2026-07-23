@@ -34,7 +34,7 @@
         v-if="!selectionMode"
         class="button album-share-preview-button"
         open-type="share"
-        :disabled="!albumShareToken || !shareCoverPrepared"
+        :disabled="!albumShareToken || !shareFriendCoverPrepared"
       >
         分享给好友或群
       </t-button>
@@ -722,6 +722,7 @@ import {
 } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import {
+  albumShareCoverContextKey,
   albumShareCoverPreparationIsCurrent,
   albumShareFriendPayload,
   albumShareImage,
@@ -731,8 +732,11 @@ import {
   startAlbumShareCoverPreparation
 } from "../../utils/albumShareCover";
 import {
+  albumShareLocalImagePath,
+  canUseAlbumShareCanvasIdExport as canUseLegacyAlbumShareCanvasIdExport,
   createAlbumShareCanvasPreparation,
-  createAlbumShareCanvasRuntime
+  createAlbumShareCanvasRuntime,
+  releaseAlbumShareCanvasTempPath as releaseAlbumShareCanvasTempFile
 } from "../../utils/albumShareCanvas";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
@@ -808,6 +812,7 @@ export default {
       albumShareCanvasPreparation: null,
       albumShareCanvasPageRuntime: null,
       albumShareCanvasNodes: {},
+      albumShareCoverContextKey: "",
       shareCounts: { total: 0, photos: 0, videos: 0 },
       albumSession: null,
       photos: [],
@@ -1419,10 +1424,8 @@ export default {
       });
     },
     canUseAlbumShareCanvasIdExport() {
-      return Boolean(
-        typeof uni !== "undefined" &&
-          typeof uni.canIUse === "function" &&
-          uni.canIUse("canvasToTempFilePath.canvasId")
+      return canUseLegacyAlbumShareCanvasIdExport(
+        typeof uni !== "undefined" ? uni : null
       );
     },
     async exportAlbumSharePageCanvas(canvasHandle, options = {}) {
@@ -1521,14 +1524,6 @@ export default {
       this.albumShareCanvasPageRuntime = runtime;
       return runtime;
     },
-    releaseAlbumShareCanvasTempPath(path) {
-      if (!/^wxfile:\/\//.test(String(path || ""))) return;
-      if (typeof uni !== "undefined" && typeof uni.removeSavedFile === "function") {
-        return new Promise((resolve) => {
-          uni.removeSavedFile({ filePath: path, complete: resolve });
-        });
-      }
-    },
     ensureAlbumShareCanvasPreparation() {
       if (this.albumShareCanvasPreparation) return this.albumShareCanvasPreparation;
       try {
@@ -1536,7 +1531,7 @@ export default {
         const runtime = createAlbumShareCanvasRuntime({ pageCanvasRuntime });
         this.albumShareCanvasPreparation = createAlbumShareCanvasPreparation({
           runtime,
-          releaseTempPath: (path) => this.releaseAlbumShareCanvasTempPath(path)
+          releaseTempPath: releaseAlbumShareCanvasTempFile
         });
       } catch (error) {
         this.albumShareCanvasPreparation = null;
@@ -1554,8 +1549,7 @@ export default {
       this.albumShareCanvasNodes = {};
     },
     albumShareLocalPreviewPath(value) {
-      const path = typeof value === "string" ? value.trim() : "";
-      return /^(wxfile:\/\/|file:\/\/|\/tmp\/|\/private\/|\/var\/)/.test(path) ? path : "";
+      return albumShareLocalImagePath(value);
     },
     albumShareLocalPreviewByMediaId() {
       const localPreviewByMediaId = new Map();
@@ -1570,10 +1564,31 @@ export default {
       return localPreviewByMediaId;
     },
     prepareAlbumShareCovers(data) {
+      const recipe = data?.cover_recipe || null;
+      const contextKey = albumShareCoverContextKey({
+        token: this.albumShareToken,
+        recipe,
+        title: this.albumShareTitle()
+      });
+      if (
+        contextKey &&
+        contextKey === this.albumShareCoverContextKey &&
+        this.albumShareCanvasPreparation
+      ) {
+        this.showShareMenus();
+        return [];
+      }
+      if (
+        this.albumShareCoverContextKey &&
+        contextKey !== this.albumShareCoverContextKey
+      ) {
+        this.resetAlbumShareCovers();
+        this.showShareMenus();
+      }
+      this.albumShareCoverContextKey = contextKey;
       const coverRequest = this.albumShareRequestAuthority.beginCoverRequest(this.albumShareToken);
       const canvasPreparation = this.ensureAlbumShareCanvasPreparation();
       const canvasRequest = canvasPreparation?.beginRequest();
-      const recipe = data?.cover_recipe || null;
       return startAlbumShareCoverPreparation({
         response: { cover_recipe: recipe },
         prepare: (kind, coverRecipe) => {
@@ -1608,6 +1623,7 @@ export default {
         this.albumShareRequestAuthority.invalidateCoverRequests();
       }
       this.disposeAlbumShareCanvasPreparation();
+      this.albumShareCoverContextKey = "";
       this.shareFriendCoverUrl = "";
       this.shareTimelineCoverUrl = "";
       this.shareFriendCoverPrepared = false;
@@ -2187,8 +2203,6 @@ export default {
             }
             const data = dataOf(response) || {};
             if (this.timelineMode) {
-              this.resetAlbumShareCovers();
-              this.showShareMenus();
               if (!this.isCurrentAlbumListRequest(listRequest)) {
                 return null;
               }

@@ -8,6 +8,7 @@ import {
   albumSharePreviewRouteState,
   normalizeAlbumShareSelection
 } from "../src/utils/albumSharePreview.js";
+import { albumShareMenus } from "../src/utils/albumShareCover.js";
 
 const albumPageSource = await readFile(
   new URL("../src/pages/session/album.vue", import.meta.url),
@@ -138,6 +139,27 @@ test("share preview uses safe state, accurate notice and native share gating", (
   assert.match(shareMenuBlock, /timelineReady:\s*this\.shareTimelineCoverPrepared/);
 });
 
+test("friend share button is gated only by the independently prepared friend cover", () => {
+  const shareOpenTypeIndex = albumPageSource.indexOf('open-type="share"');
+  const buttonStart = albumPageSource.lastIndexOf("<t-button", shareOpenTypeIndex);
+  const buttonEnd = albumPageSource.indexOf("</t-button>", shareOpenTypeIndex);
+  const friendShareButton = albumPageSource.slice(buttonStart, buttonEnd);
+  assert.match(friendShareButton, /!shareFriendCoverPrepared/);
+  assert.equal(friendShareButton.includes("shareCoverPrepared"), false);
+  assert.equal(friendShareButton.includes("shareTimelineCoverPrepared"), false);
+
+  assert.deepEqual(albumShareMenus({
+    token: "t",
+    friendReady: true,
+    timelineReady: false
+  }), ["shareAppMessage"]);
+  assert.deepEqual(albumShareMenus({
+    token: "t",
+    friendReady: false,
+    timelineReady: true
+  }), ["shareTimeline"]);
+});
+
 test("public share prepares separate local Canvas covers and never forwards server composite URLs", () => {
   assert.match(albumPageSource, /<canvas[\s\S]*id="album-share-friend-canvas"[\s\S]*type="2d"/);
   assert.match(albumPageSource, /<canvas[\s\S]*id="album-share-timeline-canvas"[\s\S]*type="2d"/);
@@ -150,7 +172,7 @@ test("public share prepares separate local Canvas covers and never forwards serv
 
   const coverPreparationBlock = albumPageSource.slice(
     albumPageSource.indexOf("prepareAlbumShareCovers(data"),
-    albumPageSource.indexOf("resetAlbumShareCovers", albumPageSource.indexOf("prepareAlbumShareCovers(data"))
+    albumPageSource.indexOf("resetAlbumShareCovers({", albumPageSource.indexOf("prepareAlbumShareCovers(data"))
   );
   assert.match(coverPreparationBlock, /cover_recipe/);
   assert.match(coverPreparationBlock, /localPreviewByMediaId/);
@@ -201,6 +223,24 @@ test("public body pagination is not part of share-cover currentness", () => {
     publicLoadBlock.indexOf("this.statusText", prepareCallStart)
   );
   assert.equal(prepareCall.includes("isCurrentAlbumListRequest"), false);
+});
+
+test("ordinary public media URL refresh keeps an unchanged share-cover context alive", () => {
+  const refreshStart = albumPageSource.indexOf("initializeAlbumMediaRefreshController() {");
+  const refreshBlock = albumPageSource.slice(
+    refreshStart,
+    albumPageSource.indexOf("async loadAlbum()", refreshStart)
+  );
+  assert.equal(refreshBlock.includes("this.resetAlbumShareCovers()"), false);
+  assert.match(refreshBlock, /this\.prepareAlbumShareCovers\(data\)/);
+
+  const preparationStart = albumPageSource.indexOf("prepareAlbumShareCovers(data)");
+  const preparationBlock = albumPageSource.slice(
+    preparationStart,
+    albumPageSource.indexOf("resetAlbumShareCovers({", preparationStart)
+  );
+  assert.match(preparationBlock, /albumShareCoverContextKey/);
+  assert.match(preparationBlock, /this\.albumShareCoverContextKey/);
 });
 
 test("share preview initial load is not invalidated by the first onShow refresh", () => {

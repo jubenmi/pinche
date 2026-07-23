@@ -1,3 +1,8 @@
+import {
+  albumShareCanvasRecipeDigest,
+  albumShareLocalImagePath
+} from "./albumShareCanvas.js";
+
 export const ALBUM_SHARE_FRIEND_FALLBACK = "/static/art/album-share-friend.jpg";
 export const ALBUM_SHARE_TIMELINE_FALLBACK = "/static/art/album-share-timeline.jpg";
 
@@ -16,17 +21,26 @@ function localShareImagePath(value) {
   if (!path) return "";
   if (
     path === ALBUM_SHARE_FRIEND_FALLBACK ||
-    path === ALBUM_SHARE_TIMELINE_FALLBACK ||
-    /^(wxfile:\/\/|file:\/\/|\/tmp\/|\/private\/|\/var\/)/.test(path)
+    path === ALBUM_SHARE_TIMELINE_FALLBACK
   ) {
     return path;
   }
-  return "";
+  return albumShareLocalImagePath(path);
 }
 
 export function albumShareCoverRecipe(response = {}) {
   const recipe = response?.cover_recipe;
   return recipe && typeof recipe === "object" && !Array.isArray(recipe) ? recipe : null;
+}
+
+export function albumShareCoverContextKey({ token, recipe, title } = {}) {
+  const normalizedToken = trimmedString(token);
+  if (!normalizedToken) return "";
+  return [
+    encodeURIComponent(normalizedToken),
+    albumShareCanvasRecipeDigest(recipe),
+    encodeURIComponent(trimmedString(title).slice(0, 48))
+  ].join(":");
 }
 
 export function albumShareMenus({ token, friendReady, timelineReady } = {}) {

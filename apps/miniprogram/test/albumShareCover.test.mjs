@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ALBUM_SHARE_FRIEND_FALLBACK,
   ALBUM_SHARE_TIMELINE_FALLBACK,
+  albumShareCoverContextKey,
   albumShareCoverPreparationIsCurrent,
   albumShareCoverRecipe,
   albumShareFriendPayload,
@@ -57,6 +58,11 @@ test("远程 URL 永远不能作为分享 imageUrl，按渠道降级到本地静
     ALBUM_SHARE_TIMELINE_FALLBACK
   );
   assert.equal(albumShareImage("friend", "wxfile://tmp/friend-cover.jpg"), "wxfile://tmp/friend-cover.jpg");
+  assert.equal(albumShareImage("friend", "http://tmp/friend-cover.jpg"), "http://tmp/friend-cover.jpg");
+  assert.equal(
+    albumShareImage("friend", "http://example.test/friend-cover.jpg"),
+    ALBUM_SHARE_FRIEND_FALLBACK
+  );
   assert.throws(() => albumShareImage("poster", ""), /kind/);
 });
 
@@ -200,6 +206,72 @@ test("正文分页不会丢弃仍属于当前 token 与配方的延迟 Canvas �
     canvasPreparation,
     canvasRequest
   }), false);
+});
+
+test("相同 token、配方 URL 与标题的媒体刷新复用本地 Canvas 缓存", async () => {
+  const contextKeyFor = albumShareCoverContextKey;
+  assert.equal(typeof contextKeyFor, "function");
+  const recipe = {
+    version: "client-canvas-v1",
+    images: [{ id: 7, thumbnail_url: "/api/album/thumb-7?signature=same" }]
+  };
+  let renderCalls = 0;
+  let disposeCalls = 0;
+  let currentContextKey = "";
+  let preparedPath = "";
+  const preparation = createAlbumShareCanvasPreparation({
+    renderer: ({ kind }) => {
+      renderCalls += 1;
+      return { ok: true, kind, path: "wxfile://tmp/cached-refresh-cover.jpg" };
+    }
+  });
+  const applyPublicResponse = async ({ token, coverRecipe, title }) => {
+    const nextContextKey = contextKeyFor({ token, recipe: coverRecipe, title });
+    if (nextContextKey === currentContextKey && preparedPath) return preparedPath;
+    if (currentContextKey) {
+      disposeCalls += 1;
+      preparation.dispose();
+    }
+    currentContextKey = nextContextKey;
+    const request = preparation.beginRequest();
+    const result = await preparation.prepare({
+      shareId: token,
+      kind: "friend",
+      recipe: coverRecipe,
+      title,
+      request
+    });
+    preparedPath = result.path;
+    return preparedPath;
+  };
+
+  assert.equal(await applyPublicResponse({
+    token: "share-token",
+    coverRecipe: recipe,
+    title: "同一相册"
+  }), "wxfile://tmp/cached-refresh-cover.jpg");
+  assert.equal(await applyPublicResponse({
+    token: "share-token",
+    coverRecipe: {
+      version: "client-canvas-v1",
+      images: [{ id: 7, thumbnail_url: "/api/album/thumb-7?signature=same" }]
+    },
+    title: "同一相册"
+  }), "wxfile://tmp/cached-refresh-cover.jpg");
+  assert.equal(renderCalls, 1);
+  assert.equal(disposeCalls, 0);
+  assert.equal(preparedPath, "wxfile://tmp/cached-refresh-cover.jpg");
+
+  assert.equal(await applyPublicResponse({
+    token: "share-token",
+    coverRecipe: {
+      version: "client-canvas-v1",
+      images: [{ id: 7, thumbnail_url: "/api/album/thumb-7?signature=changed" }]
+    },
+    title: "同一相册"
+  }), "wxfile://tmp/cached-refresh-cover.jpg");
+  assert.equal(renderCalls, 2);
+  assert.equal(disposeCalls, 1);
 });
 
 test("一个渠道 Canvas 失败会使用该渠道静态图，不阻塞另一个渠道", async () => {

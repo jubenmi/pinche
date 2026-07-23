@@ -4,8 +4,11 @@ import test from "node:test";
 import {
   albumShareCanvasLayout,
   albumShareCanvasPlan,
+  albumShareLocalImagePath,
+  canUseAlbumShareCanvasIdExport,
   createAlbumShareCanvasPreparation,
   normalizeAlbumShareCoverRecipe,
+  releaseAlbumShareCanvasTempPath,
   renderAlbumShareCanvasCover,
   resolveAlbumShareCanvasSource
 } from "../src/utils/albumShareCanvas.js";
@@ -23,6 +26,109 @@ const coverImage = (id, overrides = {}) => ({
   focus_x: 0.5,
   focus_y: 0.5,
   ...overrides
+});
+
+test("旧版页面 Canvas 导出能力使用正确的 canIUse schema", () => {
+  const canUseLegacyExport = canUseAlbumShareCanvasIdExport;
+  assert.equal(typeof canUseLegacyExport, "function");
+  const queries = [];
+  assert.equal(canUseLegacyExport({
+    canIUse(query) {
+      queries.push(query);
+      return query === "canvasToTempFilePath.object.canvasId";
+    }
+  }), true);
+  assert.deepEqual(queries, ["canvasToTempFilePath.object.canvasId"]);
+  assert.equal(canUseLegacyExport({
+    canIUse: (query) => query === "canvasToTempFilePath.canvasId"
+  }), false);
+  assert.equal(canUseLegacyExport({}), false);
+});
+
+test("只信任小程序本地路径与开发者工具 http://tmp 临时路径", () => {
+  const trustedLocalPath = albumShareLocalImagePath;
+  assert.equal(typeof trustedLocalPath, "function");
+  assert.equal(trustedLocalPath("http://tmp/a.jpg"), "http://tmp/a.jpg");
+  assert.equal(trustedLocalPath("wxfile://tmp/a.jpg"), "wxfile://tmp/a.jpg");
+  assert.equal(trustedLocalPath("/tmp/a.jpg"), "/tmp/a.jpg");
+  assert.equal(trustedLocalPath("https://cdn.example.test/a.jpg"), "");
+  assert.equal(trustedLocalPath("http://example.test/a.jpg"), "");
+  assert.equal(trustedLocalPath("/api/session-album/a.jpg"), "");
+
+  assert.equal(
+    resolveAlbumShareCanvasSource(
+      coverImage(1),
+      new Map([[1, "http://tmp/local-preview.jpg"]])
+    ),
+    "http://tmp/local-preview.jpg"
+  );
+  assert.equal(
+    resolveAlbumShareCanvasSource(
+      coverImage(1),
+      new Map([[1, "https://cdn.example.test/not-local.jpg"]])
+    ),
+    "https://cdn.example.test/thumb-1.jpg"
+  );
+});
+
+test("Canvas 临时导出通过文件系统 unlink 尽力释放且绝不删除静态或远程资源", async () => {
+  const releaseTempPath = releaseAlbumShareCanvasTempPath;
+  assert.equal(typeof releaseTempPath, "function");
+  const unlinked = [];
+  const getFileSystemManager = () => ({
+    unlink({ filePath, success }) {
+      unlinked.push(filePath);
+      success();
+    }
+  });
+
+  assert.equal(await releaseTempPath("wxfile://tmp/wx-cover.jpg", {
+    getFileSystemManager
+  }), true);
+  assert.equal(await releaseTempPath("http://tmp/devtools-cover.jpg", {
+    getFileSystemManager
+  }), true);
+  assert.deepEqual(unlinked, [
+    "wxfile://tmp/wx-cover.jpg",
+    "http://tmp/devtools-cover.jpg"
+  ]);
+
+  for (const path of [
+    "/static/art/album-share-friend.jpg",
+    "https://cdn.example.test/cover.jpg",
+    "http://example.test/cover.jpg",
+    "/api/session-album/cover.jpg"
+  ]) {
+    assert.equal(await releaseTempPath(path, { getFileSystemManager }), false);
+  }
+  assert.equal(unlinked.length, 2);
+});
+
+test("Canvas 临时文件 unlink 缺失、失败或抛错时安全返回", async () => {
+  const releaseTempPath = releaseAlbumShareCanvasTempPath;
+  assert.equal(typeof releaseTempPath, "function");
+  assert.equal(await releaseTempPath("wxfile://tmp/no-fs.jpg", {
+    getFileSystemManager: () => ({})
+  }), false);
+  assert.equal(await releaseTempPath("wxfile://tmp/fail.jpg", {
+    getFileSystemManager: () => ({
+      unlink({ fail }) {
+        fail(new Error("unlink failed"));
+      }
+    })
+  }), false);
+  assert.equal(await releaseTempPath("http://tmp/throw.jpg", {
+    getFileSystemManager: () => ({
+      unlink() {
+        throw new Error("unlink unavailable");
+      }
+    })
+  }), false);
+  assert.equal(await releaseTempPath("wxfile://tmp/getter-throws.jpg", {
+    getFileSystemManager: () => {
+      throw new Error("fs unavailable");
+    }
+  }), false);
 });
 
 test("只接受当前封面配方版本，并安全归一化至三个唯一图片", () => {

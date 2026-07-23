@@ -112,18 +112,75 @@ function localPreviewPath(value) {
   );
 }
 
+export function albumShareLocalImagePath(value) {
+  const path = localPreviewPath(value);
+  if (/^http:\/\/tmp(?:\/|$)/i.test(path)) return path;
+  return /^(wxfile:\/\/|file:\/\/|\/tmp\/|\/private\/|\/var\/)/.test(path) ? path : "";
+}
+
+function defaultFileSystemManagerGetter() {
+  if (typeof uni !== "undefined" && typeof uni?.getFileSystemManager === "function") {
+    return () => uni.getFileSystemManager();
+  }
+  if (typeof wx !== "undefined" && typeof wx?.getFileSystemManager === "function") {
+    return () => wx.getFileSystemManager();
+  }
+  return null;
+}
+
+export function releaseAlbumShareCanvasTempPath(
+  value,
+  { getFileSystemManager } = {}
+) {
+  const filePath = albumShareLocalImagePath(value);
+  if (!filePath) return Promise.resolve(false);
+  const getter = typeof getFileSystemManager === "function"
+    ? getFileSystemManager
+    : defaultFileSystemManagerGetter();
+  if (!getter) return Promise.resolve(false);
+
+  let fileSystem;
+  try {
+    fileSystem = getter();
+  } catch {
+    return Promise.resolve(false);
+  }
+  if (typeof fileSystem?.unlink !== "function") return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (released) => {
+      if (settled) return;
+      settled = true;
+      resolve(released);
+    };
+    try {
+      const pending = fileSystem.unlink({
+        filePath,
+        success: () => finish(true),
+        fail: () => finish(false)
+      });
+      if (pending && typeof pending.then === "function") {
+        pending.then(() => finish(true), () => finish(false));
+      }
+    } catch {
+      finish(false);
+    }
+  });
+}
+
 function localPreviewFor(image, localPreviewByMediaId) {
   try {
     if (typeof localPreviewByMediaId === "function") {
-      return localPreviewPath(localPreviewByMediaId(image.id, image));
+      return albumShareLocalImagePath(localPreviewByMediaId(image.id, image));
     }
     if (localPreviewByMediaId instanceof Map) {
-      return localPreviewPath(
+      return albumShareLocalImagePath(
         localPreviewByMediaId.get(image.id) || localPreviewByMediaId.get(String(image.id))
       );
     }
     if (localPreviewByMediaId && typeof localPreviewByMediaId === "object") {
-      return localPreviewPath(localPreviewByMediaId[image.id]);
+      return albumShareLocalImagePath(localPreviewByMediaId[image.id]);
     }
   } catch {
     return "";
@@ -140,8 +197,7 @@ function isSupportedKind(kind) {
 }
 
 function localTemporaryPath(value) {
-  const path = localPreviewPath(value);
-  return /^https?:\/\//i.test(path) ? "" : path;
+  return albumShareLocalImagePath(value);
 }
 
 function normalizedRendererResult(result, kind) {
@@ -187,6 +243,15 @@ function canvasRuntimeAvailable(runtime) {
 function currentUniApi(uniApi) {
   if (uniApi && typeof uniApi === "object") return uniApi;
   return typeof uni !== "undefined" && uni ? uni : null;
+}
+
+export function canUseAlbumShareCanvasIdExport(uniApi) {
+  if (typeof uniApi?.canIUse !== "function") return false;
+  try {
+    return uniApi.canIUse("canvasToTempFilePath.object.canvasId") === true;
+  } catch {
+    return false;
+  }
 }
 
 function callbackCanvasOperation(invoke) {
