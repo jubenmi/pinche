@@ -2677,6 +2677,15 @@ export async function getPublicSessionAlbumShareCoverMedia(
   options = {}
 ) {
   const id = positiveId(shareId, "shareId");
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("options must be an object");
+  }
+  if (
+    options.withDatabaseConnection !== undefined &&
+    typeof options.withDatabaseConnection !== "function"
+  ) {
+    throw new TypeError("withDatabaseConnection must be a function");
+  }
   const runWithDatabaseConnection =
     options.withDatabaseConnection || withDatabaseConnection;
   return runWithDatabaseConnection(async (connection) => {

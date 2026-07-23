@@ -329,7 +329,7 @@ function publicCoverConnection(options = {}) {
   const connection = {
     async query(sql, values = []) {
       if (sql.includes("FROM session_album_public_shares")) {
-        calls.push({ type: "share", values });
+        calls.push({ type: "share", sql, values });
         return [options.activeShare === false ? [] : [share]];
       }
       if (sql.includes("FROM sessions session")) {
@@ -402,6 +402,25 @@ test("getPublicSessionAlbumShareCoverMedia returns ordered safe metadata without
   assert.equal("privacy" in result, false);
 });
 
+test("getPublicSessionAlbumShareCoverMedia validates connection seam options", async () => {
+  for (const options of [null, "invalid", 42, true, []]) {
+    await assert.rejects(
+      () => getPublicSessionAlbumShareCoverMedia(50, "unused", options),
+      (error) => error instanceof TypeError && error.message === "options must be an object"
+    );
+  }
+
+  for (const withDatabaseConnection of [null, true, {}, "runner"]) {
+    await assert.rejects(
+      () => getPublicSessionAlbumShareCoverMedia(50, "unused", {
+        withDatabaseConnection
+      }),
+      (error) => error instanceof TypeError &&
+        error.message === "withDatabaseConnection must be a function"
+    );
+  }
+});
+
 test("getPublicSessionAlbumShareCoverMedia rejects invalid capabilities before dependent queries", async () => {
   const digestMismatch = publicCoverConnection();
   await assert.rejects(
@@ -412,21 +431,19 @@ test("getPublicSessionAlbumShareCoverMedia rejects invalid capabilities before d
   );
   assert.deepEqual(digestMismatch.calls.map((call) => call.type), ["share"]);
 
-  for (const state of ["inactive", "revoked", "expired"]) {
-    const inactiveShare = publicCoverConnection({ activeShare: false });
-    await assert.rejects(
-      () => getPublicSessionAlbumShareCoverMedia(50, "unused", {
-        withDatabaseConnection: async (work) => work(inactiveShare.connection)
-      }),
-      (error) => error.statusCode === 403 && /no longer available/.test(error.message),
-      state
-    );
-    assert.deepEqual(
-      inactiveShare.calls.map((call) => call.type),
-      ["share"],
-      state
-    );
-  }
+  const inactiveShare = publicCoverConnection({ activeShare: false });
+  await assert.rejects(
+    () => getPublicSessionAlbumShareCoverMedia(50, "unused", {
+      withDatabaseConnection: async (work) => work(inactiveShare.connection)
+    }),
+    (error) => error.statusCode === 403 && /no longer available/.test(error.message)
+  );
+  assert.deepEqual(inactiveShare.calls.map((call) => call.type), ["share"]);
+  assert.match(inactiveShare.calls[0].sql, /revoked_at\s+IS\s+NULL/);
+  assert.match(
+    inactiveShare.calls[0].sql,
+    /expires_at\s*>\s*CURRENT_TIMESTAMP/
+  );
 });
 
 test("getPublicSessionAlbumShareCoverMedia fails closed when snapshot media safety changes", async () => {
