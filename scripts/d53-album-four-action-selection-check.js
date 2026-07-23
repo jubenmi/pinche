@@ -55,6 +55,15 @@ function assertSelectionPersistsAcrossFilter(watcher, name) {
   }
 }
 
+function sourceSection(source, startPattern, endMarker, label) {
+  const startMatch = source.match(startPattern);
+  assert(startMatch?.index !== undefined, `${label} start must be executable source`);
+  const start = startMatch.index;
+  const end = source.indexOf(endMarker, start + startMatch[0].length);
+  assert(end > start, `${label} must have a bounded source section`);
+  return source.slice(start, end);
+}
+
 const requirements = read(".kiro/specs/album-four-action-selection-workbench/requirements.md");
 const design = read(".kiro/specs/album-four-action-selection-workbench/design.md");
 const album = read("apps/miniprogram/src/pages/session/album.vue");
@@ -134,10 +143,66 @@ assert(
   "recruitment must not pass entry=album"
 );
 
-assert(service.includes("normalizeSessionAlbumPublicShareScope"), "service must normalize explicit share scopes");
-assert(service.includes("ALBUM_PUBLIC_SHARE_SELECTION_INVALID"), "selected media failures need a stable error");
-assert(!service.includes("mediaIds, { max: 30"), "snapshot digest must not cap media IDs at 30");
-assert(server.includes("publicShareTokenOptions(body)"), "share token route must forward only explicit scope inputs");
-assert(packageJson.includes("d53:unit") && packageJson.includes("d53:check") && packageJson.includes("d53:smoke"), "package scripts must expose D53 verification");
+const shareScopeNormalizer = sourceSection(
+  service,
+  /^export function normalizeSessionAlbumPublicShareScope\(options = \{\}\) \{/m,
+  "export function selectEligiblePublicShareMedia",
+  "public share scope normalizer"
+);
+assert(
+  /const specifiedCount = Number\(hasScope\) \+ Number\(hasMediaIds\) \+ Number\(hasFocusMediaId\)/.test(shareScopeNormalizer) &&
+    /if \(specifiedCount > 1\) throw publicShareSelectionInvalid\(\)/.test(shareScopeNormalizer),
+  "scope, mediaIds, and focusMediaId must be mutually exclusive"
+);
+assert(
+  /return \{ mode: "all", focusMediaId: null, mediaIds: \[\] \}/.test(shareScopeNormalizer) &&
+    /return \{ mode: "selected", focusMediaId: null, mediaIds \}/.test(shareScopeNormalizer),
+  "scope normalizer must emit explicit all and selected modes"
+);
+assert(
+  /throw publicShareSelectionInvalid\(\)/.test(shareScopeNormalizer),
+  "selected input failures must use the stable selection-invalid error"
+);
+const snapshotNormalizer = sourceSection(
+  service,
+  /^export function normalizePublicShareSnapshotIds\(value, options = \{\}\) \{/m,
+  "export function isPublicShareSnapshotMediaId",
+  "snapshot ID normalizer"
+);
+assert(
+  /options\.max === undefined \? Number\.POSITIVE_INFINITY/.test(snapshotNormalizer) &&
+    !/const max = Number\(options\.max \|\| 30\)/.test(snapshotNormalizer),
+  "snapshot media IDs must not retain the legacy 30-item default cap"
+);
+const shareTokenOptions = sourceSection(
+  server,
+  /^export function publicShareTokenOptions\(body\) \{/m,
+  "function safeTextEqual",
+  "share token option forwarding"
+);
+assert(
+  /Object\.prototype\.hasOwnProperty\.call\(body, key\)/.test(shareTokenOptions) &&
+    /\["scope", "mediaIds", "focusMediaId"\]/.test(shareTokenOptions),
+  "share-token forwarding must copy only explicitly supplied scope fields"
+);
+const shareTokenRoute = sourceSection(
+  server,
+  /^  const sessionAlbumShareTokenId = idMatch\(/m,
+  "  const sessionAlbumPublicSharesId = idMatch",
+  "share-token route"
+);
+assert(
+  /const shareOptions = publicShareTokenOptions\(body\)/.test(shareTokenRoute) &&
+    /createOrReuseSessionAlbumPublicShare\([\s\S]*?shareOptions/.test(shareTokenRoute),
+  "share-token route must pass its own-field options into the service"
+);
+const packageScripts = JSON.parse(packageJson).scripts || {};
+assert(
+  packageScripts["d53:unit"] === "node --test apps/api/test/album-share-selection.test.mjs" &&
+    packageScripts["d53:check"] === "node scripts/d53-album-four-action-selection-check.js" &&
+    packageScripts["d53:smoke"] === "node scripts/d53-album-four-action-selection-smoke.js" &&
+    String(packageScripts.check || "").includes("node scripts/d53-album-four-action-selection-check.js"),
+  "package scripts must expose D53 verification and include its static check"
+);
 
 console.log("D53 album four-action and explicit share-scope checks passed");
