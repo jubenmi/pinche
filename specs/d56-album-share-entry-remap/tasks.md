@@ -43,7 +43,7 @@
 - Create: `apps/miniprogram/src/utils/albumShareEntry.js`
 - Create: `apps/miniprogram/test/albumShareEntry.test.mjs`
 
-- [ ] **Step 1.1：写分享来源优先级失败测试**
+- [x] **Step 1.1：写分享来源优先级失败测试**
 
   测试必须使用实际导出函数，覆盖：
 
@@ -82,7 +82,7 @@
   );
   ```
 
-- [ ] **Step 1.2：运行 RED**
+- [x] **Step 1.2：运行 RED**
 
   Run:
 
@@ -92,7 +92,7 @@
 
   Expected: FAIL，提示 `albumShareEntry.js` 或导出函数不存在。
 
-- [ ] **Step 1.3：实现最小分享意图解析**
+- [x] **Step 1.3：实现最小分享意图解析**
 
   在 `albumShareEntry.js` 导出：
 
@@ -103,7 +103,7 @@
 
   规则必须是 recruit → active → single → unknown button → public/default_all；非法 media ID 不得成为 single，未知 button 不得成为 default_all。
 
-- [ ] **Step 1.4：写并实现招募 payload 测试**
+- [x] **Step 1.4：写并实现招募 payload 测试**
 
   覆盖：
 
@@ -128,7 +128,7 @@
 
   缺少合法 session、token 或标题时必须返回 `null`。
 
-- [ ] **Step 1.5：实现 generation authority 与串行队列测试**
+- [x] **Step 1.5：实现 generation authority 与串行队列测试**
 
   测试两个明确边界：
 
@@ -143,7 +143,7 @@
 
   以及两个异步 renderer 永远不同时运行，执行顺序保持 `[startA, endA, startB, endB]`。
 
-- [ ] **Step 1.6：运行 GREEN 并提交**
+- [x] **Step 1.6：运行 GREEN 并提交**
 
   Run:
 
@@ -191,7 +191,7 @@
 - [ ] **Step 2.3：修改模板和样式**
 
   - 隐私按钮只保留图标及无障碍名称；
-  - 第一排右列与按钮均为 78rpx；
+  - 第一排右列与按钮均为 78rpx，并保留现有相近的 12rpx 圆角；
   - 顺序改为分享、下载、招募、标注；
   - 标注绿色 class 随 DOM 移到最右；
   - 招募按钮使用 `data-album-share="recruit"` 和动态 `open-type`；
