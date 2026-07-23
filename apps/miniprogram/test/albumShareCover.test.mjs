@@ -16,6 +16,16 @@ import {
 } from "../src/utils/albumShareCover.js";
 import { createAlbumShareCanvasPreparation } from "../src/utils/albumShareCanvas.js";
 
+const semanticCoverImage = (id, query, overrides = {}) => ({
+  id,
+  thumbnail_url: `/api/public/session-album/photos/${id}/image?${query}`,
+  width: 1600,
+  height: 1200,
+  focus_x: 0.5,
+  focus_y: 0.5,
+  ...overrides
+});
+
 test("两个渠道使用不同本地降级图", () => {
   assert.equal(ALBUM_SHARE_FRIEND_FALLBACK, "/static/art/album-share-friend.jpg");
   assert.equal(ALBUM_SHARE_TIMELINE_FALLBACK, "/static/art/album-share-timeline.jpg");
@@ -208,12 +218,71 @@ test("正文分页不会丢弃仍属于当前 token 与配方的延迟 Canvas �
   }), false);
 });
 
-test("相同 token、配方 URL 与标题的媒体刷新复用本地 Canvas 缓存", async () => {
+test("封面上下文忽略签名查询并区分 token、标题与绘制语义", () => {
+  const recipeA = {
+    version: "client-canvas-v1",
+    images: [
+      semanticCoverImage(41, "exp=1770000000&sig=old-signature&token=old-token"),
+      semanticCoverImage(52, "exp=1770000000&sig=stable-signature&token=stable-token")
+    ]
+  };
+  const recipeB = {
+    version: "client-canvas-v1",
+    images: [
+      semanticCoverImage(41, "token=new-token&exp=1880000000&sig=new-signature"),
+      semanticCoverImage(52, "token=renewed-token&exp=1880000000&sig=renewed-signature")
+    ]
+  };
+  const base = { token: "share-token", recipe: recipeA, title: "同一相册" };
+  const contextKey = albumShareCoverContextKey(base);
+
+  assert.equal(
+    albumShareCoverContextKey({ ...base, recipe: recipeB }),
+    contextKey
+  );
+  for (const [change, input] of [
+    ["selected ID", {
+      ...base,
+      recipe: {
+        ...recipeB,
+        images: [
+          semanticCoverImage(42, "exp=1880000000&sig=new-signature&token=new-token"),
+          recipeB.images[1]
+        ]
+      }
+    }],
+    ["order", { ...base, recipe: { ...recipeB, images: [recipeB.images[1], recipeB.images[0]] } }],
+    ["count", { ...base, recipe: { ...recipeB, images: [recipeB.images[0]] } }],
+    ["dimensions", {
+      ...base,
+      recipe: {
+        ...recipeB,
+        images: [{ ...recipeB.images[0], width: 2048 }, recipeB.images[1]]
+      }
+    }],
+    ["focus", {
+      ...base,
+      recipe: {
+        ...recipeB,
+        images: [{ ...recipeB.images[0], focus_x: 0.25 }, recipeB.images[1]]
+      }
+    }],
+    ["version", { ...base, recipe: { ...recipeB, version: "client-canvas-v2" } }],
+    ["title", { ...base, recipe: recipeB, title: "另一相册" }],
+    ["share token", { ...base, token: "replacement-share-token", recipe: recipeB }]
+  ]) {
+    assert.notEqual(albumShareCoverContextKey(input), contextKey, change);
+  }
+});
+
+test("相同 token、媒体语义与标题的签名刷新复用本地 Canvas 缓存", async () => {
   const contextKeyFor = albumShareCoverContextKey;
   assert.equal(typeof contextKeyFor, "function");
   const recipe = {
     version: "client-canvas-v1",
-    images: [{ id: 7, thumbnail_url: "/api/album/thumb-7?signature=same" }]
+    images: [
+      semanticCoverImage(41, "exp=1770000000&sig=old-signature&token=old-token")
+    ]
   };
   let renderCalls = 0;
   let disposeCalls = 0;
@@ -254,7 +323,9 @@ test("相同 token、配方 URL 与标题的媒体刷新复用本地 Canvas 缓�
     token: "share-token",
     coverRecipe: {
       version: "client-canvas-v1",
-      images: [{ id: 7, thumbnail_url: "/api/album/thumb-7?signature=same" }]
+      images: [
+        semanticCoverImage(41, "exp=1880000000&sig=new-signature&token=new-token")
+      ]
     },
     title: "同一相册"
   }), "wxfile://tmp/cached-refresh-cover.jpg");
@@ -266,7 +337,13 @@ test("相同 token、配方 URL 与标题的媒体刷新复用本地 Canvas 缓�
     token: "share-token",
     coverRecipe: {
       version: "client-canvas-v1",
-      images: [{ id: 7, thumbnail_url: "/api/album/thumb-7?signature=changed" }]
+      images: [
+        semanticCoverImage(
+          41,
+          "exp=1990000000&sig=latest-signature&token=latest-token",
+          { focus_x: 0.25 }
+        )
+      ]
     },
     title: "同一相册"
   }), "wxfile://tmp/cached-refresh-cover.jpg");

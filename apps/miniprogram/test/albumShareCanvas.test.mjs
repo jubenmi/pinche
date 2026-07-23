@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   albumShareCanvasLayout,
   albumShareCanvasPlan,
+  albumShareCanvasRecipeDigest,
   albumShareLocalImagePath,
   canUseAlbumShareCanvasIdExport,
   createAlbumShareCanvasPreparation,
@@ -26,6 +27,44 @@ const coverImage = (id, overrides = {}) => ({
   focus_x: 0.5,
   focus_y: 0.5,
   ...overrides
+});
+
+const signedPhotoImage = (id, query, overrides = {}) => coverImage(id, {
+  thumbnail_url: `/api/public/session-album/photos/${id}/image?${query}`,
+  ...overrides
+});
+
+test("Canvas 配方摘要忽略签名查询并区分所有绘制语义", () => {
+  const recipeA = coverRecipe([
+    signedPhotoImage(41, "exp=1770000000&sig=old-signature&token=old-token"),
+    signedPhotoImage(52, "exp=1770000000&sig=stable-signature&token=stable-token")
+  ]);
+  const recipeB = coverRecipe([
+    signedPhotoImage(41, "token=new-token&exp=1880000000&sig=new-signature"),
+    signedPhotoImage(52, "token=renewed-token&exp=1880000000&sig=renewed-signature")
+  ]);
+  const digest = albumShareCanvasRecipeDigest(recipeA);
+
+  assert.equal(albumShareCanvasRecipeDigest(recipeB), digest);
+  for (const [change, recipe] of [
+    ["selected ID", coverRecipe([
+      signedPhotoImage(42, "exp=1880000000&sig=new-signature&token=new-token"),
+      signedPhotoImage(52, "exp=1880000000&sig=renewed-signature&token=renewed-token")
+    ])],
+    ["order", coverRecipe([recipeB.images[1], recipeB.images[0]])],
+    ["count", coverRecipe([recipeB.images[0]])],
+    ["dimensions", coverRecipe([
+      { ...recipeB.images[0], width: 2048 },
+      recipeB.images[1]
+    ])],
+    ["focus", coverRecipe([
+      { ...recipeB.images[0], focus_x: 0.25 },
+      recipeB.images[1]
+    ])],
+    ["version", { ...recipeB, version: "client-canvas-v2" }]
+  ]) {
+    assert.notEqual(albumShareCanvasRecipeDigest(recipe), digest, change);
+  }
 });
 
 test("旧版页面 Canvas 导出能力使用正确的 canIUse schema", () => {
@@ -758,6 +797,107 @@ test("缓存键区分分享、配方摘要和分享渠道", async () => {
   assert.equal((await render({ shareId: 10, kind: "friend", recipe: recipeB })).path, "wxfile://cover-3.jpg");
   assert.equal((await render({ shareId: 10, kind: "timeline", recipe: recipeA })).path, "wxfile://cover-4.jpg");
   assert.equal(rendererCalls, 4);
+});
+
+test("Canvas 准备缓存忽略签名刷新并区分所有非 URL 语义", async () => {
+  let rendererCalls = 0;
+  const preparation = createAlbumShareCanvasPreparation({
+    renderer: ({ kind }) => {
+      rendererCalls += 1;
+      return { ok: true, kind, path: `wxfile://semantic-cover-${rendererCalls}.jpg` };
+    }
+  });
+  const recipeA = coverRecipe([
+    signedPhotoImage(41, "exp=1770000000&sig=old-signature&token=old-token"),
+    signedPhotoImage(52, "exp=1770000000&sig=stable-signature&token=stable-token")
+  ]);
+  const recipeB = coverRecipe([
+    signedPhotoImage(41, "token=new-token&exp=1880000000&sig=new-signature"),
+    signedPhotoImage(52, "token=renewed-token&exp=1880000000&sig=renewed-signature")
+  ]);
+  const baseOptions = {
+    shareId: "share-token",
+    kind: "friend",
+    recipe: recipeA,
+    title: "同一相册"
+  };
+  const prepare = (options) => preparation.prepare({
+    ...options,
+    request: preparation.beginRequest()
+  });
+
+  const first = await prepare(baseOptions);
+  const refreshed = await prepare({ ...baseOptions, recipe: recipeB });
+  assert.equal(first.path, "wxfile://semantic-cover-1.jpg");
+  assert.equal(refreshed.path, first.path);
+  assert.equal(refreshed.cached, true);
+  assert.equal(rendererCalls, 1);
+
+  const invalidatingVariants = [
+    {
+      name: "selected ID",
+      options: {
+        ...baseOptions,
+        recipe: coverRecipe([
+          signedPhotoImage(42, "exp=1880000000&sig=new-signature&token=new-token"),
+          recipeB.images[1]
+        ])
+      }
+    },
+    {
+      name: "order",
+      options: { ...baseOptions, recipe: coverRecipe([recipeB.images[1], recipeB.images[0]]) }
+    },
+    {
+      name: "count",
+      options: { ...baseOptions, recipe: coverRecipe([recipeB.images[0]]) }
+    },
+    {
+      name: "dimensions",
+      options: {
+        ...baseOptions,
+        recipe: coverRecipe([{ ...recipeB.images[0], height: 2048 }, recipeB.images[1]])
+      }
+    },
+    {
+      name: "focus",
+      options: {
+        ...baseOptions,
+        recipe: coverRecipe([{ ...recipeB.images[0], focus_y: 0.25 }, recipeB.images[1]])
+      }
+    },
+    {
+      name: "title",
+      options: { ...baseOptions, recipe: recipeB, title: "另一相册" }
+    },
+    {
+      name: "share token",
+      options: { ...baseOptions, shareId: "replacement-share-token", recipe: recipeB }
+    },
+    {
+      name: "kind",
+      options: { ...baseOptions, kind: "timeline", recipe: recipeB }
+    }
+  ];
+
+  for (const { name, options } of invalidatingVariants) {
+    const before = rendererCalls;
+    const result = await prepare(options);
+    assert.equal(result.cached, false, name);
+    assert.equal(rendererCalls, before + 1, name);
+  }
+
+  const beforeInvalidVersion = rendererCalls;
+  assert.deepEqual(await prepare({
+    ...baseOptions,
+    recipe: { ...recipeB, version: "client-canvas-v2" }
+  }), {
+    ok: false,
+    kind: "friend",
+    path: "",
+    error: "invalid_recipe"
+  });
+  assert.equal(rendererCalls, beforeInvalidVersion);
 });
 
 test("缓存键区分会绘制到封面的规范化标题", async () => {

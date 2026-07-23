@@ -562,14 +562,16 @@ export async function renderAlbumShareCanvasCover({
 export function albumShareCanvasRecipeDigest(recipe = {}) {
   const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
   if (!normalizedRecipe) return "";
-  return normalizedRecipe.images.map((image) => [
-    image.id,
-    encodeURIComponent(image.thumbnail_url),
-    image.width,
-    image.height,
-    image.focus_x,
-    image.focus_y
-  ].join(":")).join("|");
+  return JSON.stringify({
+    version: normalizedRecipe.version,
+    images: normalizedRecipe.images.map((image) => [
+      image.id,
+      image.width,
+      image.height,
+      image.focus_x,
+      image.focus_y
+    ])
+  });
 }
 
 export function createAlbumShareCanvasPreparation({
