@@ -141,7 +141,9 @@ assert(
   shareCallback.includes("return singleMediaShareFailClosedPayload();"),
   "D50 stale or invalid button datasets must return a credential-free fail-closed payload"
 );
-const buttonShareCallback = shareCallback.slice(0, shareCallback.indexOf("if (!this.albumShareToken)"));
+const pageShareStart = shareCallback.indexOf("const albumShareToken =");
+assert(pageShareStart > 0, "D50 page sharing boundary must follow native button handling");
+const buttonShareCallback = shareCallback.slice(0, pageShareStart);
 assert(
   !buttonShareCallback.includes("return {}") && !buttonShareCallback.includes("albumShareToken"),
   "D50 invalid button sharing must not fall back to page sharing or expose a snapshot token"
