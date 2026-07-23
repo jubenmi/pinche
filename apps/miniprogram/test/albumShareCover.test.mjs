@@ -9,6 +9,7 @@ import {
   albumShareImage,
   albumShareMenus,
   albumShareTimelinePayload,
+  createAlbumShareRequestAuthority,
   startAlbumShareCoverPreparation
 } from "../src/utils/albumShareCover.js";
 
@@ -170,4 +171,29 @@ test("时间线先失败完成后，仍会等待并接收好友的就绪回调",
     { kind: "timeline", imageUrl: "" },
     { kind: "friend", imageUrl: "friend-ready" }
   ]);
+});
+
+test("鉴权变更会阻止旧分享 token 响应启动封面或菜单回调", async () => {
+  let resolveOldToken;
+  const authority = createAlbumShareRequestAuthority();
+  const oldRequest = authority.beginTokenRequest();
+  let appliedToken = "";
+  let coverPreparationCalls = 0;
+  let menuUpdates = 0;
+  const oldResponse = new Promise((resolve) => {
+    resolveOldToken = resolve;
+  }).then((data) => {
+    if (!authority.isTokenRequestCurrent(oldRequest)) return;
+    appliedToken = data.token;
+    coverPreparationCalls += 1;
+    menuUpdates += 1;
+  });
+
+  authority.invalidate();
+  resolveOldToken({ token: "old-account-token" });
+  await oldResponse;
+
+  assert.equal(appliedToken, "");
+  assert.equal(coverPreparationCalls, 0);
+  assert.equal(menuUpdates, 0);
 });

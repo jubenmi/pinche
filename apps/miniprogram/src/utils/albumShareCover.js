@@ -30,6 +30,37 @@ export function albumShareImage(kind, imageUrl) {
   return trimmedString(imageUrl) || fallbackFor(kind);
 }
 
+export function createAlbumShareRequestAuthority() {
+  let tokenSerial = 0;
+  let coverSerial = 0;
+
+  return {
+    beginTokenRequest() {
+      return Object.freeze({ serial: ++tokenSerial });
+    },
+    isTokenRequestCurrent(request) {
+      return Number.isSafeInteger(request?.serial) && request.serial === tokenSerial;
+    },
+    beginCoverRequest(token) {
+      return Object.freeze({ serial: ++coverSerial, token: trimmedString(token) });
+    },
+    isCoverRequestCurrent(request, token) {
+      return (
+        Number.isSafeInteger(request?.serial) &&
+        request.serial === coverSerial &&
+        request.token === trimmedString(token)
+      );
+    },
+    invalidateCoverRequests() {
+      coverSerial += 1;
+    },
+    invalidate() {
+      tokenSerial += 1;
+      coverSerial += 1;
+    }
+  };
+}
+
 export function startAlbumShareCoverPreparation({
   response,
   prepare,

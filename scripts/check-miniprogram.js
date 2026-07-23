@@ -2937,6 +2937,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const albumOnLoadSource = methodBody(albumSource, "onLoad");
   const albumOnShowSource = methodBody(albumSource, "onShow");
+  const albumOnUnloadSource = methodBody(albumSource, "onUnload");
   const previewPhotoSource = methodBody(albumSource, "previewPhoto");
   assertBefore(
     albumOnLoadSource,
@@ -3534,6 +3535,30 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Album share token, initial public load, and public refresh must prepare both cover channels");
   }
   const ensureAlbumShareTokenSource = methodBody(albumSource, "ensureAlbumShareToken");
+  const invalidateAlbumShareStateSource = methodBody(albumSource, "invalidateAlbumShareState");
+  const handleAlbumAuthChangeSource = methodBody(albumSource, "handleAlbumAuthChange");
+  if (
+    !ensureAlbumShareTokenSource.includes("beginTokenRequest") ||
+    !ensureAlbumShareTokenSource.includes("isTokenRequestCurrent(shareTokenRequest)") ||
+    !albumSource.includes("beginCoverRequest") ||
+    !albumSource.includes("isCoverRequestCurrent") ||
+    !handleAlbumAuthChangeSource.includes("this.invalidateAlbumShareState()") ||
+    !albumOnUnloadSource.includes("this.invalidateAlbumShareState()")
+  ) {
+    fail("Album sharing must invalidate stale token and cover preparations after an account change or unload");
+  }
+  for (const requiredInvalidationText of [
+    "albumShareRequestAuthority.invalidate()",
+    'this.albumShareToken = ""',
+    "this.shareSubject = null",
+    "this.shareCounts = { total: 0, photos: 0, videos: 0 }",
+    "this.albumSession = null",
+    "this.showShareMenus()"
+  ]) {
+    if (!invalidateAlbumShareStateSource.includes(requiredInvalidationText)) {
+      fail(`Album auth invalidation must clear share state: ${requiredInvalidationText}`);
+    }
+  }
   assertBefore(
     ensureAlbumShareTokenSource,
     "canRequestAlbumShareToken",

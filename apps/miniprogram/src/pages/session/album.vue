@@ -704,6 +704,7 @@ import {
   albumShareImage,
   albumShareMenus,
   albumShareTimelinePayload,
+  createAlbumShareRequestAuthority,
   startAlbumShareCoverPreparation
 } from "../../utils/albumShareCover";
 import { showWechatShareMenus } from "../../utils/share";
@@ -768,8 +769,7 @@ export default {
       shareTimelineCoverUrl: "",
       shareFriendCoverPrepared: false,
       shareTimelineCoverPrepared: false,
-      albumShareCoverRequestSerial: 0,
-      albumShareTokenRequestSerial: 0,
+      albumShareRequestAuthority: createAlbumShareRequestAuthority(),
       shareCounts: { total: 0, photos: 0, videos: 0 },
       albumSession: null,
       photos: [],
@@ -1209,6 +1209,9 @@ export default {
     this.clearAuthorPrivateAlbumState();
   },
   onUnload() {
+    if (!this.timelineMode) {
+      this.invalidateAlbumShareState();
+    }
     this.resetSingleMediaShareState();
     this.clearAuthorPrivateAlbumState();
     this.unobserveAlbumAuthChanges();
@@ -1311,15 +1314,15 @@ export default {
       return this.prepareShareCoverUrl(albumShareImage(kind, ""), { normalize: false });
     },
     prepareAlbumShareCovers(data, { isCurrent = () => true } = {}) {
-      const requestSerial = this.albumShareCoverRequestSerial + 1;
-      const token = this.albumShareToken;
-      this.albumShareCoverRequestSerial = requestSerial;
+      const coverRequest = this.albumShareRequestAuthority.beginCoverRequest(this.albumShareToken);
       return startAlbumShareCoverPreparation({
         response: data,
         prepare: (kind, remoteUrl) => this.prepareAlbumShareCoverUrl(kind, remoteUrl),
         isCurrent: () => (
-          requestSerial === this.albumShareCoverRequestSerial &&
-          token === this.albumShareToken &&
+          this.albumShareRequestAuthority.isCoverRequestCurrent(
+            coverRequest,
+            this.albumShareToken
+          ) &&
           isCurrent() === true
         ),
         onPrepared: (kind, imageUrl) => {
@@ -1328,12 +1331,25 @@ export default {
         }
       });
     },
-    resetAlbumShareCovers() {
-      this.albumShareCoverRequestSerial += 1;
+    resetAlbumShareCovers({ invalidateRequest = true } = {}) {
+      if (invalidateRequest) {
+        this.albumShareRequestAuthority.invalidateCoverRequests();
+      }
       this.shareFriendCoverUrl = "";
       this.shareTimelineCoverUrl = "";
       this.shareFriendCoverPrepared = false;
       this.shareTimelineCoverPrepared = false;
+    },
+    invalidateAlbumShareState() {
+      this.albumShareRequestAuthority.invalidate();
+      this.albumShareToken = "";
+      this.shareSubject = null;
+      this.shareOwner = null;
+      this.shareCounts = { total: 0, photos: 0, videos: 0 };
+      this.albumSession = null;
+      this.publicAlbumSnapshotLoaded = false;
+      this.resetAlbumShareCovers({ invalidateRequest: false });
+      this.showShareMenus();
     },
     applyAlbumShareCover(kind, imageUrl) {
       const preparedUrl = String(imageUrl || "").trim();
@@ -1538,6 +1554,7 @@ export default {
       const nextUserId = auth?.user?.id || "";
       const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
       if (accountChanged) {
+        this.invalidateAlbumShareState();
         this.resetSingleMediaShareState();
         this.clearAuthorPrivateAlbumState();
       }
@@ -1627,8 +1644,7 @@ export default {
       if (this.timelineMode || !this.sessionId) {
         return;
       }
-      const shareTokenRequestSerial = this.albumShareTokenRequestSerial + 1;
-      this.albumShareTokenRequestSerial = shareTokenRequestSerial;
+      const shareTokenRequest = this.albumShareRequestAuthority.beginTokenRequest();
       if (!this.canRequestAlbumShareToken()) {
         this.albumShareToken = "";
         this.shareSubject = null;
@@ -1646,7 +1662,7 @@ export default {
           method: "POST"
         });
         const data = dataOf(response) || {};
-        if (shareTokenRequestSerial !== this.albumShareTokenRequestSerial) {
+        if (!this.albumShareRequestAuthority.isTokenRequestCurrent(shareTokenRequest)) {
           return;
         }
         this.albumShareToken = data.token || "";
@@ -1659,7 +1675,7 @@ export default {
           videos: Number(data.video_count || 0)
         };
       } catch (error) {
-        if (shareTokenRequestSerial !== this.albumShareTokenRequestSerial) {
+        if (!this.albumShareRequestAuthority.isTokenRequestCurrent(shareTokenRequest)) {
           return;
         }
         this.albumShareToken = "";
