@@ -550,21 +550,19 @@
       </view>
     </root-portal>
 
-    <root-portal :enable="!timelineMode && albumShareReadyVisible">
-      <view v-if="!timelineMode && albumShareReadyVisible" class="album-share-ready-layer">
-        <view class="album-share-ready-title">分享已准备好</view>
-        <view class="album-share-ready-count">已准备分享 {{ activeAlbumShareCount }} 项</view>
-        <button
-          class="album-share-ready-button"
-          open-type="share"
-          data-album-share="active"
-        >
-          发送给好友或群聊
-        </button>
-        <view class="album-share-ready-hint">朋友圈请使用右上角“…”分享</view>
-        <view class="album-share-ready-close" @tap="closeAlbumShareReady">关闭</view>
-      </view>
-    </root-portal>
+    <view v-if="!timelineMode && albumShareReadyVisible" class="album-share-ready-layer">
+      <view class="album-share-ready-title">分享已准备好</view>
+      <view class="album-share-ready-count">已准备分享 {{ activeAlbumShareCount }} 项</view>
+      <button
+        class="album-share-ready-button"
+        open-type="share"
+        data-album-share="active"
+      >
+        发送给好友或群聊
+      </button>
+      <view class="album-share-ready-hint">朋友圈请使用右上角“…”分享</view>
+      <view class="album-share-ready-close" @tap="closeAlbumShareReady">关闭</view>
+    </view>
 
     <AlbumImageViewer
       :visible="previewOverlayVisible"
