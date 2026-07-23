@@ -729,7 +729,6 @@ import {
 } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import {
-  albumShareCoverResponse,
   albumShareFriendPayload,
   albumShareImage,
   albumShareMenus,
@@ -783,6 +782,14 @@ export default {
       activeAlbumShareToken: "",
       activeAlbumShareScope: "",
       activeAlbumShareCount: 0,
+      activeAlbumShareFriendCoverUrl: "",
+      activeAlbumShareTimelineCoverUrl: "",
+      activeAlbumShareFriendCoverPrepared: false,
+      activeAlbumShareTimelineCoverPrepared: false,
+      activeAlbumShareSubject: null,
+      activeAlbumShareOwner: null,
+      activeAlbumShareCounts: { total: 0, photos: 0, videos: 0 },
+      albumShareRequestVersion: 0,
       albumSharePreparing: false,
       albumShareReadyVisible: false,
       singleMediaShareRequested: false,
@@ -1024,6 +1031,14 @@ export default {
         this.shareSubject?.role_name ||
         this.shareSubject?.seat_name ||
         this.shareSubject?.label ||
+        ""
+      );
+    },
+    activeAlbumShareSubjectLabel() {
+      return (
+        this.activeAlbumShareSubject?.role_name ||
+        this.activeAlbumShareSubject?.seat_name ||
+        this.activeAlbumShareSubject?.label ||
         ""
       );
     },
@@ -1276,11 +1291,16 @@ export default {
     const albumShareToken = this.timelineMode
       ? this.albumShareToken
       : this.activeAlbumShareToken;
-    if (!albumShareToken) {
+    if (
+      !albumShareToken ||
+      (!this.timelineMode && !this.activeAlbumShareFriendCoverPrepared)
+    ) {
       return singleMediaShareFailClosedPayload();
     }
     return albumShareFriendPayload({
-      title: this.albumShareTitle(),
+      title: this.timelineMode
+        ? this.albumShareTitle()
+        : this.activeAlbumShareTitle(),
       path: `/pages/session/album${queryString({
         id: this.sessionId,
         source: "wechat_share",
@@ -1293,7 +1313,10 @@ export default {
     const albumShareToken = this.timelineMode
       ? this.albumShareToken
       : this.activeAlbumShareToken;
-    if (!albumShareToken || (!this.timelineMode && !this.shareTimelineCoverPrepared)) {
+    if (
+      !albumShareToken ||
+      (!this.timelineMode && !this.activeAlbumShareTimelineCoverPrepared)
+    ) {
       return {
         title: "分享暂不可用",
         query: "",
@@ -1301,7 +1324,9 @@ export default {
       };
     }
     return albumShareTimelinePayload({
-      title: this.albumTimelineTitle(),
+      title: this.timelineMode
+        ? this.albumTimelineTitle()
+        : this.activeAlbumShareTimelineTitle(),
       query: this.albumTimelineQuery(albumShareToken),
       imageUrl: this.albumTimelineShareImage()
     });
@@ -1335,8 +1360,12 @@ export default {
       if (!token || this.selectionMode) return;
       const menus = albumShareMenus({
         token,
-        friendReady: this.shareFriendCoverPrepared,
-        timelineReady: this.shareTimelineCoverPrepared
+        friendReady: this.timelineMode
+          ? this.shareFriendCoverPrepared
+          : this.activeAlbumShareFriendCoverPrepared,
+        timelineReady: this.timelineMode
+          ? this.shareTimelineCoverPrepared
+          : this.activeAlbumShareTimelineCoverPrepared
       });
       if (menus.length === 0) return;
       showWechatShareMenus({
@@ -1432,22 +1461,38 @@ export default {
       return `${this.albumScriptName || "剧本待定"}｜${this.albumStoreName || "店家待定"}`;
     },
     albumFriendShareImage() {
-      return albumShareImage("friend", this.shareFriendCoverUrl);
+      const coverUrl = !this.timelineMode && this.activeAlbumShareToken
+        ? this.activeAlbumShareFriendCoverUrl
+        : this.shareFriendCoverUrl;
+      return albumShareImage("friend", coverUrl);
     },
     albumTimelineShareImage() {
-      return albumShareImage("timeline", this.shareTimelineCoverUrl);
+      const coverUrl = !this.timelineMode && this.activeAlbumShareToken
+        ? this.activeAlbumShareTimelineCoverUrl
+        : this.shareTimelineCoverUrl;
+      return albumShareImage("timeline", coverUrl);
+    },
+    activeAlbumShareTitle() {
+      return `我在《${this.albumScriptName || "剧本待定"}》中饰演「${
+        this.activeAlbumShareSubjectLabel || "角色待定"
+      }」｜游玩相册`;
+    },
+    activeAlbumShareTimelineTitle() {
+      return `这一晚，我是「${this.activeAlbumShareSubjectLabel || "角色待定"}」｜《${
+        this.albumScriptName || "剧本待定"
+      }》`;
     },
     activeAlbumSharePayload() {
       if (
         this.timelineMode ||
         !this.activeAlbumShareToken ||
-        !this.shareFriendCoverPrepared
+        !this.activeAlbumShareFriendCoverPrepared
       ) {
         showToast({ title: "当前分享尚未准备好", icon: "none" });
         return singleMediaShareFailClosedPayload();
       }
       return albumShareFriendPayload({
-        title: this.albumShareTitle(),
+        title: this.activeAlbumShareTitle(),
         path: `/pages/session/album${queryString({
           id: this.sessionId,
           source: "wechat_share",
@@ -1456,12 +1501,72 @@ export default {
         imageUrl: this.albumFriendShareImage()
       });
     },
-    clearActiveAlbumShareState({ hideMenus = true } = {}) {
+    beginAlbumShareSnapshotRequest() {
+      this.albumShareRequestVersion += 1;
+      return {
+        version: this.albumShareRequestVersion,
+        sessionId: String(this.sessionId || "")
+      };
+    },
+    isCurrentAlbumShareSnapshotRequest(requestContext) {
+      return Boolean(
+        requestContext &&
+          !this.timelineMode &&
+          requestContext.version === this.albumShareRequestVersion &&
+          requestContext.sessionId === String(this.sessionId || "")
+      );
+    },
+    installActiveAlbumShareSnapshot(data, { token, scope }) {
+      this.activeAlbumShareToken = token;
+      this.activeAlbumShareScope = scope;
+      this.activeAlbumShareCount = Number(data.visible_count || 0);
+      this.activeAlbumShareFriendCoverUrl = "";
+      this.activeAlbumShareTimelineCoverUrl = "";
+      this.activeAlbumShareFriendCoverPrepared = false;
+      this.activeAlbumShareTimelineCoverPrepared = false;
+      this.activeAlbumShareSubject = data.share_subject || this.localAlbumShareSubject();
+      this.activeAlbumShareOwner = data.share_owner || null;
+      this.activeAlbumShareCounts = {
+        total: this.activeAlbumShareCount,
+        photos: Number(data.photo_count || 0),
+        videos: Number(data.video_count || 0)
+      };
+      this.albumShareReadyVisible = false;
+    },
+    applyActiveAlbumShareCover(kind, imageUrl) {
+      const preparedUrl = String(imageUrl || "").trim();
+      if (kind === "friend") {
+        this.activeAlbumShareFriendCoverUrl = preparedUrl;
+        this.activeAlbumShareFriendCoverPrepared = Boolean(preparedUrl);
+        this.albumShareReadyVisible = this.activeAlbumShareFriendCoverPrepared;
+        return;
+      }
+      if (kind === "timeline") {
+        this.activeAlbumShareTimelineCoverUrl = preparedUrl;
+        this.activeAlbumShareTimelineCoverPrepared = Boolean(preparedUrl);
+        return;
+      }
+      throw new TypeError("active album share cover kind must be friend or timeline");
+    },
+    clearActiveAlbumShareState({ hideMenus = true, invalidateRequest = true } = {}) {
+      if (invalidateRequest) {
+        this.albumShareRequestVersion += 1;
+        this.albumSharePreparing = false;
+        if (this.statusText === "正在准备分享...") {
+          this.statusText = "";
+        }
+      }
       this.activeAlbumShareToken = "";
       this.activeAlbumShareScope = "";
       this.activeAlbumShareCount = 0;
+      this.activeAlbumShareFriendCoverUrl = "";
+      this.activeAlbumShareTimelineCoverUrl = "";
+      this.activeAlbumShareFriendCoverPrepared = false;
+      this.activeAlbumShareTimelineCoverPrepared = false;
+      this.activeAlbumShareSubject = null;
+      this.activeAlbumShareOwner = null;
+      this.activeAlbumShareCounts = { total: 0, photos: 0, videos: 0 };
       this.albumShareReadyVisible = false;
-      this.resetAlbumShareCovers();
       if (hideMenus) {
         this.showShareMenus();
       }
@@ -4247,7 +4352,13 @@ export default {
       const confirmed = await this.confirmDownloadPhotos(
         options.confirmContent || `将保存 ${targets.length} 张照片到系统相册，是否继续？`
       );
-      if (!confirmed || this.albumBusy) {
+      if (!confirmed) {
+        if (options.exitSelection) {
+          this.cancelSelectionMode({ force: true });
+        }
+        return;
+      }
+      if (this.albumBusy) {
         return;
       }
       this.downloading = true;
@@ -4438,47 +4549,61 @@ export default {
       if (this.timelineMode || this.albumBusy || !this.sessionId) {
         return;
       }
+      const shareRequest = this.beginAlbumShareSnapshotRequest();
       this.albumSharePreparing = true;
       this.statusText = "正在准备分享...";
-      this.clearActiveAlbumShareState({ hideMenus: true });
+      this.clearActiveAlbumShareState({ hideMenus: true, invalidateRequest: false });
       try {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/album/share-token`,
           method: "POST",
           data: payload
         });
+        if (!this.isCurrentAlbumShareSnapshotRequest(shareRequest)) {
+          return;
+        }
         const data = dataOf(response) || {};
         const token = typeof data.token === "string" ? data.token.trim() : "";
         if (!token) {
           throw albumMediaError("ALBUM_PUBLIC_SHARE_RESPONSE_INVALID", "分享准备失败，请稍后重试。");
         }
-        this.activeAlbumShareToken = token;
-        this.activeAlbumShareScope = payload.scope === "all" ? "all" : "selected";
-        this.activeAlbumShareCount = Number(data.visible_count || 0);
-        this.shareSubject = data.share_subject || this.localAlbumShareSubject();
-        this.shareOwner = data.share_owner || null;
-        const coverUrls = albumShareCoverResponse(data);
-        const [friendCoverUrl, timelineCoverUrl] = await Promise.all([
-          this.prepareAlbumShareCoverUrl("friend", coverUrls.friend),
-          this.prepareAlbumShareCoverUrl("timeline", coverUrls.timeline)
-        ]);
-        this.applyAlbumShareCover("friend", friendCoverUrl);
-        this.applyAlbumShareCover("timeline", timelineCoverUrl);
-        this.shareCounts = {
-          total: this.activeAlbumShareCount,
-          photos: Number(data.photo_count || 0),
-          videos: Number(data.video_count || 0)
-        };
-        this.albumShareReadyVisible = true;
+        this.installActiveAlbumShareSnapshot(data, {
+          token,
+          scope: payload.scope === "all" ? "all" : "selected"
+        });
         this.cancelSelectionMode({ force: true, preserveActiveShare: true });
-        this.statusText = "";
         this.showShareMenus();
+        const coverTasks = startAlbumShareCoverPreparation({
+          response: data,
+          prepare: (kind, remoteUrl) => this.prepareAlbumShareCoverUrl(kind, remoteUrl),
+          isCurrent: () => this.isCurrentAlbumShareSnapshotRequest(shareRequest),
+          onPrepared: (kind, imageUrl) => {
+            this.applyActiveAlbumShareCover(kind, imageUrl);
+            this.showShareMenus();
+          }
+        });
+        await Promise.all(coverTasks);
+        if (!this.isCurrentAlbumShareSnapshotRequest(shareRequest)) {
+          return;
+        }
+        if (!this.activeAlbumShareFriendCoverPrepared) {
+          throw albumMediaError(
+            "ALBUM_PUBLIC_SHARE_COVER_UNAVAILABLE",
+            "分享封面准备失败，请稍后重试。"
+          );
+        }
+        this.statusText = "";
       } catch (error) {
-        this.clearActiveAlbumShareState({ hideMenus: true });
+        if (!this.isCurrentAlbumShareSnapshotRequest(shareRequest)) {
+          return;
+        }
+        this.clearActiveAlbumShareState({ hideMenus: true, invalidateRequest: false });
         this.statusText = "";
         showToast({ title: error?.userMessage || "分享准备失败，请稍后重试", icon: "none" });
       } finally {
-        this.albumSharePreparing = false;
+        if (this.isCurrentAlbumShareSnapshotRequest(shareRequest)) {
+          this.albumSharePreparing = false;
+        }
       }
     },
     openBulkTagSheet() {

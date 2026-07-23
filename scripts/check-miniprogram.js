@@ -3516,6 +3516,8 @@ if (!fs.existsSync(pagesJsonPath)) {
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
   const activeAlbumSharePayloadSource = methodBody(albumSource, "activeAlbumSharePayload");
   const prepareAlbumShareSnapshotSource = methodBody(albumSource, "prepareAlbumShareSnapshot");
+  const installActiveAlbumShareSnapshotSource = methodBody(albumSource, "installActiveAlbumShareSnapshot");
+  const applyActiveAlbumShareCoverSource = methodBody(albumSource, "applyActiveAlbumShareCover");
   if (
     !albumShareAppMessageSource.includes("activeAlbumSharePayload") ||
     !activeAlbumSharePayloadSource.includes("/pages/session/album") ||
@@ -3600,8 +3602,15 @@ if (!fs.existsSync(pagesJsonPath)) {
     albumSource.includes("ensureAlbumShareToken(") ||
     !prepareAlbumShareSnapshotSource.includes("/album/share-token") ||
     !prepareAlbumShareSnapshotSource.includes("data: payload") ||
-    !prepareAlbumShareSnapshotSource.includes("this.activeAlbumShareToken = token") ||
-    !prepareAlbumShareSnapshotSource.includes("this.albumShareReadyVisible = true") ||
+    !prepareAlbumShareSnapshotSource.includes("this.installActiveAlbumShareSnapshot") ||
+    !prepareAlbumShareSnapshotSource.includes("startAlbumShareCoverPreparation") ||
+    !prepareAlbumShareSnapshotSource.includes("this.applyActiveAlbumShareCover") ||
+    !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareToken = token") ||
+    !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareSubject") ||
+    !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareOwner") ||
+    !applyActiveAlbumShareCoverSource.includes("this.activeAlbumShareFriendCoverUrl") ||
+    !applyActiveAlbumShareCoverSource.includes("this.activeAlbumShareTimelineCoverUrl") ||
+    !applyActiveAlbumShareCoverSource.includes("this.albumShareReadyVisible") ||
     !prepareAlbumShareSnapshotSource.includes("this.showShareMenus()")
   ) {
     fail("Album D53 sharing must prepare one active snapshot on demand without legacy token prefetch");

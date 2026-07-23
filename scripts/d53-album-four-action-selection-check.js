@@ -306,6 +306,16 @@ function containsEquality(node, property, value) {
   }).length > 0;
 }
 
+function containsIdentifierEquality(node, identifier, value) {
+  return findReachableNodes(node, (candidate) => {
+    if (candidate.type !== "BinaryExpression" || !["===", "=="].includes(candidate.operator)) return false;
+    return (
+      (isIdentifier(candidate.left, identifier) && literalValue(candidate.right) === value) ||
+      (isIdentifier(candidate.right, identifier) && literalValue(candidate.left) === value)
+    );
+  }).length > 0;
+}
+
 function isNestedIn(ancestor, node) {
   return (
     Number.isInteger(ancestor?.start) &&
@@ -348,6 +358,18 @@ function hasStaticAttribute(element, name, value) {
       property.type === 6 &&
       property.name === name &&
       property.value?.content === value
+  );
+}
+
+function hasPurposeBranch(element, purpose) {
+  const condition = element.props.find(
+    (property) => property.type === 7 && ["if", "else-if"].includes(property.name)
+  );
+  if (!condition?.exp) return false;
+  return containsIdentifierEquality(
+    parseTemplateExpression(condition.exp, `${purpose} selection toolbar branch`),
+    "selectionModePurpose",
+    purpose
   );
 }
 
@@ -534,11 +556,67 @@ const downloadAllAction = findAction(allTemplateElements, "下载全部", "downl
 const downloadSelectedAction = findAction(allTemplateElements, "下载选中", "downloadSelectedPhotos");
 assert(hasDisabledWhenSelectionIsEmpty(downloadSelectedAction, "下载选中"), "下载选中 must disable only when the download selection is empty");
 assert(shareAllAction && downloadAllAction, "share and download all actions must be visible");
+for (const [purpose, allLabel, allMethod, selectedLabel, selectedMethod] of [
+  ["share", "分享全部", "shareAllAlbumMedia", "分享选中", "shareSelectedAlbumMedia"],
+  ["download", "下载全部", "downloadAllPhotos", "下载选中", "downloadSelectedPhotos"]
+]) {
+  const branch = findTemplateElements(
+    albumTemplate,
+    (element) => hasStaticClass(element, "album-toolbar-business") && hasPurposeBranch(element, purpose)
+  );
+  assert(branch.length === 1, `${purpose} toolbar must have one purpose-specific business branch`);
+  const businessButtons = branch[0].children.filter((child) => child.type === 1 && child.tag === "t-button");
+  assert(businessButtons.length === 2, `${purpose} toolbar must contain exactly two business buttons`);
+  findAction(businessButtons, allLabel, allMethod);
+  findAction(businessButtons, selectedLabel, selectedMethod);
+}
 
 const shareAllMethod = optionMethod(albumOptions, "methods", "shareAllAlbumMedia", albumScript);
 assert(containsObjectProperty(shareAllMethod.node, "scope", "all"), "分享全部 must submit scope: all");
 const shareSelectedMethod = optionMethod(albumOptions, "methods", "shareSelectedAlbumMedia", albumScript);
 assert(containsObjectPropertyIdentifier(shareSelectedMethod.node, "mediaIds", "mediaIds"), "分享选中 must submit selected mediaIds");
+const prepareAlbumShareSnapshot = optionMethod(albumOptions, "methods", "prepareAlbumShareSnapshot", albumScript);
+const applyActiveAlbumShareCover = optionMethod(
+  albumOptions,
+  "methods",
+  "applyActiveAlbumShareCover",
+  albumScript
+);
+assert(
+  prepareAlbumShareSnapshot.source.includes("const shareRequest = this.beginAlbumShareSnapshotRequest()") &&
+    prepareAlbumShareSnapshot.source.includes("if (!this.isCurrentAlbumShareSnapshotRequest(shareRequest))") &&
+    prepareAlbumShareSnapshot.source.includes("startAlbumShareCoverPreparation") &&
+    prepareAlbumShareSnapshot.source.includes("await Promise.all(coverTasks)") &&
+    prepareAlbumShareSnapshot.source.includes("this.applyActiveAlbumShareCover") &&
+    prepareAlbumShareSnapshot.source.includes("this.installActiveAlbumShareSnapshot") &&
+    prepareAlbumShareSnapshot.source.includes("this.clearActiveAlbumShareState({ hideMenus: true, invalidateRequest: false })") &&
+    applyActiveAlbumShareCover.source.includes("this.activeAlbumShareFriendCoverPrepared") &&
+    applyActiveAlbumShareCover.source.includes("this.activeAlbumShareTimelineCoverPrepared"),
+  "share preparation must guard every async boundary and prepare both active cover channels"
+);
+const clearActiveAlbumShareState = optionMethod(albumOptions, "methods", "clearActiveAlbumShareState", albumScript);
+assert(
+  clearActiveAlbumShareState.source.includes("this.albumShareRequestVersion += 1") &&
+    clearActiveAlbumShareState.source.includes("this.albumSharePreparing = false") &&
+    [
+      "activeAlbumShareFriendCoverUrl",
+      "activeAlbumShareTimelineCoverUrl",
+      "activeAlbumShareFriendCoverPrepared",
+      "activeAlbumShareTimelineCoverPrepared",
+      "activeAlbumShareSubject",
+      "activeAlbumShareOwner",
+      "activeAlbumShareCounts"
+    ].every((field) => clearActiveAlbumShareState.source.includes(`this.${field}`)),
+  "clearing an active share must invalidate in-flight work and reset every active-only snapshot field"
+);
+const downloadPhotosMethod = optionMethod(albumOptions, "methods", "downloadPhotos", albumScript);
+assert(
+  downloadPhotosMethod.source.includes("if (!confirmed") &&
+    downloadPhotosMethod.source.includes("options.exitSelection") &&
+    downloadPhotosMethod.source.indexOf("if (!confirmed") < downloadPhotosMethod.source.indexOf("this.downloading = true") &&
+    downloadPhotosMethod.source.includes("this.cancelSelectionMode({ force: true })"),
+  "cancelling a selection download confirmation must clear selection before returning"
+);
 const downloadSelectedMethod = optionMethod(albumOptions, "methods", "downloadSelectedPhotos", albumScript);
 assert(
   hasDownloadableFilter(downloadSelectedMethod.node, "downloadablePhotos") &&
