@@ -549,7 +549,11 @@ test("focused album shares validate the focus ID and expose it through the share
     serverSource.indexOf("const sessionAlbumPublicSharesId")
   );
   assert.match(serverSource, /const body = await bodyFor\(request\)/);
-  assert.match(shareTokenRoute, /focusMediaId: body\?\.focusMediaId/);
+  assert.match(shareTokenRoute, /const shareOptions = publicShareTokenOptions\(body\)/);
+  assert.match(
+    shareTokenRoute,
+    /createOrReuseSessionAlbumPublicShare\(\s*user,\s*sessionAlbumShareTokenId,\s*shareOptions\s*\)/
+  );
   assert.match(shareTokenRoute, /focus_media_id: share\.focus_media_id/);
 });
 
