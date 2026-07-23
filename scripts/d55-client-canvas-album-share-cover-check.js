@@ -187,37 +187,75 @@ includesAll(
   "privacy-safe cover recipe read"
 );
 
-const obsoleteServerSymbols =
-  /\b(publicShareCoverDependencies|publicShareCoverMediaIdsDigest|getPublicSessionAlbumShareCoverMedia|signSessionAlbumPublicShareCover|verifySessionAlbumPublicShareCover|renderPublicSessionAlbumShareCover|publicShareCoverCoordinator)\b/;
-check(
-  !obsoleteServerSymbols.test(`${service}\n${server}`),
-  "Server composite-cover capability, dependency, coordinator, and renderer symbols must be absent"
+const apiSourceFiles = walk("apps/api/src");
+const retiredServerCoverDirectoryFiles = apiSourceFiles.filter((file) =>
+  /(?:^|\/)album-share-cover\//i.test(file)
 );
-const apiFiles = [...walk("apps/api/src"), ...walk("apps/api/test")];
-const obsoleteServerFiles = apiFiles.filter((file) => (
-  /album-share-cover\/(?:cache|coordinator|layouts?|renderer|selection)\.[cm]?js$/i.test(file) ||
+check(
+  retiredServerCoverDirectoryFiles.length === 0,
+  `Deleted server album-share-cover directory still contains files: ${retiredServerCoverDirectoryFiles.join(", ")}`
+);
+const obsoleteServerTestFiles = walk("apps/api/test").filter((file) =>
   /apps\/api\/test\/album-share-cover-(?:layouts?|renderer|route|selection).*\.test\.mjs$/i.test(file)
-));
-check(
-  obsoleteServerFiles.length === 0,
-  `Obsolete server composite-cover files remain: ${obsoleteServerFiles.join(", ")}`
-);
-const apiSourceImports = walk("apps/api/src")
-  .filter((file) => /\.[cm]?js$/.test(file))
-  .map((file) => read(file))
-  .join("\n");
-check(
-  !/from\s+["'][^"']*album-share-cover\//.test(apiSourceImports),
-  "API source must not import a deleted server album-share-cover module"
-);
-const normalizedServerRoutes = server.replaceAll("\\/", "/");
-check(
-  !/public-shares\/\([^)]*\)\/cover/.test(normalizedServerRoutes),
-  "The plural public-share server-composite cover route must be absent"
 );
 check(
-  !/(usage:\s*["']cover["']|session-album-public-share-cover)/.test(server),
-  "The server-composite cover capability token must be absent"
+  obsoleteServerTestFiles.length === 0,
+  `Obsolete server composite-cover tests remain: ${obsoleteServerTestFiles.join(", ")}`
+);
+
+const apiProductionSources = apiSourceFiles
+  .filter((file) => /\.(?:[cm]?[jt]s|[jt]sx|vue)$/i.test(file))
+  .map((file) => ({ file, source: read(file) }));
+const retiredServerCoverIdentifierPattern =
+  /\b(?:renderAlbumShareCover|renderPublicSessionAlbumShareCover|signSessionAlbumPublicCoverToken|signSessionAlbumPublicShareCover|verifySessionAlbumPublicCoverQuery|verifySessionAlbumPublicShareCover|getPublicSessionAlbumShareCoverMedia|publicShareCoverMediaIdsDigest|analyzeAlbumShareCoverCandidate|analyzeAlbumShareCoverMedia|albumShareCoverDHash|albumShareCoverFocus|albumShareCoverCacheKey|albumShareCoverLayout|albumShareCoverClamp01|albumShareCoverLuminance|albumShareCoverOrientedDimensions|albumShareCover(?:Cache|Layout)Version|permanentMissingAlbumShareCoverSource|transientAlbumShareCoverSourceError|AlbumShareCoverCache|AlbumShareCoverGenerationCoordinator|PermanentAlbumShareCoverCandidateError|publicShareCoverDependencies|publicShareCoverCoordinator|sessionAlbumPublicShareCoverPath|publicSessionAlbumShareCoverId|testOnlyAllowPublicShareCoverAuthorizationOverrides|ALBUM_SHARE_COVER_(?:CACHE|LAYOUT)_[A-Z0-9_]+|ALBUM_SHARE_COVER_NETWORK_ERROR_CODES|ALBUM_SHARE_COVER_UNAVAILABLE|SESSION_ALBUM_PUBLIC_COVER_TOKEN_SECONDS)\b/g;
+const retiredServerCoverIdentifierMatches = apiProductionSources.flatMap(({ file, source }) =>
+  [...new Set(source.match(retiredServerCoverIdentifierPattern) || [])]
+    .map((identifier) => `${file}:${identifier}`)
+);
+check(
+  retiredServerCoverIdentifierMatches.length === 0,
+  `Retired server album-share-cover identifiers remain: ${retiredServerCoverIdentifierMatches.join(", ")}`
+);
+
+const retiredServerCoverContractPatterns = [
+  ["plural public /cover route", /\/(?:api\/)?session-album\/public-shares\/[^\n]{0,160}\/cover(?:\b|[?'"`/$])/],
+  ["public cover capability", /session-album-public(?:-share)?-cover/],
+  ["public cover usage claim", /usage\s*:\s*["']cover["']/],
+  ["server cover layout version", /album-share-cover-v\d+\b/],
+  ["server cover module import", /from\s+["'][^"']*album-share-cover\//]
+];
+const retiredServerCoverContractMatches = apiProductionSources.flatMap(({ file, source }) => {
+  const normalizedSource = source.replaceAll("\\/", "/");
+  return retiredServerCoverContractPatterns
+    .filter(([, pattern]) => pattern.test(normalizedSource))
+    .map(([label]) => `${file}:${label}`);
+});
+check(
+  retiredServerCoverContractMatches.length === 0,
+  `Retired server album-share-cover routes, capabilities, or versions remain: ${retiredServerCoverContractMatches.join(", ")}`
+);
+
+const contextualCoverReadMatches = apiProductionSources
+  .filter(({ source }) => {
+    let index = source.indexOf("readUploadedSessionAlbumPhotoObject");
+    while (index >= 0) {
+      const nearbySource = source
+        .slice(Math.max(0, index - 800), index + 800)
+        .replaceAll("\\/", "/");
+      if (
+        /(?:album-share-cover|album share cover|session-album-public-cover|publicShareCoverDependencies|AlbumShareCover|SessionAlbumPublicCover|public-shares\/[^\n]{0,160}\/cover)/i
+          .test(nearbySource)
+      ) {
+        return true;
+      }
+      index = source.indexOf("readUploadedSessionAlbumPhotoObject", index + 1);
+    }
+    return false;
+  })
+  .map(({ file }) => file);
+check(
+  contextualCoverReadMatches.length === 0,
+  `Uploaded album photo object reads must not be wired into server cover composition: ${contextualCoverReadMatches.join(", ")}`
 );
 
 const attachPublicMedia = between(
