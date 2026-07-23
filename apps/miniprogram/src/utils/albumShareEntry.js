@@ -13,6 +13,24 @@ function trimmedString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function semanticDimension(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function semanticFocus(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0.5;
+  return Math.min(1, Math.max(0, numeric));
+}
+
+function tagSignature(tags) {
+  if (!Array.isArray(tags)) return [];
+  return tags.map((tag) => JSON.stringify(
+    Object.keys(tag || {}).sort().map((key) => [key, tag[key]])
+  )).sort();
+}
+
 function normalizePositiveInteger(value) {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -111,6 +129,21 @@ export function memberDefaultAlbumShareState({
     friendReady: defaultAlbumShareFriendCoverPrepared === true,
     timelineReady: defaultAlbumShareTimelineCoverPrepared === true
   };
+}
+
+export function memberDefaultAlbumShareMediaFingerprint(photos) {
+  return JSON.stringify((Array.isArray(photos) ? photos : []).map((photo) => [
+    String(photo?.id || ""),
+    trimmedString(photo?.media_type),
+    trimmedString(photo?.moderation_status),
+    trimmedString(photo?.processing_status),
+    Boolean(photo?.is_mine),
+    tagSignature(photo?.tags),
+    semanticDimension(photo?.image_width ?? photo?.width),
+    semanticDimension(photo?.image_height ?? photo?.height),
+    semanticFocus(photo?.focus_x),
+    semanticFocus(photo?.focus_y)
+  ]));
 }
 
 export function createAlbumShareEntryAuthority() {

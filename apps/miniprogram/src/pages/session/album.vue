@@ -755,6 +755,7 @@ import {
 import {
   ALBUM_SHARE_INTENT,
   albumShareAppMessageIntent,
+  memberDefaultAlbumShareMediaFingerprint,
   memberDefaultAlbumShareState,
   recruitmentSharePayload,
   createAlbumShareEntryAuthority,
@@ -1292,8 +1293,8 @@ export default {
     }
     const auth = getCurrentUser();
     const accountChanged = this.handleAlbumAuthChange(auth);
-    if (this.sessionId && this.currentUserId && !this.recruitInviteToken) {
-      this.prepareRecruitInvite();
+    if (this.sessionId && this.currentUserId && (!this.defaultAlbumShareToken || !this.recruitInviteToken)) {
+      this.primeAlbumShareEntries();
     }
     const skipRefresh = this.consumePreviewReturnRefreshSkip();
     if (skipRefresh && !accountChanged) {
@@ -1304,23 +1305,31 @@ export default {
     }
   },
   onHide() {
-    this.invalidateRecruitInviteShare();
+    if (!this.timelineMode) {
+      this.invalidateDefaultAlbumShare();
+      this.invalidateRecruitInviteShare();
+    }
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
+    this.albumShareCanvasCoordinator?.invalidate();
     this.disposeAlbumShareCanvasPreparation();
     this.resetAlbumShareCovers({ disposeCanvas: false });
     this.clearAuthorPrivateAlbumState();
   },
   onUnload() {
     if (!this.timelineMode) {
-      this.invalidateAlbumShareState();
+      this.invalidateDefaultAlbumShare();
       this.invalidateRecruitInviteShare();
     }
     this.resetSingleMediaShareState();
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
+    this.albumShareCanvasCoordinator?.invalidate();
     this.disposeAlbumShareCanvasPreparation();
     this.resetAlbumShareCovers({ disposeCanvas: false });
+    if (!this.timelineMode) {
+      this.invalidateAlbumShareState();
+    }
     this.clearAuthorPrivateAlbumState();
     this.unobserveAlbumAuthChanges();
     this.albumMediaRefresh?.dispose();
@@ -2207,6 +2216,7 @@ export default {
       const nextUserId = auth?.user?.id || "";
       const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
       if (accountChanged) {
+        this.invalidateDefaultAlbumShare();
         this.invalidateAlbumShareState();
         this.invalidateRecruitInviteShare();
         this.resetSingleMediaShareState();
@@ -2452,10 +2462,19 @@ export default {
       this.albumMediaRefresh = createAlbumMediaRefreshController({
         readAlbum: () => ({ photos: this.photos }),
         writeAlbum: (next) => {
+          const beforeMedia = memberDefaultAlbumShareMediaFingerprint(this.photos);
+          const nextMedia = memberDefaultAlbumShareMediaFingerprint(next.photos);
+          const nextPhotos = (next.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+          if (!this.timelineMode && beforeMedia !== nextMedia) {
+            this.invalidateDefaultAlbumShare({ hideMenus: true });
+          }
           this.mediaLoadSerial += 1;
-          this.photos = (next.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+          this.photos = nextPhotos;
           this.pruneUnpublishedAlbumMediaState(this.photos);
           this.refreshWaterfall();
+          if (!this.timelineMode && beforeMedia !== nextMedia) {
+            this.primeAlbumShareEntries();
+          }
         },
         reloadAlbum: async () => {
           const listRequest = this.beginAlbumListRequest();
@@ -2508,6 +2527,10 @@ export default {
               errorCode: error?.code || "MEDIA_REFRESH_FAILED"
             });
             if (error?.statusCode === 401 || error?.statusCode === 403) {
+              if (!this.timelineMode) {
+                this.invalidateDefaultAlbumShare({ hideMenus: true });
+                this.invalidateRecruitInviteShare();
+              }
               return {
                 photos: [],
                 isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
@@ -2538,7 +2561,7 @@ export default {
         this.listThumbnailFailedById = {};
         this.mediaLoadSerial += 1;
         this.invalidateRecruitInviteShare();
-        this.clearDefaultAlbumShareState({ hideMenus: true });
+        this.invalidateDefaultAlbumShare({ hideMenus: true });
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.albumSession = this.albumSessionSummary(data);
@@ -2547,7 +2570,10 @@ export default {
         this.statusText = "";
         this.refreshWaterfall();
         if (this.canUpload) {
-          await this.loadPeople();
+          await this.loadPeople(() => this.isCurrentAlbumListRequest(listRequest));
+          if (!this.isCurrentAlbumListRequest(listRequest)) {
+            return;
+          }
           this.ensureSelectedRoleFilter();
         } else {
           this.people = [];
@@ -2561,6 +2587,7 @@ export default {
           return;
         }
         if (error?.statusCode === 401 || error?.statusCode === 403) {
+          this.invalidateDefaultAlbumShare({ hideMenus: true });
           this.invalidateRecruitInviteShare();
           this.mediaLoadSerial += 1;
           this.photos = [];
@@ -3664,7 +3691,7 @@ export default {
       }
       return "height:328rpx;";
     },
-    async loadPeople() {
+    async loadPeople(isCurrent = () => true) {
       let people = [];
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album/people` });
@@ -3672,11 +3699,21 @@ export default {
       } catch (error) {
         people = [];
       }
-      this.people = this.mergePeople([...people, ...(await this.loadSessionPeopleFallback())]);
+      if (!isCurrent()) {
+        return;
+      }
+      const fallbackPeople = await this.loadSessionPeopleFallback(isCurrent);
+      if (!isCurrent()) {
+        return;
+      }
+      this.people = this.mergePeople([...people, ...fallbackPeople]);
     },
-    async loadSessionPeopleFallback() {
+    async loadSessionPeopleFallback(isCurrent = () => true) {
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
+        if (!isCurrent()) {
+          return [];
+        }
         const session = dataOf(response) || {};
         this.applyAlbumSessionFallback(session);
         return this.sessionDetailPeople(session);
@@ -5037,12 +5074,7 @@ export default {
           this.defaultAlbumShareAuthority.isCurrent(requestContext.authorityRequest)
       );
     },
-    clearDefaultAlbumShareState({ invalidateRequest = true, hideMenus = false } = {}) {
-      if (invalidateRequest) {
-        this.defaultAlbumShareGeneration += 1;
-        this.defaultAlbumShareAuthority.invalidate();
-        this.defaultAlbumShareCoverRequestAuthority.invalidateCoverRequests();
-      }
+    clearDefaultAlbumShareState({ hideMenus = false } = {}) {
       this.defaultAlbumShareToken = "";
       this.defaultAlbumShareFriendCoverUrl = "";
       this.defaultAlbumShareTimelineCoverUrl = "";
@@ -5055,13 +5087,19 @@ export default {
       this.defaultAlbumShareCoverContextKey = "";
       if (hideMenus) this.showShareMenus();
     },
+    invalidateDefaultAlbumShare({ hideMenus = false } = {}) {
+      this.defaultAlbumShareGeneration += 1;
+      this.defaultAlbumShareAuthority.invalidate();
+      this.defaultAlbumShareCoverRequestAuthority.invalidateCoverRequests();
+      this.clearDefaultAlbumShareState({ hideMenus });
+    },
     primeAlbumShareEntries() {
       if (this.timelineMode || !this.sessionId || !this.currentUserId) {
         return;
       }
       this.prepareRecruitInvite();
       if (this.shareSelectableMedia.length === 0) {
-        this.clearDefaultAlbumShareState({ hideMenus: true });
+        this.invalidateDefaultAlbumShare({ hideMenus: true });
         return;
       }
       this.prepareDefaultAlbumShare();
@@ -5083,7 +5121,7 @@ export default {
         if (this.defaultAlbumSharePromise) return this.defaultAlbumSharePromise;
       }
 
-      this.clearDefaultAlbumShareState({ invalidateRequest: false });
+      this.clearDefaultAlbumShareState();
       this.defaultAlbumShareGeneration += 1;
       requestContext.generation = this.defaultAlbumShareGeneration;
       this.defaultAlbumShareKey = requestKey;
@@ -5137,7 +5175,7 @@ export default {
         })
         .catch(() => {
           if (this.isCurrentDefaultAlbumShareRequest(requestContext)) {
-            this.clearDefaultAlbumShareState({ invalidateRequest: false, hideMenus: true });
+            this.clearDefaultAlbumShareState({ hideMenus: true });
           }
           return "";
         })

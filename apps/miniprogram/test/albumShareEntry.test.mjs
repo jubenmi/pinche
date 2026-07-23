@@ -7,6 +7,7 @@ import {
   albumShareAppMessageIntent,
   createAlbumShareEntryAuthority,
   createAlbumShareEntryCoordinator,
+  memberDefaultAlbumShareMediaFingerprint,
   memberDefaultAlbumShareState,
   recruitmentSharePayload
 } from "../src/utils/albumShareEntry.js";
@@ -281,14 +282,14 @@ test("member onShow silently reprimes a missing recruit token before the preview
     "utf8"
   );
   const onShow = sourceBlock(source, "async onShow() {", "onHide() {");
-  const prewarm = "if (this.sessionId && this.currentUserId && !this.recruitInviteToken)";
+  const prewarm = "if (this.sessionId && this.currentUserId && (!this.defaultAlbumShareToken || !this.recruitInviteToken))";
   const prewarmIndex = onShow.indexOf(prewarm);
   const skipRefreshIndex = onShow.indexOf("if (skipRefresh && !accountChanged)");
 
   assert.notEqual(prewarmIndex, -1);
   assert.ok(prewarmIndex < skipRefreshIndex);
-  assert.match(onShow, /this\.prepareRecruitInvite\(\)/);
-  assert.doesNotMatch(onShow, /await this\.prepareRecruitInvite\(\)/);
+  assert.match(onShow, /this\.primeAlbumShareEntries\(\)/);
+  assert.doesNotMatch(onShow, /await this\.primeAlbumShareEntries\(\)/);
 });
 
 test("recruit share titles include script, store, and Beijing-formatted start time", async () => {
@@ -409,4 +410,223 @@ test("member menu state keeps a selected active snapshot out of the default all-
       timelineReady: false
     }
   );
+});
+
+test("member default media fingerprint ignores signed URLs but tracks share semantics", () => {
+  const photos = [{
+    id: 41,
+    media_type: "image",
+    moderation_status: "approved",
+    processing_status: "ready",
+    is_mine: true,
+    tags: [{ key: "seat:8", label: "侦探" }],
+    image_width: 1600,
+    image_height: 1200,
+    focus_x: 0.25,
+    focus_y: 0.75,
+    thumbnail_url: "https://cdn.example.test/41.jpg?token=old",
+    media_url_expires_at: "2026-07-24T01:00:00.000Z"
+  }];
+  const fingerprint = memberDefaultAlbumShareMediaFingerprint(photos);
+
+  assert.equal(
+    memberDefaultAlbumShareMediaFingerprint([{
+      ...photos[0],
+      thumbnail_url: "https://cdn.example.test/41.jpg?token=renewed",
+      media_url_expires_at: "2026-07-24T02:00:00.000Z"
+    }]),
+    fingerprint
+  );
+  assert.notEqual(memberDefaultAlbumShareMediaFingerprint([]), fingerprint);
+  assert.notEqual(memberDefaultAlbumShareMediaFingerprint([...photos, { ...photos[0], id: 42 }]), fingerprint);
+  assert.notEqual(
+    memberDefaultAlbumShareMediaFingerprint([{ ...photos[0], tags: [] }]),
+    fingerprint
+  );
+  assert.notEqual(
+    memberDefaultAlbumShareMediaFingerprint([{ ...photos[0], moderation_status: "review" }]),
+    fingerprint
+  );
+  assert.notEqual(
+    memberDefaultAlbumShareMediaFingerprint([{ ...photos[0], image_width: 1200 }]),
+    fingerprint
+  );
+  assert.notEqual(
+    memberDefaultAlbumShareMediaFingerprint([{ ...photos[0], focus_x: 0.5 }]),
+    fingerprint
+  );
+});
+
+test("member lifecycle invalidates default and recruit entries before Canvas disposal", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const onHide = sourceBlock(source, "onHide() {", "onUnload() {");
+  const onUnload = sourceBlock(source, "onUnload() {", "onPageScroll(event) {");
+
+  for (const lifecycle of [onHide, onUnload]) {
+    const invalidateDefault = lifecycle.indexOf("this.invalidateDefaultAlbumShare()");
+    const invalidateRecruit = lifecycle.indexOf("this.invalidateRecruitInviteShare()");
+    const invalidateCanvas = lifecycle.indexOf("this.albumShareCanvasCoordinator?.invalidate()");
+    const disposeCanvas = lifecycle.indexOf("this.disposeAlbumShareCanvasPreparation()");
+
+    assert.notEqual(invalidateDefault, -1);
+    assert.notEqual(invalidateRecruit, -1);
+    assert.notEqual(invalidateCanvas, -1);
+    assert.ok(invalidateDefault < disposeCanvas);
+    assert.ok(invalidateRecruit < disposeCanvas);
+    assert.ok(invalidateCanvas < disposeCanvas);
+  }
+});
+
+test("member entry authority closes on identity, semantic load, and permission failure", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const authChange = sourceBlock(
+    source,
+    "handleAlbumAuthChange(auth = {}) {",
+    "updateTopActionsFloating() {"
+  );
+  const loadAlbum = sourceBlock(source, "async loadAlbum() {", "async loadPublicAlbum() {");
+  const permissionFailure = sourceBlock(
+    loadAlbum,
+    "if (error?.statusCode === 401 || error?.statusCode === 403) {",
+    "} else {"
+  );
+
+  assert.match(authChange, /this\.invalidateDefaultAlbumShare\(\)/);
+  assert.match(authChange, /this\.invalidateRecruitInviteShare\(\)/);
+  assert.match(loadAlbum, /this\.invalidateDefaultAlbumShare\(\{ hideMenus: true \}\)/);
+  assert.match(permissionFailure, /this\.invalidateDefaultAlbumShare\(\{ hideMenus: true \}\)/);
+  assert.match(permissionFailure, /this\.invalidateRecruitInviteShare\(\)/);
+});
+
+test("member refresh authorization failure invalidates entry state before emptying photos", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const refreshController = sourceBlock(
+    source,
+    "initializeAlbumMediaRefreshController() {",
+    "async loadAlbum() {"
+  );
+  const authorizationFailure = sourceBlock(
+    refreshController,
+    "if (error?.statusCode === 401 || error?.statusCode === 403) {",
+    "throw error;"
+  );
+  const memberInvalidation = sourceBlock(
+    authorizationFailure,
+    "if (!this.timelineMode) {",
+    "return {"
+  );
+
+  assert.match(memberInvalidation, /this\.invalidateDefaultAlbumShare\(\{ hideMenus: true \}\)/);
+  assert.match(memberInvalidation, /this\.invalidateRecruitInviteShare\(\)/);
+  assert.ok(
+    authorizationFailure.indexOf("this.invalidateDefaultAlbumShare({ hideMenus: true })") <
+      authorizationFailure.indexOf("photos: []")
+  );
+});
+
+test("member onShow silently reprimes both missing entry states before skipping refresh", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const onShow = sourceBlock(source, "async onShow() {", "onHide() {");
+  const prewarm = "if (this.sessionId && this.currentUserId && (!this.defaultAlbumShareToken || !this.recruitInviteToken))";
+  const prewarmIndex = onShow.indexOf(prewarm);
+  const skipRefreshIndex = onShow.indexOf("if (skipRefresh && !accountChanged)");
+
+  assert.notEqual(prewarmIndex, -1);
+  assert.ok(prewarmIndex < skipRefreshIndex);
+  assert.match(onShow, /this\.primeAlbumShareEntries\(\)/);
+  assert.doesNotMatch(onShow, /await this\.primeAlbumShareEntries\(\)/);
+});
+
+test("entry prewarm stays local and ignores display-only member and public updates", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const watch = sourceBlock(source, "watch: {", "methods: {");
+  const scroll = sourceBlock(source, "onPageScroll(event) {", "onReachBottom() {");
+  const publicPagination = sourceBlock(
+    source,
+    "async loadMorePublicAlbum() {",
+    "normalizeAlbumMediaUrl(path) {"
+  );
+  const refreshUrls = sourceBlock(
+    source,
+    "applyFreshAlbumMediaUrls(freshPhotos = []) {",
+    "refreshAlbumMediaUrlsForPreview() {"
+  );
+  const prepareDefault = sourceBlock(
+    source,
+    "prepareDefaultAlbumShare() {",
+    "handleRecruitShareTap() {"
+  );
+
+  for (const displayOnlyPath of [watch, scroll, publicPagination, refreshUrls]) {
+    assert.doesNotMatch(displayOnlyPath, /primeAlbumShareEntries|prepareDefaultAlbumShare|invalidateDefaultAlbumShare/);
+  }
+  assert.doesNotMatch(prepareDefault, /albumBusy|statusText|albumShareReadyVisible|showToast/);
+});
+
+test("stale member album loads stop after people and guard people fallback writes", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const loadAlbum = sourceBlock(source, "async loadAlbum() {", "async loadPublicAlbum() {");
+  const loadPeople = sourceBlock(source, "async loadPeople(", "async loadSessionPeopleFallback(");
+  const fallback = sourceBlock(source, "async loadSessionPeopleFallback(", "sessionDetailPeople(session) {");
+  const awaitPeople = loadAlbum.indexOf("await this.loadPeople(() => this.isCurrentAlbumListRequest(listRequest))");
+  const currentCheck = loadAlbum.indexOf(
+    "if (!this.isCurrentAlbumListRequest(listRequest)) {",
+    awaitPeople
+  );
+  const navigationTitle = loadAlbum.indexOf("this.applyAlbumNavigationTitle()", awaitPeople);
+  const scheduleRefresh = loadAlbum.indexOf("this.albumMediaRefresh?.schedule()", awaitPeople);
+  const primeEntries = loadAlbum.indexOf("this.primeAlbumShareEntries()", awaitPeople);
+
+  assert.notEqual(awaitPeople, -1);
+  assert.notEqual(currentCheck, -1);
+  assert.ok(currentCheck < navigationTitle);
+  assert.ok(currentCheck < scheduleRefresh);
+  assert.ok(currentCheck < primeEntries);
+  assert.match(loadPeople, /async loadPeople\(isCurrent = \(\) => true\)/);
+  assert.match(loadPeople, /if \(!isCurrent\(\)\) \{\s*return;\s*\}[\s\S]*this\.people =/);
+  assert.match(fallback, /async loadSessionPeopleFallback\(isCurrent = \(\) => true\)/);
+  assert.match(fallback, /if \(!isCurrent\(\)\) \{\s*return \[\];\s*\}[\s\S]*this\.applyAlbumSessionFallback\(session\)/);
+});
+
+test("member background refresh replaces default sharing only for semantic media changes", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const refreshController = sourceBlock(
+    source,
+    "initializeAlbumMediaRefreshController() {",
+    "async loadAlbum() {"
+  );
+  const writeAlbum = sourceBlock(refreshController, "writeAlbum: (next) => {", "reloadAlbum: async () => {");
+  const invalidateDefault = writeAlbum.indexOf("this.invalidateDefaultAlbumShare({ hideMenus: true })");
+  const assignPhotos = writeAlbum.indexOf("this.photos =");
+  const refreshWaterfall = writeAlbum.indexOf("this.refreshWaterfall()");
+  const primeEntries = writeAlbum.indexOf("this.primeAlbumShareEntries()");
+
+  assert.match(source, /memberDefaultAlbumShareMediaFingerprint/);
+  assert.match(writeAlbum, /const beforeMedia = memberDefaultAlbumShareMediaFingerprint\(this\.photos\)/);
+  assert.match(writeAlbum, /const nextMedia = memberDefaultAlbumShareMediaFingerprint\(next\.photos\)/);
+  assert.match(writeAlbum, /if \(!this\.timelineMode && beforeMedia !== nextMedia\)/);
+  assert.notEqual(invalidateDefault, -1);
+  assert.ok(invalidateDefault < assignPhotos);
+  assert.ok(refreshWaterfall < primeEntries);
 });

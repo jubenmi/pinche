@@ -320,7 +320,7 @@
 - Modify: `apps/miniprogram/src/pages/session/album.vue`
 - Modify: `apps/miniprogram/test/albumShareEntry.test.mjs`
 
-- [ ] **Step 4.1：写竞态和生命周期失败测试**
+- [x] **Step 4.1：写竞态和生命周期失败测试**
 
   覆盖：
 
@@ -332,7 +332,7 @@
   - 401/403 后菜单关闭；
   - default 后台失败不写 busy、ready 弹层或用户全局错误。
 
-- [ ] **Step 4.2：运行 RED**
+- [x] **Step 4.2：运行 RED**
 
   Run:
 
@@ -342,7 +342,7 @@
 
   Expected: 至少 lifecycle/currentness 新断言失败。
 
-- [ ] **Step 4.3：实现最小失效与重试**
+- [x] **Step 4.3：实现最小失效与重试**
 
   新增并统一调用：
 
@@ -354,7 +354,7 @@
 
   所有异步写入前检查对应 authority；catch 只清本来源状态，不污染其他来源。
 
-- [ ] **Step 4.4：运行 GREEN 并提交**
+- [x] **Step 4.4：运行 GREEN 并提交**
 
   Run:
 
