@@ -39,7 +39,7 @@
     "d40:smoke": "node scripts/d40-guest-calendar-home-smoke.js",
     "d48:check": "node scripts/d48-album-sharing-role-claim-separation-check.js",
     "d48:smoke": "node scripts/d48-album-sharing-role-claim-separation-smoke.js",
-    "d52:assets:check": "node scripts/d52-adaptive-album-share-cover-check.js --allow-missing-task7-helper",
+    "d52:assets:check": "node scripts/d52-adaptive-album-share-cover-check.js --assets-only",
     "d52:unit": "node --test apps/api/test/album-share-cover-layouts.test.mjs apps/api/test/album-share-cover-selection.test.mjs apps/api/test/album-share-cover-renderer.test.mjs apps/api/test/album-share-cover-route.test.mjs apps/miniprogram/test/albumShareCover.test.mjs",
     "d52:check": "node scripts/d52-adaptive-album-share-cover-check.js",
     "d50:unit": "node --test apps/api/test/album-single-media-share.test.mjs apps/miniprogram/test/albumSingleMediaShare.test.mjs",
