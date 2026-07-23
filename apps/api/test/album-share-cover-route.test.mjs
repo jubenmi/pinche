@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
 import { readFile } from "node:fs/promises";
 import http from "node:http";
 import test from "node:test";
@@ -81,11 +82,6 @@ function coverDependencies(overrides = {}) {
         roleName: "侦探"
       };
     },
-    async readObject(item) {
-      counts.read += 1;
-      if (overrides.readObject) return overrides.readObject(item, counts);
-      return { filename: `${item.id}.png`, body: GOOD_IMAGE, contentType: "image/png" };
-    },
     async render(input) {
       counts.render += 1;
       rendered.push(input);
@@ -93,6 +89,13 @@ function coverDependencies(overrides = {}) {
       return JPEG;
     }
   };
+  if (overrides.includeReadObject !== false) {
+    dependencies.readObject = async (item) => {
+      counts.read += 1;
+      if (overrides.readObject) return overrides.readObject(item, counts);
+      return { filename: `${item.id}.png`, body: GOOD_IMAGE, contentType: "image/png" };
+    };
+  }
   if (overrides.includeCache !== false) dependencies.cache = overrides.cache || cache;
   return { dependencies, counts, rendered };
 }
@@ -631,6 +634,29 @@ test("an all-transient source failure preserves its 504 and never renders or cac
   });
   assert.equal(fixture.counts.render, 0);
   assert.equal(fixture.counts.cacheSet, 0);
+});
+
+test("a local EIO source read remains a system failure and is never cached as a degraded cover", async (t) => {
+  const readError = new Error("local image read failed");
+  readError.code = "EIO";
+  t.mock.method(fs, "readFile", async () => { throw readError; });
+  const fixture = coverDependencies({ includeReadObject: false });
+  await withCoverServer(fixture.dependencies, async (baseUrl) => {
+    const response = await coverRequest(baseUrl);
+    assert.equal(response.status, 500);
+    assert.equal((await response.json()).error.code, "INTERNAL_ERROR");
+  });
+  assert.equal(fixture.counts.render, 0);
+  assert.equal(fixture.counts.cacheSet, 0);
+});
+
+test("the local source reader maps only ENOENT to not found", () => {
+  const sourceReader = serverSource.slice(
+    serverSource.indexOf("async function readUploadedObject"),
+    serverSource.indexOf("async function readUploadedSessionAlbumPhotoObject")
+  );
+  assert.match(sourceReader, /if \(error\?\.code === "ENOENT"\) throw notFound\(\);/);
+  assert.match(sourceReader, /throw error;/);
 });
 
 test("a partial transient 502 aborts the generation and a later request retries all candidates", async () => {

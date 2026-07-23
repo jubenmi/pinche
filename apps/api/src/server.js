@@ -3663,7 +3663,8 @@ async function readUploadedObject({ url, prefix, localDir }) {
       contentType: uploadedObjectContentType(filename)
     };
   } catch (error) {
-    throw notFound();
+    if (error?.code === "ENOENT") throw notFound();
+    throw error;
   }
 }
 
