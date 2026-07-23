@@ -503,6 +503,14 @@
       </template>
     </uv-waterfall>
 
+    <view v-if="timelineMode && publicShareLoadingMore" class="public-share-page-status">
+      正在加载更多照片…
+    </view>
+    <view v-else-if="timelineMode && publicShareLoadMoreError" class="public-share-page-status error">
+      <text>{{ publicShareLoadMoreError }}</text>
+      <t-button size="small" variant="text" @tap="loadMorePublicAlbum">重试</t-button>
+    </view>
+
     <root-portal :enable="selectionMode && !tagSheetPhoto">
       <view v-if="selectionMode && !tagSheetPhoto" class="album-floating-toolbar">
         <view class="floating-toolbar-button secondary" @tap="toggleSelectionMode">
@@ -727,6 +735,10 @@ import {
   albumSharePreviewRouteState,
   normalizeAlbumShareSelection
 } from "../../utils/albumSharePreview";
+import {
+  mergePublicAlbumSharePages,
+  publicAlbumSharePageUrl
+} from "../../utils/albumPublicSharePagination";
 
 function albumMediaCachePath(photoId, variant = "preview") {
   const root =
@@ -763,6 +775,10 @@ export default {
       focusedPublicMediaUnavailable: false,
       focusMediaId: null,
       publicAlbumSnapshotLoaded: false,
+      publicShareNextCursor: null,
+      publicShareHasMore: false,
+      publicShareLoadingMore: false,
+      publicShareLoadMoreError: "",
       shareSubject: null,
       shareOwner: null,
       shareFriendCoverUrl: "",
@@ -1222,6 +1238,11 @@ export default {
     this.albumScrollTop = Number(event?.scrollTop || 0);
     this.updateTopActionsFloating();
   },
+  onReachBottom() {
+    if (this.timelineMode) {
+      this.loadMorePublicAlbum();
+    }
+  },
   onShareAppMessage(options) {
     if (options?.from === "button") {
       const mediaId = normalizeFocusedMediaId(options?.target?.dataset?.mediaId);
@@ -1348,6 +1369,7 @@ export default {
       this.shareCounts = { total: 0, photos: 0, videos: 0 };
       this.albumSession = null;
       this.publicAlbumSnapshotLoaded = false;
+      this.resetPublicSharePagination();
       this.resetAlbumShareCovers({ invalidateRequest: false });
       this.showShareMenus();
     },
@@ -1929,6 +1951,12 @@ export default {
                 photos: Number(data.photo_count || 0),
                 videos: Number(data.video_count || 0)
               };
+              this.publicShareNextCursor = data.has_more === true && data.next_cursor
+                ? String(data.next_cursor)
+                : null;
+              this.publicShareHasMore = Boolean(this.publicShareNextCursor);
+              this.publicShareLoadingMore = false;
+              this.publicShareLoadMoreError = "";
               this.showShareMenus();
               this.applyAlbumNavigationTitle();
             }
@@ -2018,6 +2046,7 @@ export default {
       }
       if (!this.sessionId || !this.albumShareToken) {
         this.publicAlbumSnapshotLoaded = false;
+        this.resetPublicSharePagination();
         this.focusedPublicMode = false;
         this.focusedPublicMediaUnavailable = this.singleMediaShareRequested;
         this.statusText = this.singleMediaShareRequested
@@ -2027,6 +2056,7 @@ export default {
       }
       this.loadingAlbum = true;
       this.publicAlbumSnapshotLoaded = false;
+      this.resetPublicSharePagination();
       this.resetAlbumShareCovers();
       this.showShareMenus();
       const listRequest = this.beginAlbumListRequest();
@@ -2064,6 +2094,10 @@ export default {
           photos: Number(data.photo_count || 0),
           videos: Number(data.video_count || 0)
         };
+        this.publicShareNextCursor = data.has_more === true && data.next_cursor
+          ? String(data.next_cursor)
+          : null;
+        this.publicShareHasMore = Boolean(this.publicShareNextCursor);
         if (this.sharePreviewMode) {
           this.sharePreviewTotal = Number(data.visible_count || 0);
           this.sharePreviewUntaggedCount = Math.min(
@@ -2116,6 +2150,65 @@ export default {
         this.applyAlbumNavigationTitle();
       } finally {
         this.loadingAlbum = false;
+      }
+    },
+    resetPublicSharePagination() {
+      this.publicShareNextCursor = null;
+      this.publicShareHasMore = false;
+      this.publicShareLoadingMore = false;
+      this.publicShareLoadMoreError = "";
+    },
+    async loadMorePublicAlbum() {
+      const cursor = this.publicShareNextCursor;
+      if (
+        !this.timelineMode ||
+        !this.sessionId ||
+        !this.albumShareToken ||
+        !cursor ||
+        !this.publicShareHasMore ||
+        this.publicShareLoadingMore ||
+        this.loadingAlbum
+      ) {
+        return;
+      }
+      const url = publicAlbumSharePageUrl({
+        sessionId: this.sessionId,
+        token: this.albumShareToken,
+        cursor
+      });
+      if (!url) {
+        this.resetPublicSharePagination();
+        return;
+      }
+      const listRequest = this.beginAlbumListRequest();
+      this.publicShareLoadingMore = true;
+      this.publicShareLoadMoreError = "";
+      try {
+        const response = await request({ url, suppressMaintenance: true });
+        if (!this.isCurrentAlbumListRequest(listRequest)) {
+          return;
+        }
+        const data = dataOf(response) || {};
+        const merged = mergePublicAlbumSharePages(
+          this.photos,
+          (data.photos || []).map((photo) => this.normalizePhotoMedia(photo)),
+          data
+        );
+        this.mediaLoadSerial += 1;
+        this.photos = merged.photos;
+        this.pruneUnpublishedAlbumMediaState(this.photos);
+        this.publicShareNextCursor = merged.nextCursor;
+        this.publicShareHasMore = merged.hasMore;
+        this.refreshWaterfall();
+      } catch (error) {
+        if (!this.isCurrentAlbumListRequest(listRequest)) {
+          return;
+        }
+        this.publicShareLoadMoreError = "继续加载失败，可重试。";
+      } finally {
+        if (this.isCurrentAlbumListRequest(listRequest)) {
+          this.publicShareLoadingMore = false;
+        }
       }
     },
     normalizeAlbumMediaUrl(path) {
@@ -4894,6 +4987,20 @@ export default {
   overflow-x: hidden;
   box-sizing: border-box;
   align-items: flex-start;
+}
+
+.public-share-page-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
+  padding: 28rpx 32rpx 40rpx;
+  color: #7b7f82;
+  font-size: 26rpx;
+}
+
+.public-share-page-status.error {
+  color: #a35e4d;
 }
 
 .waterfall-column {

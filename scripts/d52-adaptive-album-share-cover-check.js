@@ -10,6 +10,7 @@ const EXPECTED_ARTWORK = new Map([
 const paths = Object.freeze({
   apiServer: "apps/api/src/server.js",
   cache: "apps/api/src/modules/album-share-cover/cache.js",
+  selection: "apps/api/src/modules/album-share-cover/selection.js",
   renderer: "apps/api/src/modules/album-share-cover/renderer.js",
   service: "apps/api/src/modules/core/service.js",
   dockerfile: "apps/api/Dockerfile",
@@ -232,14 +233,37 @@ function verifyMiniProgramContract() {
 
 function verifySnapshotBoundary() {
   const service = readSource(paths.service);
+  const selection = readSource(paths.selection);
   const migration = readSource(paths.publicShareMigration);
   assert(
-    /coverMediaIds:\s*normalizePublicShareSnapshotIds\(coverMediaIds,\s*\{[\s\S]{0,100}?max:\s*9/.test(service),
-    "D52 cover_media_ids must remain constrained to at most nine IDs when hashing a snapshot"
+    service.includes("export const PUBLIC_SHARE_COVER_CANDIDATE_LIMIT = 30;"),
+    "D52/D54 cover analysis must retain the explicit 30-item safety bound"
   );
   assert(
-    /label:\s*"cover_media_ids",[\s\S]{0,100}?max:\s*9/.test(service),
-    "D52 persisted cover_media_ids must remain constrained to at most nine IDs"
+    /coverMediaIds:\s*normalizePublicShareSnapshotIds\(coverMediaIds,\s*\{[\s\S]{0,140}?max:\s*PUBLIC_SHARE_COVER_CANDIDATE_LIMIT/.test(service),
+    "D52/D54 cover candidate snapshots must use the bounded analysis limit"
+  );
+  assert(
+    /label:\s*"cover_media_ids",[\s\S]{0,140}?max:\s*PUBLIC_SHARE_COVER_CANDIDATE_LIMIT/.test(service),
+    "D52/D54 persisted cover candidates must use the bounded analysis limit"
+  );
+  assert(
+    selection.includes("export const ALBUM_SHARE_MAX_IMAGES = 9;"),
+    "D52 final cover composition must remain capped at nine images"
+  );
+  const selectionFunction = sourceBetween(
+    selection,
+    "export function selectAlbumShareImages(candidates)",
+    "export function cropLoss",
+    "cover selection"
+  );
+  assert(
+    !selectionFunction.includes(".slice(0, ALBUM_SHARE_MAX_IMAGES)\n    .map(({ image }) => image)"),
+    "D52/D54 must not truncate cover candidates before quality and duplicate analysis"
+  );
+  assert(
+    /return deduped[\s\S]{0,260}?\.slice\(0, ALBUM_SHARE_MAX_IMAGES\)/.test(selectionFunction),
+    "D52/D54 must cap the final rendered cover after analysis"
   );
   assert(
     migration.includes("cover_media_ids JSON NOT NULL"),

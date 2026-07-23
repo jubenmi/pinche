@@ -132,8 +132,10 @@ test("share preview uses safe state, accurate notice and native share gating", (
   );
   assert.match(shareMenuBlock, /!this\.timelineMode/);
   assert.match(shareMenuBlock, /this\.selectionMode/);
-  assert.match(shareMenuBlock, /!this\.albumShareToken/);
-  assert.match(shareMenuBlock, /!this\.shareCoverPrepared/);
+  assert.match(shareMenuBlock, /albumShareMenus\(\{/);
+  assert.match(shareMenuBlock, /token:\s*this\.albumShareToken/);
+  assert.match(shareMenuBlock, /friendReady:\s*this\.shareFriendCoverPrepared/);
+  assert.match(shareMenuBlock, /timelineReady:\s*this\.shareTimelineCoverPrepared/);
 });
 
 test("share preview initial load is not invalidated by the first onShow refresh", () => {
