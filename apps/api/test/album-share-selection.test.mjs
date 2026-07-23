@@ -20,6 +20,7 @@ function media(id, overrides = {}) {
     moderation_status: "approved",
     media_type: id <= 4 ? "video" : "image",
     processing_status: "ready",
+    tag_version: 0,
     created_at: new Date(Date.UTC(2026, 6, 20, 0, 0, id)).toISOString(),
     ...overrides
   };
@@ -35,8 +36,9 @@ function tagRow(photoId) {
   };
 }
 
-function shareConnection(photoRows) {
+function shareConnection(photoRows, options = {}) {
   const shares = [];
+  const untaggedIds = new Set((options.untaggedIds || []).map(Number));
   const session = { id: 10, organizer_user_id: 100, status: "completed" };
   const seat = {
     id: 1000,
@@ -58,7 +60,9 @@ function shareConnection(photoRows) {
         return [[...photoRows].sort((left, right) => Number(right.id) - Number(left.id))];
       }
       if (sql.includes("FROM session_album_photo_tags tag")) {
-        return [photoRows.map((photo) => tagRow(photo.id))];
+        return [photoRows
+          .filter((photo) => !untaggedIds.has(Number(photo.id)))
+          .map((photo) => tagRow(photo.id))];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {
@@ -71,9 +75,10 @@ function shareConnection(photoRows) {
           sharer_user_id: values[1],
           seat_id: values[2],
           media_ids: values[3],
-          snapshot_digest: values[4],
-          cover_media_ids: values[5],
-          expires_at: values[6],
+          implicit_untagged_media: values[4],
+          snapshot_digest: values[5],
+          cover_media_ids: values[6],
+          expires_at: values[7],
           revoked_at: null
         };
         shares.push(share);
@@ -173,12 +178,12 @@ test("all scope stores every currently eligible medium without the legacy item o
 
   assert.equal(result.visible_count, 32);
   assert.equal(result.video_count, 4);
-  assert.deepEqual(result.media_ids, Array.from({ length: 32 }, (_, index) => 32 - index));
-  assert.ok(result.cover_media_ids.length <= 9);
+  assert.deepEqual(result.media_ids, Array.from({ length: 32 }, (_, index) => index + 1));
+  assert.ok(result.cover_media_ids.length <= 30);
   assert.ok(result.cover_media_ids.every((id) => result.media_ids.includes(id)));
 });
 
-test("no-field legacy sharing retains its bounded selection while focus retains the requested medium", async () => {
+test("no-field legacy sharing retains every static photo and at most three videos", async () => {
   const photos = Array.from({ length: 40 }, (_, index) => media(index + 1, {
     media_type: index >= 35 ? "video" : "image"
   }));
@@ -189,7 +194,7 @@ test("no-field legacy sharing retains its bounded selection while focus retains 
     withTransaction: transaction
   });
   assert.equal(legacy.focus_media_id, null);
-  assert.equal(legacy.visible_count, 30);
+  assert.equal(legacy.visible_count, 38);
   assert.equal(legacy.video_count, 3);
 
   const focused = await createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, {
@@ -198,7 +203,7 @@ test("no-field legacy sharing retains its bounded selection while focus retains 
   });
   assert.equal(focused.focus_media_id, 36);
   assert.equal(focused.media_ids.includes(36), true);
-  assert.equal(focused.visible_count, 30);
+  assert.equal(focused.visible_count, 38);
 });
 
 test("selected scope persists only the exact eligible set in stable album order", async () => {
@@ -211,8 +216,23 @@ test("selected scope persists only the exact eligible set in stable album order"
   });
 
   assert.equal(result.visible_count, 31);
-  assert.deepEqual(result.media_ids, Array.from({ length: 31 }, (_, index) => 31 - index));
+  assert.deepEqual(result.media_ids, Array.from({ length: 31 }, (_, index) => index + 1));
   assert.equal(result.media_ids.includes(32), false);
+});
+
+test("explicit scope preserves the sharer's opted-in untagged image snapshot metadata", async () => {
+  const untagged = media(33, {
+    media_type: "image",
+    tag_version: 7
+  });
+  const connection = shareConnection([untagged], { untaggedIds: [untagged.id] });
+  const result = await createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, {
+    scope: "all",
+    withTransaction: async (work) => work(connection)
+  });
+
+  assert.deepEqual(result.media_ids, [33]);
+  assert.deepEqual(result.implicit_untagged_media, [{ media_id: 33, tag_version: 7 }]);
 });
 
 test("selected scope fails as one request when any requested medium is unavailable", async () => {

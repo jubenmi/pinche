@@ -2,147 +2,128 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import {
-  albumSharePreviewNotice,
-  albumSharePreviewRoute,
-  albumSharePreviewRouteState,
-  normalizeAlbumShareSelection
-} from "../src/utils/albumSharePreview.js";
-
 const albumPageSource = await readFile(
   new URL("../src/pages/session/album.vue", import.meta.url),
   "utf8"
 );
 
-test("builds an encoded share-preview route only from valid required fields", () => {
-  assert.equal(
-    albumSharePreviewRoute({
-      sessionId: 10,
-      token: "token +/=?",
-      total: 3,
-      untagged: 1
-    }),
-    "/pages/session/album?id=10&source=share_preview&albumShareToken=token%20%2B%2F%3D%3F&shareTotal=3&shareUntagged=1"
-  );
-  for (const input of [
-    { sessionId: 0, token: "token", total: 1, untagged: 0 },
-    { sessionId: 10, token: "", total: 1, untagged: 0 }
+function sourceBlock(startMarker, endMarker) {
+  const start = albumPageSource.indexOf(startMarker);
+  assert.notEqual(start, -1, `missing source marker: ${startMarker}`);
+  const end = albumPageSource.indexOf(endMarker, start);
+  assert.notEqual(end, -1, `missing source marker: ${endMarker}`);
+  return albumPageSource.slice(start, end);
+}
+
+test("member page exposes the four compact actions and removes the preview step", () => {
+  for (const [handler, label, icon] of [
+    ["openShareSelectionMode", "分享", "album-share.svg"],
+    ["openDownloadSelectionMode", "下载", "album-download.svg"],
+    ["openTagSelectionMode", "标注", "album-tag-white.svg"],
+    ["openRecruitment", "招募", "album-recruit.svg"]
   ]) {
-    assert.equal(albumSharePreviewRoute(input), "");
+    assert.match(albumPageSource, new RegExp(`@tap="${handler}"`));
+    assert.match(albumPageSource, new RegExp(`>${label}<`));
+    assert.match(albumPageSource, new RegExp(icon.replace(".", "\\.")));
   }
+
+  assert.doesNotMatch(albumPageSource, /预览并分享/);
+  assert.doesNotMatch(albumPageSource, /prepareAlbumSharePreview/);
+  assert.doesNotMatch(albumPageSource, /sharePreviewMode/);
+  assert.doesNotMatch(albumPageSource, /normalizeAlbumShareSelection/);
 });
 
-test("parses preview state safely and fails closed without a token", () => {
-  assert.deepEqual(albumSharePreviewRouteState({
-    source: "share_preview",
-    albumShareToken: " snapshot-token ",
-    shareTotal: "3",
-    shareUntagged: "1"
-  }), {
-    token: "snapshot-token",
-    sharePreviewRequested: true,
-    sharePreviewMode: true,
-    total: 3,
-    untagged: 1
-  });
-  assert.deepEqual(albumSharePreviewRouteState({
-    source: "share_preview",
-    shareTotal: "invalid",
-    shareUntagged: "99"
-  }), {
-    token: "",
-    sharePreviewRequested: true,
-    sharePreviewMode: false,
-    total: 0,
-    untagged: 0
-  });
-});
-
-test("generates an accurate privacy reminder", () => {
-  assert.equal(
-    albumSharePreviewNotice({ total: 3, untagged: 1 }),
-    "共 3 项，其中 1 张未标注图片。请确认不含不适合公开的人物或内容。"
+test("share enters an empty batch selection and offers all or selected", () => {
+  const openShareBlock = sourceBlock(
+    "openShareSelectionMode() {",
+    "openTagSelectionMode() {"
   );
-  assert.equal(
-    albumSharePreviewNotice({ total: 2, untagged: 0 }),
-    "共 2 项。请确认不含不适合公开的人物或内容。"
+  assert.match(openShareBlock, /this\.selectionMode = true/);
+  assert.match(openShareBlock, /this\.selectionModePurpose = "share"/);
+  assert.match(openShareBlock, /this\.selectedPhotoIds = \[\]/);
+
+  assert.match(albumPageSource, /selectionModePurpose === 'share'/);
+  assert.match(albumPageSource, /@tap="shareAllAlbumMedia"/);
+  assert.match(albumPageSource, /分享全部（\{\{ shareSelectableMedia\.length \}\}）/);
+  assert.match(albumPageSource, /@tap="shareSelectedAlbumMedia"/);
+  assert.match(albumPageSource, /分享选中（\{\{ selectedPhotoCount \}\}）/);
+
+  const shareAllBlock = sourceBlock(
+    "async shareAllAlbumMedia() {",
+    "async shareSelectedAlbumMedia() {"
   );
-});
+  assert.match(shareAllBlock, /prepareAlbumShareSnapshot\(\{ scope: "all" \}\)/);
 
-test("normalizes exact selection without mutation and enforces 30 media and 3 videos", () => {
-  const photos = [
-    { id: 1, media_type: "image" },
-    { id: 2, media_type: "video" },
-    { id: 3, media_type: "image" }
-  ];
-  const selectedIds = [3, "1", 3];
-  assert.deepEqual(normalizeAlbumShareSelection(photos, selectedIds), {
-    ok: true,
-    ids: [3, 1],
-    error: ""
-  });
-  assert.deepEqual(selectedIds, [3, "1", 3]);
-
-  assert.equal(normalizeAlbumShareSelection(photos, []).ok, false);
-  assert.equal(normalizeAlbumShareSelection(photos, [999]).ok, false);
-  assert.equal(normalizeAlbumShareSelection(
-    Array.from({ length: 31 }, (_, index) => ({ id: index + 1, media_type: "image" })),
-    Array.from({ length: 31 }, (_, index) => index + 1)
-  ).ok, false);
-  assert.equal(normalizeAlbumShareSelection(
-    Array.from({ length: 4 }, (_, index) => ({ id: index + 1, media_type: "video" })),
-    [1, 2, 3, 4]
-  ).ok, false);
-});
-
-test("preview helper results are immutable", () => {
-  assert.equal(Object.isFrozen(albumSharePreviewRouteState({})), true);
-  const selection = normalizeAlbumShareSelection([{ id: 1, media_type: "image" }], [1]);
-  assert.equal(Object.isFrozen(selection), true);
-  assert.equal(Object.isFrozen(selection.ids), true);
-});
-
-test("member page prepares a preview explicitly instead of creating an album token on load", () => {
-  assert.match(albumPageSource, />预览并分享</);
-  assert.match(albumPageSource, /@tap="prepareAlbumSharePreview"/);
-  assert.match(albumPageSource, /async prepareAlbumSharePreview\(\)/);
-  assert.match(albumPageSource, /includeOwnedUntaggedImages: true/);
-  assert.match(albumPageSource, /albumSharePreviewRoute\(\{/);
-
-  const onLoadBlock = albumPageSource.slice(
-    albumPageSource.indexOf("async onLoad(options)"),
-    albumPageSource.indexOf("async onShow()")
+  const shareSelectedBlock = sourceBlock(
+    "async shareSelectedAlbumMedia() {",
+    "async prepareAlbumShareSnapshot(payload) {"
   );
-  const onShowBlock = albumPageSource.slice(
-    albumPageSource.indexOf("async onShow()"),
-    albumPageSource.indexOf("onHide()")
-  );
-  assert.equal(onLoadBlock.includes("ensureAlbumShareToken"), false);
-  assert.equal(onShowBlock.includes("ensureAlbumShareToken"), false);
+  assert.match(shareSelectedBlock, /const mediaIds = \[\.\.\.this\.selectedPhotoIds\]/);
+  assert.match(shareSelectedBlock, /prepareAlbumShareSnapshot\(\{ mediaIds \}\)/);
+  assert.doesNotMatch(shareSelectedBlock, /30|3\s*(?:个|项|条|部|videos?)/i);
 });
 
-test("share preview uses safe state, accurate notice and native share gating", () => {
-  assert.match(albumPageSource, /albumSharePreviewRouteState\(options\)/);
-  assert.match(albumPageSource, /albumSharePreviewNotice\(\{/);
-  assert.match(albumPageSource, /v-if="sharePreviewMode"/);
+test("download uses the same empty batch-selection pattern with two actions", () => {
+  const openDownloadBlock = sourceBlock(
+    "openDownloadSelectionMode() {",
+    "openShareSelectionMode() {"
+  );
+  assert.match(openDownloadBlock, /this\.selectionMode = true/);
+  assert.match(openDownloadBlock, /this\.selectionModePurpose = "download"/);
+  assert.match(openDownloadBlock, /this\.selectedPhotoIds = \[\]/);
+
+  assert.match(albumPageSource, /selectionModePurpose === 'download'/);
+  assert.match(albumPageSource, /@tap="downloadAllPhotos"/);
+  assert.match(albumPageSource, /下载全部（\{\{ downloadablePhotos\.length \}\}）/);
+  assert.match(albumPageSource, /@tap="downloadSelectedPhotos"/);
+  assert.match(albumPageSource, /下载选中（\{\{ selectedPhotoCount \}\}）/);
+});
+
+test("active album sharing is request-guarded and prepares independent dual covers", () => {
+  const prepareBlock = sourceBlock(
+    "async prepareAlbumShareSnapshot(payload) {",
+    "openBulkTagSheet() {"
+  );
+  assert.match(prepareBlock, /beginAlbumShareSnapshotRequest\(\)/);
+  assert.match(prepareBlock, /isCurrentAlbumShareSnapshotRequest\(shareRequest\)/);
+  assert.match(prepareBlock, /installActiveAlbumShareSnapshot/);
+  assert.match(prepareBlock, /cancelSelectionMode\(\{ force: true, preserveActiveShare: true \}\)/);
+  assert.match(prepareBlock, /startAlbumShareCoverPreparation\(\{/);
+  assert.match(prepareBlock, /applyActiveAlbumShareCover\(kind, imageUrl\)/);
+  assert.match(prepareBlock, /await Promise\.all\(coverTasks\)/);
+
+  assert.match(albumPageSource, /activeAlbumShareFriendCoverUrl/);
+  assert.match(albumPageSource, /activeAlbumShareTimelineCoverUrl/);
+  assert.match(albumPageSource, /activeAlbumShareFriendCoverPrepared/);
+  assert.match(albumPageSource, /activeAlbumShareTimelineCoverPrepared/);
+  assert.match(albumPageSource, /albumFriendShareImage\(\)/);
+  assert.match(albumPageSource, /albumTimelineShareImage\(\)/);
+});
+
+test("native share CTA appears only after the active snapshot is ready", () => {
+  assert.match(albumPageSource, /v-if="!timelineMode && albumShareReadyVisible"/);
+  assert.match(albumPageSource, /class="album-share-ready-button"/);
   assert.match(albumPageSource, /open-type="share"/);
-  const shareMenuBlock = albumPageSource.slice(
-    albumPageSource.indexOf("showShareMenus() {"),
-    albumPageSource.indexOf("async prepareShareCoverUrl")
+  assert.match(albumPageSource, /data-album-share="active"/);
+
+  const shareAppMessageBlock = sourceBlock(
+    "onShareAppMessage(options) {",
+    "onShareTimeline() {"
   );
-  assert.match(shareMenuBlock, /!this\.timelineMode/);
-  assert.match(shareMenuBlock, /this\.selectionMode/);
-  assert.match(shareMenuBlock, /albumShareMenus\(\{/);
-  assert.match(shareMenuBlock, /token:\s*this\.albumShareToken/);
-  assert.match(shareMenuBlock, /friendReady:\s*this\.shareFriendCoverPrepared/);
-  assert.match(shareMenuBlock, /timelineReady:\s*this\.shareTimelineCoverPrepared/);
+  assert.match(shareAppMessageBlock, /dataset\?\.albumShare === "active"/);
+  assert.match(shareAppMessageBlock, /activeAlbumSharePayload\(\)/);
+
+  const shareMenuBlock = sourceBlock(
+    "showShareMenus() {",
+    "async prepareShareCoverUrl"
+  );
+  assert.match(shareMenuBlock, /this\.timelineMode\s*\?\s*this\.albumShareToken\s*:\s*this\.activeAlbumShareToken/);
+  assert.match(shareMenuBlock, /this\.shareFriendCoverPrepared\s*:\s*this\.activeAlbumShareFriendCoverPrepared/);
+  assert.match(shareMenuBlock, /this\.shareTimelineCoverPrepared\s*:\s*this\.activeAlbumShareTimelineCoverPrepared/);
 });
 
-test("share preview initial load is not invalidated by the first onShow refresh", () => {
-  const onShowBlock = albumPageSource.slice(
-    albumPageSource.indexOf("async onShow()"),
-    albumPageSource.indexOf("onHide()")
-  );
+test("public album initial load is not invalidated by the first onShow refresh", () => {
+  const onShowBlock = sourceBlock("async onShow()", "onHide()");
   const timelineBlock = onShowBlock.slice(
     onShowBlock.indexOf("if (this.timelineMode)"),
     onShowBlock.indexOf("const auth = getCurrentUser()")
@@ -155,24 +136,31 @@ test("share preview initial load is not invalidated by the first onShow refresh"
   );
 });
 
-test("preview adjustment keeps an independent exact share selection", () => {
-  assert.match(albumPageSource, />调整分享内容</);
-  assert.match(albumPageSource, /<root-portal :enable="selectionMode && !tagSheetPhoto">/);
-  assert.match(albumPageSource, /selectionModePurpose === 'share'/);
-  assert.match(albumPageSource, /openShareSelectionMode/);
-  assert.match(albumPageSource, /!this\.sharePreviewMode \|\|/);
-  assert.match(albumPageSource, /this\.timelineMode && !this\.sharePreviewMode/);
-  assert.match(albumPageSource, /this\.timelineMode && this\.selectionModePurpose !== "share"/);
-  assert.match(albumPageSource, /normalizeAlbumShareSelection\(/);
-  assert.match(albumPageSource, /async saveShareSelection\(\)/);
-  assert.match(albumPageSource, /selectedMediaIds: selection\.ids/);
+test("public shared albums keep cursor pagination, retry state, and bottom loading", () => {
+  assert.match(albumPageSource, /publicShareNextCursor/);
+  assert.match(albumPageSource, /publicShareLoadingMore/);
+  assert.match(albumPageSource, /publicShareLoadMoreError/);
+  assert.match(albumPageSource, /@tap="loadMorePublicAlbum">重试/);
+
+  const reachBottomBlock = sourceBlock("onReachBottom() {", "onShareAppMessage(options) {");
+  assert.match(reachBottomBlock, /if \(this\.timelineMode\)/);
+  assert.match(reachBottomBlock, /this\.loadMorePublicAlbum\(\)/);
+
+  const loadMoreBlock = sourceBlock(
+    "async loadMorePublicAlbum() {",
+    "normalizeAlbumMediaUrl(path)"
+  );
+  assert.match(loadMoreBlock, /publicAlbumSharePageUrl\(\{/);
+  assert.match(loadMoreBlock, /mergePublicAlbumSharePages\(/);
+  assert.match(loadMoreBlock, /this\.publicShareNextCursor = merged\.nextCursor/);
+  assert.match(loadMoreBlock, /this\.publicShareHasMore = merged\.hasMore/);
+  assert.match(loadMoreBlock, /this\.publicShareLoadMoreError = "继续加载失败，可重试。"/);
 });
 
 test("single-image sharing explicitly allows an owned untagged image and explains exposure", () => {
-  const start = albumPageSource.indexOf("async prepareSingleMediaShare(photo");
-  const singleShareBlock = albumPageSource.slice(
-    start,
-    albumPageSource.indexOf("handleSingleMediaShareStatusTap", start)
+  const singleShareBlock = sourceBlock(
+    "async prepareSingleMediaShare(photo",
+    "handleSingleMediaShareStatusTap"
   );
   assert.match(singleShareBlock, /includeOwnedUntaggedImages: true/);
   assert.match(albumPageSource, /未标注，仅在你主动分享后公开/);
