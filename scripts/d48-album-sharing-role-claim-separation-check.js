@@ -93,17 +93,19 @@ assert(
 );
 assert(
   albumPage.includes("prepareShareCoverUrl") &&
-    albumPage.includes("shareCoverPrepared") &&
+    albumPage.includes("shareFriendCoverPrepared") &&
+    albumPage.includes("shareTimelineCoverPrepared") &&
     albumPage.includes("getImageInfo"),
-  "album sharing must preflight its short-lived cover and fall back before enabling share menus"
+  "album sharing must preflight each short-lived channel cover before enabling its share menu"
 );
 assert(
   albumPage.match(/this\.albumSession = this\.albumSessionSummary\(data\);/g)?.length >= 3,
   "public album refresh must preserve header metadata when onLoad and onShow race"
 );
 assert(
-  albumPage.includes("shareCoverUrl"),
-  "album sharing must prepare a safe generated full-album cover"
+  albumPage.includes("shareFriendCoverUrl") &&
+    albumPage.includes("shareTimelineCoverUrl"),
+  "album sharing must prepare safe generated covers for both share channels"
 );
 const singleMediaShareHelper = read("apps/miniprogram/src/utils/albumSingleMediaShare.js");
 assert(
