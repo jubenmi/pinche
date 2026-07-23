@@ -263,6 +263,11 @@ function isAllowedNativeAvatarPrimitiveTag(tag, tagSource) {
         /album-image-viewer__share-button/.test(className) &&
         /\bopen-type\s*=\s*["']share["']/.test(tagSource) &&
         /\bdata-media-id\s*=/.test(tagSource)
+      ) ||
+      (
+        /album-share-ready-button/.test(className) &&
+        /\bopen-type\s*=\s*["']share["']/.test(tagSource) &&
+        /\bdata-album-share\s*=\s*["']active["']/.test(tagSource)
       )
     );
   }
@@ -3484,6 +3489,12 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (albumSource.includes("createIntersectionObserver(this)")) {
     fail("Album visible photo observer must not pass the Vue component proxy to createIntersectionObserver");
   }
+  const albumReadyShareButtonSource = /<button\s+class="album-share-ready-button"\s+open-type="share"\s+data-album-share="active"/.test(
+    albumSource
+  );
+  if (!albumReadyShareButtonSource) {
+    fail("Album active-share ready CTA must use a native share button with the active album dataset");
+  }
   for (const [packageRoot, packageLabel] of [
     [miniprogramDevRoot, "Dev package"],
     [miniprogramBuildRoot, "Build package"]
@@ -3495,6 +3506,14 @@ if (!fs.existsSync(pagesJsonPath)) {
     const builtAlbumWxml = fs.readFileSync(builtAlbumWxmlPath, "utf8");
     if (builtAlbumWxml.includes("<t-image-viewer")) {
       fail(`${packageLabel} album preview must not render TDesign ImageViewer`);
+    }
+    if (
+      packageRoot === miniprogramBuildRoot &&
+      !/<button[^>]*class="album-share-ready-button[^>]*"[^>]*open-type="share"[^>]*data-album-share="active"/.test(
+        builtAlbumWxml
+      )
+    ) {
+      fail(`${packageLabel} album ready CTA must compile to a native share button with the active album dataset`);
     }
   }
   for (const [packageRoot, packageLabel] of [

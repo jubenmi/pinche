@@ -570,6 +570,23 @@ for (const [purpose, allLabel, allMethod, selectedLabel, selectedMethod] of [
   findAction(businessButtons, allLabel, allMethod);
   findAction(businessButtons, selectedLabel, selectedMethod);
 }
+const readyLayer = findTemplateElements(
+  albumTemplate,
+  (element) => hasStaticClass(element, "album-share-ready-layer")
+);
+assert(readyLayer.length === 1, "album must have one active-share ready layer");
+const readyShareButtons = findTemplateElements(
+  readyLayer[0],
+  (element) =>
+    element.tag === "button" &&
+    hasStaticAttribute(element, "open-type", "share") &&
+    hasStaticAttribute(element, "data-album-share", "active") &&
+    templateText(element).includes("发送给好友或群聊")
+);
+assert(
+  readyShareButtons.length === 1,
+  "active-share ready CTA must be a native share button with its album dataset"
+);
 
 const shareAllMethod = optionMethod(albumOptions, "methods", "shareAllAlbumMedia", albumScript);
 assert(containsObjectProperty(shareAllMethod.node, "scope", "all"), "分享全部 must submit scope: all");

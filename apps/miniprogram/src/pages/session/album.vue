@@ -554,13 +554,13 @@
       <view v-if="!timelineMode && albumShareReadyVisible" class="album-share-ready-layer">
         <view class="album-share-ready-title">分享已准备好</view>
         <view class="album-share-ready-count">已准备分享 {{ activeAlbumShareCount }} 项</view>
-        <t-button
+        <button
           class="album-share-ready-button"
           open-type="share"
           data-album-share="active"
         >
           发送给好友或群聊
-        </t-button>
+        </button>
         <view class="album-share-ready-hint">朋友圈请使用右上角“…”分享</view>
         <view class="album-share-ready-close" @tap="closeAlbumShareReady">关闭</view>
       </view>
@@ -5530,14 +5530,25 @@ export default {
 }
 
 .album-share-ready-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   height: 80rpx;
+  padding: 0;
   margin-top: 24rpx;
   border-color: #1f6f5b;
+  border-radius: 12rpx;
   background: #1f6f5b;
   color: #ffffff;
   font-size: 27rpx;
   font-weight: 700;
+  line-height: 80rpx;
+  box-sizing: border-box;
+}
+
+.album-share-ready-button::after {
+  border: 0;
 }
 
 .album-share-ready-close {
