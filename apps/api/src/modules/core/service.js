@@ -2514,7 +2514,7 @@ export function normalizePublicShareSnapshotIds(value, options = {}) {
       throw forbidden("Album share snapshot is invalid");
     }
   }
-  const max = options.max === undefined ? Infinity : Number(options.max);
+  const max = options.max === undefined ? Number.POSITIVE_INFINITY : Number(options.max);
   const allowEmpty = options.allowEmpty === true;
   if (
     !Array.isArray(parsed) ||
