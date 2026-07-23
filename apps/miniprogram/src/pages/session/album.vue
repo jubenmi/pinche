@@ -87,25 +87,23 @@
           class="album-action-groups"
         >
           <t-button
-            v-if="downloadablePhotos.length"
-            class="album-command album-download-all-command"
+            class="album-command"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
             :disabled="albumBusy"
-            @tap="downloadAllPhotos"
+            @tap="openShareSelectionMode"
           >
             <view class="album-command-content">
               <t-image
                 class="album-command-icon"
-                src="/static/icons/album-download.svg"
+                src="/static/icons/album-share.svg"
                 mode="aspectFit"
               />
-              <text class="album-command-label">全部下载</text>
+              <text class="album-command-label">分享</text>
             </view>
           </t-button>
           <t-button
-            v-if="filteredDownloadablePhotos.length"
-            class="album-command album-download-selected-command"
+            class="album-command"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
             :disabled="albumBusy"
@@ -114,15 +112,14 @@
             <view class="album-command-content">
               <t-image
                 class="album-command-icon"
-                src="/static/icons/album-select.svg"
+                src="/static/icons/album-download.svg"
                 mode="aspectFit"
               />
-              <text class="album-command-label">多选下载</text>
+              <text class="album-command-label">下载</text>
             </view>
           </t-button>
           <t-button
-            v-if="taggablePhotos.length"
-            class="album-command album-tag-command"
+            class="album-command album-tag-command tag-action"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; border-color: #1f6f5b; background: #1f6f5b; color: #ffffff; font-size: 23rpx; font-weight: 700; line-height: 52rpx; --td-button-default-bg-color: #1f6f5b; --td-button-default-color: #ffffff; --td-button-default-border-color: #1f6f5b;"
             :disabled="albumBusy"
@@ -134,7 +131,23 @@
                 src="/static/icons/album-tag-white.svg"
                 mode="aspectFit"
               />
-              <text class="album-command-label">批量标注</text>
+              <text class="album-command-label">标注</text>
+            </view>
+          </t-button>
+          <t-button
+            class="album-command"
+            size="extra-small"
+            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
+            :disabled="albumBusy"
+            @tap="openRecruitment"
+          >
+            <view class="album-command-content">
+              <t-image
+                class="album-command-icon"
+                src="/static/icons/album-recruit.svg"
+                mode="aspectFit"
+              />
+              <text class="album-command-label">招募</text>
             </view>
           </t-button>
         </view>
@@ -475,26 +488,73 @@
 
     <root-portal :enable="!timelineMode && selectionMode && !tagSheetPhoto">
       <view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">
-        <view class="floating-toolbar-button secondary" @tap="toggleSelectionMode">
-          取消
+        <view class="album-toolbar-state">
+          <view class="bulk-count">已选 {{ selectedPhotoCount }} 项</view>
+          <view
+            class="floating-toolbar-cancel"
+            :class="{ disabled: albumBusy }"
+            @tap="cancelSelectionMode"
+          >
+            取消
+          </view>
         </view>
-        <view class="bulk-count">已选 {{ selectedPhotoCount }} 张</view>
-        <view
-          v-if="selectionModePurpose === 'download'"
-          class="floating-toolbar-button primary"
-          :class="{ disabled: albumBusy || selectedPhotoCount === 0 }"
-          @tap="downloadSelectedPhotos"
+        <view v-if="selectionModePurpose === 'share'" class="album-toolbar-business">
+          <t-button
+            class="floating-toolbar-button secondary"
+            :disabled="albumBusy"
+            @tap="shareAllAlbumMedia"
+          >
+            分享全部（{{ shareSelectableMedia.length }}）
+          </t-button>
+          <t-button
+            class="floating-toolbar-button primary"
+            :disabled="albumBusy || selectedPhotoCount === 0"
+            @tap="shareSelectedAlbumMedia"
+          >
+            分享选中（{{ selectedPhotoCount }}）
+          </t-button>
+        </view>
+        <view v-else-if="selectionModePurpose === 'download'" class="album-toolbar-business">
+          <t-button
+            class="floating-toolbar-button secondary"
+            :disabled="albumBusy"
+            @tap="downloadAllPhotos"
+          >
+            下载全部（{{ downloadablePhotos.length }}）
+          </t-button>
+          <t-button
+            class="floating-toolbar-button primary"
+            :disabled="albumBusy || selectedPhotoCount === 0"
+            @tap="downloadSelectedPhotos"
+          >
+            下载选中（{{ selectedPhotoCount }}）
+          </t-button>
+        </view>
+        <view v-else class="album-toolbar-business">
+          <t-button
+            class="floating-toolbar-button primary"
+            :disabled="albumBusy || selectedTagTargetCount === 0"
+            @tap="openBulkTagSheet"
+          >
+            批量标注
+          </t-button>
+        </view>
+      </view>
+    </root-portal>
+
+    <root-portal :enable="!timelineMode && albumShareReadyVisible">
+      <view v-if="!timelineMode && albumShareReadyVisible" class="album-share-ready-layer">
+        <view class="album-share-ready-title">分享已准备好</view>
+        <view class="album-share-ready-count">已准备分享 {{ activeAlbumShareCount }} 项</view>
+        <t-button
+          class="album-share-ready-button"
+          open-type="share"
+          data-album-share="active"
         >
-          下载所选
-        </view>
-        <view
-          v-else
-          class="floating-toolbar-button primary"
-          :class="{ disabled: albumBusy || selectedTagTargetCount === 0 }"
-          @tap="openBulkTagSheet"
-        >
-          批量标注
-        </view>
+          发送给好友或群聊
+        </t-button>
+        <view class="album-share-ready-hint">朋友圈请使用右上角“…”分享</view>
+        <view class="album-share-ready-close" @tap="closeAlbumShareReady">关闭</view>
       </view>
     </root-portal>
 
@@ -691,6 +751,11 @@ export default {
       sessionId: "",
       timelineMode: false,
       albumShareToken: "",
+      activeAlbumShareToken: "",
+      activeAlbumShareScope: "",
+      activeAlbumShareCount: 0,
+      albumSharePreparing: false,
+      albumShareReadyVisible: false,
       singleMediaShareRequested: false,
       focusedPublicMode: false,
       focusedPublicMediaUnavailable: false,
@@ -774,6 +839,13 @@ export default {
     filteredDownloadablePhotos() {
       return this.filteredPhotos.filter((photo) =>
         isApprovedAlbumImageDownloadCandidate(photo, this.mediaUrlForPhoto(photo, "download"))
+      );
+    },
+    shareSelectableMedia() {
+      return this.photos.filter(
+        (photo) =>
+          this.isCurrentPublishedAlbumMedia(photo) &&
+          (this.isImageMedia(photo) || this.videoReady(photo))
       );
     },
     previewCurrentPhoto() {
@@ -1024,6 +1096,7 @@ export default {
         this.uploading ||
         this.downloading ||
         this.savingTags ||
+        this.albumSharePreparing ||
         Boolean(this.deletingPhotoId)
       );
     },
@@ -1039,6 +1112,9 @@ export default {
       }
       if (this.savingTags) {
         return "正在保存标注...";
+      }
+      if (this.albumSharePreparing) {
+        return "正在准备分享...";
       }
       if (this.deletingPhotoId) {
         return "正在删除照片...";
@@ -1064,6 +1140,8 @@ export default {
     this.showShareMenus();
     this.applyAlbumNavigationTitle();
     if (this.timelineMode) {
+      this.cancelSelectionMode({ force: true });
+      this.clearActiveAlbumShareState({ hideMenus: true });
       await this.loadPublicAlbum();
       return;
     }
@@ -1078,7 +1156,6 @@ export default {
     this.currentUserId = auth.user.id || "";
     this.currentRoles = auth.roles || [];
     await this.loadAlbum();
-    await this.ensureAlbumShareToken();
   },
   async onShow() {
     if (this.timelineMode) {
@@ -1098,14 +1175,17 @@ export default {
     }
     if (this.sessionId && this.currentUserId) {
       await this.albumMediaRefresh?.refresh();
-      await this.ensureAlbumShareToken();
     }
   },
   onHide() {
+    this.cancelSelectionMode({ force: true });
+    this.clearActiveAlbumShareState({ hideMenus: true });
     this.clearAuthorPrivateAlbumState();
   },
   onUnload() {
     this.resetSingleMediaShareState();
+    this.cancelSelectionMode({ force: true });
+    this.clearActiveAlbumShareState({ hideMenus: true });
     this.clearAuthorPrivateAlbumState();
     this.unobserveAlbumAuthChanges();
     this.albumMediaRefresh?.dispose();
@@ -1116,6 +1196,9 @@ export default {
     this.updateTopActionsFloating();
   },
   onShareAppMessage(options) {
+    if (options?.from === "button" && options?.target?.dataset?.albumShare === "active") {
+      return this.activeAlbumSharePayload();
+    }
     if (options?.from === "button") {
       const mediaId = normalizeFocusedMediaId(options?.target?.dataset?.mediaId);
       const entry = this.singleMediaShareAuthority.entryFor(mediaId);
@@ -1129,37 +1212,38 @@ export default {
       return singleMediaShareFailClosedPayload();
     }
     if (!this.albumShareToken) {
-      showToast({ title: "当前没有可公开分享的完成标注照片", icon: "none" });
+      if (this.timelineMode) {
+        return singleMediaShareFailClosedPayload();
+      }
     }
-    return {
-      title: this.albumShareTitle(),
-      path: `/pages/session/album${queryString({
-        id: this.sessionId,
-        source: "wechat_share",
-        albumShareToken: this.albumShareToken
-      })}`,
-      imageUrl: this.albumShareImage()
-    };
+    return this.activeAlbumSharePayload();
   },
   onShareTimeline() {
+    if (this.timelineMode || !this.activeAlbumShareToken) {
+      return {
+        title: "分享暂不可用",
+        query: "",
+        imageUrl: "/static/art/ticket-landscape.jpg"
+      };
+    }
     return {
       title: this.albumTimelineTitle(),
-      query: this.albumTimelineQuery(),
+      query: this.albumTimelineQuery(this.activeAlbumShareToken),
       imageUrl: this.albumShareImage()
     };
   },
   watch: {
     activeFilter() {
-      this.selectionMode = false;
-      this.selectionModePurpose = "tag";
-      this.selectedPhotoIds = [];
+      if (this.selectionMode && this.selectionModePurpose === "tag") {
+        this.cancelSelectionMode();
+      }
       this.updateTopActionsFloating();
       this.refreshWaterfall();
     },
     selectedRoleFilter() {
-      this.selectionMode = false;
-      this.selectionModePurpose = "tag";
-      this.selectedPhotoIds = [];
+      if (this.selectionMode && this.selectionModePurpose === "tag") {
+        this.cancelSelectionMode();
+      }
       this.updateTopActionsFloating();
       this.refreshWaterfall();
     }
@@ -1167,7 +1251,7 @@ export default {
   methods: {
     apiUrl,
     showShareMenus() {
-      if (!this.albumShareToken || !this.shareCoverPrepared) {
+      if (this.timelineMode || !this.activeAlbumShareToken || !this.shareCoverPrepared) {
         if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
           uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
         }
@@ -1207,6 +1291,36 @@ export default {
     },
     albumShareImage() {
       return this.shareCoverUrl || "/static/art/ticket-landscape.jpg";
+    },
+    activeAlbumSharePayload() {
+      if (this.timelineMode || !this.activeAlbumShareToken || !this.shareCoverPrepared) {
+        showToast({ title: "当前分享尚未准备好", icon: "none" });
+        return singleMediaShareFailClosedPayload();
+      }
+      return {
+        title: this.albumShareTitle(),
+        path: `/pages/session/album${queryString({
+          id: this.sessionId,
+          source: "wechat_share",
+          albumShareToken: this.activeAlbumShareToken
+        })}`,
+        imageUrl: this.albumShareImage()
+      };
+    },
+    clearActiveAlbumShareState({ hideMenus = true } = {}) {
+      this.activeAlbumShareToken = "";
+      this.activeAlbumShareScope = "";
+      this.activeAlbumShareCount = 0;
+      this.albumShareReadyVisible = false;
+      if (hideMenus) {
+        this.showShareMenus();
+      }
+    },
+    closeAlbumShareReady() {
+      if (this.albumSharePreparing) {
+        return;
+      }
+      this.clearActiveAlbumShareState({ hideMenus: true });
     },
     resetSingleMediaShareState() {
       this.singleMediaShareAuthority.reset();
@@ -1321,11 +1435,11 @@ export default {
       this.resetPreviewVideoViewerState();
       this.refreshWaterfall();
     },
-    albumTimelineQuery() {
+    albumTimelineQuery(albumShareToken = this.activeAlbumShareToken) {
       return queryString({
         id: this.sessionId,
         source: "wechat_timeline",
-        albumShareToken: this.albumShareToken
+        albumShareToken
       }).replace(/^\?/, "");
     },
     albumSessionSummary(data = {}) {
@@ -1376,6 +1490,8 @@ export default {
       const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
       if (accountChanged) {
         this.resetSingleMediaShareState();
+        this.cancelSelectionMode({ force: true });
+        this.clearActiveAlbumShareState({ hideMenus: true });
         this.clearAuthorPrivateAlbumState();
       }
       this.currentUserId = nextUserId;
@@ -1415,51 +1531,6 @@ export default {
     },
     canRequestAlbumShareToken() {
       return Boolean(this.localAlbumShareSubject());
-    },
-    async ensureAlbumShareToken() {
-      if (this.timelineMode || !this.sessionId) {
-        return;
-      }
-      if (!this.canRequestAlbumShareToken()) {
-        this.albumShareToken = "";
-        this.shareSubject = null;
-        this.shareOwner = null;
-        this.shareCoverUrl = "";
-        this.shareCoverPrepared = false;
-        this.shareCounts = { total: 0, photos: 0, videos: 0 };
-        this.showShareMenus();
-        return;
-      }
-      this.shareCoverPrepared = false;
-      this.showShareMenus();
-      try {
-        const response = await request({
-          url: `/api/sessions/${this.sessionId}/album/share-token`,
-          method: "POST"
-        });
-        const data = dataOf(response) || {};
-        this.albumShareToken = data.token || "";
-        this.shareSubject = data.share_subject || this.localAlbumShareSubject();
-        this.shareOwner = data.share_owner || null;
-        this.shareCoverUrl = await this.prepareShareCoverUrl(data.cover_url || "");
-        this.shareCoverPrepared = true;
-        this.shareCounts = {
-          total: Number(data.visible_count || 0),
-          photos: Number(data.photo_count || 0),
-          videos: Number(data.video_count || 0)
-        };
-      } catch (error) {
-        this.albumShareToken = "";
-        this.shareSubject = null;
-        this.shareOwner = null;
-        this.shareCoverUrl = "";
-        this.shareCoverPrepared = false;
-        this.shareCounts = { total: 0, photos: 0, videos: 0 };
-        if (error?.code === "ALBUM_PUBLIC_SHARE_EMPTY" || error?.statusCode === 409) {
-          this.statusText = "照片需先完成角色或场景标注，并符合所有人的隐私设置后才能分享。";
-        }
-      }
-      this.showShareMenus();
     },
     inferredSeatRoleName(person) {
       return String(person?.note || "")
@@ -3916,8 +3987,11 @@ export default {
       });
     },
     async downloadSelectedPhotos() {
+      if (this.timelineMode || this.albumBusy || this.selectionModePurpose !== "download") {
+        return;
+      }
       const selectedIdSet = new Set(this.selectedPhotoIds.map((photoId) => Number(photoId)));
-      const photos = this.filteredDownloadablePhotos.filter(
+      const photos = this.downloadablePhotos.filter(
         (photo) => selectedIdSet.has(Number(photo.id))
       );
       await this.downloadPhotos(photos, {
@@ -3926,7 +4000,11 @@ export default {
       });
     },
     async downloadAllPhotos() {
+      if (this.timelineMode || this.albumBusy) {
+        return;
+      }
       await this.downloadPhotos(this.downloadablePhotos, {
+        exitSelection: this.selectionMode && this.selectionModePurpose === "download",
         confirmContent: `将保存我的相册中 ${this.downloadablePhotos.length} 张照片到系统相册，是否继续？`
       });
     },
@@ -3994,10 +4072,7 @@ export default {
         }
         this.statusText = "";
         if (options.exitSelection) {
-          this.selectionMode = false;
-          this.selectionModePurpose = "tag";
-          this.selectedPhotoIds = [];
-          this.updateTopActionsFloating();
+          this.cancelSelectionMode({ force: true });
         }
         if (savedCount > 0 && failedCount === 0) {
           showToast({ title: `已保存 ${savedCount} 张`, icon: "none" });
@@ -4027,7 +4102,11 @@ export default {
       this.selectedTagKeys = (photo.tags || []).map((tag) => tag.key);
     },
     openDownloadSelectionMode() {
-      if (this.timelineMode || this.albumBusy || this.filteredDownloadablePhotos.length === 0) {
+      if (this.timelineMode || this.albumBusy) {
+        return;
+      }
+      if (this.downloadablePhotos.length === 0) {
+        showToast({ title: "暂无可下载照片", icon: "none" });
         return;
       }
       this.closePhotoPreview();
@@ -4039,8 +4118,29 @@ export default {
       this.selectedPhotoIds = [];
       this.topActionsFloating = false;
     },
+    openShareSelectionMode() {
+      if (this.timelineMode || this.albumBusy) {
+        return;
+      }
+      if (this.shareSelectableMedia.length === 0) {
+        showToast({ title: "暂无可分享内容", icon: "none" });
+        return;
+      }
+      this.closePhotoPreview();
+      this.tagSheetPhoto = null;
+      this.bulkTagging = false;
+      this.selectedTagKeys = [];
+      this.selectionMode = true;
+      this.selectionModePurpose = "share";
+      this.selectedPhotoIds = [];
+      this.topActionsFloating = false;
+    },
     openTagSelectionMode() {
-      if (this.timelineMode || this.albumBusy || this.taggablePhotos.length === 0) {
+      if (this.timelineMode || this.albumBusy) {
+        return;
+      }
+      if (this.taggablePhotos.length === 0) {
+        showToast({ title: "暂无可标注照片", icon: "none" });
         return;
       }
       this.closePhotoPreview();
@@ -4052,6 +4152,12 @@ export default {
       this.selectedPhotoIds = [];
       this.topActionsFloating = false;
     },
+    openRecruitment() {
+      if (this.timelineMode || this.albumBusy || !this.sessionId) {
+        return;
+      }
+      uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}` });
+    },
     toggleSelectionMode() {
       if (this.timelineMode || this.albumBusy) {
         return;
@@ -4060,10 +4166,22 @@ export default {
         this.openTagSelectionMode();
         return;
       }
+      this.cancelSelectionMode();
+    },
+    cancelSelectionMode({ force = false, preserveActiveShare = false } = {}) {
+      if (this.timelineMode || (!force && this.albumBusy)) {
+        return;
+      }
       this.selectionMode = false;
       this.selectionModePurpose = "tag";
       this.selectedPhotoIds = [];
+      this.tagSheetPhoto = null;
+      this.selectedTagKeys = [];
+      this.bulkTagging = false;
       this.updateTopActionsFloating();
+      if (!preserveActiveShare) {
+        this.clearActiveAlbumShareState({ hideMenus: true });
+      }
     },
     canSelectPhoto(photo) {
       if (!this.selectionMode) {
@@ -4071,6 +4189,9 @@ export default {
       }
       if (this.selectionModePurpose === "download") {
         return this.isDownloadableAlbumImage(photo);
+      }
+      if (this.selectionModePurpose === "share") {
+        return this.shareSelectableMedia.some((item) => Number(item.id) === Number(photo?.id));
       }
       return Boolean(photo.can_tag);
     },
@@ -4087,6 +4208,67 @@ export default {
         return;
       }
       this.selectedPhotoIds = [...this.selectedPhotoIds, photoId];
+    },
+    async shareAllAlbumMedia() {
+      if (this.timelineMode || this.albumBusy || this.selectionModePurpose !== "share") {
+        return;
+      }
+      await this.prepareAlbumShareSnapshot({ scope: "all" });
+    },
+    async shareSelectedAlbumMedia() {
+      if (
+        this.timelineMode ||
+        this.albumBusy ||
+        this.selectionModePurpose !== "share" ||
+        this.selectedPhotoCount === 0
+      ) {
+        return;
+      }
+      const mediaIds = [...this.selectedPhotoIds];
+      await this.prepareAlbumShareSnapshot({ mediaIds });
+    },
+    async prepareAlbumShareSnapshot(payload) {
+      if (this.timelineMode || this.albumBusy || !this.sessionId) {
+        return;
+      }
+      this.albumSharePreparing = true;
+      this.statusText = "正在准备分享...";
+      this.clearActiveAlbumShareState({ hideMenus: true });
+      try {
+        const response = await request({
+          url: `/api/sessions/${this.sessionId}/album/share-token`,
+          method: "POST",
+          data: payload
+        });
+        const data = dataOf(response) || {};
+        const token = typeof data.token === "string" ? data.token.trim() : "";
+        if (!token) {
+          throw albumMediaError("ALBUM_PUBLIC_SHARE_RESPONSE_INVALID", "分享准备失败，请稍后重试。");
+        }
+        this.activeAlbumShareToken = token;
+        this.activeAlbumShareScope = payload.scope === "all" ? "all" : "selected";
+        this.activeAlbumShareCount = Number(data.visible_count || 0);
+        this.shareSubject = data.share_subject || this.localAlbumShareSubject();
+        this.shareOwner = data.share_owner || null;
+        this.shareCoverPrepared = false;
+        this.shareCoverUrl = await this.prepareShareCoverUrl(data.cover_url || "");
+        this.shareCounts = {
+          total: this.activeAlbumShareCount,
+          photos: Number(data.photo_count || 0),
+          videos: Number(data.video_count || 0)
+        };
+        this.shareCoverPrepared = true;
+        this.albumShareReadyVisible = true;
+        this.cancelSelectionMode({ force: true, preserveActiveShare: true });
+        this.statusText = "";
+        this.showShareMenus();
+      } catch (error) {
+        this.clearActiveAlbumShareState({ hideMenus: true });
+        this.statusText = "";
+        showToast({ title: error?.userMessage || "分享准备失败，请稍后重试", icon: "none" });
+      } finally {
+        this.albumSharePreparing = false;
+      }
     },
     openBulkTagSheet() {
       if (
@@ -4147,9 +4329,7 @@ export default {
         }
         const allFailed = failedCount === targetPhotoIds.length;
         this.closeTagSheet({ force: true });
-        this.selectionMode = false;
-        this.selectedPhotoIds = [];
-        this.updateTopActionsFloating();
+        this.cancelSelectionMode({ force: true });
         await this.loadAlbum();
         if (allFailed) {
           showToast({ title: "标注保存失败", icon: "none" });
@@ -4363,7 +4543,7 @@ export default {
 
 .album-action-groups {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8rpx;
   min-width: 0;
   min-height: 52rpx;
@@ -4408,6 +4588,8 @@ export default {
   gap: 8rpx;
   width: 100%;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .album-command-icon {
@@ -4417,19 +4599,9 @@ export default {
 }
 
 .album-command-label {
-  min-width: 0;
-  overflow: hidden;
+  flex: 0 0 auto;
   color: inherit;
-  text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.album-download-all-command {
-  grid-column: 1;
-}
-
-.album-download-selected-command {
-  grid-column: 2;
 }
 
 .album-tag-command {
@@ -4869,7 +5041,7 @@ export default {
 }
 
 .album-page.selection-active {
-  padding-bottom: 190rpx;
+  padding-bottom: 224rpx;
 }
 
 .album-floating-toolbar {
@@ -4879,10 +5051,10 @@ export default {
   left: 0;
   z-index: 12000;
   display: flex;
-  align-items: flex-start;
-  gap: 12rpx;
-  height: 132rpx;
-  padding: 14rpx 20rpx 0;
+  flex-direction: column;
+  gap: 10rpx;
+  min-height: 172rpx;
+  padding: 14rpx 20rpx 16rpx;
   padding-bottom: env(safe-area-inset-bottom);
   border-top: 1rpx solid #dfd8cc;
   border-radius: 16rpx 16rpx 0 0;
@@ -4895,7 +5067,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 184rpx;
+  flex: 1;
   min-width: 0;
   height: 76rpx;
   border-radius: 12rpx;
@@ -4909,7 +5081,6 @@ export default {
 }
 
 .floating-toolbar-button.secondary {
-  flex-basis: 132rpx;
   border: 1rpx solid #ded8ca;
   background-color: #fffefc;
   color: #193d35;
@@ -4924,14 +5095,88 @@ export default {
 .bulk-count {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   flex: 1;
   min-width: 0;
-  height: 76rpx;
+  height: 48rpx;
   color: #334155;
   font-size: 25rpx;
   line-height: 1.2;
   text-align: center;
+}
+
+.album-toolbar-state,
+.album-toolbar-business {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.album-toolbar-state {
+  gap: 16rpx;
+}
+
+.album-toolbar-business {
+  gap: 12rpx;
+}
+
+.floating-toolbar-cancel {
+  flex: 0 0 auto;
+  padding: 8rpx 4rpx;
+  color: #1f6f5b;
+  font-size: 25rpx;
+  line-height: 1.2;
+}
+
+.floating-toolbar-cancel.disabled {
+  color: #9aa39c;
+}
+
+.album-share-ready-layer {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 12000;
+  padding: 28rpx 30rpx calc(28rpx + env(safe-area-inset-bottom));
+  border-top: 1rpx solid #dfd8cc;
+  border-radius: 20rpx 20rpx 0 0;
+  background: #fffefc;
+  box-shadow: 0 -12rpx 30rpx rgba(15, 23, 42, 0.12);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.album-share-ready-title {
+  color: #153f34;
+  font-size: 32rpx;
+  font-weight: 700;
+}
+
+.album-share-ready-count,
+.album-share-ready-hint {
+  margin-top: 10rpx;
+  color: #718078;
+  font-size: 24rpx;
+  line-height: 1.45;
+}
+
+.album-share-ready-button {
+  width: 100%;
+  height: 80rpx;
+  margin-top: 24rpx;
+  border-color: #1f6f5b;
+  background: #1f6f5b;
+  color: #ffffff;
+  font-size: 27rpx;
+  font-weight: 700;
+}
+
+.album-share-ready-close {
+  margin-top: 22rpx;
+  color: #6f7d74;
+  font-size: 24rpx;
 }
 
 .tag-mask {

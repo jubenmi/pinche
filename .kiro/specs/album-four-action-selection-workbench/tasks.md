@@ -62,65 +62,65 @@
   - [ ] 5.7 验证 album token 不能认领角色、invite token 不能读取相册。
   - [ ] 5.8 增加 `d53:smoke` 命令，运行 `npm run d53:unit && npm run d53:smoke` 并确认通过。
 
-- [ ] 6. 改造普通四操作区
-  - [ ] 6.1 在 `apps/miniprogram/src/pages/session/album.vue` 用四列等宽布局替换现有下载和批量标注按钮组合。
-  - [ ] 6.2 按顺序渲染双字文案 `分享`、`下载`、`标注`、`招募`。
-  - [ ] 6.3 分享使用三节点连接图标，下载使用向下图标，标注使用标签图标，招募使用人物加号图标。
-  - [ ] 6.4 复用现有或正式 TDesign 图标资产；只有缺失时才在 `apps/miniprogram/src/static/icons/` 增加同体系资产。
-  - [ ] 6.5 保持标注墨绿实心，其余描边；统一高度、圆角、图标尺寸和图文间距。
-  - [ ] 6.6 保持标题上传、隐私、筛选和角色选择的结构与行为不变。
-  - [ ] 6.7 在小屏 CSS 契约中确认四按钮单行不换行、不截字、不溢出。
+- [x] 6. 改造普通四操作区
+  - [x] 6.1 在 `apps/miniprogram/src/pages/session/album.vue` 用四列等宽布局替换现有下载和批量标注按钮组合。
+  - [x] 6.2 按顺序渲染双字文案 `分享`、`下载`、`标注`、`招募`。
+  - [x] 6.3 分享使用三节点连接图标，下载使用向下图标，标注使用标签图标，招募使用人物加号图标。
+  - [x] 6.4 复用现有或正式 TDesign 图标资产；只有缺失时才在 `apps/miniprogram/src/static/icons/` 增加同体系资产。
+  - [x] 6.5 保持标注墨绿实心，其余描边；统一高度、圆角、图标尺寸和图文间距。
+  - [x] 6.6 保持标题上传、隐私、筛选和角色选择的结构与行为不变。
+  - [x] 6.7 在小屏 CSS 契约中确认四按钮单行不换行、不截字、不溢出。
 
-- [ ] 7. 实现分享选择模式
-  - [ ] 7.1 增加 `openShareSelectionMode()`，检查候选后直接设置 `selectionModePurpose = "share"` 并清空旧选择。
-  - [ ] 7.2 扩展 `canSelectPhoto()`，share 模式允许本地已知可公开图片和 ready 视频。
-  - [ ] 7.3 修改筛选 watcher：share 模式切换筛选时保留目的和选择 ID，只刷新瀑布流。
-  - [ ] 7.4 调整 `album-floating-toolbar`，share 模式状态行显示已选数量和取消，业务行只显示 `分享全部（A）` 与 `分享选中（N）`。
-  - [ ] 7.5 未选择时禁用 `分享选中`；`分享全部` 与当前勾选无关。
-  - [ ] 7.6 `shareAllAlbumMedia()` 提交 `{ scope: "all" }`。
-  - [ ] 7.7 `shareSelectedAlbumMedia()` 提交完整 `selectedPhotoIds`，不做数量裁剪。
-  - [ ] 7.8 请求期间锁定选择和两个提交按钮；失败时保留选择并展示稳定提示。
+- [x] 7. 实现分享选择模式
+  - [x] 7.1 增加 `openShareSelectionMode()`，检查候选后直接设置 `selectionModePurpose = "share"` 并清空旧选择。
+  - [x] 7.2 扩展 `canSelectPhoto()`，share 模式允许本地已知可公开图片和 ready 视频。
+  - [x] 7.3 修改筛选 watcher：share 模式切换筛选时保留目的和选择 ID，只刷新瀑布流。
+  - [x] 7.4 调整 `album-floating-toolbar`，share 模式状态行显示已选数量和取消，业务行只显示 `分享全部（A）` 与 `分享选中（N）`。
+  - [x] 7.5 未选择时禁用 `分享选中`；`分享全部` 与当前勾选无关。
+  - [x] 7.6 `shareAllAlbumMedia()` 提交 `{ scope: "all" }`。
+  - [x] 7.7 `shareSelectedAlbumMedia()` 提交完整 `selectedPhotoIds`，不做数量裁剪。
+  - [x] 7.8 请求期间锁定选择和两个提交按钮；失败时保留选择并展示稳定提示。
 
-- [ ] 8. 实现无预览分享就绪状态
-  - [ ] 8.1 快照成功后退出选择模式并把 token、封面、最终数量保存为活动分享快照。
-  - [ ] 8.2 在 token 和安全封面都就绪前隐藏好友和朋友圈菜单。
-  - [ ] 8.3 增加轻量底部就绪层，只显示最终数量、`发送给好友或群聊` 原生分享按钮和朋友圈提示。
-  - [ ] 8.4 就绪层不得渲染媒体缩略图、顺序或调整入口。
-  - [ ] 8.5 让就绪层按钮、右上角好友菜单和朋友圈菜单读取同一个活动快照。
-  - [ ] 8.6 页面隐藏、账号变化、token 失败或活动快照失效时关闭就绪层并清理活动状态。
-  - [ ] 8.7 保持 `focusMediaId` 单媒体分享 authority 独立，不覆盖批量活动快照或选择 ID。
+- [x] 8. 实现无预览分享就绪状态
+  - [x] 8.1 快照成功后退出选择模式并把 token、封面、最终数量保存为活动分享快照。
+  - [x] 8.2 在 token 和安全封面都就绪前隐藏好友和朋友圈菜单。
+  - [x] 8.3 增加轻量底部就绪层，只显示最终数量、`发送给好友或群聊` 原生分享按钮和朋友圈提示。
+  - [x] 8.4 就绪层不得渲染媒体缩略图、顺序或调整入口。
+  - [x] 8.5 让就绪层按钮、右上角好友菜单和朋友圈菜单读取同一个活动快照。
+  - [x] 8.6 页面隐藏、账号变化、token 失败或活动快照失效时关闭就绪层并清理活动状态。
+  - [x] 8.7 保持 `focusMediaId` 单媒体分享 authority 独立，不覆盖批量活动快照或选择 ID。
 
-- [ ] 9. 实现下载选择模式双动作
-  - [ ] 9.1 保留 `openDownloadSelectionMode()` 直接进入下载用途，并统一调用新的选择状态清理边界。
-  - [ ] 9.2 修改筛选 watcher：download 模式切换筛选时保留目的和选择 ID。
-  - [ ] 9.3 调整下载底栏，状态行显示已选数量和取消，业务行只显示 `下载全部（A）` 与 `下载选中（N）`。
-  - [ ] 9.4 未选择时禁用 `下载选中`；`下载全部` 始终使用完整 `downloadablePhotos`。
-  - [ ] 9.5 修改 `downloadSelectedPhotos()`，从完整 `downloadablePhotos` 解析选择 ID，不使用当前筛选集合。
-  - [ ] 9.6 保留下载确认、系统权限、逐张保存、进度、部分失败和完成退出行为。
-  - [ ] 9.7 确认视频和无权限媒体在下载模式下不可选。
+- [x] 9. 实现下载选择模式双动作
+  - [x] 9.1 保留 `openDownloadSelectionMode()` 直接进入下载用途，并统一调用新的选择状态清理边界。
+  - [x] 9.2 修改筛选 watcher：download 模式切换筛选时保留目的和选择 ID。
+  - [x] 9.3 调整下载底栏，状态行显示已选数量和取消，业务行只显示 `下载全部（A）` 与 `下载选中（N）`。
+  - [x] 9.4 未选择时禁用 `下载选中`；`下载全部` 始终使用完整 `downloadablePhotos`。
+  - [x] 9.5 修改 `downloadSelectedPhotos()`，从完整 `downloadablePhotos` 解析选择 ID，不使用当前筛选集合。
+  - [x] 9.6 保留下载确认、系统权限、逐张保存、进度、部分失败和完成退出行为。
+  - [x] 9.7 确认视频和无权限媒体在下载模式下不可选。
 
-- [ ] 10. 接入标注与招募
-  - [ ] 10.1 把普通状态 `批量标注` 文案收敛为 `标注`，继续调用 `openTagSelectionMode()`。
-  - [ ] 10.2 确认标签候选、人物面板、批量保存和错误恢复没有改变。
-  - [ ] 10.3 增加 `openRecruitment()`，导航到 `/pages/session/share?id={sessionId}`。
-  - [ ] 10.4 确认新入口不传 `entry=album`，分享页继续生成独立 `join-invite-token`。
-  - [ ] 10.5 确认招募只注册好友 / 群聊分享，不注册朋友圈，且使用安全票根封面。
+- [x] 10. 接入标注与招募
+  - [x] 10.1 把普通状态 `批量标注` 文案收敛为 `标注`，继续调用 `openTagSelectionMode()`。
+  - [x] 10.2 确认标签候选、人物面板、批量保存和错误恢复没有改变。
+  - [x] 10.3 增加 `openRecruitment()`，导航到 `/pages/session/share?id={sessionId}`。
+  - [x] 10.4 确认新入口不传 `entry=album`，分享页继续生成独立 `join-invite-token`。
+  - [x] 10.5 确认招募只注册好友 / 群聊分享，不注册朋友圈，且使用安全票根封面。
 
-- [ ] 11. 状态清理与边界回归
-  - [ ] 11.1 增加统一 `cancelSelectionMode()`，清理目的、选择、标签面板和顶部悬浮状态。
-  - [ ] 11.2 确认 share、download、tag 三种用途不能同时存在或复用彼此 ID。
-  - [ ] 11.3 页面隐藏、退出登录、切换账号和进入公开只读模式时清理未提交状态。
-  - [ ] 11.4 `albumBusy` 期间阻止进入新模式、切换用途和重复提交。
-  - [ ] 11.5 无分享、下载、标注候选时分别展示明确 toast；招募不可用由邀请页实时展示。
+- [x] 11. 状态清理与边界回归
+  - [x] 11.1 增加统一 `cancelSelectionMode()`，清理目的、选择、标签面板和顶部悬浮状态。
+  - [x] 11.2 确认 share、download、tag 三种用途不能同时存在或复用彼此 ID。
+  - [x] 11.3 页面隐藏、退出登录、切换账号和进入公开只读模式时清理未提交状态。
+  - [x] 11.4 `albumBusy` 期间阻止进入新模式、切换用途和重复提交。
+  - [x] 11.5 无分享、下载、标注候选时分别展示明确 toast；招募不可用由邀请页实时展示。
 
 - [ ] 12. 自动化回归
   - [ ] 12.1 运行 `npm run d53:unit`。
-  - [ ] 12.2 运行 `npm run d53:check`。
+  - [x] 12.2 运行 `npm run d53:check`。
   - [ ] 12.3 运行 `npm run d53:smoke`。
   - [ ] 12.4 运行 `npm run d48:check && npm run d48:smoke`，确认相册与招募分流未回退。
   - [ ] 12.5 运行 `npm run d50:unit && npm run d50:check`，确认单媒体分享未回退。
-  - [ ] 12.6 运行 `node scripts/check-miniprogram.js`。
-  - [ ] 12.7 运行 `npm --workspace apps/miniprogram run build:mp-weixin`。
+  - [x] 12.6 运行 `node scripts/check-miniprogram.js`。
+  - [x] 12.7 运行 `npm --workspace apps/miniprogram run build:mp-weixin`。
   - [ ] 12.8 检查 git diff，确认只包含本 spec 范围且未覆盖既有工作区改动。
 
 - [ ] 13. 微信开发者工具验收
