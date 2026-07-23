@@ -147,7 +147,7 @@ function focusedShareConnection(photoRows, tagRows) {
   };
 }
 
-test("selectPublicShareMedia seeds an eligible required image and keeps the 30-media cap", () => {
+test("selectPublicShareMedia seeds an eligible required image without truncating static photos", () => {
   const candidates = Array.from({ length: 35 }, (_, index) => eligibleMedia(index + 1));
   const selected = selectPublicShareMedia(
     candidates,
@@ -158,8 +158,8 @@ test("selectPublicShareMedia seeds an eligible required image and keeps the 30-m
   );
 
   assert.equal(selected[0].id, 1);
-  assert.equal(selected.length, 30);
-  assert.equal(new Set(selected.map((media) => media.id)).size, 30);
+  assert.equal(selected.length, 35);
+  assert.equal(new Set(selected.map((media) => media.id)).size, 35);
 });
 
 test("selectPublicShareMedia includes a required ready video and counts it toward the three-video cap", () => {
@@ -297,6 +297,25 @@ test("createOrReuseSessionAlbumPublicShare persists a safe max-nine cover author
   assert.deepEqual(first.cover_media_ids, persistedCoverMediaIds);
   assert.equal(second.share_id, first.share_id);
   assert.equal(connection.shares.length, 1);
+});
+
+test("createOrReuseSessionAlbumPublicShare retains all eligible static photos beyond thirty", async () => {
+  const photos = Array.from({ length: 31 }, (_, index) => eligibleMedia(index + 1));
+  const connection = focusedShareConnection(
+    photos,
+    photos.map((photo) => ({ photo_id: photo.id, ...sharerSeatTag() }))
+  );
+
+  const share = await createOrReuseSessionAlbumPublicShare(
+    { user: { id: 100 } },
+    10,
+    { withTransaction: async (work) => work(connection) }
+  );
+
+  assert.equal(share.media_ids.length, 31);
+  assert.equal(share.cover_media_ids.length, 9);
+  assert.equal(new Set(share.media_ids).size, 31);
+  assert(share.cover_media_ids.every((mediaId) => share.media_ids.includes(mediaId)));
 });
 
 function publicCoverConnection(options = {}) {

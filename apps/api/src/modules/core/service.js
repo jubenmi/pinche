@@ -2267,8 +2267,8 @@ function publicShareMediaPriority(photo, tags, claims) {
 
 export function normalizePublicShareSelectedMediaIds(value) {
   if (value === undefined) return null;
-  if (!Array.isArray(value) || value.length === 0 || value.length > 30) {
-    throw badRequest("selectedMediaIds must contain between 1 and 30 media IDs");
+  if (!Array.isArray(value) || value.length === 0) {
+    throw badRequest("selectedMediaIds must contain at least one media ID");
   }
   const ids = [];
   const seen = new Set();
@@ -2348,7 +2348,6 @@ export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claim
     if (isVideo && videoCount >= 3) continue;
     selected.push(photo);
     if (isVideo) videoCount += 1;
-    if (selected.length >= 30) break;
   }
   return selected;
 }
@@ -2445,7 +2444,7 @@ export function normalizePublicShareSnapshotIds(value, options = {}) {
       throw forbidden("Album share snapshot is invalid");
     }
   }
-  const max = Number(options.max || 30);
+  const max = options.max === undefined ? Infinity : Number(options.max);
   const allowEmpty = options.allowEmpty === true;
   if (
     !Array.isArray(parsed) ||
@@ -2488,7 +2487,7 @@ export function normalizeImplicitUntaggedMedia(value, options = {}) {
       throw forbidden("Album share snapshot is invalid");
     }
   }
-  if (!Array.isArray(parsed) || parsed.length > 30) {
+  if (!Array.isArray(parsed)) {
     throw forbidden("Album share snapshot is invalid");
   }
   const allowed = options.subsetOf
@@ -2525,7 +2524,7 @@ export function publicShareSnapshotDigest({
     sessionId: positiveId(sessionId, "sessionId"),
     sharerUserId: positiveId(sharerUserId, "sharerUserId"),
     seatId: positiveId(seatId, "seatId"),
-    mediaIds: normalizePublicShareSnapshotIds(mediaIds, { max: 30 })
+    mediaIds: normalizePublicShareSnapshotIds(mediaIds)
       .slice()
       .sort((left, right) => left - right),
     coverMediaIds: normalizePublicShareSnapshotIds(coverMediaIds, {
@@ -2557,8 +2556,7 @@ export function publicShareCoverMediaIdsDigest(coverMediaIds) {
 function normalizeSessionAlbumPublicShareRow(row) {
   if (!row) throw forbidden("Album share is no longer available");
   const mediaIds = normalizePublicShareSnapshotIds(row.media_ids, {
-    label: "media_ids",
-    max: 30
+    label: "media_ids"
   });
   const coverMediaIds = normalizePublicShareSnapshotIds(row.cover_media_ids, {
     label: "cover_media_ids",
@@ -6869,8 +6867,15 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     }
 
     const mediaIds = normalizePublicShareSnapshotIds(
-      selectedMedia.map((photo) => Number(photo.id)),
-      { max: 30 }
+      selectedMedia
+        .slice()
+        .sort((left, right) => {
+          const createdDifference =
+            new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+          if (createdDifference) return createdDifference;
+          return Number(left.id) - Number(right.id);
+        })
+        .map((photo) => Number(photo.id))
     );
     const implicitUntaggedMedia = normalizeImplicitUntaggedMedia(
       selectedMedia
