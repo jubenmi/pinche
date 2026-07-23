@@ -52,15 +52,15 @@
   - [x] 4.7 封面选择继续只从最终快照中选最多 9 项，并保持安全封面降级。
   - [x] 4.8 相同完整快照继续复用，不同媒体集合不得因截断或摘要错误而误复用。
 
-- [ ] 5. 建立后端数据库 smoke
+- [x] 5. 建立后端数据库 smoke
   - [x] 5.1 新建 `scripts/d53-album-four-action-selection-smoke.js`，建立至少 32 个符合公开资格媒体的车局夹具。
-  - [ ] 5.2 验证 `{ scope: "all" }` 的 `visible_count` 与快照包含全部合规媒体。
-  - [ ] 5.3 验证 31 项以上 selected 请求成功且快照只包含精确选择集合。
-  - [ ] 5.4 验证空、重复、跨车局、作者私有、未审核、处理中视频和隐私阻止媒体关闭式失败。
-  - [ ] 5.5 验证 selected 任一失效时整体失败，all 在提交时重新计算最新资格。
-  - [ ] 5.6 验证公开读取只返回快照与当前资格交集，撤销和过期继续生效。
-  - [ ] 5.7 验证 album token 不能认领角色、invite token 不能读取相册。
-  - [ ] 5.8 增加 `d53:smoke` 命令，运行 `npm run d53:unit && npm run d53:smoke` 并确认通过。
+  - [x] 5.2 验证 `{ scope: "all" }` 的 `visible_count` 与快照包含全部合规媒体。
+  - [x] 5.3 验证 31 项以上 selected 请求成功且快照只包含精确选择集合。
+  - [x] 5.4 验证空、重复、跨车局、作者私有、未审核、处理中视频和隐私阻止媒体关闭式失败。
+  - [x] 5.5 验证 selected 任一失效时整体失败，all 在提交时重新计算最新资格。
+  - [x] 5.6 验证公开读取只返回快照与当前资格交集，撤销和过期继续生效。
+  - [x] 5.7 验证 album token 不能认领角色、invite token 不能读取相册。
+  - [x] 5.8 增加 `d53:smoke` 命令，运行 `npm run d53:unit && npm run d53:smoke` 并确认通过。
 
 - [x] 6. 改造普通四操作区
   - [x] 6.1 在 `apps/miniprogram/src/pages/session/album.vue` 用四列等宽布局替换现有下载和批量标注按钮组合。
@@ -113,21 +113,24 @@
   - [x] 11.4 `albumBusy` 期间阻止进入新模式、切换用途和重复提交。
   - [x] 11.5 无分享、下载、标注候选时分别展示明确 toast；招募不可用由邀请页实时展示。
 
-- [ ] 12. 自动化回归
-  - [ ] 12.1 运行 `npm run d53:unit`。
+- [x] 12. 自动化回归
+  - [x] 12.1 运行 `npm run d53:unit`。
   - [x] 12.2 运行 `npm run d53:check`。
-  - [ ] 12.3 运行 `npm run d53:smoke`。
-  - [ ] 12.4 运行 `npm run d48:check && npm run d48:smoke`，确认相册与招募分流未回退。
-  - [ ] 12.5 运行 `npm run d50:unit && npm run d50:check`，确认单媒体分享未回退。
+  - [x] 12.3 运行 `npm run d53:smoke`。
+  - [x] 12.4 运行 `npm run d48:check && npm run d48:smoke`，确认相册与招募分流未回退。
+  - [x] 12.5 运行 `npm run d50:unit && npm run d50:check`，确认单媒体分享未回退。
   - [x] 12.6 运行 `node scripts/check-miniprogram.js`。
   - [x] 12.7 运行 `npm --workspace apps/miniprogram run build:mp-weixin`。
-  - [ ] 12.8 检查 git diff，确认只包含本 spec 范围且未覆盖既有工作区改动。
+  - [x] 12.8 检查 git diff，确认只包含本 spec 范围且未覆盖既有工作区改动。
 
 ## 2026-07-23 前端命令证据
 
 - `npm run d53:check`：通过（含四操作、用途分支双按钮、活动快照竞态与下载取消契约）。
 - `node scripts/check-miniprogram.js`：通过（14 pages）。
 - `npm --workspace apps/miniprogram run build:mp-weixin`：通过（仅有上游 Sass deprecation 提示）。
+- `npm run d53:unit`：通过（11/11）；`npm run d53:smoke`：通过（32 个合规媒体、31 个精确 selected，session 153）。
+- `npm run d48:check && npm run d48:smoke`：通过；`npm run d50:unit && npm run d50:check`：通过（38/38）。
+- `git diff --check`：通过；工作树中仅保留本任务开始前已记录的无关修改与未跟踪资产。
 
 - [ ] 13. 微信开发者工具验收
   - [ ] 13.1 确认普通状态四按钮顺序、双字文案、图标区别和四列布局符合设计稿。
@@ -140,7 +143,12 @@
   - [ ] 13.8 确认标注仍可批量保存，招募进入角色邀请且朋友圈不可用。
   - [ ] 13.9 确认公开页没有上传、下载、标注、隐私、招募或认领入口。
 
+## 2026-07-23 微信开发者工具记录
+
+- 已通过临时“相册四按钮验收”编译条件实际启动 `pages/session/album?id=158`，开发者工具页面路径显示为 `pages/session/album`；登录弹层和本地 mock 登录也已实际触发。
+- 默认 mock 账号不是该 smoke 车局成员，`GET /api/sessions/158/album` 按预期返回 403。切换到媒体所有者验收账号前，开发者工具转入一个与本任务无关的工作树并显示信任提示；未再操作该窗口。所有临时编译产物配置均已恢复，因此 13.1–13.9 均不勾选，且未实际发送好友、群聊或朋友圈分享。
+
 - [ ] 14. 收尾
-  - [ ] 14.1 更新本 `tasks.md`，只勾选具有命令输出或人工证据的项目。
-  - [ ] 14.2 记录全部自动化命令、结果和仍待完成的微信人工验收。
+  - [x] 14.1 更新本 `tasks.md`，只勾选具有命令输出或人工证据的项目。
+  - [x] 14.2 记录全部自动化命令、结果和仍待完成的微信人工验收。
   - [ ] 14.3 最终说明四按钮、分享 / 下载双动作、无上限快照、无预览分享和招募分流均按 spec 完成。
