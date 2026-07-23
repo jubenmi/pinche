@@ -40,7 +40,7 @@
     "d40:smoke": "node scripts/d40-guest-calendar-home-smoke.js",
     "d48:check": "node scripts/d48-album-sharing-role-claim-separation-check.js",
     "d48:smoke": "node scripts/d48-album-sharing-role-claim-separation-smoke.js",
-    "d54:unit": "node --test apps/api/test/album-public-share-pagination.test.mjs apps/api/test/album-single-media-share.test.mjs apps/miniprogram/test/albumPublicSharePagination.test.mjs apps/miniprogram/test/albumSharePreview.test.mjs",
+    "d54:unit": "node --test apps/api/test/album-public-share-pagination.test.mjs apps/api/test/album-public-share-cover-recipe.test.mjs apps/api/test/album-single-media-share.test.mjs apps/miniprogram/test/albumPublicSharePagination.test.mjs apps/miniprogram/test/albumSharePreview.test.mjs",
     "d54:check": "node scripts/d54-public-album-full-share-pagination-check.js",
     "d50:unit": "node --test apps/api/test/album-single-media-share.test.mjs apps/miniprogram/test/albumSingleMediaShare.test.mjs",
     "d50:check": "node scripts/d50-album-single-media-sharing-check.js",
