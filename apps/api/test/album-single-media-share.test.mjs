@@ -247,7 +247,7 @@ test("createOrReuseSessionAlbumPublicShare persists and reuses an eligible focus
   assert.equal(second.focus_media_id, 1);
 });
 
-test("createOrReuseSessionAlbumPublicShare persists a safe max-nine cover authorization snapshot", async () => {
+test("createOrReuseSessionAlbumPublicShare persists a safe visual candidate snapshot for a max-nine cover", async () => {
   const safeRolePhotos = Array.from({ length: 14 }, (_, index) => eligibleMedia(index + 1));
   const groupPhoto = eligibleMedia(20);
   const otherUploaderPhoto = eligibleMedia(21, { uploader_user_id: 200 });
@@ -288,8 +288,8 @@ test("createOrReuseSessionAlbumPublicShare persists a safe max-nine cover author
 
   assert.equal(typeof persisted.media_ids, "string");
   assert.equal(typeof persisted.cover_media_ids, "string");
-  assert.deepEqual(persistedCoverMediaIds, [14, 13, 12, 11, 10, 9, 8, 7, 6]);
-  assert.equal(persistedCoverMediaIds.length, 9);
+  assert.deepEqual(persistedCoverMediaIds, [14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 24]);
+  assert.equal(persistedCoverMediaIds.length, 15);
   assert.equal(persistedCoverMediaIds.every((mediaId) => persistedMediaIds.includes(mediaId)), true);
   for (const excludedId of [20, 21, 22, 23]) {
     assert.equal(persistedCoverMediaIds.includes(excludedId), false);
@@ -313,7 +313,8 @@ test("createOrReuseSessionAlbumPublicShare retains all eligible static photos be
   );
 
   assert.equal(share.media_ids.length, 31);
-  assert.equal(share.cover_media_ids.length, 9);
+  assert.equal(share.cover_media_ids.length, 30);
+  assert.deepEqual(share.cover_media_ids, Array.from({ length: 30 }, (_, index) => 31 - index));
   assert.equal(new Set(share.media_ids).size, 31);
   assert(share.cover_media_ids.every((mediaId) => share.media_ids.includes(mediaId)));
 });

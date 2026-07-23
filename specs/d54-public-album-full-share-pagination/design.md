@@ -2,7 +2,7 @@
 
 ## 1. 架构结论
 
-D54 将“正文快照范围”和“封面候选范围”明确分离：`media_ids` 保存完整公开正文范围，`cover_media_ids` 始终保存其安全子集中的最多 9 项。公开页通过签名游标逐页读取 `media_ids`，每个数据库媒体查询最多处理 30 个 ID。
+D54 将“正文快照范围”“封面分析候选范围”和“最终画布格数”明确分离：`media_ids` 保存完整公开正文范围，`cover_media_ids` 保存其安全子集中的最多 30 项，仅供封面实际图片分析；渲染器在其中筛选、去重并最终输出 1～9 张。公开页通过签名游标逐页读取 `media_ids`，每个数据库媒体查询最多处理 30 个 ID。
 
 不新增数据库字段或迁移。`media_ids`、`cover_media_ids` 和 `implicit_untagged_media` 继续是同一分享快照的一部分，摘要继续绑定它们；旧快照保留原 JSON、摘要和 token 兼容语义。
 
@@ -14,11 +14,11 @@ D54 将“正文快照范围”和“封面候选范围”明确分离：`media_
 
 - 移除 `normalizePublicShareSelectedMediaIds` 的 30 项静态照片上限。
 - `selectPublicShareMedia` 默认范围不再在第 30 项停止；保留 `ready` 视频最多 3 项。
-- `normalizePublicShareSnapshotIds` 在未明确传入 `max` 时不施加媒体数量上限；封面调用继续显式传入 `max: 9`。
+- `normalizePublicShareSnapshotIds` 在未明确传入 `max` 时不施加媒体数量上限；`cover_media_ids` 显式使用 `PUBLIC_SHARE_COVER_CANDIDATE_LIMIT = 30`，而不是画布的 9 格上限。
 - `normalizeImplicitUntaggedMedia` 跟随正文快照，不再独立限制为 30 项。
-- `publicShareSnapshotDigest`、行规范化和创建快照对正文 ID 使用无上限规范化；封面仍验证为正文子集且最多 9 项。
+- `publicShareSnapshotDigest`、行规范化和创建快照对正文 ID 使用无上限规范化；封面分析候选仍验证为正文子集且最多 30 项。
 
-`createOrReuseSessionAlbumPublicShare` 将 `selectedMedia` 的静态照片范围完整写入 `media_ids`。封面继续调用 `selectPublicShareCoverMedia(selectedMedia, ...)`，因此从完整候选集合中选出至多 9 项。
+`createOrReuseSessionAlbumPublicShare` 将 `selectedMedia` 的静态照片范围完整写入 `media_ids`。封面继续调用 `selectPublicShareCoverMedia(selectedMedia, ...)`，先从完整安全候选集合保留最多 30 项。随后封面路由读取这 30 项，`selectAlbumShareImages` 先处理清晰度、曝光、重复图和质量下限，最后才截到最多 9 项；因此重复的前九项不会阻止后续优质候选补位。
 
 ### 2.2 签名游标
 
@@ -75,7 +75,7 @@ decodePublicSharePageCursor(cursor, shareId)
 - 成功时使用 helper 去重追加并刷新瀑布流；失败仅设置局部错误；
 - token、页面刷新、卸载和请求序列变化时清空游标并拒绝过期响应。
 
-封面预热和分享菜单仍只使用 share token 与 `cover_media_ids`，不依赖正文是否加载到最后一页。
+封面预热和分享菜单仍只使用 share token 与内部 `cover_media_ids` 候选，不依赖正文是否加载到最后一页；对外返回的是生成后的单张封面图，不暴露这些候选 ID。
 
 ## 4. 安全与兼容
 
@@ -86,4 +86,4 @@ decodePublicSharePageCursor(cursor, shareId)
 
 ## 5. 测试策略
 
-服务端测试以 31、100 张安全静态图片建立完整快照，断言正文未截断、封面最多 9 张、分页游标稳定且篡改关闭。小程序 helper 测试页 URL、去重合并和空/错误游标；页面静态契约测试触底加载、请求序列门禁和局部失败文案。D54 门禁脚本保证发布前检查仍覆盖上述边界。
+服务端测试以 31、100 张安全静态图片建立完整快照，断言正文未截断、封面分析候选最多 30 张、最终画布最多 9 张且能在前序重复图后补位、分页游标稳定且篡改关闭。小程序 helper 测试页 URL、去重合并和空/错误游标；页面静态契约测试触底加载、请求序列门禁和局部失败文案。D54 门禁脚本保证发布前检查仍覆盖上述边界。

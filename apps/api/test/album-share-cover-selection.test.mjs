@@ -122,7 +122,7 @@ test("selection applies the quality floor, keeps one, caps at nine, and never re
   assert.deepEqual(capped.map((image) => image.mediaId), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
-test("selection never backfills past its sorted top-nine candidate window", () => {
+test("selection backfills from its safe candidate window after duplicate removal", () => {
   const selected = selectAlbumShareImages([
     candidate("best", { quality: 1, dHash: 0n }),
     ...Array.from({ length: 8 }, (_, index) => candidate(`duplicate-${index}`, {
@@ -132,7 +132,7 @@ test("selection never backfills past its sorted top-nine candidate window", () =
     candidate("later-distinct", { quality: 0.9, dHash: 0b1111111n })
   ]);
 
-  assert.deepEqual(selected.map((image) => image.mediaId), ["best"]);
+  assert.deepEqual(selected.map((image) => image.mediaId), ["best", "later-distinct"]);
 });
 
 test("selection has a total deterministic tie order and leaves caller candidates unchanged", () => {

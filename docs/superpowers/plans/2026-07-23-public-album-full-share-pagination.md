@@ -26,10 +26,10 @@ test("public share snapshots all eligible static photos while retaining only thr
   assert.equal(selected.length, 100);
 });
 
-test("a full public-share snapshot keeps 31 media IDs but no more than nine cover IDs", async () => {
+test("a full public-share snapshot keeps 31 media IDs and a bounded visual candidate pool", async () => {
   const result = await createOrReuseSessionAlbumPublicShare(user, 10, optionsFor(31));
   assert.equal(result.media_ids.length, 31);
-  assert.equal(result.cover_media_ids.length, 9);
+  assert.equal(result.cover_media_ids.length, 30);
 });
 ```
 
@@ -55,7 +55,7 @@ export function normalizePublicShareSelectedMediaIds(value) {
 const max = options.max === undefined ? Infinity : Number(options.max);
 ```
 
-Remove only the `selected.length >= 30` break in default selection and the implicit 30 maxima used for `media_ids` and `implicit_untagged_media`. Keep explicit `{ max: 9 }` cover validation and the `> 3` video validation. Before persisting a new snapshot, order `media_ids` by `created_at ASC, id ASC`; pass the complete selected set, not only a page, to `selectPublicShareCoverMedia`.
+Remove only the `selected.length >= 30` break in default selection and the implicit 30 maxima used for `media_ids` and `implicit_untagged_media`. Keep the `> 3` video validation. Before persisting a new snapshot, order `media_ids` by `created_at ASC, id ASC`; pass the complete selected set to `selectPublicShareCoverMedia`, retain at most 30 safe candidates for actual-buffer analysis, and limit the final renderer output—not the candidate list—to nine images.
 
 - [ ] **Step 4: Run the focused test and verify GREEN**
 
@@ -189,7 +189,7 @@ git commit -m "feat: load public album shares by page"
 - Modify: `package.json`
 - Modify: `specs/d54-public-album-full-share-pagination/tasks.md`
 
-- [ ] **Step 1: Write the D54 static gate**
+- [x] **Step 1: Write the D54 static gate**
 
 ```js
 assert.match(serviceSource, /PUBLIC_SHARE_PAGE_SIZE\s*=\s*30/);
@@ -198,17 +198,17 @@ assert.match(serverSource, /cursor:\s*url\.searchParams\.get\("cursor"\)/);
 assert.match(albumSource, /loadMorePublicAlbum/);
 ```
 
-- [ ] **Step 2: Run it before package integration and verify RED**
+- [x] **Step 2: Run it and correct its source-boundary assertion**
 
 Run: `node scripts/d54-public-album-full-share-pagination-check.js`
 
-Expected: failure until the implementation and package wiring exist.
+Expected: the gate fails closed on an invalid source boundary and passes only after it targets the explicit public-share route.
 
-- [ ] **Step 3: Integrate the gate**
+- [x] **Step 3: Integrate the gate**
 
-Add `d54:unit` for the API and mini-program pagination test files, and add `d54:check` for the static gate. Run `d54:unit` in `precheck` and `d54:check` in `check` after the D52 gates.
+Add `d54:unit` for the API and mini-program pagination test files, and add `d54:check` for the static gate. Run both from the root `postcheck` lifecycle after the existing check completes.
 
-- [ ] **Step 4: Verify focused and complete checks**
+- [x] **Step 4: Verify focused and complete checks**
 
 Run:
 
@@ -222,7 +222,7 @@ npm run check
 git diff --check
 ```
 
-Expected: every command exits 0; D54 tests cover 31/100 photos, cursor integrity, page merging, and nine-cover cap.
+Expected: every command exits 0; D54 tests cover 31/100 photos, cursor integrity, page merging, a 30-item safety candidate pool, and a nine-image final-cover cap.
 
 - [ ] **Step 5: Commit and record evidence**
 

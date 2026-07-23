@@ -120,7 +120,6 @@ export function selectAlbumShareImages(candidates) {
     .filter((candidate) => candidate?.eligible === true)
     .map((candidate, index) => ({ image: normalizeImage(candidate), index }))
     .sort((left, right) => compareCandidates(left.image, right.image) || left.index - right.index)
-    .slice(0, ALBUM_SHARE_MAX_IMAGES)
     .map(({ image }) => image);
 
   const deduped = [];

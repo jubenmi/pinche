@@ -83,6 +83,9 @@ const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
 const ALBUM_VIDEO_PROCESSING_STATUSES = new Set(["processing", "ready", "failed"]);
 const SESSION_ALBUM_PUBLIC_SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const PUBLIC_SHARE_PAGE_SIZE = 30;
+// Keep a bounded set of privacy-authorized photos for actual-buffer analysis.
+// The renderer still emits at most nine images; this is not a public layout limit.
+export const PUBLIC_SHARE_COVER_CANDIDATE_LIMIT = 30;
 
 function requireValue(body, key) {
   const value = body[key];
@@ -2433,7 +2436,9 @@ export function selectPublicShareCoverMedia(
     if (createdDifference) return createdDifference;
     return Number(right.photo.id) - Number(left.photo.id);
   });
-  return candidates.slice(0, 9).map(({ photo }) => photo);
+  return candidates
+    .slice(0, PUBLIC_SHARE_COVER_CANDIDATE_LIMIT)
+    .map(({ photo }) => photo);
 }
 
 export function normalizePublicShareSnapshotIds(value, options = {}) {
@@ -2612,7 +2617,7 @@ export function publicShareSnapshotDigest({
       .sort((left, right) => left - right),
     coverMediaIds: normalizePublicShareSnapshotIds(coverMediaIds, {
       allowEmpty: true,
-      max: 9,
+      max: PUBLIC_SHARE_COVER_CANDIDATE_LIMIT,
       subsetOf: mediaIds
     })
       .slice()
@@ -2631,7 +2636,7 @@ export function publicShareSnapshotDigest({
 export function publicShareCoverMediaIdsDigest(coverMediaIds) {
   const ids = normalizePublicShareSnapshotIds(coverMediaIds, {
     allowEmpty: true,
-    max: 9
+    max: PUBLIC_SHARE_COVER_CANDIDATE_LIMIT
   });
   return crypto.createHash("sha256").update(JSON.stringify(ids)).digest("hex");
 }
@@ -2644,7 +2649,7 @@ function normalizeSessionAlbumPublicShareRow(row) {
   const coverMediaIds = normalizePublicShareSnapshotIds(row.cover_media_ids, {
     label: "cover_media_ids",
     allowEmpty: true,
-    max: 9,
+    max: PUBLIC_SHARE_COVER_CANDIDATE_LIMIT,
     subsetOf: mediaIds
   });
   const implicitUntaggedMedia = normalizeImplicitUntaggedMedia(
