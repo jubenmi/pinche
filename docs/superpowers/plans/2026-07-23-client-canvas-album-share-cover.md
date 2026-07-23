@@ -59,7 +59,7 @@ git commit -m "feat: expose client album share cover recipes"
 
 **Step 1: Write the failing tests.**
 
-Test recipe normalization, crop-safe geometry, layout selection for one, two, and three images, friend and timeline output sizes, and a fake Canvas runtime that verifies the renderer exports a local JPEG path. Include an unavailable-runtime/error case that returns a controlled failure rather than throwing.
+Test recipe normalization, crop-safe geometry, layout selection for one, two, and three images, friend and timeline output sizes, and a fake Canvas runtime that verifies the renderer exports a local JPEG path. Verify a recipe media ID resolves to the current album's local preview path before its thumbnail URL, and only uses the URL on a local cache miss. Include an unavailable-runtime/error case that returns a controlled failure rather than throwing.
 
 **Step 2: Run the focused test to verify red.**
 
@@ -71,7 +71,7 @@ Expected: FAIL because the client Canvas module does not exist.
 
 **Step 3: Implement the smallest production change.**
 
-Add pure normalization and layout-plan functions, then a runtime adapter that loads each recipe thumbnail, draws crop-to-fill tiles plus lightweight title text, and exports a 0.82-quality JPEG to a temporary local path. The adapter must support the WeChat page-canvas API and permit test injection; do not download or compose images through the API server.
+Add pure normalization and layout-plan functions, then a runtime adapter that resolves each recipe media ID to the current album's local preview first and its 640px thumbnail URL only on a miss, draws crop-to-fill tiles plus lightweight title text, and exports a 0.82-quality JPEG to a temporary local path. The adapter must support the WeChat page-canvas API and permit test injection; do not download or compose images through the API server.
 
 **Step 4: Run the focused Canvas tests.**
 

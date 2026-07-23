@@ -6,7 +6,7 @@
 公开相册完整快照
   → 服务端：安全复核 + 元数据排序（最多 3 张）
   → cover_recipe（3 个受 token 保护的 640px 缩略图 URL）
-  → 小程序：下载 1～3 张缩略图 + Canvas
+  → 小程序：复用本地预览，缺失时下载 1～3 张缩略图 + Canvas
   → friend 5:4 / timeline 1:1 本地临时 JPEG
   → 微信 imageUrl
 ```
@@ -56,7 +56,7 @@
 - `normalizeAlbumShareCoverRecipe`：只保留 1～3 个合法图片；
 - `albumShareCanvasLayout(kind, count)`：返回好友 1000×800 或朋友圈 1000×1000 的单、双、三图槽位；
 - `albumShareCanvasPlan`：按图片尺寸与可选焦点计算裁切源矩形与目标矩形；
-- `renderAlbumShareCanvasCover`：使用 `uni.createOffscreenCanvas`（不可用时使用页面 canvas 适配器）绘制图片和文案，导出临时 JPEG；
+- `renderAlbumShareCanvasCover`：使用 `uni.createOffscreenCanvas`（不可用时使用页面 canvas 适配器）绘制图片和文案，导出临时 JPEG；图片源优先由当前相册媒体 ID 对应的本地预览路径解析，缺失时才使用 recipe 的缩略图 URL；
 - `createAlbumShareCanvasPreparation`：以 `shareId + recipe digest + kind` 为键去重/复用本地路径，提供 token 与请求序列门禁。
 
 `albumShareCover.js` 改为处理 recipe 和本地 Canvas 结果；保留已有的好友/朋友圈分通道就绪状态、菜单门禁和本地降级图。`album.vue` 在首屏公开分享响应到达后开始预热，但不等待正文分页结束；失败只回退对应渠道。
@@ -72,7 +72,7 @@
 
 ## 5. 故障、缓存与安全
 
-- recipe 为空、图片下载失败、Canvas 不可用或导出失败：回退为现有渠道本地图；
+- recipe 为空、图片源解析（本地预览及其缩略图兜底）失败、Canvas 不可用或导出失败：回退为现有渠道本地图；
 - 新 token、请求失效、页面隐藏/卸载：取消或忽略旧任务并清理内存映射；
 - 本地临时路径仅在当前页面会话缓存，不能作为长期授权 URL；
 - 所有 recipe 缩略图仍通过现有公开媒体 capability 路由动态复核，不向客户端暴露原图或封面候选列表之外的内容；
@@ -83,6 +83,6 @@
 先写失败测试，再删服务器渲染链路并实现 recipe，最后接入 Canvas：
 
 1. 服务端：新快照三图、旧 30 候选取前三、空/失效 recipe、DTO 无旧字段、无封面 route；
-2. 小程序：recipe 规范化、三套布局、裁切计划、单渠道降级、同 recipe 复用、token 失效关闭；
+2. 小程序：recipe 规范化、本地预览优先与缩略图兜底、三套布局、裁切计划、单渠道降级、同 recipe 复用、token 失效关闭；
 3. 静态门禁：禁止服务端导入/路由/缓存/渲染模块，要求 recipe 与 Canvas 适配器；
 4. 回归：D48/D50/D54 更新后的门禁、D55 聚焦测试、小程序构建、`npm run check` 和 `npm run devtools:refresh`。
