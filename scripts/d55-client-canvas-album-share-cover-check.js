@@ -1,0 +1,508 @@
+import fs from "node:fs";
+import path from "node:path";
+
+const root = process.cwd();
+const failures = [];
+
+function check(condition, message) {
+  if (!condition) failures.push(message);
+}
+
+function read(relativePath) {
+  const absolutePath = path.join(root, relativePath);
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error(`D55 required source is missing: ${relativePath}`);
+  }
+  return fs.readFileSync(absolutePath, "utf8");
+}
+
+function between(source, startToken, endToken, label) {
+  const start = source.indexOf(startToken);
+  const end = source.indexOf(endToken, start + startToken.length);
+  check(start >= 0 && end > start, `D55 source block is missing: ${label}`);
+  return start >= 0 && end > start ? source.slice(start, end) : "";
+}
+
+function walk(relativePath) {
+  const absolutePath = path.join(root, relativePath);
+  if (!fs.existsSync(absolutePath)) return [];
+  const entries = fs.readdirSync(absolutePath, { withFileTypes: true });
+  return entries.flatMap((entry) => {
+    const child = path.join(relativePath, entry.name);
+    return entry.isDirectory() ? walk(child) : [child.replaceAll(path.sep, "/")];
+  });
+}
+
+function numericConstant(source, name) {
+  const match = source.match(new RegExp(`\\b${name}\\s*=\\s*(\\d+)\\s*;`));
+  return match ? Number(match[1]) : null;
+}
+
+function includesAll(source, tokens, label) {
+  for (const token of tokens) {
+    check(source.includes(token), `D55 ${label} is missing: ${token}`);
+  }
+}
+
+const paths = Object.freeze({
+  service: "apps/api/src/modules/core/service.js",
+  server: "apps/api/src/server.js",
+  apiPackage: "apps/api/package.json",
+  apiDockerfile: "apps/api/Dockerfile",
+  canvas: "apps/miniprogram/src/utils/albumShareCanvas.js",
+  cover: "apps/miniprogram/src/utils/albumShareCover.js",
+  albumPage: "apps/miniprogram/src/pages/session/album.vue",
+  apiRecipeTest: "apps/api/test/album-public-share-cover-recipe.test.mjs",
+  miniCanvasTest: "apps/miniprogram/test/albumShareCanvas.test.mjs",
+  miniCoverTest: "apps/miniprogram/test/albumShareCover.test.mjs",
+  miniPreviewTest: "apps/miniprogram/test/albumSharePreview.test.mjs",
+  miniprogramCheck: "scripts/check-miniprogram.js",
+  d23Check: "scripts/d23-album-share-join-policy-check.js",
+  d48Check: "scripts/d48-album-sharing-role-claim-separation-check.js",
+  d48Smoke: "scripts/d48-album-sharing-role-claim-separation-smoke.js",
+  d54Check: "scripts/d54-public-album-full-share-pagination-check.js",
+  packageJson: "package.json"
+});
+
+const service = read(paths.service);
+const server = read(paths.server);
+const apiPackage = JSON.parse(read(paths.apiPackage));
+const apiDockerfile = read(paths.apiDockerfile);
+const canvas = read(paths.canvas);
+const cover = read(paths.cover);
+const albumPage = read(paths.albumPage);
+const apiRecipeTest = read(paths.apiRecipeTest);
+const miniCanvasTest = read(paths.miniCanvasTest);
+const miniCoverTest = read(paths.miniCoverTest);
+const miniPreviewTest = read(paths.miniPreviewTest);
+const miniprogramCheck = read(paths.miniprogramCheck);
+const d23Check = read(paths.d23Check);
+const d48Check = read(paths.d48Check);
+const d48Smoke = read(paths.d48Smoke);
+const d54Check = read(paths.d54Check);
+const packageJson = JSON.parse(read(paths.packageJson));
+
+const d55UnitTests = [
+  "apps/api/test/album-public-share-cover-recipe.test.mjs",
+  "apps/api/test/album-public-share-pagination.test.mjs",
+  "apps/api/test/album-single-media-share.test.mjs",
+  "apps/miniprogram/test/albumShareCanvas.test.mjs",
+  "apps/miniprogram/test/albumShareCover.test.mjs",
+  "apps/miniprogram/test/albumSharePreview.test.mjs",
+  "apps/miniprogram/test/albumPublicSharePagination.test.mjs"
+];
+const d55Unit = packageJson.scripts?.["d55:unit"] || "";
+const d55Check = packageJson.scripts?.["d55:check"] || "";
+check(d55Unit.startsWith("node --test "), "D55 package wiring must define d55:unit");
+for (const testFile of d55UnitTests) {
+  check(d55Unit.includes(testFile), `D55 unit gate must run ${testFile}`);
+}
+check(
+  d55Check === "node scripts/d55-client-canvas-album-share-cover-check.js",
+  "D55 package wiring must define the focused d55:check command"
+);
+check(
+  packageJson.scripts?.postcheck ===
+    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check",
+  "Root postcheck must run valid D54 gates followed by D55 unit and static gates"
+);
+check(
+  !(packageJson.scripts?.["d54:unit"] || "").includes(
+    "apps/api/test/album-public-share-cover-recipe.test.mjs"
+  ),
+  "D54 unit wiring must not duplicate the D55 cover-recipe suite"
+);
+
+check(
+  numericConstant(service, "PUBLIC_SHARE_COVER_CANDIDATE_LIMIT") === 3,
+  "New public-share cover selection must be capped at three images"
+);
+check(
+  numericConstant(service, "PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT") === 30,
+  "Legacy public-share cover snapshots must continue accepting up to 30 candidates"
+);
+const coverSelection = between(
+  service,
+  "export function selectPublicShareCoverMedia(",
+  "function publicShareCoverRecipeFocus(",
+  "public-share cover selection"
+);
+check(
+  /\.slice\(\s*0\s*,\s*PUBLIC_SHARE_COVER_CANDIDATE_LIMIT\s*\)/.test(coverSelection),
+  "Safe cover selection must apply the three-image limit after ranking"
+);
+const snapshotDigest = between(
+  service,
+  "export function publicShareSnapshotDigest(",
+  "function normalizeSessionAlbumPublicShareRow(",
+  "public-share snapshot digest"
+);
+const snapshotRow = between(
+  service,
+  "function normalizeSessionAlbumPublicShareRow(",
+  "function implicitUntaggedByMediaIdForShare(",
+  "public-share snapshot row normalization"
+);
+for (const [source, label] of [
+  [snapshotDigest, "snapshot digest"],
+  [snapshotRow, "persisted snapshot parsing"]
+]) {
+  check(
+    source.includes("PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT"),
+    `D55 ${label} must retain the legacy 30-candidate bound`
+  );
+}
+const coverRecipeMedia = between(
+  service,
+  "function publicShareCoverRecipeMedia(",
+  "export function normalizePublicShareSnapshotIds(",
+  "safe cover recipe media projection"
+);
+includesAll(
+  coverRecipeMedia,
+  ["id:", "image_width:", "image_height:", "focus_x:", "focus_y:"],
+  "safe cover recipe projection"
+);
+check(
+  !/(object_key|source_url|display_url|preview_url|uploader|tags?\\s*:)/i.test(coverRecipeMedia),
+  "Cover recipe service projection must not expose storage, uploader, or tag details"
+);
+const coverRead = between(
+  service,
+  "const readCoverMedia = async () => {",
+  "let photos;",
+  "privacy-safe cover recipe read"
+);
+includesAll(
+  coverRead,
+  [
+    "status = 'active'",
+    "moderation_status IN ('approved', 'approved_legacy')",
+    "albumTagsForPhotos",
+    "albumPrivacyMap",
+    "publicShareCoverPriority",
+    "publicShareCoverRecipeMedia",
+    "PUBLIC_SHARE_COVER_CANDIDATE_LIMIT"
+  ],
+  "privacy-safe cover recipe read"
+);
+
+const obsoleteServerSymbols =
+  /\b(publicShareCoverDependencies|publicShareCoverMediaIdsDigest|getPublicSessionAlbumShareCoverMedia|signSessionAlbumPublicShareCover|verifySessionAlbumPublicShareCover|renderPublicSessionAlbumShareCover|publicShareCoverCoordinator)\b/;
+check(
+  !obsoleteServerSymbols.test(`${service}\n${server}`),
+  "Server composite-cover capability, dependency, coordinator, and renderer symbols must be absent"
+);
+const apiFiles = [...walk("apps/api/src"), ...walk("apps/api/test")];
+const obsoleteServerFiles = apiFiles.filter((file) => (
+  /album-share-cover\/(?:cache|coordinator|layouts?|renderer|selection)\.[cm]?js$/i.test(file) ||
+  /apps\/api\/test\/album-share-cover-(?:layouts?|renderer|route|selection).*\.test\.mjs$/i.test(file)
+));
+check(
+  obsoleteServerFiles.length === 0,
+  `Obsolete server composite-cover files remain: ${obsoleteServerFiles.join(", ")}`
+);
+const apiSourceImports = walk("apps/api/src")
+  .filter((file) => /\.[cm]?js$/.test(file))
+  .map((file) => read(file))
+  .join("\n");
+check(
+  !/from\s+["'][^"']*album-share-cover\//.test(apiSourceImports),
+  "API source must not import a deleted server album-share-cover module"
+);
+const normalizedServerRoutes = server.replaceAll("\\/", "/");
+check(
+  !/public-shares\/\([^)]*\)\/cover/.test(normalizedServerRoutes),
+  "The plural public-share server-composite cover route must be absent"
+);
+check(
+  !/(usage:\s*["']cover["']|session-album-public-share-cover)/.test(server),
+  "The server-composite cover capability token must be absent"
+);
+
+const attachPublicMedia = between(
+  server,
+  "export function attachPublicSessionAlbumMediaUrls(",
+  "async function sessionAlbumThumbnailBuffer(",
+  "public album URL projection"
+);
+const publicRecipeResult = between(
+  attachPublicMedia,
+  "const result = {",
+  "return assertPublicResponseSafe(",
+  "public cover recipe DTO"
+);
+includesAll(
+  publicRecipeResult,
+  [
+    "cover_recipe:",
+    'version: "client-canvas-v1"',
+    "images: coverMedia.map",
+    "thumbnail_url:",
+    '"thumbnail"',
+    "width:",
+    "height:",
+    "focus_x:",
+    "focus_y:"
+  ],
+  "public versioned cover recipe"
+);
+check(
+  !/\b(?:cover_url|timeline_cover_url)\s*:/.test(publicRecipeResult),
+  "Public album top-level DTO must not expose old server-composite cover URLs"
+);
+const shareTokenRoute = between(
+  server,
+  "const sessionAlbumShareTokenId = idMatch(",
+  "const sessionAlbumPublicSharesId = idMatch(",
+  "public album share-token DTO"
+);
+check(
+  !/\b(?:cover_url|timeline_cover_url)\s*:/.test(shareTokenRoute),
+  "Public share-token DTO must not expose old server-composite cover URLs"
+);
+includesAll(
+  apiRecipeTest,
+  [
+    "legacyCoverMediaIds",
+    'version, "client-canvas-v1"',
+    'url.searchParams.get("variant"), "thumbnail"',
+    '"cover_url"',
+    '"timeline_cover_url"'
+  ],
+  "API cover recipe regression tests"
+);
+
+check(
+  numericConstant(canvas, "MAX_COVER_IMAGES") === 3,
+  "Client Canvas normalization must be capped at three images"
+);
+const normalizeRecipe = between(
+  canvas,
+  "export function normalizeAlbumShareCoverRecipe(",
+  "export function albumShareCanvasLayout(",
+  "client recipe normalization"
+);
+includesAll(
+  normalizeRecipe,
+  ["ALBUM_SHARE_CANVAS_RECIPE_VERSION", "normalizedImages", "images.length === 0"],
+  "client recipe normalization"
+);
+const canvasLayout = between(
+  canvas,
+  "export function albumShareCanvasLayout(",
+  "export function albumShareCanvasPlan(",
+  "client Canvas layouts"
+);
+includesAll(
+  canvasLayout,
+  ["MAX_COVER_IMAGES", 'kind === "friend"', "normalizedCount === 1", "normalizedCount === 2", "normalizedCount === 3"],
+  "one/two/three-image Canvas layouts"
+);
+const canvasSource = between(
+  canvas,
+  "export function resolveAlbumShareCanvasSource(",
+  "export async function renderAlbumShareCanvasCover(",
+  "client Canvas source resolution"
+);
+includesAll(
+  canvasSource,
+  ["localPreviewFor", "if (localPreview) return localPreview", "thumbnail_url", "thumbnailUrlResolver"],
+  "local-preview-first Canvas source resolution"
+);
+check(
+  canvasSource.indexOf("if (localPreview) return localPreview") <
+    canvasSource.indexOf("thumbnail_url"),
+  "Canvas source resolution must prefer local preview before remote thumbnail"
+);
+const canvasRender = between(
+  canvas,
+  "export async function renderAlbumShareCanvasCover(",
+  "export function albumShareCanvasRecipeDigest(",
+  "client Canvas renderer"
+);
+includesAll(
+  canvasRender,
+  [
+    "albumShareCanvasPlan",
+    "resolveAlbumShareCanvasSource",
+    "loadImage",
+    "drawImage",
+    "exportCanvas",
+    'fileType: "jpg"',
+    "localTemporaryPath"
+  ],
+  "client Canvas renderer"
+);
+const canvasPreparationStart = canvas.indexOf(
+  "export function createAlbumShareCanvasPreparation("
+);
+check(canvasPreparationStart >= 0, "D55 source block is missing: client Canvas preparation cache");
+const canvasPreparation = canvasPreparationStart >= 0
+  ? canvas.slice(canvasPreparationStart)
+  : "";
+includesAll(
+  canvasPreparation,
+  [
+    "cachedPaths",
+    "inFlight",
+    "beginRequest",
+    "invalidate",
+    "clear",
+    "dispose: clear",
+    "cacheKey",
+    "stale_request"
+  ],
+  "client Canvas cache and stale-request lifecycle"
+);
+includesAll(
+  miniCanvasTest,
+  [
+    "九图配方只加载并绘制前面三个本地预览",
+    "本地相册预览优先于远程缩略图",
+    "缓存键区分分享、配方摘要和分享渠道",
+    "clear 与 dispose 使在途封面过期"
+  ],
+  "Canvas behavioral regression tests"
+);
+
+includesAll(
+  cover,
+  [
+    "ALBUM_SHARE_FRIEND_FALLBACK",
+    "ALBUM_SHARE_TIMELINE_FALLBACK",
+    "albumShareLocalImagePath",
+    '["friend", "timeline"]',
+    "albumShareFriendPayload",
+    "albumShareTimelinePayload"
+  ],
+  "channel-local share-cover helper"
+);
+check(
+  !/(https?:\/\/|thumbnail_url|cover_url|timeline_cover_url)/.test(
+    between(cover, "export function albumShareImage(", "export function createAlbumShareRequestAuthority(", "safe share image")
+  ),
+  "Share image selection must return only a local/temp path or static channel fallback"
+);
+includesAll(
+  albumPage,
+  [
+    'id="album-share-friend-canvas"',
+    'id="album-share-timeline-canvas"',
+    'type="2d"',
+    "createSelectorQuery",
+    ".fields({ node: true, size: true }",
+    "createAlbumShareCanvasRuntime",
+    "createAlbumShareCanvasPreparation",
+    "uni.canvasToTempFilePath",
+    "localPreviewByMediaId: this.albumShareLocalPreviewByMediaId()",
+    "thumbnailUrlResolver: this.normalizeAlbumMediaUrl",
+    "albumShareCoverPreparationIsCurrent",
+    "onHide()",
+    "this.resetAlbumShareCovers();",
+    "onUnload()",
+    "this.disposeAlbumShareCanvasPreparation();",
+    "albumShareFriendPayload",
+    "albumShareTimelinePayload"
+  ],
+  "album page Canvas node, preparation, sharing, and lifecycle wiring"
+);
+includesAll(
+  miniCoverTest,
+  [
+    "远程 URL 永远不能作为分享 imageUrl",
+    "一个渠道 Canvas 失败会使用该渠道静态图",
+    "不阻塞另一个渠道",
+    "鉴权变更会阻止旧分享 token"
+  ],
+  "share-cover isolation regression tests"
+);
+includesAll(
+  miniPreviewTest,
+  [
+    "public share prepares separate local Canvas covers",
+    "share cover local-preview map only reuses downloaded local media",
+    "public body pagination is not part of share-cover currentness"
+  ],
+  "album-page Canvas integration regression tests"
+);
+
+const obsoleteD52GateFiles = walk("scripts").filter((file) => (
+  /^scripts\/d52-/i.test(file) &&
+  /(adaptive|album).*(share|cover)|(share|cover).*(album|adaptive)/i.test(path.basename(file))
+));
+check(
+  obsoleteD52GateFiles.length === 0,
+  `Obsolete D52 album-share-cover gate files remain: ${obsoleteD52GateFiles.join(", ")}`
+);
+check(
+  !/d52-adaptive-album-share-cover|d52:[^"]*(?:album-share-cover|adaptive-cover)/i.test(
+    JSON.stringify(packageJson.scripts)
+  ),
+  "Obsolete D52 album-share-cover package commands must be absent"
+);
+
+includesAll(
+  server,
+  [
+    "SESSION_ALBUM_THUMBNAIL_RULE",
+    "sessionAlbumThumbnailBuffer",
+    "publicSessionAlbumMediaPhotoId",
+    "getPublicSessionAlbumPhotoForMedia",
+    "publicSessionAlbumVideoCoverId",
+    "getPublicSessionAlbumVideoCoverForMedia",
+    "publicSessionAlbumVideoUrlId",
+    "publicSessionAlbumVideoFileId",
+    "createPublicAlbumVideoResponse"
+  ],
+  "generic public thumbnail and video behavior"
+);
+check(
+  typeof apiPackage.dependencies?.sharp === "string",
+  "Generic Sharp image/thumbnail tooling must remain installed"
+);
+check(
+  !/font-noto-cjk/i.test(apiDockerfile),
+  "API Docker image must not retain the font used only by deleted server cover composition"
+);
+
+check(
+  !/PUBLIC_SHARE_(?:COVER|LEGACY_COVER)_CANDIDATE_LIMIT/.test(d54Check),
+  "D54 static gate must stay focused on pagination rather than D55 cover selection internals"
+);
+check(
+  d54Check.includes("npm run d55:unit") && d54Check.includes("npm run d55:check"),
+  "D54 lifecycle assertion must allow the D55 gates that follow it"
+);
+includesAll(
+  d48Check,
+  ["cover_recipe", "prepareAlbumShareCovers", "createAlbumShareCanvasPreparation"],
+  "updated D48 public-share contract gate"
+);
+check(
+  !d48Check.includes('"/cover"') && !d48Check.includes('"getImageInfo"'),
+  "D48 static gate must not require the deleted server cover route or old cover preflight"
+);
+check(
+  !/album-share-cover\/(?:layouts?|selection)/.test(d48Smoke) &&
+    d48Smoke.includes("bounded to three client Canvas inputs"),
+  "D48 privacy smoke must use the service-level three-image selection without deleted modules"
+);
+check(
+  !miniprogramCheck.includes("friend_cover_url") &&
+    !miniprogramCheck.includes("albumShareCoverResponse") &&
+    miniprogramCheck.includes("albumShareCoverPreparationIsCurrent") &&
+    miniprogramCheck.includes("albumShareLocalImagePath"),
+  "The generic mini-program gate must assert the client Canvas contract instead of legacy cover URLs"
+);
+check(
+  !d23Check.includes('"/api/session-album/public-shares/"') &&
+    d23Check.includes('"/api/session-album/public-share/photos/"'),
+  "The D23 compatibility gate must retain public media authorization without the deleted composite route"
+);
+
+if (failures.length > 0) {
+  throw new Error(`D55 client Canvas album share cover check failed:\n- ${failures.join("\n- ")}`);
+}
+
+console.log("D55 client Canvas album share cover checks passed");

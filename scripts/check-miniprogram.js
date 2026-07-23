@@ -3522,14 +3522,15 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (
     !albumShareCoverUtilSource.includes("ALBUM_SHARE_FRIEND_FALLBACK") ||
     !albumShareCoverUtilSource.includes("ALBUM_SHARE_TIMELINE_FALLBACK") ||
-    !albumShareCoverUtilSource.includes("friend_cover_url") ||
-    !albumShareCoverUtilSource.includes("cover_url") ||
-    !albumShareCoverUtilSource.includes("timeline_cover_url")
+    !albumShareCoverUtilSource.includes("cover_recipe") ||
+    !albumShareCoverUtilSource.includes("albumShareLocalImagePath") ||
+    !albumShareCoverUtilSource.includes("albumShareFriendPayload") ||
+    !albumShareCoverUtilSource.includes("albumShareTimelinePayload")
   ) {
-    fail("Album sharing must normalize two generated cover response URLs with both local fallbacks");
+    fail("Album sharing must normalize the client Canvas recipe to local paths or channel fallbacks");
   }
   if (albumSource.includes("data.cover_url") || albumSource.includes("data.timeline_cover_url")) {
-    fail("Album page must consume generated cover URLs through albumShareCoverResponse");
+    fail("Album page must not consume deleted server-composite cover URLs");
   }
   if ((albumSource.match(/this\.prepareAlbumShareCovers\(data(?:,|\))/g) || []).length < 3) {
     fail("Album share token, initial public load, and public refresh must prepare both cover channels");
@@ -3541,7 +3542,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     !ensureAlbumShareTokenSource.includes("beginTokenRequest") ||
     !ensureAlbumShareTokenSource.includes("isTokenRequestCurrent(shareTokenRequest)") ||
     !albumSource.includes("beginCoverRequest") ||
-    !albumSource.includes("isCoverRequestCurrent") ||
+    !albumSource.includes("albumShareCoverPreparationIsCurrent") ||
+    !albumShareCoverUtilSource.includes("isCoverRequestCurrent") ||
     !handleAlbumAuthChangeSource.includes("this.invalidateAlbumShareState()") ||
     !albumOnUnloadSource.includes("this.invalidateAlbumShareState()")
   ) {

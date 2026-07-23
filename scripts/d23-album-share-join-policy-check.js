@@ -190,7 +190,7 @@ for (const token of [
   "version: 2",
   "shareId",
   "payload.version === undefined",
-  "/api/session-album/public-shares/",
+  "cover_recipe",
   "revokeMySessionAlbumPublicShares"
 ]) {
   assert(server.includes(token), `D23 compatibility must retain old tokens while adding D48: ${token}`);

@@ -73,8 +73,9 @@ for (const token of [
   "shareId",
   'usage: "image"',
   'usage: "video_cover"',
-  "/api/session-album/public-shares/",
-  "/cover",
+  "/api/session-album/public-share/photos/${photoId}/image",
+  "/api/session-album/public-share/media/${mediaId}/cover",
+  "cover_recipe",
   "revokeMySessionAlbumPublicShares"
 ]) {
   assert(server.includes(token), `D48 server contract is missing: ${token}`);
@@ -92,11 +93,12 @@ assert(
   "album sharing must route friend/group and timeline recipients to the public album page"
 );
 assert(
-  albumPage.includes("prepareShareCoverUrl") &&
+  albumPage.includes("prepareAlbumShareCovers") &&
+    albumPage.includes("createAlbumShareCanvasPreparation") &&
     albumPage.includes("shareFriendCoverPrepared") &&
     albumPage.includes("shareTimelineCoverPrepared") &&
-    albumPage.includes("getImageInfo"),
-  "album sharing must preflight each short-lived channel cover before enabling its share menu"
+    albumPage.includes("thumbnailUrlResolver: this.normalizeAlbumMediaUrl"),
+  "album sharing must prepare each local Canvas channel cover before enabling its share menu"
 );
 assert(
   albumPage.match(/this\.albumSession = this\.albumSessionSummary\(data\);/g)?.length >= 3,
@@ -105,7 +107,14 @@ assert(
 assert(
   albumPage.includes("shareFriendCoverUrl") &&
     albumPage.includes("shareTimelineCoverUrl"),
-  "album sharing must prepare safe generated covers for both share channels"
+  "album sharing must retain separate safe local covers for both share channels"
+);
+const albumShareCoverHelper = read("apps/miniprogram/src/utils/albumShareCover.js");
+assert(
+  albumShareCoverHelper.includes("albumShareLocalImagePath") &&
+    albumShareCoverHelper.includes("ALBUM_SHARE_FRIEND_FALLBACK") &&
+    albumShareCoverHelper.includes("ALBUM_SHARE_TIMELINE_FALLBACK"),
+  "album sharing must accept only local Canvas paths or channel-specific static fallbacks"
 );
 const singleMediaShareHelper = read("apps/miniprogram/src/utils/albumSingleMediaShare.js");
 assert(

@@ -41,22 +41,6 @@ assert(
   service.includes("export const PUBLIC_SHARE_PAGE_SIZE = 30;"),
   "D54 public album pages must remain bounded to 30 items"
 );
-assert(
-  service.includes("export const PUBLIC_SHARE_COVER_CANDIDATE_LIMIT = 3;"),
-  "D55 must cap new public-share cover recipes at three images"
-);
-assert(
-  /return candidates\s*\.slice\(0, PUBLIC_SHARE_COVER_CANDIDATE_LIMIT\)/.test(service),
-  "D55 must snapshot the three-image recipe after safety ranking"
-);
-assert(
-  /coverMediaIds:\s*normalizePublicShareSnapshotIds\(coverMediaIds,[\s\S]{0,160}?max:\s*PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT/.test(service),
-  "D55 snapshot digests must continue accepting legacy cover candidates"
-);
-assert(
-  /label:\s*"cover_media_ids",[\s\S]{0,160}?max:\s*PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT/.test(service),
-  "D55 persisted snapshots must continue accepting legacy cover candidates"
-);
 const publicShareRoute = between(
   server,
   "const publicSessionAlbumShareId = idMatch(",
@@ -99,8 +83,9 @@ assert(
   "D54 package scripts are required"
 );
 assert(
-  packageJson.scripts.postcheck === "npm run d54:unit && npm run d54:check",
-  "D54 checks must run after the root check lifecycle"
+  packageJson.scripts.postcheck ===
+    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check",
+  "D54 checks must run before the D55 checks in the root check lifecycle"
 );
 
 console.log("D54 public album full-share pagination checks passed");
