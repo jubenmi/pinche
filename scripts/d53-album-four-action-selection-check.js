@@ -15,32 +15,119 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function stripHtmlComments(source) {
+  return source.replace(/<!--[\s\S]*?-->/g, "");
+}
+
+function stripJavaScriptComments(source) {
+  let result = "";
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (quote) {
+      result += char;
+      if (char === "\\") {
+        result += next || "";
+        index += 1;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (["'", '"', "`"].includes(char)) {
+      quote = char;
+      result += char;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      while (index < source.length && source[index] !== "\n") index += 1;
+      result += "\n";
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+    result += char;
+  }
+  return result;
+}
+
+function tagContent(source, tag) {
+  const match = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`).exec(source);
+  assert(match, `album must contain an executable <${tag}> block`);
+  return match[1];
+}
+
+function balancedBlock(source, braceStart, label) {
+  assert(source[braceStart] === "{", `${label} must start with a block`);
+  let depth = 0;
+  let quote = null;
+  for (let index = braceStart; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === "\\") {
+        index += 1;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (["'", '"', "`"].includes(char)) {
+      quote = char;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) return source.slice(braceStart, index + 1);
+  }
+  throw new Error(`${label} block is not closed`);
+}
+
+function lastMatch(source, pattern) {
+  let match;
+  let last = null;
+  while ((match = pattern.exec(source))) last = match;
+  return last;
+}
+
 function methodSource(name) {
-  const start = album.indexOf(`${name}()`);
-  assert(start >= 0, `album methods must define ${name}()`);
-  const end = album.indexOf("\n    },", start);
-  assert(end > start, `album method ${name}() must have a bounded body`);
-  return album.slice(start, end);
+  const match = lastMatch(
+    albumScript,
+    new RegExp(`^    (?:async )?${name}\\(\\)\\s*\\{`, "gm")
+  );
+  assert(match?.index !== undefined, `album methods must define ${name}()`);
+  const braceStart = albumScript.indexOf("{", match.index);
+  return balancedBlock(albumScript, braceStart, `album method ${name}()`);
+}
+
+function watcherSource(name) {
+  const watchMatch = lastMatch(albumScript, /^  watch:\s*\{/gm);
+  assert(watchMatch?.index !== undefined, "album must define a watch object");
+  const watchStart = albumScript.indexOf("{", watchMatch.index);
+  const watchBlock = balancedBlock(albumScript, watchStart, "album watch object");
+  const match = lastMatch(watchBlock, new RegExp(`^    ${name}\\(\\)\\s*\\{`, "gm"));
+  assert(match?.index !== undefined, `${name} watcher must be separately defined`);
+  const braceStart = watchBlock.indexOf("{", match.index);
+  return balancedBlock(watchBlock, braceStart, `${name} watcher`);
 }
 
 function actionElement(methodName) {
-  const tap = album.indexOf(`@tap=\"${methodName}\"`);
+  const tap = albumTemplate.lastIndexOf(`@tap=\"${methodName}\"`);
   assert(tap >= 0, `toolbar must bind ${methodName}`);
-  const starts = [album.lastIndexOf("<view", tap), album.lastIndexOf("<t-button", tap)]
+  const starts = [albumTemplate.lastIndexOf("<view", tap), albumTemplate.lastIndexOf("<t-button", tap)]
     .filter((index) => index >= 0);
   const start = Math.max(...starts);
-  const tag = /^<(view|t-button)\b/.exec(album.slice(start))?.[1];
+  const tag = /^<(view|t-button)\b/.exec(albumTemplate.slice(start))?.[1];
   assert(tag, `${methodName} must be attached to a view or button`);
-  const end = album.indexOf(`</${tag}>`, tap);
+  const end = albumTemplate.indexOf(`</${tag}>`, tap);
   assert(end > tap, `${methodName} action element must close`);
-  return album.slice(start, end + tag.length + 3);
-}
-
-function filterWatcherSource(name, nextMarker) {
-  const start = album.indexOf(`    ${name}() {`);
-  const end = album.indexOf(nextMarker, start + 1);
-  assert(start >= 0 && end > start, `${name} watcher must be separately defined`);
-  return album.slice(start, end);
+  return albumTemplate.slice(start, end + tag.length + 3);
 }
 
 function assertSelectionPersistsAcrossFilter(watcher, name) {
@@ -66,9 +153,11 @@ function sourceSection(source, startPattern, endMarker, label) {
 
 const requirements = read(".kiro/specs/album-four-action-selection-workbench/requirements.md");
 const design = read(".kiro/specs/album-four-action-selection-workbench/design.md");
-const album = read("apps/miniprogram/src/pages/session/album.vue");
-const service = read("apps/api/src/modules/core/service.js");
-const server = read("apps/api/src/server.js");
+const albumSource = stripHtmlComments(read("apps/miniprogram/src/pages/session/album.vue"));
+const albumTemplate = tagContent(albumSource, "template");
+const albumScript = stripJavaScriptComments(tagContent(albumSource, "script"));
+const service = stripJavaScriptComments(read("apps/api/src/modules/core/service.js"));
+const server = stripJavaScriptComments(read("apps/api/src/server.js"));
 const packageJson = read("package.json");
 
 for (const token of ["scope: \"all\"", "mediaIds", "ALBUM_PUBLIC_SHARE_SELECTION_INVALID"]) {
@@ -78,12 +167,12 @@ for (const token of ["scope: \"all\"", "mediaIds", "ALBUM_PUBLIC_SHARE_SELECTION
 const actions = ["分享", "下载", "标注", "招募"];
 let previous = -1;
 for (const action of actions) {
-  const index = album.indexOf(`>${action}<`);
+  const index = albumTemplate.indexOf(`>${action}<`);
   assert(index > previous, `album actions must include ${actions.join("、")} in order`);
   previous = index;
 }
 for (const legacyLabel of ["预览并分享", "全部下载", "多选下载", "批量标注"]) {
-  assert(!album.includes(`>${legacyLabel}<`), `${legacyLabel} must not remain a normal action button`);
+  assert(!albumTemplate.includes(`>${legacyLabel}<`), `${legacyLabel} must not remain a normal action button`);
 }
 const openShareSelection = methodSource("openShareSelectionMode");
 assert(
@@ -117,22 +206,28 @@ const shareAllMethod = methodSource("shareAllAlbumMedia");
 assert(/scope\s*:\s*["']all["']/.test(shareAllMethod), "分享全部 must submit scope: all");
 const shareSelectedMethod = methodSource("shareSelectedAlbumMedia");
 assert(/mediaIds\s*:/.test(shareSelectedMethod), "分享选中 must submit selected mediaIds");
-const downloadSelectedMethod = methodSource("async downloadSelectedPhotos");
+const downloadSelectedMethod = methodSource("downloadSelectedPhotos");
 assert(
   /this\.downloadablePhotos\.filter/.test(downloadSelectedMethod) &&
     !/this\.filteredDownloadablePhotos\.filter/.test(downloadSelectedMethod),
   "下载选中 must resolve from complete downloadablePhotos, not the current filter"
 );
 assertSelectionPersistsAcrossFilter(
-  filterWatcherSource("activeFilter", "selectedRoleFilter"),
+  watcherSource("activeFilter"),
   "activeFilter"
 );
 assertSelectionPersistsAcrossFilter(
-  filterWatcherSource("selectedRoleFilter", "    methods: {"),
+  watcherSource("selectedRoleFilter"),
   "selectedRoleFilter"
 );
-assert(album.includes("ShareIcon") && album.includes("UserAddIcon"), "share and recruitment must use distinct icons");
-assert(album.includes("tag-action"), "tag action must retain its green primary style");
+assert(
+  /<ShareIcon\b/.test(albumTemplate) && /<UserAddIcon\b/.test(albumTemplate),
+  "share and recruitment must use distinct icons"
+);
+assert(
+  albumTemplate.includes("tag-action") && albumSource.includes(".tag-action"),
+  "tag action must retain its green primary style"
+);
 const recruitmentMethod = methodSource("openRecruitment");
 assert(
   recruitmentMethod.includes("/pages/session/share?id=${this.sessionId}"),
