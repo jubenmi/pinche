@@ -82,21 +82,37 @@ const d48Smoke = read(paths.d48Smoke);
 const d54Check = read(paths.d54Check);
 const packageJson = JSON.parse(read(paths.packageJson));
 
-const d55UnitTests = [
-  "apps/api/test/album-public-share-cover-recipe.test.mjs",
+const d54UnitTests = [
   "apps/api/test/album-public-share-pagination.test.mjs",
   "apps/api/test/album-single-media-share.test.mjs",
-  "apps/miniprogram/test/albumShareCanvas.test.mjs",
-  "apps/miniprogram/test/albumShareCover.test.mjs",
-  "apps/miniprogram/test/albumSharePreview.test.mjs",
-  "apps/miniprogram/test/albumPublicSharePagination.test.mjs"
+  "apps/miniprogram/test/albumPublicSharePagination.test.mjs",
+  "apps/miniprogram/test/albumSharePreview.test.mjs"
 ];
+const d55UnitTests = [
+  "apps/api/test/album-public-share-cover-recipe.test.mjs",
+  "apps/miniprogram/test/albumShareCanvas.test.mjs",
+  "apps/miniprogram/test/albumShareCover.test.mjs"
+];
+const d54Unit = packageJson.scripts?.["d54:unit"] || "";
 const d55Unit = packageJson.scripts?.["d55:unit"] || "";
 const d55Check = packageJson.scripts?.["d55:check"] || "";
+const unitTestFiles = (script) => script.match(/\S+\.test\.mjs/g) || [];
+const d54UnitFiles = unitTestFiles(d54Unit);
+const d55UnitFiles = unitTestFiles(d55Unit);
+check(
+  JSON.stringify(d54UnitFiles) === JSON.stringify(d54UnitTests),
+  `D54 unit gate must own exactly its four regression suites: ${d54UnitTests.join(", ")}`
+);
 check(d55Unit.startsWith("node --test "), "D55 package wiring must define d55:unit");
-for (const testFile of d55UnitTests) {
-  check(d55Unit.includes(testFile), `D55 unit gate must run ${testFile}`);
-}
+check(
+  JSON.stringify(d55UnitFiles) === JSON.stringify(d55UnitTests),
+  `D55 unit gate must own exactly its three unique suites: ${d55UnitTests.join(", ")}`
+);
+const duplicatedUnitFiles = d55UnitFiles.filter((file) => d54UnitFiles.includes(file));
+check(
+  duplicatedUnitFiles.length === 0,
+  `D54 and D55 unit gates must not duplicate suites: ${duplicatedUnitFiles.join(", ")}`
+);
 check(
   d55Check === "node scripts/d55-client-canvas-album-share-cover-check.js",
   "D55 package wiring must define the focused d55:check command"
@@ -106,11 +122,44 @@ check(
     "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check",
   "Root postcheck must run valid D54 gates followed by D55 unit and static gates"
 );
+
+const rootCheck = packageJson.scripts?.check || "";
+const miniprogramBuildCommand = "npm run build:mp-weixin";
+const miniprogramSizeCheckCommand = "node scripts/check-miniprogram.js";
 check(
-  !(packageJson.scripts?.["d54:unit"] || "").includes(
-    "apps/api/test/album-public-share-cover-recipe.test.mjs"
+  rootCheck.startsWith(`${miniprogramBuildCommand} && `),
+  "Root check must begin with a fresh production mini-program build after precheck"
+);
+check(
+  rootCheck.indexOf(miniprogramBuildCommand) <
+    rootCheck.indexOf(miniprogramSizeCheckCommand),
+  "Root check must build the mini-program before invoking its package-size checker"
+);
+const missingBuildGuard = between(
+  miniprogramCheck,
+  "if (!fs.existsSync(miniprogramBuildRoot)) {",
+  "}",
+  "missing production mini-program build guard"
+);
+includesAll(
+  missingBuildGuard,
+  ["throw new Error(", "Built mini-program output is missing", "npm run build:mp-weixin"],
+  "missing production mini-program build failure"
+);
+check(
+  miniprogramCheck.includes(
+    "const mainPackageLimitBytes = Math.floor(1.5 * 1024 * 1024);"
   ),
-  "D54 unit wiring must not duplicate the D55 cover-recipe suite"
+  "The clean-build main-package gate must retain the 1.5 MiB threshold"
+);
+check(
+  miniprogramCheck.includes(
+    "const mainPackageSize = builtMainPackageSize(miniprogramBuildRoot);"
+  ) &&
+    miniprogramCheck.includes("if (mainPackageSize > mainPackageLimitBytes)") &&
+    !/if\s*\(\s*fs\.existsSync\(miniprogramBuildRoot\)\s*\)\s*\{[\s\S]{0,160}const mainPackageSize/
+      .test(miniprogramCheck),
+  "The 1.5 MiB production package-size gate must run unconditionally after the missing-build guard"
 );
 
 check(

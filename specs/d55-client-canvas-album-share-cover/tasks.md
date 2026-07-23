@@ -19,6 +19,6 @@
   - [x] 4.1 更新 D48/D50/D54/D52（删除或替换）静态检查，新增 D55 单元与静态门禁。
     - D55 静态门禁先因缺少 package 接线、旧 D23/D48/D54/通用小程序断言与 Docker 字体依赖失败，更新后 `npm run d55:check` 通过；无关的 D52 历史时间修正门禁保留。
   - [ ] 4.2 运行聚焦测试、小程序构建、完整 `npm run check`、`git diff --check` 与开发者工具刷新。
-    - 自动验证：`npm run d55:unit` 92/92、`npm run d54:unit` 49/49、`npm run check`、`npm --workspace apps/miniprogram run build:mp-weixin` 与 `git diff --check` 均通过。
+    - 自动验证：postcheck 无重叠覆盖 92 项（`npm run d54:unit` 49/49 + `npm run d55:unit` 43/43）；`npm run check`、`npm run build:mp-weixin`、`node scripts/check-miniprogram.js` 与 `git diff --check` 均通过。
     - 未完成：微信开发者工具刷新与真机分享验收。
   - [ ] 4.3 将更新后的提交合并入 `develop` 并等待 CI；成功后才恢复 `main`、`publish` 提升。

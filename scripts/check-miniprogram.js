@@ -741,6 +741,12 @@ function assertTdesignTslibCompatShims(tdesignBuildRoot, label) {
   }
 }
 
+if (!fs.existsSync(miniprogramBuildRoot)) {
+  throw new Error(
+    "Built mini-program output is missing; run npm run build:mp-weixin before this check"
+  );
+}
+
 if (!fs.existsSync(pagesJsonPath)) {
   fail("apps/miniprogram/src/pages.json is missing");
 } else {
@@ -831,13 +837,11 @@ if (!fs.existsSync(pagesJsonPath)) {
     );
   }
 
-  if (fs.existsSync(miniprogramBuildRoot)) {
-    const mainPackageSize = builtMainPackageSize(miniprogramBuildRoot);
-    if (mainPackageSize > mainPackageLimitBytes) {
-      fail(
-        `Built main package exceeds 1.5 MB: ${formatSize(mainPackageSize)} in ${relativePath(miniprogramBuildRoot)}`
-      );
-    }
+  const mainPackageSize = builtMainPackageSize(miniprogramBuildRoot);
+  if (mainPackageSize > mainPackageLimitBytes) {
+    fail(
+      `Built main package exceeds 1.5 MB: ${formatSize(mainPackageSize)} in ${relativePath(miniprogramBuildRoot)}`
+    );
   }
 
   for (const page of pages) {
