@@ -19,7 +19,7 @@ const paths = Object.freeze({
   publicShareMigration: "apps/api/migrations/0032_session_album_public_shares.sql"
 });
 const fallbackNames = Array.from(EXPECTED_ARTWORK.keys()).map((file) => path.basename(file));
-const allowMissingTask7Helper = process.argv.includes("--allow-missing-task7-helper");
+const assetOnly = process.argv.includes("--assets-only");
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -42,21 +42,47 @@ function sourceFiles(directory) {
   });
 }
 
-function requireInOrder(source, values, message) {
-  let previous = -1;
-  for (const value of values) {
-    const index = source.indexOf(value, previous + 1);
-    assert(index !== -1, `${message}: missing ${value}`);
-    assert(index > previous, `${message}: ${value} is out of order`);
-    previous = index;
-  }
+function sourceBetween(source, startMarker, endMarker, description) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert(start !== -1 && end !== -1, `D52 ${description} must remain explicit`);
+  return source.slice(start, end);
 }
 
 function publicCoverRouteSource(serverSource) {
-  const start = serverSource.indexOf("const publicSessionAlbumShareCoverId = idMatch(");
-  const end = serverSource.indexOf("const publicSessionAlbumMediaPhotoId = idMatch(", start);
-  assert(start !== -1 && end !== -1, "D52 public album cover route must remain explicit");
-  return serverSource.slice(start, end);
+  return sourceBetween(
+    serverSource,
+    "const publicSessionAlbumShareCoverId = idMatch(",
+    "const publicSessionAlbumMediaPhotoId = idMatch(",
+    "public album cover route"
+  );
+}
+
+function publicCoverPathSource(serverSource) {
+  return sourceBetween(
+    serverSource,
+    "function sessionAlbumPublicShareCoverPath(",
+    "function verifySessionAlbumPublicCoverQuery(",
+    "public album cover URL builder"
+  );
+}
+
+function publicAlbumDtoSource(serverSource) {
+  return sourceBetween(
+    serverSource,
+    "export function attachPublicSessionAlbumMediaUrls(",
+    "async function sessionAlbumThumbnailBuffer(",
+    "public album response DTO"
+  );
+}
+
+function shareTokenRouteSource(serverSource) {
+  return sourceBetween(
+    serverSource,
+    "const sessionAlbumShareTokenId = idMatch(",
+    "const sessionAlbumPublicSharesId = idMatch(",
+    "album share-token route"
+  );
 }
 
 async function verifyFallbackArtwork() {
@@ -88,18 +114,38 @@ function verifyNoLegacyGrid() {
 function verifyApiContract() {
   const server = readSource(paths.apiServer);
   const route = publicCoverRouteSource(server);
+  const coverPath = publicCoverPathSource(server);
+  const publicAlbumDto = publicAlbumDtoSource(server);
+  const shareTokenRoute = shareTokenRouteSource(server);
   const cache = readSource(paths.cache);
   const routeTest = readSource(paths.routeTest);
 
   for (const required of [
+    'const variant = url.searchParams.has("variant")',
+    ': "friend";',
     'variant !== "friend" && variant !== "timeline"',
-    'cover_url: sessionAlbumPublicShareCoverPath(share, "friend")',
-    'timeline_cover_url: sessionAlbumPublicShareCoverPath(share, "timeline")',
+  ]) {
+    assert(route.includes(required), `D52 cover route must expose friend and timeline variants: ${required}`);
+  }
+  for (const required of [
+    'function sessionAlbumPublicShareCoverPath(share, variant = "friend")',
+    "const query = new URLSearchParams({ token, variant });"
+  ]) {
+    assert(coverPath.includes(required), `D52 cover URL builder must retain its friend default: ${required}`);
+  }
+  for (const required of [
     'cover_url: sessionAlbumPublicShareCoverPath({',
+    'timeline_cover_url: sessionAlbumPublicShareCoverPath({',
     '}, "friend")',
     '}, "timeline")'
   ]) {
-    assert(server.includes(required), `D52 API must expose friend and timeline cover URLs: ${required}`);
+    assert(publicAlbumDto.includes(required), `D52 public album DTO must expose both cover URLs: ${required}`);
+  }
+  for (const required of [
+    'cover_url: sessionAlbumPublicShareCoverPath(share, "friend")',
+    'timeline_cover_url: sessionAlbumPublicShareCoverPath(share, "timeline")'
+  ]) {
+    assert(shareTokenRoute.includes(required), `D52 share-token DTO must expose both cover URLs: ${required}`);
   }
   for (const required of [
     "shareId: coverClaims.shareId",
@@ -117,14 +163,15 @@ function verifyApiContract() {
   ]) {
     assert(cache.includes(required), `D52 cache key implementation is missing ${required}`);
   }
-  requireInOrder(
-    route,
-    [
-      "publicShareCover.verifyQuery(",
-      "await publicShareCover.load(",
-      "publicShareCover.cache.get(cacheKey)"
-    ],
-    "D52 must verify and reload authorization before serving a cached cover"
+  const verifyQuery = route.indexOf("publicShareCover.verifyQuery(");
+  const loadAuthorizedMedia = route.indexOf("await publicShareCover.load(");
+  const firstCacheRead = route.search(/publicShareCover\.cache\.get\s*\(/);
+  assert(verifyQuery !== -1, "D52 cover route must verify its signed query before cache access");
+  assert(loadAuthorizedMedia !== -1, "D52 cover route must reload authorization before cache access");
+  assert(firstCacheRead !== -1, "D52 cover route must read its cover cache");
+  assert(
+    firstCacheRead > verifyQuery && firstCacheRead > loadAuthorizedMedia,
+    "D52 first cover cache read must occur after signed-query verification and authorization reload"
   );
   for (const dynamicGuarantee of [
     "a cache hit repeats verification and authorization but skips reads, analysis, and render",
@@ -154,10 +201,7 @@ function verifyRendererContract() {
 function verifyMiniProgramContract() {
   const albumPage = readSource(paths.albumPage);
   const helperPath = absolute(paths.helper);
-  if (!fs.existsSync(helperPath)) {
-    if (allowMissingTask7Helper) return;
-    throw new Error(`D52 album share helper is missing: ${paths.helper}`);
-  }
+  assert(fs.existsSync(helperPath), `D52 album share helper is missing: ${paths.helper}`);
   const helper = fs.readFileSync(helperPath, "utf8");
   for (const fallbackName of fallbackNames) {
     assert(helper.includes(fallbackName), `D52 album share helper must reference ${fallbackName}`);
@@ -228,9 +272,22 @@ function verifyPackageScripts() {
     packageJson?.scripts?.["d52:check"] === "node scripts/d52-adaptive-album-share-cover-check.js",
     "D52 package script d52:check must run the strict static contract"
   );
+  assert(
+    packageJson?.scripts?.["d52:assets:check"] ===
+      "node scripts/d52-adaptive-album-share-cover-check.js --assets-only",
+    "D52 package script d52:assets:check must identify itself as asset-only"
+  );
+  assert(
+    packageJson?.scripts?.check?.includes("npm run d52:check"),
+    "D52 root npm check must invoke the strict static contract"
+  );
 }
 
 await verifyFallbackArtwork();
+if (assetOnly) {
+  console.log("D52 fallback artwork checks passed");
+  process.exit(0);
+}
 verifyNoLegacyGrid();
 verifyApiContract();
 verifyRendererContract();
