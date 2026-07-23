@@ -529,6 +529,14 @@ export function createAlbumShareCanvasPreparation({
   const resultForRequest = (request, result) => (
     request && !isCurrent(request) ? failure(result.kind, "stale_request") : result
   );
+  const beginRequest = () => {
+    currentRequest = Object.freeze({ serial: ++requestSerial });
+    return currentRequest;
+  };
+  const requestForPreparation = (request) => {
+    if (request) return request;
+    return currentRequest?.invalidated === true ? beginRequest() : (currentRequest || beginRequest());
+  };
   const invalidate = () => {
     currentRequest = Object.freeze({ serial: ++requestSerial, invalidated: true });
   };
@@ -553,8 +561,7 @@ export function createAlbumShareCanvasPreparation({
 
   return {
     beginRequest() {
-      currentRequest = Object.freeze({ serial: ++requestSerial });
-      return currentRequest;
+      return beginRequest();
     },
     isCurrent,
     clear,
@@ -570,6 +577,7 @@ export function createAlbumShareCanvasPreparation({
     } = {}) {
       if (!isSupportedKind(kind)) return Promise.resolve(failure(kind, "invalid_kind"));
       if (request && !isCurrent(request)) return Promise.resolve(failure(kind, "stale_request"));
+      const preparationRequest = requestForPreparation(request);
       const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
       if (!normalizedRecipe) return Promise.resolve(failure(kind, "invalid_recipe"));
       const normalizedId = normalizedShareId(shareId);
@@ -579,7 +587,7 @@ export function createAlbumShareCanvasPreparation({
       const cacheKey = `${normalizedId}:${digest}:${kind}:${encodeURIComponent(normalizedTitle)}`;
       const cachedPath = localTemporaryPath(cachedPaths.get(cacheKey));
       if (cachedPath) {
-        return Promise.resolve(resultForRequest(request, {
+        return Promise.resolve(resultForRequest(preparationRequest, {
           ok: true,
           kind,
           path: cachedPath,
@@ -588,7 +596,7 @@ export function createAlbumShareCanvasPreparation({
       }
 
       let entry = inFlight.get(cacheKey);
-      if (!entry || entry.request !== request) {
+      if (!entry || entry.request !== preparationRequest) {
         let rendered;
         try {
           rendered = renderer({
@@ -605,7 +613,7 @@ export function createAlbumShareCanvasPreparation({
         const work = Promise.resolve(rendered)
           .then((result) => normalizedRendererResult(result, kind))
           .then((result) => {
-            if (!workIsCurrent(request)) {
+            if (!workIsCurrent(preparationRequest)) {
               if (result.ok) releasePath(result.path);
               return failure(kind, "stale_request");
             }
@@ -618,10 +626,10 @@ export function createAlbumShareCanvasPreparation({
           .finally(() => {
             if (inFlight.get(cacheKey) === entry) inFlight.delete(cacheKey);
           });
-        entry = { request, work };
+        entry = { request: preparationRequest, work };
         inFlight.set(cacheKey, entry);
       }
-      return entry.work.then((result) => resultForRequest(request, result));
+      return entry.work.then((result) => resultForRequest(preparationRequest, result));
     }
   };
 }
