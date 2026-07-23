@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ALBUM_SHARE_FRIEND_FALLBACK,
   ALBUM_SHARE_TIMELINE_FALLBACK,
+  albumShareCoverPreparationIsCurrent,
   albumShareCoverRecipe,
   albumShareFriendPayload,
   albumShareImage,
@@ -12,6 +13,7 @@ import {
   createAlbumShareRequestAuthority,
   startAlbumShareCoverPreparation
 } from "../src/utils/albumShareCover.js";
+import { createAlbumShareCanvasPreparation } from "../src/utils/albumShareCanvas.js";
 
 test("两个渠道使用不同本地降级图", () => {
   assert.equal(ALBUM_SHARE_FRIEND_FALLBACK, "/static/art/album-share-friend.jpg");
@@ -119,6 +121,85 @@ test("好友 Canvas 完成后不等待慢速时间线，配方按渠道独立准
   resolveTimeline({ ok: true, path: "wxfile://tmp/timeline-late.jpg" });
   await jobs[1];
   assert.deepEqual(prepared, [{ kind: "friend", imageUrl: "wxfile://tmp/friend-ready.jpg" }]);
+});
+
+test("正文分页不会丢弃仍属于当前 token 与配方的延迟 Canvas 封面", async () => {
+  const recipe = {
+    version: "client-canvas-v1",
+    images: [{ id: 1, thumbnail_url: "/api/album/thumb-1" }]
+  };
+  const deferred = new Map();
+  const canvasPreparation = createAlbumShareCanvasPreparation({
+    renderer: ({ kind }) => new Promise((resolve) => deferred.set(kind, resolve))
+  });
+  const canvasRequest = canvasPreparation.beginRequest();
+  const requestAuthority = createAlbumShareRequestAuthority();
+  let shareToken = "current-share-token";
+  const coverRequest = requestAuthority.beginCoverRequest(shareToken);
+  let listSerial = 1;
+  const initialListRequest = listSerial;
+  let friendImageUrl = "";
+  let timelineImageUrl = "";
+
+  const jobs = startAlbumShareCoverPreparation({
+    response: { cover_recipe: recipe },
+    prepare: (kind, coverRecipe) => canvasPreparation.prepare({
+      shareId: shareToken,
+      kind,
+      recipe: coverRecipe,
+      request: canvasRequest
+    }),
+    isCurrent: () => albumShareCoverPreparationIsCurrent({
+      requestAuthority,
+      coverRequest,
+      token: shareToken,
+      canvasPreparation,
+      canvasRequest
+    }),
+    onPrepared(kind, imageUrl) {
+      if (kind === "friend") friendImageUrl = imageUrl;
+      if (kind === "timeline") timelineImageUrl = imageUrl;
+    }
+  });
+
+  await Promise.resolve();
+  listSerial += 1;
+  assert.notEqual(listSerial, initialListRequest);
+
+  deferred.get("friend")({ ok: true, path: "wxfile://tmp/friend-pagination.jpg" });
+  await jobs[0];
+  assert.equal(friendImageUrl, "wxfile://tmp/friend-pagination.jpg");
+  assert.deepEqual(albumShareMenus({
+    token: shareToken,
+    friendReady: Boolean(friendImageUrl),
+    timelineReady: Boolean(timelineImageUrl)
+  }), ["shareAppMessage"]);
+
+  deferred.get("timeline")({ ok: true, path: "wxfile://tmp/timeline-pagination.jpg" });
+  await jobs[1];
+  assert.deepEqual(albumShareMenus({
+    token: shareToken,
+    friendReady: Boolean(friendImageUrl),
+    timelineReady: Boolean(timelineImageUrl)
+  }), ["shareAppMessage", "shareTimeline"]);
+
+  shareToken = "replacement-share-token";
+  assert.equal(albumShareCoverPreparationIsCurrent({
+    requestAuthority,
+    coverRequest,
+    token: shareToken,
+    canvasPreparation,
+    canvasRequest
+  }), false);
+  requestAuthority.beginCoverRequest(shareToken);
+  canvasPreparation.beginRequest();
+  assert.equal(albumShareCoverPreparationIsCurrent({
+    requestAuthority,
+    coverRequest,
+    token: shareToken,
+    canvasPreparation,
+    canvasRequest
+  }), false);
 });
 
 test("一个渠道 Canvas 失败会使用该渠道静态图，不阻塞另一个渠道", async () => {

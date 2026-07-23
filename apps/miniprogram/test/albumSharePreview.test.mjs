@@ -180,6 +180,29 @@ test("share cover local-preview map only reuses downloaded local media, never or
   assert.equal(localPreviewBlock.includes("display_url"), false);
 });
 
+test("public body pagination is not part of share-cover currentness", () => {
+  const preparationStart = albumPageSource.indexOf("prepareAlbumShareCovers(data");
+  const coverPreparationBlock = albumPageSource.slice(
+    preparationStart,
+    albumPageSource.indexOf("resetAlbumShareCovers", preparationStart)
+  );
+  assert.equal(coverPreparationBlock.includes("isCurrent ="), false);
+  assert.equal(coverPreparationBlock.includes("isCurrent()"), false);
+  assert.equal(coverPreparationBlock.includes("isCurrentAlbumListRequest"), false);
+
+  const publicLoadStart = albumPageSource.indexOf("async loadPublicAlbum()");
+  const publicLoadBlock = albumPageSource.slice(
+    publicLoadStart,
+    albumPageSource.indexOf("async loadMorePublicAlbum()", publicLoadStart)
+  );
+  const prepareCallStart = publicLoadBlock.indexOf("this.prepareAlbumShareCovers(data");
+  const prepareCall = publicLoadBlock.slice(
+    prepareCallStart,
+    publicLoadBlock.indexOf("this.statusText", prepareCallStart)
+  );
+  assert.equal(prepareCall.includes("isCurrentAlbumListRequest"), false);
+});
+
 test("share preview initial load is not invalidated by the first onShow refresh", () => {
   const onShowBlock = albumPageSource.slice(
     albumPageSource.indexOf("async onShow()"),

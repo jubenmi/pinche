@@ -722,6 +722,7 @@ import {
 } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import {
+  albumShareCoverPreparationIsCurrent,
   albumShareFriendPayload,
   albumShareImage,
   albumShareMenus,
@@ -1568,7 +1569,7 @@ export default {
       }
       return localPreviewByMediaId;
     },
-    prepareAlbumShareCovers(data, { isCurrent = () => true } = {}) {
+    prepareAlbumShareCovers(data) {
       const coverRequest = this.albumShareRequestAuthority.beginCoverRequest(this.albumShareToken);
       const canvasPreparation = this.ensureAlbumShareCanvasPreparation();
       const canvasRequest = canvasPreparation?.beginRequest();
@@ -1589,14 +1590,13 @@ export default {
             request: canvasRequest
           });
         },
-        isCurrent: () => (
-          this.albumShareRequestAuthority.isCoverRequestCurrent(
-            coverRequest,
-            this.albumShareToken
-          ) &&
-          canvasPreparation?.isCurrent(canvasRequest) === true &&
-          isCurrent() === true
-        ),
+        isCurrent: () => albumShareCoverPreparationIsCurrent({
+          requestAuthority: this.albumShareRequestAuthority,
+          coverRequest,
+          token: this.albumShareToken,
+          canvasPreparation,
+          canvasRequest
+        }),
         onPrepared: (kind, imageUrl) => {
           this.applyAlbumShareCover(kind, imageUrl);
           this.showShareMenus();
@@ -2195,9 +2195,7 @@ export default {
               this.albumSession = this.albumSessionSummary(data);
               this.shareSubject = data.share_subject || this.shareSubject;
               this.shareOwner = data.share_owner || this.shareOwner;
-              this.prepareAlbumShareCovers(data, {
-                isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
-              });
+              this.prepareAlbumShareCovers(data);
               this.shareCounts = {
                 total: Number(data.visible_count || 0),
                 photos: Number(data.photo_count || 0),
@@ -2356,9 +2354,7 @@ export default {
         }
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.pruneUnpublishedAlbumMediaState(this.photos);
-        this.prepareAlbumShareCovers(data, {
-          isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
-        });
+        this.prepareAlbumShareCovers(data);
         this.statusText = "";
         this.publicAlbumSnapshotLoaded = true;
         this.showShareMenus();

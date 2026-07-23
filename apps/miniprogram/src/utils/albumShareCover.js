@@ -72,6 +72,25 @@ export function createAlbumShareRequestAuthority() {
   };
 }
 
+export function albumShareCoverPreparationIsCurrent({
+  requestAuthority,
+  coverRequest,
+  token,
+  canvasPreparation,
+  canvasRequest
+} = {}) {
+  if (
+    typeof requestAuthority?.isCoverRequestCurrent !== "function" ||
+    typeof canvasPreparation?.isCurrent !== "function"
+  ) {
+    return false;
+  }
+  return (
+    requestAuthority.isCoverRequestCurrent(coverRequest, token) === true &&
+    canvasPreparation.isCurrent(canvasRequest) === true
+  );
+}
+
 export function startAlbumShareCoverPreparation({
   response,
   prepare,
