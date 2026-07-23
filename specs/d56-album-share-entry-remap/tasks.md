@@ -375,7 +375,7 @@
 - Create: `scripts/d56-album-share-entry-remap-check.js`
 - Modify: `package.json`
 
-- [ ] **Step 5.1：写 D56 静态门禁**
+- [x] **Step 5.1：写 D56 静态门禁**
 
   门禁解析实际 Vue template/script/style，并要求：
 
@@ -396,7 +396,7 @@
   new server cover route / Sharp composite
   ```
 
-- [ ] **Step 5.2：接入 package scripts**
+- [x] **Step 5.2：接入 package scripts**
 
   增加：
 
@@ -409,7 +409,7 @@
 
   `postcheck` 在 D55 后运行 D56 unit/check，不删除 D53/D54/D55。
 
-- [ ] **Step 5.3：运行完整验证**
+- [x] **Step 5.3：运行完整验证**
 
   Run:
 
@@ -445,7 +445,7 @@
 
      使用安全文件替换后重新构建，并确认两张资源仍是不同文件、D55 fallback 测试通过。
 
-- [ ] **Step 5.4：提交门禁**
+- [x] **Step 5.4：提交门禁**
 
   ```bash
   git add package.json scripts/d56-album-share-entry-remap-check.js apps/miniprogram/test/albumShareEntry.test.mjs

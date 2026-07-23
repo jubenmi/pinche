@@ -79,6 +79,7 @@ for (const token of [
 
 const albumPage = read("apps/miniprogram/src/pages/session/album.vue");
 const shareHelper = read("apps/miniprogram/src/utils/albumSingleMediaShare.js");
+const shareEntryHelper = read("apps/miniprogram/src/utils/albumShareEntry.js");
 for (const helperName of [
   "singleMediaShareRouteState",
   "focusedPublicSnapshotProjection",
@@ -122,16 +123,29 @@ assert(
 
 const shareCallback = methodBlock(albumPage, "onShareAppMessage", "onShareTimeline");
 assertOrdered(
+  shareEntryHelper,
+  [
+    'const isButton = options?.from === "button";',
+    "const dataset = options?.target?.dataset || {};",
+    "if (isButton && dataset.albumShare === ALBUM_SHARE_INTENT.RECRUIT)",
+    "if (isButton && dataset.albumShare === ALBUM_SHARE_INTENT.ACTIVE)",
+    "const mediaId = isButton ? normalizePositiveInteger(dataset.mediaId) : null;",
+    "return { kind: ALBUM_SHARE_INTENT.SINGLE, mediaId };",
+    "if (isButton) return { kind: ALBUM_SHARE_INTENT.UNKNOWN };"
+  ],
+  "D50 native button source routing must preserve recruit/active priority, then resolve only an exact media dataset"
+);
+assertOrdered(
   shareCallback,
   [
-    'options?.from === "button"',
-    "options?.target?.dataset?.mediaId",
-    "this.singleMediaShareAuthority.entryFor(mediaId)",
+    "const intent = albumShareAppMessageIntent(options,",
+    "if (intent.kind === ALBUM_SHARE_INTENT.SINGLE)",
+    "this.singleMediaShareAuthority.entryFor(intent.mediaId)",
     'entry?.status === "ready"',
     "entry.path",
     "entry.imageUrl"
   ],
-  "D50 native button share must read the exact dataset cache entry"
+  "D50 native single-media share must read the exact routed dataset cache entry"
 );
 assert(
   !shareCallback.includes("previewCurrentIndex"),
@@ -141,8 +155,8 @@ assert(
   shareCallback.includes("return singleMediaShareFailClosedPayload();"),
   "D50 stale or invalid button datasets must return a credential-free fail-closed payload"
 );
-const pageShareStart = shareCallback.indexOf("const albumShareToken =");
-assert(pageShareStart > 0, "D50 page sharing boundary must follow native button handling");
+const pageShareStart = shareCallback.indexOf("if (intent.kind === ALBUM_SHARE_INTENT.DEFAULT_ALL)");
+assert(pageShareStart > 0, "D50 page-menu sharing boundary must follow native button handling");
 const buttonShareCallback = shareCallback.slice(0, pageShareStart);
 assert(
   !buttonShareCallback.includes("return {}") && !buttonShareCallback.includes("albumShareToken"),

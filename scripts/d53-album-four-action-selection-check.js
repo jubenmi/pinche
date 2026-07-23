@@ -525,8 +525,8 @@ const groupActions = actionGroup[0].children.filter((child) => child.type === 1)
 const expectedActions = [
   ["分享", "openShareSelectionMode"],
   ["下载", "openDownloadSelectionMode"],
-  ["标注", "openTagSelectionMode"],
-  ["招募", "openRecruitment"]
+  ["招募", "handleRecruitShareTap"],
+  ["标注", "openTagSelectionMode"]
 ];
 const actionIndices = expectedActions.map(([label, method]) => {
   const element = findAction(groupActions, label, method);
@@ -658,7 +658,7 @@ assert(
     (element) => element.tag === "t-image" && hasStaticAttribute(element, "src", "/static/icons/album-share.svg")
   ).length > 0 &&
     findTemplateElements(
-      groupActions[actionIndices[3]],
+      groupActions[actionIndices[2]],
       (element) => element.tag === "t-image" && hasStaticAttribute(element, "src", "/static/icons/album-recruit.svg")
     ).length > 0 &&
     findTemplateElements(
@@ -669,10 +669,24 @@ assert(
 );
 read("apps/miniprogram/src/static/icons/album-share.svg");
 read("apps/miniprogram/src/static/icons/album-recruit.svg");
-assert(hasStaticClass(groupActions[actionIndices[2]], "tag-action"), "tag action must retain its green primary style");
-const recruitmentMethod = optionMethod(albumOptions, "methods", "openRecruitment", albumScript);
-assert(templateLiteralNavigatesToRecruitment(recruitmentMethod.node), "recruitment must navigate to the invitation page");
-assert(!containsAlbumEntryParameter(recruitmentMethod.node), "recruitment must not pass entry=album");
+assert(hasStaticClass(groupActions[actionIndices[3]], "tag-action"), "tag action must retain its green primary style");
+const recruitAction = groupActions[actionIndices[2]];
+const recruitOpenType = directive(recruitAction, "bind", "open-type");
+const recruitOpenTypeExpression = parseTemplateExpression(recruitOpenType?.exp, "recruit native share open-type");
+assert(
+  hasStaticAttribute(recruitAction, "data-album-share", "recruit") &&
+    recruitOpenTypeExpression?.type === "ConditionalExpression" &&
+    isIdentifier(recruitOpenTypeExpression.test, "recruitInviteToken") &&
+    literalValue(recruitOpenTypeExpression.consequent) === "share" &&
+    literalValue(recruitOpenTypeExpression.alternate) === "",
+  "recruitment must use its token-gated native share dataset rather than invitation navigation"
+);
+const albumMethods = objectValue(albumOptions, "methods", "album options");
+assert(!objectProperty(albumMethods, "openRecruitment"), "legacy recruitment navigation must be removed");
+assert(
+  !/navigateTo\s*\([\s\S]{0,240}\/pages\/session\/share/.test(albumScript),
+  "recruitment must not navigate to the invitation page before native sharing"
+);
 
 const shareScopeNormalizer = exportedFunction(serviceProgram, "normalizeSessionAlbumPublicShareScope", "public share scope normalizer");
 const specifiedCount = variableDeclarator(shareScopeNormalizer, "specifiedCount");

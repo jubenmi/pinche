@@ -127,8 +127,8 @@ check(
 );
 check(
   packageJson.scripts?.postcheck ===
-    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check",
-  "Root postcheck must run valid D54 gates followed by D55 unit and static gates"
+    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check",
+  "Root postcheck must run valid D54 gates followed by D55 and D56 unit and static gates"
 );
 
 const rootCheck = packageJson.scripts?.check || "";
@@ -621,12 +621,14 @@ includesAll(
   [
     "@tap=\"openShareSelectionMode\"",
     "@tap=\"openDownloadSelectionMode\"",
+    "@tap=\"handleRecruitShareTap\"",
     "@tap=\"openTagSelectionMode\"",
-    "@tap=\"openRecruitment\"",
+    ":open-type=\"recruitInviteToken ? 'share' : ''\"",
+    "data-album-share=\"recruit\"",
     "prepareAlbumShareSnapshot({ scope: \"all\" })",
     "prepareAlbumShareSnapshot({ mediaIds })"
   ],
-  "D53 four-action and exact all/selected share flow"
+  "D53 four-action native-recruit and exact all/selected share flow"
 );
 includesAll(
   miniCoverTest,
