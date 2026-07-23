@@ -2436,40 +2436,6 @@ export function selectPublicShareCoverMedia(
   return candidates.slice(0, 9).map(({ photo }) => photo);
 }
 
-export function publicShareCoverGridLayout(count) {
-  const imageCount = Number(count);
-  if (!Number.isInteger(imageCount) || imageCount < 1 || imageCount > 9) {
-    throw badRequest("cover image count must be between 1 and 9");
-  }
-  const rowCounts = imageCount === 1
-    ? [1]
-    : imageCount === 2
-      ? [2]
-      : imageCount === 3
-        ? [3]
-        : imageCount === 4
-          ? [2, 2]
-          : Array.from(
-              { length: Math.ceil(imageCount / 3) },
-              (_, rowIndex) => Math.min(3, imageCount - rowIndex * 3)
-            );
-  const columns = Math.max(...rowCounts);
-  const positions = [];
-  let index = 0;
-  for (let row = 0; row < rowCounts.length; row += 1) {
-    for (let column = 0; column < rowCounts[row]; column += 1) {
-      positions.push({ index, row, column });
-      index += 1;
-    }
-  }
-  return {
-    rowCounts,
-    columns,
-    rows: rowCounts.length,
-    positions
-  };
-}
-
 export function normalizePublicShareSnapshotIds(value, options = {}) {
   let parsed = value;
   if (typeof parsed === "string") {
