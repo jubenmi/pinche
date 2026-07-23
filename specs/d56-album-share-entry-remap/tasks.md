@@ -241,7 +241,7 @@
 - Modify: `apps/miniprogram/test/albumShareEntry.test.mjs`
 - Modify: `apps/miniprogram/test/albumSharePreview.test.mjs`
 
-- [ ] **Step 3.1：写 default 与 active 隔离失败测试**
+- [x] **Step 3.1：写 default 与 active 隔离失败测试**
 
   页面测试必须证明：
 
@@ -255,7 +255,7 @@
 
   行为测试还要模拟 active selected token 后确认菜单 payload 仍返回 default all token。
 
-- [ ] **Step 3.2：运行 RED**
+- [x] **Step 3.2：运行 RED**
 
   Run:
 
@@ -265,7 +265,7 @@
 
   Expected: FAIL，因为成员菜单仍读取 `activeAlbumShareToken`。
 
-- [ ] **Step 3.3：增加独立 default 状态和静默预热**
+- [x] **Step 3.3：增加独立 default 状态和静默预热**
 
   `prepareDefaultAlbumShare()` 固定请求：
 
@@ -279,7 +279,7 @@
 
   它不得设置 `albumSharePreparing`、`statusText` 或 `albumShareReadyVisible`。相同 session/user/media version 重复调用复用同一个 promise。
 
-- [ ] **Step 3.4：串行 default/active Canvas**
+- [x] **Step 3.4：串行 default/active Canvas**
 
   用 Task 1 的协调器包裹 D55 Canvas preparation：
 
@@ -289,7 +289,7 @@
   - active 完成后若 default 未就绪，重新排队 default；
   - 不新增第二对 hidden Canvas。
 
-- [ ] **Step 3.5：重写菜单和分享回调**
+- [x] **Step 3.5：重写菜单和分享回调**
 
   - member menu app message → default friend；
   - member timeline → default timeline；
@@ -299,7 +299,7 @@
   - selection mode 期间菜单仍隐藏；
   - default 未就绪不借用 active token。
 
-- [ ] **Step 3.6：运行聚焦回归并提交**
+- [x] **Step 3.6：运行聚焦回归并提交**
 
   Run:
 

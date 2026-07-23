@@ -7,6 +7,7 @@ import {
   albumShareAppMessageIntent,
   createAlbumShareEntryAuthority,
   createAlbumShareEntryCoordinator,
+  memberDefaultAlbumShareState,
   recruitmentSharePayload
 } from "../src/utils/albumShareEntry.js";
 
@@ -237,7 +238,7 @@ test("album page prewarms recruit authority and fail-closes recruit app-message 
   assert.match(source, /recruitInvitePromise:\s*null/);
 
   const loadAlbum = sourceBlock(source, "async loadAlbum() {", "async loadPublicAlbum() {");
-  assert.match(loadAlbum, /this\.prepareRecruitInvite\(\)/);
+  assert.match(loadAlbum, /this\.primeAlbumShareEntries\(\)/);
   const prepareRecruit = sourceBlock(
     source,
     "prepareRecruitInvite() {",
@@ -316,4 +317,96 @@ test("recruit share titles include script, store, and Beijing-formatted start ti
     /return `\$\{this\.albumScriptName \|\| "剧本待定"\}｜\$\{this\.albumStoreName \|\| "店家待定"\}｜\$\{formatBeijingDateTime\(this\.albumSession\?\.start_at, "时间待定"\)\}`/
   );
   assert.match(recruitBranch, /title:\s*this\.albumShareSessionTitle\(\)/);
+});
+
+test("member default all-photo sharing has its own silent state, authority, and request", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const loadAlbum = sourceBlock(source, "async loadAlbum() {", "async loadPublicAlbum() {");
+  const primeEntries = sourceBlock(
+    source,
+    "primeAlbumShareEntries() {",
+    "prepareDefaultAlbumShare() {"
+  );
+  const prepareDefault = sourceBlock(
+    source,
+    "prepareDefaultAlbumShare() {",
+    "handleRecruitShareTap() {"
+  );
+
+  for (const field of [
+    "defaultAlbumShareToken",
+    "defaultAlbumShareFriendCoverUrl",
+    "defaultAlbumShareTimelineCoverUrl",
+    "defaultAlbumShareFriendCoverPrepared",
+    "defaultAlbumShareTimelineCoverPrepared",
+    "defaultAlbumShareSubject",
+    "defaultAlbumShareCounts",
+    "defaultAlbumShareGeneration",
+    "defaultAlbumSharePromise",
+    "defaultAlbumShareAuthority"
+  ]) {
+    assert.match(source, new RegExp(`${field}:`));
+  }
+  assert.match(loadAlbum, /this\.primeAlbumShareEntries\(\)/);
+  assert.match(primeEntries, /this\.prepareRecruitInvite\(\)/);
+  assert.match(primeEntries, /this\.prepareDefaultAlbumShare\(\)/);
+  assert.match(
+    prepareDefault,
+    /url:\s*`\/api\/sessions\/\$\{this\.sessionId\}\/album\/share-token`/
+  );
+  assert.match(prepareDefault, /method:\s*"POST"/);
+  assert.match(prepareDefault, /data:\s*\{\s*scope:\s*"all"\s*\}/);
+  assert.match(source, /this\.defaultAlbumShareAuthority\.begin\(/);
+  assert.doesNotMatch(prepareDefault, /albumBusy|statusText|albumSharePreparing|albumShareReadyVisible/);
+});
+
+test("member menu payloads read only the default all-photo snapshot while active remains button-only", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/album.vue", import.meta.url),
+    "utf8"
+  );
+  const appMessage = sourceBlock(source, "onShareAppMessage(options) {", "onShareTimeline() {");
+  const timeline = sourceBlock(source, "onShareTimeline() {", "watch: {");
+  const menus = sourceBlock(source, "showShareMenus() {", "async prepareShareCoverUrl");
+  const activeBranch = sourceBlock(
+    appMessage,
+    "if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE)",
+    "if (intent.kind === ALBUM_SHARE_INTENT.SINGLE)"
+  );
+  const memberMenuBranch = sourceBlock(
+    appMessage,
+    "if (intent.kind === ALBUM_SHARE_INTENT.DEFAULT_ALL)",
+    "if (intent.kind === ALBUM_SHARE_INTENT.PUBLIC)"
+  );
+
+  assert.match(activeBranch, /activeAlbumSharePayload\(\)/);
+  assert.match(memberMenuBranch, /defaultAlbumSharePayload\(\)/);
+  assert.doesNotMatch(memberMenuBranch, /activeAlbumShareToken|recruitInviteToken|singleMediaShareAuthority/);
+  assert.match(timeline, /defaultAlbumShareTimelinePayload\(\)/);
+  assert.doesNotMatch(timeline, /activeAlbumShareToken/);
+  assert.match(menus, /defaultAlbumShareToken/);
+  assert.match(menus, /defaultAlbumShareFriendCoverPrepared/);
+  assert.match(menus, /defaultAlbumShareTimelineCoverPrepared/);
+  assert.doesNotMatch(menus, /activeAlbumShareToken/);
+});
+
+test("member menu state keeps a selected active snapshot out of the default all-photo payload", () => {
+  assert.deepEqual(
+    memberDefaultAlbumShareState({
+      defaultAlbumShareToken: "default-all-token",
+      defaultAlbumShareFriendCoverPrepared: true,
+      defaultAlbumShareTimelineCoverPrepared: false,
+      activeAlbumShareToken: "selected-active-token",
+      activeAlbumShareFriendCoverPrepared: true,
+      activeAlbumShareTimelineCoverPrepared: true
+    }),
+    {
+      token: "default-all-token",
+      friendReady: true,
+      timelineReady: false
+    }
+  );
 });

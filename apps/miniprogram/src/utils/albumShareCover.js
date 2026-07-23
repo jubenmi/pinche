@@ -93,16 +93,15 @@ export function albumShareCoverPreparationIsCurrent({
   canvasPreparation,
   canvasRequest
 } = {}) {
-  if (
-    typeof requestAuthority?.isCoverRequestCurrent !== "function" ||
-    typeof canvasPreparation?.isCurrent !== "function"
-  ) {
+  if (typeof requestAuthority?.isCoverRequestCurrent !== "function") {
     return false;
   }
-  return (
-    requestAuthority.isCoverRequestCurrent(coverRequest, token) === true &&
-    canvasPreparation.isCurrent(canvasRequest) === true
-  );
+  if (!canvasPreparation && !canvasRequest) {
+    return requestAuthority.isCoverRequestCurrent(coverRequest, token) === true;
+  }
+  if (typeof canvasPreparation?.isCurrent !== "function") return false;
+  return requestAuthority.isCoverRequestCurrent(coverRequest, token) === true &&
+    canvasPreparation.isCurrent(canvasRequest) === true;
 }
 
 export function startAlbumShareCoverPreparation({

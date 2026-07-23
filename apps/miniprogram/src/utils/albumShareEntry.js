@@ -101,6 +101,18 @@ export function recruitmentSharePayload({
   };
 }
 
+export function memberDefaultAlbumShareState({
+  defaultAlbumShareToken,
+  defaultAlbumShareFriendCoverPrepared,
+  defaultAlbumShareTimelineCoverPrepared
+} = {}) {
+  return {
+    token: trimmedString(defaultAlbumShareToken),
+    friendReady: defaultAlbumShareFriendCoverPrepared === true,
+    timelineReady: defaultAlbumShareTimelineCoverPrepared === true
+  };
+}
+
 export function createAlbumShareEntryAuthority() {
   let serial = 0;
   let currentKey = "";
