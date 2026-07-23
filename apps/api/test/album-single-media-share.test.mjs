@@ -385,7 +385,8 @@ test("getPublicSessionAlbumShareCoverMedia returns ordered safe metadata without
     share: {
       ...fixture.share,
       media_ids: [42, 41, 99],
-      cover_media_ids: [42, 41]
+      cover_media_ids: [42, 41],
+      implicit_untagged_media: []
     },
     media: [
       { ...fixture.scenePhoto, public_cover_priority: 1 },
