@@ -101,6 +101,10 @@ assert(
   albumPage.match(/this\.albumSession = this\.albumSessionSummary\(data\);/g)?.length >= 3,
   "public album refresh must preserve header metadata when onLoad and onShow race"
 );
+assert(
+  albumPage.includes("shareCoverUrl"),
+  "album sharing must prepare a safe generated full-album cover"
+);
 const singleMediaShareHelper = read("apps/miniprogram/src/utils/albumSingleMediaShare.js");
 assert(
   singleMediaShareHelper.includes("ticket-landscape.jpg"),

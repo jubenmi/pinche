@@ -9,6 +9,7 @@ const EXPECTED = new Map([
 ]);
 const helperPath = "apps/miniprogram/src/utils/albumShareCover.js";
 const fallbackNames = Array.from(EXPECTED.keys()).map((file) => path.basename(file));
+const allowMissingTask7Helper = process.argv.includes("--allow-missing-task7-helper");
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -25,14 +26,21 @@ async function verifyFallbackArtwork() {
       metadata.width === width && metadata.height === height,
       `D52 fallback artwork must be ${width}×${height}: ${relativePath} is ${metadata.width}×${metadata.height}`
     );
+    await sharp(absolutePath, { failOn: "error" }).raw().toBuffer();
   }
 }
 
 function verifyShareHelperWhenPresent() {
   const helper = path.join(root, helperPath);
   if (!fs.existsSync(helper)) {
-    console.log("D52 helper integration pending Task 7: albumShareCover.js is not present yet");
-    return;
+    if (allowMissingTask7Helper) {
+      console.log("D52 helper integration temporarily skipped for Task 6");
+      return;
+    }
+    throw new Error(
+      `D52 album share helper is missing: ${helperPath}. ` +
+      "Use --allow-missing-task7-helper only for the temporary Task 6 asset check."
+    );
   }
 
   const source = fs.readFileSync(helper, "utf8");
