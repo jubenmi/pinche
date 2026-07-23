@@ -51,6 +51,34 @@ function staticValue(node) {
   if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
     return { known: true, value: node.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join("") };
   }
+  if (node?.type === "LogicalExpression") {
+    const left = staticValue(node.left);
+    const right = staticValue(node.right);
+    if (node.operator === "&&") {
+      if (left.known && !Boolean(left.value)) return left;
+      if (right.known && !Boolean(right.value)) return { known: true, value: false };
+      if (left.known && Boolean(left.value) && right.known) return right;
+    }
+    if (node.operator === "||") {
+      if (left.known && Boolean(left.value)) return left;
+      if (right.known && Boolean(right.value)) return { known: true, value: true };
+      if (left.known && !Boolean(left.value) && right.known) return right;
+    }
+    if (node.operator === "??" && left.known) {
+      if (left.value !== null && left.value !== undefined) return left;
+      if (right.known) return right;
+    }
+  }
+  if (node?.type === "BinaryExpression" && ["===", "!==", "==", "!="].includes(node.operator)) {
+    const left = staticValue(node.left);
+    const right = staticValue(node.right);
+    if (left.known && right.known) {
+      const equal = ["==", "!="].includes(node.operator)
+        ? left.value == right.value
+        : left.value === right.value;
+      return { known: true, value: ["===", "=="].includes(node.operator) ? equal : !equal };
+    }
+  }
   if (node?.type === "UnaryExpression") {
     const argument = staticValue(node.argument);
     if (!argument.known) return argument;
