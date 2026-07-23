@@ -83,9 +83,10 @@ const ALBUM_VIDEO_MAX_DIMENSION = 4_294_967_295;
 const ALBUM_VIDEO_PROCESSING_STATUSES = new Set(["processing", "ready", "failed"]);
 const SESSION_ALBUM_PUBLIC_SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const PUBLIC_SHARE_PAGE_SIZE = 30;
-// Keep a bounded set of privacy-authorized photos for actual-buffer analysis.
-// The renderer still emits at most nine images; this is not a public layout limit.
-export const PUBLIC_SHARE_COVER_CANDIDATE_LIMIT = 30;
+// New shares need at most three client-side Canvas inputs. Historical snapshots
+// may contain up to thirty candidates and remain readable below.
+export const PUBLIC_SHARE_COVER_CANDIDATE_LIMIT = 3;
+const PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT = 30;
 
 function requireValue(body, key) {
   const value = body[key];
@@ -2441,6 +2442,22 @@ export function selectPublicShareCoverMedia(
     .map(({ photo }) => photo);
 }
 
+function publicShareCoverRecipeFocus(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0.5;
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function publicShareCoverRecipeMedia(photo) {
+  return {
+    id: Number(photo.id),
+    image_width: Number(photo.image_width) || null,
+    image_height: Number(photo.image_height) || null,
+    focus_x: publicShareCoverRecipeFocus(photo.focus_x),
+    focus_y: publicShareCoverRecipeFocus(photo.focus_y)
+  };
+}
+
 export function normalizePublicShareSnapshotIds(value, options = {}) {
   let parsed = value;
   if (typeof parsed === "string") {
@@ -2617,7 +2634,7 @@ export function publicShareSnapshotDigest({
       .sort((left, right) => left - right),
     coverMediaIds: normalizePublicShareSnapshotIds(coverMediaIds, {
       allowEmpty: true,
-      max: PUBLIC_SHARE_COVER_CANDIDATE_LIMIT,
+      max: PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT,
       subsetOf: mediaIds
     })
       .slice()
@@ -2636,7 +2653,7 @@ export function publicShareSnapshotDigest({
 export function publicShareCoverMediaIdsDigest(coverMediaIds) {
   const ids = normalizePublicShareSnapshotIds(coverMediaIds, {
     allowEmpty: true,
-    max: PUBLIC_SHARE_COVER_CANDIDATE_LIMIT
+    max: PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT
   });
   return crypto.createHash("sha256").update(JSON.stringify(ids)).digest("hex");
 }
@@ -2649,7 +2666,7 @@ function normalizeSessionAlbumPublicShareRow(row) {
   const coverMediaIds = normalizePublicShareSnapshotIds(row.cover_media_ids, {
     label: "cover_media_ids",
     allowEmpty: true,
-    max: PUBLIC_SHARE_COVER_CANDIDATE_LIMIT,
+    max: PUBLIC_SHARE_LEGACY_COVER_CANDIDATE_LIMIT,
     subsetOf: mediaIds
   });
   const implicitUntaggedMedia = normalizeImplicitUntaggedMedia(
@@ -7269,6 +7286,48 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
       return visiblePhotos;
     };
 
+    const readCoverMedia = async () => {
+      const candidateIds = snapshotContext?.share.cover_media_ids || [];
+      if (candidateIds.length === 0) return [];
+      const [photoRows] = await connection.query(
+        `
+          SELECT photo.*
+          FROM session_album_photos photo
+          WHERE photo.session_id = ?
+            AND photo.status = 'active'
+            AND photo.moderation_status IN ('approved', 'approved_legacy')
+            AND photo.id IN (${candidateIds.map(() => "?").join(", ")})
+        `,
+        [normalizedClaims.sessionId, ...candidateIds]
+      );
+      const tagsMap = await albumTagsForPhotos(connection, candidateIds);
+      const privacyUserIds = [];
+      for (const photo of photoRows) {
+        privacyUserIds.push(photo.uploader_user_id);
+        for (const tag of tagsMap.get(Number(photo.id)) || []) {
+          if (tag.user_id) privacyUserIds.push(tag.user_id);
+        }
+      }
+      const privacyByUser = await albumPrivacyMap(
+        connection,
+        normalizedClaims.sessionId,
+        privacyUserIds
+      );
+      const photosById = new Map(photoRows.map((photo) => [Number(photo.id), photo]));
+      const coverMedia = [];
+      for (const mediaId of candidateIds) {
+        const photo = photosById.get(Number(mediaId));
+        if (!photo) continue;
+        const tags = tagsMap.get(Number(mediaId)) || [];
+        if (publicShareCoverPriority(photo, tags, privacyByUser, normalizedClaims) === null) {
+          continue;
+        }
+        coverMedia.push(publicShareCoverRecipeMedia(photo));
+        if (coverMedia.length === PUBLIC_SHARE_COVER_CANDIDATE_LIMIT) break;
+      }
+      return coverMedia;
+    };
+
     let photos;
     let nextCursor = null;
     let hasMore = false;
@@ -7290,10 +7349,11 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
     } else {
       photos = await readVisiblePhotos();
     }
+    const coverMedia = await readCoverMedia();
     return {
       session_id: normalizedClaims.sessionId,
       share_id: snapshotContext?.share.id || null,
-      cover_media_ids: snapshotContext?.share.cover_media_ids || [],
+      cover_media: coverMedia,
       script_name_snapshot: session.script_name_snapshot,
       store_name_snapshot: session.store_name_snapshot,
       played_on: beijingDateKey(session.start_at),

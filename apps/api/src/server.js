@@ -96,7 +96,6 @@ import {
   deleteScript,
   deleteStore,
   getPublicSessionAlbumPhotoForMedia,
-  getPublicSessionAlbumShareCoverMedia,
   getPublicSessionAlbumVideoForPlayback,
   getPublicSessionAlbumVideoCoverForMedia,
   getSessionForViewer,
@@ -139,7 +138,6 @@ import {
   markCatalogReviewItemNeedsChanges,
   mergeCatalogReviewItem,
   publishSession,
-  publicShareCoverMediaIdsDigest,
   rejectSignup,
   rejectCatalogReviewItem,
   relinkMySessionMembership,
@@ -167,17 +165,6 @@ import {
   insertFinalizedSessionAlbumImage,
   serializeSessionAlbumImage
 } from "./modules/core/service.js";
-import {
-  AlbumShareCoverCache,
-  AlbumShareCoverGenerationCoordinator,
-  albumShareCoverCacheKey
-} from "./modules/album-share-cover/cache.js";
-import { ALBUM_SHARE_COVER_LAYOUT_VERSION } from "./modules/album-share-cover/layouts.js";
-import {
-  exposureScore,
-  selectAlbumShareImages
-} from "./modules/album-share-cover/selection.js";
-import { renderAlbumShareCover } from "./modules/album-share-cover/renderer.js";
 import { isAlbumImageKind } from "./modules/album-image/constants.js";
 import { sessionRescheduleResponse } from "./modules/core/session-reschedule.js";
 import {
@@ -358,7 +345,6 @@ const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
-const SESSION_ALBUM_PUBLIC_COVER_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE = "session-album-public-video-file";
 const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   "ci-process": "snapshot",
@@ -3408,41 +3394,6 @@ function sessionAlbumPublicVideoUrlPath(mediaId) {
   return `/api/session-album/public-share/media/${mediaId}/video-url`;
 }
 
-function signSessionAlbumPublicCoverToken(share) {
-  const exp = Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_COVER_TOKEN_SECONDS;
-  return signSignedPayload("session-album-public-cover", {
-    shareId: tokenPositiveInteger(share.share_id, "shareId"),
-    coverMediaIdsDigest: publicShareCoverMediaIdsDigest(share.cover_media_ids),
-    exp
-  });
-}
-
-function sessionAlbumPublicShareCoverPath(share, variant = "friend") {
-  if (variant !== "friend" && variant !== "timeline") {
-    throw new TypeError("album share cover variant must be friend or timeline");
-  }
-  if (!Array.isArray(share.cover_media_ids) || share.cover_media_ids.length === 0) {
-    return "";
-  }
-  const token = signSessionAlbumPublicCoverToken(share);
-  const query = new URLSearchParams({ token, variant });
-  return `/api/session-album/public-shares/${share.share_id}/cover?${query.toString()}`;
-}
-
-function verifySessionAlbumPublicCoverQuery(shareId, query) {
-  const payload = verifySignedPayload(
-    "session-album-public-cover",
-    query.get("token") || "",
-    "album public cover token"
-  );
-  const tokenShareId = tokenPositiveInteger(payload.shareId, "shareId");
-  const coverMediaIdsDigest = String(payload.coverMediaIdsDigest || "");
-  if (tokenShareId !== Number(shareId) || !/^[a-f0-9]{64}$/.test(coverMediaIdsDigest)) {
-    throw forbidden("album public cover token is invalid");
-  }
-  return { shareId: tokenShareId, coverMediaIdsDigest };
-}
-
 export function attachPublicSessionAlbumMediaUrls(
   album,
   claims,
@@ -3450,7 +3401,7 @@ export function attachPublicSessionAlbumMediaUrls(
   options = {}
 ) {
   const {
-    cover_media_ids: coverMediaIds = [],
+    cover_media: coverMedia = [],
     ...publicAlbum
   } = album;
   const resolved = albumImageUrlOptions({ ...options, directMediaUrls: false });
@@ -3483,14 +3434,22 @@ export function attachPublicSessionAlbumMediaUrls(
   });
   const result = {
     ...publicAlbum,
-    cover_url: sessionAlbumPublicShareCoverPath({
-      share_id: album.share_id,
-      cover_media_ids: coverMediaIds
-    }, "friend"),
-    timeline_cover_url: sessionAlbumPublicShareCoverPath({
-      share_id: album.share_id,
-      cover_media_ids: coverMediaIds
-    }, "timeline"),
+    cover_recipe: {
+      version: "client-canvas-v1",
+      images: coverMedia.map((media) => ({
+        id: Number(media.id),
+        thumbnail_url: sessionAlbumPublicMediaPath(
+          media.id,
+          claims,
+          albumShareToken,
+          "thumbnail"
+        ),
+        width: Number(media.image_width) || null,
+        height: Number(media.image_height) || null,
+        focus_x: Number.isFinite(Number(media.focus_x)) ? Number(media.focus_x) : 0.5,
+        focus_y: Number.isFinite(Number(media.focus_y)) ? Number(media.focus_y) : 0.5
+      }))
+    },
     visible_count: photos.length,
     photos,
     media: photos
@@ -3666,197 +3625,6 @@ async function readUploadedObject({ url, prefix, localDir }) {
     if (error?.code === "ENOENT") throw notFound();
     throw error;
   }
-}
-
-async function readUploadedSessionAlbumPhotoObject(photo) {
-  const photoUrl = new URL(photo.photo_url, "http://localhost");
-  if (photoUrl.pathname.startsWith("/uploads/session-album/display/")) {
-    return readUploadedObject({
-      url: photoUrl,
-      prefix: "/uploads/session-album/display/",
-      localDir: sessionAlbumDisplayUploadDir
-    });
-  }
-  if (!photoUrl.pathname.startsWith("/uploads/session-album/")) {
-    throw notFound("Album share cover source not found");
-  }
-  return readUploadedObject({
-    url: photoUrl,
-    prefix: "/uploads/session-album/",
-    localDir: sessionAlbumUploadDir
-  });
-}
-
-function albumShareCoverClamp01(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 0;
-  return Math.max(0, Math.min(1, numeric));
-}
-
-function albumShareCoverOrientedDimensions(metadata) {
-  if (Number.isInteger(metadata.autoOrient?.width) && Number.isInteger(metadata.autoOrient?.height)) {
-    return metadata.autoOrient;
-  }
-  const swap = [5, 6, 7, 8].includes(metadata.orientation);
-  return {
-    width: swap ? metadata.height : metadata.width,
-    height: swap ? metadata.width : metadata.height
-  };
-}
-
-function albumShareCoverLuminance(stats) {
-  const means = (stats?.channels || [])
-    .map((channel) => Number(channel?.mean))
-    .filter(Number.isFinite);
-  if (means.length === 0) throw new TypeError("album share cover image has no luminance");
-  if (means.length < 3) return means[0];
-  return 0.2126 * means[0] + 0.7152 * means[1] + 0.0722 * means[2];
-}
-
-function albumShareCoverDHash(data, info) {
-  if (!Buffer.isBuffer(data) || info?.width !== 9 || info?.height !== 8 || info?.channels !== 1) {
-    throw new TypeError("album share cover dHash pixels are invalid");
-  }
-  let hash = 0n;
-  for (let row = 0; row < 8; row += 1) {
-    for (let column = 0; column < 8; column += 1) {
-      const offset = row * 9 + column;
-      hash = (hash << 1n) | (data[offset] > data[offset + 1] ? 1n : 0n);
-    }
-  }
-  return hash;
-}
-
-function albumShareCoverFocus(media) {
-  if (
-    typeof media?.focus_x === "number" && Number.isFinite(media.focus_x) &&
-    typeof media?.focus_y === "number" && Number.isFinite(media.focus_y)
-  ) {
-    return { focusX: media.focus_x, focusY: media.focus_y };
-  }
-  return {};
-}
-
-class PermanentAlbumShareCoverCandidateError extends Error {
-  constructor(message, cause) {
-    super(message, { cause });
-    this.name = "PermanentAlbumShareCoverCandidateError";
-  }
-}
-
-const ALBUM_SHARE_COVER_NETWORK_ERROR_CODES = new Set([
-  "ETIMEDOUT",
-  "ECONNRESET",
-  "EAI_AGAIN",
-  "ENETUNREACH"
-]);
-
-function transientAlbumShareCoverSourceError(error) {
-  const statusCode = Number(error?.statusCode ?? error?.status);
-  return error?.retryable === true ||
-    statusCode === 408 ||
-    statusCode === 429 ||
-    statusCode >= 500 ||
-    ALBUM_SHARE_COVER_NETWORK_ERROR_CODES.has(error?.code);
-}
-
-function permanentMissingAlbumShareCoverSource(error) {
-  return Number(error?.statusCode) === 404 &&
-    (error instanceof AppError || isTrustedCosStorageError(error));
-}
-
-async function analyzeAlbumShareCoverCandidate(media, readObject) {
-  let object;
-  try {
-    object = await readObject(media);
-  } catch (error) {
-    if (transientAlbumShareCoverSourceError(error)) throw error;
-    if (permanentMissingAlbumShareCoverSource(error)) {
-      throw new PermanentAlbumShareCoverCandidateError(
-        "album share cover source is missing",
-        error
-      );
-    }
-    throw error;
-  }
-  if (!object || !Buffer.isBuffer(object.body) || object.body.length === 0) {
-    throw new PermanentAlbumShareCoverCandidateError(
-      "album share cover source must provide a nonempty Buffer body"
-    );
-  }
-  let dimensions;
-  let stats;
-  let sharpness;
-  let exposure;
-  let dHash;
-  try {
-    const metadata = await sharp(object.body, { failOn: "error" }).metadata();
-    dimensions = albumShareCoverOrientedDimensions(metadata);
-    if (
-      !Number.isInteger(dimensions.width) || dimensions.width <= 0 ||
-      !Number.isInteger(dimensions.height) || dimensions.height <= 0
-    ) {
-      throw new TypeError("album share cover image dimensions are invalid");
-    }
-    stats = await sharp(object.body, { failOn: "error" }).rotate().stats();
-    const hashPixels = await sharp(object.body, { failOn: "error" })
-      .rotate()
-      .resize(9, 8, { fit: "fill" })
-      .grayscale()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    sharpness = albumShareCoverClamp01(stats.sharpness / 12);
-    exposure = exposureScore(albumShareCoverLuminance(stats));
-    dHash = albumShareCoverDHash(hashPixels.data, hashPixels.info);
-  } catch (error) {
-    throw new PermanentAlbumShareCoverCandidateError(
-      "album share cover source image is invalid",
-      error
-    );
-  }
-  const priority = Number(media.public_cover_priority);
-  if (priority !== 0 && priority !== 1) {
-    throw new TypeError("album share cover media priority is invalid");
-  }
-  return {
-    mediaId: media.id,
-    buffer: object.body,
-    width: dimensions.width,
-    height: dimensions.height,
-    sharpness,
-    exposure,
-    relevance: priority === 0 ? 1 : 0.65,
-    eligible: true,
-    dHash,
-    createdAt: media.created_at,
-    ...albumShareCoverFocus(media)
-  };
-}
-
-async function analyzeAlbumShareCoverMedia(media, readObject) {
-  const candidates = new Array(media.length);
-  let nextIndex = 0;
-  let sourceFailure = null;
-  const worker = async () => {
-    while (nextIndex < media.length && !sourceFailure) {
-      const index = nextIndex;
-      nextIndex += 1;
-      try {
-        candidates[index] = await analyzeAlbumShareCoverCandidate(media[index], readObject);
-      } catch (error) {
-        if (error instanceof PermanentAlbumShareCoverCandidateError) {
-          candidates[index] = null;
-        } else {
-          sourceFailure ??= error;
-        }
-      }
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(2, media.length) }, () => worker())
-  );
-  if (sourceFailure) throw sourceFailure;
-  return selectAlbumShareImages(candidates.filter(Boolean));
 }
 
 async function deleteUploadedSessionAlbumPhotoObject(photoUrl) {
@@ -4497,74 +4265,6 @@ async function route(request, response, options = {}) {
         }
       }
     );
-    return;
-  }
-
-  const publicSessionAlbumShareCoverId = idMatch(
-    url.pathname,
-    /^\/api\/session-album\/public-shares\/(\d+)\/cover$/
-  );
-  if (request.method === "GET" && publicSessionAlbumShareCoverId) {
-    const variant = url.searchParams.has("variant")
-      ? url.searchParams.get("variant")
-      : "friend";
-    if (variant !== "friend" && variant !== "timeline") {
-      throw badRequest("album share cover variant must be friend or timeline");
-    }
-    const publicShareCover = options.publicShareCover;
-    const coverClaims = publicShareCover.verifyQuery(
-      publicSessionAlbumShareCoverId,
-      url.searchParams
-    );
-    const { media, scriptName, roleName } = await publicShareCover.load(
-      coverClaims.shareId,
-      coverClaims.coverMediaIdsDigest
-    );
-    const cacheKey = albumShareCoverCacheKey({
-      shareId: coverClaims.shareId,
-      coverDigest: coverClaims.coverMediaIdsDigest,
-      variant,
-      layoutVersion: ALBUM_SHARE_COVER_LAYOUT_VERSION
-    });
-    const cached = publicShareCover.cache.get(cacheKey);
-    if (cached) {
-      response.writeHead(200, {
-        "cache-control": "private, no-store",
-        "content-length": cached.length,
-        "content-type": "image/jpeg"
-      });
-      response.end(cached);
-      return;
-    }
-    const cover = await publicShareCover.coordinator.run(cacheKey, async () => {
-      const raced = publicShareCover.cache.get(cacheKey);
-      if (raced) return raced;
-      const images = await analyzeAlbumShareCoverMedia(media, publicShareCover.readObject);
-      if (images.length === 0) {
-        throw new AppError(
-          422,
-          "ALBUM_SHARE_COVER_UNAVAILABLE",
-          "Album share cover cannot be generated"
-        );
-      }
-      const generated = await publicShareCover.render({
-        variant,
-        images,
-        scriptName,
-        roleName
-      });
-      if (!Buffer.isBuffer(generated) || generated.length === 0) {
-        throw new TypeError("album share cover renderer must return a nonempty Buffer");
-      }
-      publicShareCover.cache.set(cacheKey, generated);
-      return generated;
-    });
-    response.writeHead(200, {
-      "cache-control": "private, no-store",
-      "content-length": cover.length,
-      "content-type": "image/jpeg"
-    });
-    response.end(cover);
     return;
   }
 
@@ -6142,8 +5842,6 @@ async function route(request, response, options = {}) {
         visible_count: share.visible_count,
         photo_count: share.photo_count,
         video_count: share.video_count,
-        cover_url: sessionAlbumPublicShareCoverPath(share, "friend"),
-        timeline_cover_url: sessionAlbumPublicShareCoverPath(share, "timeline"),
         token: signSessionAlbumShareToken(claims),
         expires_at: new Date(exp * 1000).toISOString()
       }
@@ -6738,64 +6436,9 @@ async function route(request, response, options = {}) {
   errorResponse(response, 404, "NOT_FOUND", "Route not found");
 }
 
-function publicShareCoverDependencies(overrides, { allowAuthorizationOverrides = false } = {}) {
-  if (overrides === undefined) overrides = {};
-  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
-    throw new TypeError("publicShareCover must be an object");
-  }
-  const hasAuthorizationOverrides =
-    overrides.verifyQuery !== undefined || overrides.load !== undefined;
-  if (
-    hasAuthorizationOverrides &&
-    !(config.nodeEnv !== "production" && allowAuthorizationOverrides === true)
-  ) {
-    throw new TypeError(
-      "publicShareCover authorization overrides require an explicit non-production test flag"
-    );
-  }
-  const dependencies = {
-    verifyQuery: overrides.verifyQuery === undefined
-      ? verifySessionAlbumPublicCoverQuery
-      : overrides.verifyQuery,
-    load: overrides.load === undefined
-      ? getPublicSessionAlbumShareCoverMedia
-      : overrides.load,
-    readObject: overrides.readObject === undefined
-      ? readUploadedSessionAlbumPhotoObject
-      : overrides.readObject,
-    render: overrides.render === undefined
-      ? renderAlbumShareCover
-      : overrides.render,
-    cache: overrides.cache === undefined
-      ? new AlbumShareCoverCache()
-      : overrides.cache,
-    coordinator: new AlbumShareCoverGenerationCoordinator()
-  };
-  for (const name of ["verifyQuery", "load", "readObject", "render"]) {
-    if (typeof dependencies[name] !== "function") {
-      throw new TypeError(`publicShareCover.${name} must be a function`);
-    }
-  }
-  if (
-    !dependencies.cache ||
-    typeof dependencies.cache.get !== "function" ||
-    typeof dependencies.cache.set !== "function"
-  ) {
-    throw new TypeError("publicShareCover.cache must provide get and set functions");
-  }
-  return dependencies;
-}
-
 export function createApp(options = {}) {
-  const routeOptions = {
-    ...options,
-    publicShareCover: publicShareCoverDependencies(options.publicShareCover, {
-      allowAuthorizationOverrides:
-        options.testOnlyAllowPublicShareCoverAuthorizationOverrides === true
-    })
-  };
   return http.createServer((request, response) => {
-    route(request, response, routeOptions).catch((error) => {
+    route(request, response, options).catch((error) => {
       if (error?.contentModerationDenied === true) {
         try {
           emitContentModerationEvent("moderation_access_denied", {

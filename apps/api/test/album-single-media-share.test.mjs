@@ -247,7 +247,7 @@ test("createOrReuseSessionAlbumPublicShare persists and reuses an eligible focus
   assert.equal(second.focus_media_id, 1);
 });
 
-test("createOrReuseSessionAlbumPublicShare persists a safe visual candidate snapshot for a max-nine cover", async () => {
+test("createOrReuseSessionAlbumPublicShare persists a safe three-image Canvas cover snapshot", async () => {
   const safeRolePhotos = Array.from({ length: 14 }, (_, index) => eligibleMedia(index + 1));
   const groupPhoto = eligibleMedia(20);
   const otherUploaderPhoto = eligibleMedia(21, { uploader_user_id: 200 });
@@ -288,8 +288,8 @@ test("createOrReuseSessionAlbumPublicShare persists a safe visual candidate snap
 
   assert.equal(typeof persisted.media_ids, "string");
   assert.equal(typeof persisted.cover_media_ids, "string");
-  assert.deepEqual(persistedCoverMediaIds, [14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 24]);
-  assert.equal(persistedCoverMediaIds.length, 15);
+  assert.deepEqual(persistedCoverMediaIds, [14, 13, 12]);
+  assert.equal(persistedCoverMediaIds.length, 3);
   assert.equal(persistedCoverMediaIds.every((mediaId) => persistedMediaIds.includes(mediaId)), true);
   for (const excludedId of [20, 21, 22, 23]) {
     assert.equal(persistedCoverMediaIds.includes(excludedId), false);
@@ -299,7 +299,7 @@ test("createOrReuseSessionAlbumPublicShare persists a safe visual candidate snap
   assert.equal(connection.shares.length, 1);
 });
 
-test("createOrReuseSessionAlbumPublicShare retains all eligible static photos beyond thirty", async () => {
+test("createOrReuseSessionAlbumPublicShare retains all eligible static photos beyond thirty with three cover IDs", async () => {
   const photos = Array.from({ length: 31 }, (_, index) => eligibleMedia(index + 1));
   const connection = focusedShareConnection(
     photos,
@@ -313,8 +313,8 @@ test("createOrReuseSessionAlbumPublicShare retains all eligible static photos be
   );
 
   assert.equal(share.media_ids.length, 31);
-  assert.equal(share.cover_media_ids.length, 30);
-  assert.deepEqual(share.cover_media_ids, Array.from({ length: 30 }, (_, index) => 31 - index));
+  assert.equal(share.cover_media_ids.length, 3);
+  assert.deepEqual(share.cover_media_ids, [31, 30, 29]);
   assert.equal(new Set(share.media_ids).size, 31);
   assert(share.cover_media_ids.every((mediaId) => share.media_ids.includes(mediaId)));
 });
