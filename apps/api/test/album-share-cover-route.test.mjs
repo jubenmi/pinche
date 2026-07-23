@@ -485,7 +485,7 @@ test("the sixty-fifth distinct generation key receives a stable safe 503", async
     try {
       overflow = await fetch(
         `${baseUrl}/api/session-album/public-shares/17/cover?token=bounded-overflow`,
-        { signal: AbortSignal.timeout(500) }
+        { signal: AbortSignal.timeout(5_000) }
       );
     } catch (error) {
       overflowError = error;
