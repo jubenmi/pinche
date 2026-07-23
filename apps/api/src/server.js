@@ -169,6 +169,7 @@ import {
 } from "./modules/core/service.js";
 import {
   AlbumShareCoverCache,
+  AlbumShareCoverGenerationCoordinator,
   albumShareCoverCacheKey
 } from "./modules/album-share-cover/cache.js";
 import { ALBUM_SHARE_COVER_LAYOUT_VERSION } from "./modules/album-share-cover/layouts.js";
@@ -3735,26 +3736,83 @@ function albumShareCoverFocus(media) {
   return {};
 }
 
+class PermanentAlbumShareCoverCandidateError extends Error {
+  constructor(message, cause) {
+    super(message, { cause });
+    this.name = "PermanentAlbumShareCoverCandidateError";
+  }
+}
+
+const ALBUM_SHARE_COVER_NETWORK_ERROR_CODES = new Set([
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "ENETUNREACH"
+]);
+
+function transientAlbumShareCoverSourceError(error) {
+  const statusCode = Number(error?.statusCode ?? error?.status);
+  return error?.retryable === true ||
+    statusCode === 408 ||
+    statusCode === 429 ||
+    statusCode >= 500 ||
+    ALBUM_SHARE_COVER_NETWORK_ERROR_CODES.has(error?.code);
+}
+
+function permanentMissingAlbumShareCoverSource(error) {
+  return Number(error?.statusCode) === 404 &&
+    (error instanceof AppError || isTrustedCosStorageError(error));
+}
+
 async function analyzeAlbumShareCoverCandidate(media, readObject) {
-  const object = await readObject(media);
+  let object;
+  try {
+    object = await readObject(media);
+  } catch (error) {
+    if (transientAlbumShareCoverSourceError(error)) throw error;
+    if (permanentMissingAlbumShareCoverSource(error)) {
+      throw new PermanentAlbumShareCoverCandidateError(
+        "album share cover source is missing",
+        error
+      );
+    }
+    throw error;
+  }
   if (!object || !Buffer.isBuffer(object.body) || object.body.length === 0) {
-    throw new TypeError("album share cover source must provide a nonempty Buffer body");
+    throw new PermanentAlbumShareCoverCandidateError(
+      "album share cover source must provide a nonempty Buffer body"
+    );
   }
-  const metadata = await sharp(object.body, { failOn: "error" }).metadata();
-  const dimensions = albumShareCoverOrientedDimensions(metadata);
-  if (
-    !Number.isInteger(dimensions.width) || dimensions.width <= 0 ||
-    !Number.isInteger(dimensions.height) || dimensions.height <= 0
-  ) {
-    throw new TypeError("album share cover image dimensions are invalid");
+  let dimensions;
+  let stats;
+  let sharpness;
+  let exposure;
+  let dHash;
+  try {
+    const metadata = await sharp(object.body, { failOn: "error" }).metadata();
+    dimensions = albumShareCoverOrientedDimensions(metadata);
+    if (
+      !Number.isInteger(dimensions.width) || dimensions.width <= 0 ||
+      !Number.isInteger(dimensions.height) || dimensions.height <= 0
+    ) {
+      throw new TypeError("album share cover image dimensions are invalid");
+    }
+    stats = await sharp(object.body, { failOn: "error" }).rotate().stats();
+    const hashPixels = await sharp(object.body, { failOn: "error" })
+      .rotate()
+      .resize(9, 8, { fit: "fill" })
+      .grayscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    sharpness = albumShareCoverClamp01(stats.sharpness / 12);
+    exposure = exposureScore(albumShareCoverLuminance(stats));
+    dHash = albumShareCoverDHash(hashPixels.data, hashPixels.info);
+  } catch (error) {
+    throw new PermanentAlbumShareCoverCandidateError(
+      "album share cover source image is invalid",
+      error
+    );
   }
-  const stats = await sharp(object.body, { failOn: "error" }).rotate().stats();
-  const hashPixels = await sharp(object.body, { failOn: "error" })
-    .rotate()
-    .resize(9, 8, { fit: "fill" })
-    .grayscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
   const priority = Number(media.public_cover_priority);
   if (priority !== 0 && priority !== 1) {
     throw new TypeError("album share cover media priority is invalid");
@@ -3764,11 +3822,11 @@ async function analyzeAlbumShareCoverCandidate(media, readObject) {
     buffer: object.body,
     width: dimensions.width,
     height: dimensions.height,
-    sharpness: albumShareCoverClamp01(stats.sharpness / 12),
-    exposure: exposureScore(albumShareCoverLuminance(stats)),
+    sharpness,
+    exposure,
     relevance: priority === 0 ? 1 : 0.65,
     eligible: true,
-    dHash: albumShareCoverDHash(hashPixels.data, hashPixels.info),
+    dHash,
     createdAt: media.created_at,
     ...albumShareCoverFocus(media)
   };
@@ -3777,20 +3835,26 @@ async function analyzeAlbumShareCoverCandidate(media, readObject) {
 async function analyzeAlbumShareCoverMedia(media, readObject) {
   const candidates = new Array(media.length);
   let nextIndex = 0;
+  let sourceFailure = null;
   const worker = async () => {
-    while (nextIndex < media.length) {
+    while (nextIndex < media.length && !sourceFailure) {
       const index = nextIndex;
       nextIndex += 1;
       try {
         candidates[index] = await analyzeAlbumShareCoverCandidate(media[index], readObject);
-      } catch {
-        candidates[index] = null;
+      } catch (error) {
+        if (error instanceof PermanentAlbumShareCoverCandidateError) {
+          candidates[index] = null;
+        } else {
+          sourceFailure ??= error;
+        }
       }
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(2, media.length) }, () => worker())
   );
+  if (sourceFailure) throw sourceFailure;
   return selectAlbumShareImages(candidates.filter(Boolean));
 }
 
@@ -4471,24 +4535,29 @@ async function route(request, response, options = {}) {
       response.end(cached);
       return;
     }
-    const images = await analyzeAlbumShareCoverMedia(media, publicShareCover.readObject);
-    if (images.length === 0) {
-      throw new AppError(
-        422,
-        "ALBUM_SHARE_COVER_UNAVAILABLE",
-        "Album share cover cannot be generated"
-      );
-    }
-    const cover = await publicShareCover.render({
-      variant,
-      images,
-      scriptName,
-      roleName
+    const cover = await publicShareCover.coordinator.run(cacheKey, async () => {
+      const raced = publicShareCover.cache.get(cacheKey);
+      if (raced) return raced;
+      const images = await analyzeAlbumShareCoverMedia(media, publicShareCover.readObject);
+      if (images.length === 0) {
+        throw new AppError(
+          422,
+          "ALBUM_SHARE_COVER_UNAVAILABLE",
+          "Album share cover cannot be generated"
+        );
+      }
+      const generated = await publicShareCover.render({
+        variant,
+        images,
+        scriptName,
+        roleName
+      });
+      if (!Buffer.isBuffer(generated) || generated.length === 0) {
+        throw new TypeError("album share cover renderer must return a nonempty Buffer");
+      }
+      publicShareCover.cache.set(cacheKey, generated);
+      return generated;
     });
-    if (!Buffer.isBuffer(cover) || cover.length === 0) {
-      throw new TypeError("album share cover renderer must return a nonempty Buffer");
-    }
-    publicShareCover.cache.set(cacheKey, cover);
     response.writeHead(200, {
       "cache-control": "private, no-store",
       "content-length": cover.length,
@@ -6665,12 +6734,20 @@ async function route(request, response, options = {}) {
   errorResponse(response, 404, "NOT_FOUND", "Route not found");
 }
 
-const defaultAlbumShareCoverCache = new AlbumShareCoverCache();
-
-function publicShareCoverDependencies(overrides) {
+function publicShareCoverDependencies(overrides, { allowAuthorizationOverrides = false } = {}) {
   if (overrides === undefined) overrides = {};
   if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
     throw new TypeError("publicShareCover must be an object");
+  }
+  const hasAuthorizationOverrides =
+    overrides.verifyQuery !== undefined || overrides.load !== undefined;
+  if (
+    hasAuthorizationOverrides &&
+    !(config.nodeEnv !== "production" && allowAuthorizationOverrides === true)
+  ) {
+    throw new TypeError(
+      "publicShareCover authorization overrides require an explicit non-production test flag"
+    );
   }
   const dependencies = {
     verifyQuery: overrides.verifyQuery === undefined
@@ -6686,8 +6763,9 @@ function publicShareCoverDependencies(overrides) {
       ? renderAlbumShareCover
       : overrides.render,
     cache: overrides.cache === undefined
-      ? defaultAlbumShareCoverCache
-      : overrides.cache
+      ? new AlbumShareCoverCache()
+      : overrides.cache,
+    coordinator: new AlbumShareCoverGenerationCoordinator()
   };
   for (const name of ["verifyQuery", "load", "readObject", "render"]) {
     if (typeof dependencies[name] !== "function") {
@@ -6707,7 +6785,10 @@ function publicShareCoverDependencies(overrides) {
 export function createApp(options = {}) {
   const routeOptions = {
     ...options,
-    publicShareCover: publicShareCoverDependencies(options.publicShareCover)
+    publicShareCover: publicShareCoverDependencies(options.publicShareCover, {
+      allowAuthorizationOverrides:
+        options.testOnlyAllowPublicShareCoverAuthorizationOverrides === true
+    })
   };
   return http.createServer((request, response) => {
     route(request, response, routeOptions).catch((error) => {

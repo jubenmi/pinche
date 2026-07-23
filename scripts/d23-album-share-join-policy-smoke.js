@@ -584,7 +584,7 @@ async function main() {
         reviewSessionId: review.session.id,
         publicPhotoId: publicOwnPhoto.id,
         publicAlbumPage: `pages/session/album?id=${direct.session.id}&source=wechat_timeline&albumShareToken=${encodeURIComponent(
-          shareTokenPayload.data.token
+          renewedShare.data.token
         )}`,
         friendAlbumPage: `pages/session/album?id=${direct.session.id}&source=wechat_share&albumShareToken=${encodeURIComponent(
           renewedShare.data.token

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import http from "node:http";
 import test from "node:test";
 
 import sharp from "sharp";
@@ -7,6 +9,7 @@ import sharp from "sharp";
 import { AppError } from "../src/http/errors.js";
 import {
   AlbumShareCoverCache,
+  AlbumShareCoverGenerationCoordinator,
   albumShareCoverCacheKey
 } from "../src/modules/album-share-cover/cache.js";
 import { ALBUM_SHARE_COVER_LAYOUT_VERSION } from "../src/modules/album-share-cover/layouts.js";
@@ -88,29 +91,76 @@ function coverDependencies(overrides = {}) {
       rendered.push(input);
       if (overrides.render) return overrides.render(input, counts);
       return JPEG;
-    },
-    cache: overrides.cache || cache
+    }
   };
+  if (overrides.includeCache !== false) dependencies.cache = overrides.cache || cache;
   return { dependencies, counts, rendered };
 }
 
+async function listenCoverServer(app, { port = 0, host = "127.0.0.1" } = {}) {
+  await new Promise((resolve, reject) => {
+    const onError = (error) => reject(error);
+    app.once("error", onError);
+    app.listen(port, host, () => {
+      app.off("error", onError);
+      resolve();
+    });
+  });
+}
+
+async function closeCoverServer(app) {
+  if (!app.listening) return;
+  await new Promise((resolve, reject) => app.close((error) => {
+    if (error) reject(error);
+    else resolve();
+  }));
+}
+
 async function withCoverServer(dependencies, work) {
-  const app = createApp({ publicShareCover: dependencies });
+  const app = createApp({
+    testOnlyAllowPublicShareCoverAuthorizationOverrides: true,
+    publicShareCover: dependencies
+  });
+  let listening = false;
   try {
-    await new Promise((resolve, reject) => app.listen(0, "127.0.0.1", (error) => {
-      if (error) reject(error);
-      else resolve();
-    }));
+    await listenCoverServer(app);
+    listening = true;
     const address = app.address();
     await work(`http://127.0.0.1:${address.port}`);
   } finally {
-    await new Promise((resolve) => app.close(resolve));
+    if (listening) await closeCoverServer(app);
   }
 }
 
 async function coverRequest(baseUrl, query = "token=digest-a") {
   return fetch(`${baseUrl}/api/session-album/public-shares/17/cover?${query}`);
 }
+
+async function waitFor(predicate, label) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+}
+
+test("HTTP lifecycle helper rejects listen errors and safely ignores non-listening closes", async () => {
+  const occupied = http.createServer((_request, response) => response.end("occupied"));
+  const contender = http.createServer((_request, response) => response.end("contender"));
+  try {
+    await listenCoverServer(occupied);
+    const address = occupied.address();
+    await assert.rejects(
+      () => listenCoverServer(contender, { port: address.port }),
+      (error) => error?.code === "EADDRINUSE"
+    );
+    assert.equal(contender.listening, false);
+    await closeCoverServer(contender);
+  } finally {
+    await closeCoverServer(contender);
+    await closeCoverServer(occupied);
+  }
+});
 
 test("cache keys encode share, digest, variant, and layout version in that order", () => {
   assert.equal(albumShareCoverCacheKey({
@@ -223,6 +273,61 @@ test("cache rejects oversize values without replacing a prior value and clear re
   assert.deepEqual(cache.get("b"), Buffer.from([2, 3]));
 });
 
+test("generation coordinator coalesces keys, bounds global work, and rejects overflow safely", async () => {
+  const coordinator = new AlbumShareCoverGenerationCoordinator({
+    concurrency: 2,
+    maxKeys: 3
+  });
+  let active = 0;
+  let maximumActive = 0;
+  let sameKeyRuns = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const generate = async (value) => {
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    await gate;
+    active -= 1;
+    return value;
+  };
+  const sameKey = Array.from({ length: 12 }, () => coordinator.run("same", async () => {
+    sameKeyRuns += 1;
+    return generate("same-result");
+  }));
+  const second = coordinator.run("second", () => generate("second-result"));
+  const queued = coordinator.run("queued", () => generate("queued-result"));
+  await assert.rejects(
+    () => coordinator.run("overflow", () => generate("overflow-result")),
+    (error) => error instanceof AppError &&
+      error.statusCode === 503 &&
+      error.code === "ALBUM_SHARE_COVER_BUSY" &&
+      error.message === "Album share cover generation is busy"
+  );
+  release();
+  assert.deepEqual(await Promise.all(sameKey), Array(12).fill("same-result"));
+  assert.equal(await second, "second-result");
+  assert.equal(await queued, "queued-result");
+  assert.equal(sameKeyRuns, 1);
+  assert.equal(maximumActive, 2);
+});
+
+test("generation coordinator removes failed keys so later calls retry", async () => {
+  const coordinator = new AlbumShareCoverGenerationCoordinator();
+  let runs = 0;
+  const failed = Array.from({ length: 12 }, () => coordinator.run("retry", async () => {
+    runs += 1;
+    throw new Error("generation failed");
+  }));
+  const results = await Promise.allSettled(failed);
+  assert.equal(results.every((result) => result.status === "rejected"), true);
+  assert.equal(runs, 1);
+  assert.equal(await coordinator.run("retry", async () => {
+    runs += 1;
+    return "retried";
+  }), "retried");
+  assert.equal(runs, 2);
+});
+
 test("missing variant defaults to friend and timeline is passed separately", async () => {
   const fixture = coverDependencies();
   await withCoverServer(fixture.dependencies, async (baseUrl) => {
@@ -269,8 +374,128 @@ test("a cache hit repeats verification and authorization but skips reads, analys
     load: 2,
     read: 1,
     render: 1,
-    cacheGet: 2,
+    cacheGet: 3,
     cacheSet: 1
+  });
+});
+
+test("twelve concurrent misses authorize independently and share one same-key generation", async () => {
+  const fixture = coverDependencies({
+    async render() {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return JPEG;
+    }
+  });
+  await withCoverServer(fixture.dependencies, async (baseUrl) => {
+    const responses = await Promise.all(
+      Array.from({ length: 12 }, () => coverRequest(baseUrl))
+    );
+    assert.deepEqual(responses.map((response) => response.status), Array(12).fill(200));
+  });
+  assert.equal(fixture.counts.verify, 12);
+  assert.equal(fixture.counts.load, 12);
+  assert.equal(fixture.counts.read, 1);
+  assert.equal(fixture.counts.render, 1);
+  assert.equal(fixture.counts.cacheSet, 1);
+});
+
+test("a failed shared generation is removed and the next request retries", async () => {
+  let failFirstWave = true;
+  const fixture = coverDependencies({
+    async render() {
+      const shouldFail = failFirstWave;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      if (shouldFail) throw new Error("shared render failed");
+      return JPEG;
+    }
+  });
+  await withCoverServer(fixture.dependencies, async (baseUrl) => {
+    const failed = await Promise.all(
+      Array.from({ length: 12 }, () => coverRequest(baseUrl))
+    );
+    assert.deepEqual(failed.map((response) => response.status), Array(12).fill(500));
+    assert.equal(fixture.counts.render, 1);
+    assert.equal(fixture.counts.cacheSet, 0);
+
+    failFirstWave = false;
+    assert.equal((await coverRequest(baseUrl)).status, 200);
+  });
+  assert.equal(fixture.counts.verify, 13);
+  assert.equal(fixture.counts.load, 13);
+  assert.equal(fixture.counts.read, 2);
+  assert.equal(fixture.counts.render, 2);
+  assert.equal(fixture.counts.cacheSet, 1);
+});
+
+test("distinct cover keys never run more than two generations per app", async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const fixture = coverDependencies({
+    verifyQuery(shareId, query) {
+      return { shareId: Number(shareId), coverMediaIdsDigest: query.get("token") };
+    },
+    async render() {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      active -= 1;
+      return JPEG;
+    }
+  });
+  await withCoverServer(fixture.dependencies, async (baseUrl) => {
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, (_, index) => coverRequest(baseUrl, `token=distinct-${index}`))
+    );
+    assert.deepEqual(responses.map((response) => response.status), Array(6).fill(200));
+  });
+  assert.equal(fixture.counts.render, 6);
+  assert.equal(maximumActive, 2);
+});
+
+test("the sixty-fifth distinct generation key receives a stable safe 503", async () => {
+  let releaseRender;
+  const renderGate = new Promise((resolve) => { releaseRender = resolve; });
+  const fixture = coverDependencies({
+    verifyQuery(shareId, query) {
+      return { shareId: Number(shareId), coverMediaIdsDigest: query.get("token") };
+    },
+    async render() {
+      await renderGate;
+      return JPEG;
+    }
+  });
+  await withCoverServer(fixture.dependencies, async (baseUrl) => {
+    const accepted = Array.from(
+      { length: 64 },
+      (_, index) => coverRequest(baseUrl, `token=bounded-${index}`)
+    );
+    await waitFor(
+      () => fixture.counts.load === 64 && fixture.counts.cacheGet >= 66,
+      "64 authorized and registered generation keys"
+    );
+    let overflow;
+    let overflowError = null;
+    try {
+      overflow = await fetch(
+        `${baseUrl}/api/session-album/public-shares/17/cover?token=bounded-overflow`,
+        { signal: AbortSignal.timeout(500) }
+      );
+    } catch (error) {
+      overflowError = error;
+    } finally {
+      releaseRender();
+    }
+    const acceptedResponses = await Promise.all(accepted);
+    assert.deepEqual(acceptedResponses.map((response) => response.status), Array(64).fill(200));
+    assert.ifError(overflowError);
+    assert.equal(overflow.status, 503);
+    assert.deepEqual(await overflow.json(), {
+      ok: false,
+      error: {
+        code: "ALBUM_SHARE_COVER_BUSY",
+        message: "Album share cover generation is busy"
+      }
+    });
   });
 });
 
@@ -294,7 +519,7 @@ test("a revoked second authorization returns 403 without leaking cached bytes", 
   });
   assert.equal(fixture.counts.verify, 2);
   assert.equal(fixture.counts.load, 2);
-  assert.equal(fixture.counts.cacheGet, 1);
+  assert.equal(fixture.counts.cacheGet, 2);
   assert.equal(fixture.counts.render, 1);
 });
 
@@ -376,6 +601,68 @@ test("one corrupt authorized candidate is skipped and the remaining image render
   assert.equal(fixture.counts.read, 2);
   assert.equal(fixture.counts.render, 1);
   assert.deepEqual(fixture.rendered[0].images.map((image) => image.mediaId), [2]);
+  assert.equal(fixture.counts.cacheSet, 1);
+});
+
+test("an all-transient source failure preserves its 504 and never renders or caches", async () => {
+  const fixture = coverDependencies({
+    load(shareId) {
+      return {
+        share: { share_id: shareId, cover_media_ids: [1, 2] },
+        media: [media(1), media(2)],
+        scriptName: "剧本",
+        roleName: "角色"
+      };
+    },
+    readObject() {
+      throw new AppError(504, "ALBUM_SOURCE_TIMEOUT", "Album source timed out");
+    }
+  });
+  await withCoverServer(fixture.dependencies, async (baseUrl) => {
+    const response = await coverRequest(baseUrl);
+    assert.equal(response.status, 504);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      error: {
+        code: "ALBUM_SOURCE_TIMEOUT",
+        message: "Album source timed out"
+      }
+    });
+  });
+  assert.equal(fixture.counts.render, 0);
+  assert.equal(fixture.counts.cacheSet, 0);
+});
+
+test("a partial transient 502 aborts the generation and a later request retries all candidates", async () => {
+  let transient = true;
+  const fixture = coverDependencies({
+    load(shareId) {
+      return {
+        share: { share_id: shareId, cover_media_ids: [1, 2] },
+        media: [media(1), media(2, { public_cover_priority: 1 })],
+        scriptName: "剧本",
+        roleName: "角色"
+      };
+    },
+    readObject(item) {
+      if (transient && item.id === 1) {
+        throw new AppError(502, "ALBUM_SOURCE_UNAVAILABLE", "Album source unavailable");
+      }
+      return { filename: `${item.id}.png`, body: GOOD_IMAGE, contentType: "image/png" };
+    }
+  });
+  await withCoverServer(fixture.dependencies, async (baseUrl) => {
+    const failed = await coverRequest(baseUrl);
+    assert.equal(failed.status, 502);
+    assert.equal((await failed.json()).error.code, "ALBUM_SOURCE_UNAVAILABLE");
+    assert.equal(fixture.counts.render, 0);
+    assert.equal(fixture.counts.cacheSet, 0);
+
+    transient = false;
+    assert.equal((await coverRequest(baseUrl)).status, 200);
+  });
+  assert.equal(fixture.counts.read, 4);
+  assert.equal(fixture.counts.render, 1);
   assert.equal(fixture.counts.cacheSet, 1);
 });
 
@@ -462,7 +749,10 @@ test("analysis passes deterministic left-greater-than-right dHash and finite qua
 test("createApp rejects malformed public cover overrides clearly", () => {
   for (const publicShareCover of [null, [], "cover"]) {
     assert.throws(
-      () => createApp({ publicShareCover }),
+      () => createApp({
+        testOnlyAllowPublicShareCoverAuthorizationOverrides: true,
+        publicShareCover
+      }),
       (error) => error instanceof TypeError && error.message === "publicShareCover must be an object"
     );
   }
@@ -470,17 +760,79 @@ test("createApp rejects malformed public cover overrides clearly", () => {
   for (const field of ["verifyQuery", "load", "readObject", "render"]) {
     for (const invalid of [null, true]) {
       assert.throws(
-        () => createApp({ publicShareCover: { ...valid, [field]: invalid } }),
+        () => createApp({
+          testOnlyAllowPublicShareCoverAuthorizationOverrides: true,
+          publicShareCover: { ...valid, [field]: invalid }
+        }),
         (error) => error instanceof TypeError &&
           error.message === `publicShareCover.${field} must be a function`
       );
     }
   }
   assert.throws(
-    () => createApp({ publicShareCover: { ...valid, cache: {} } }),
+    () => createApp({
+      testOnlyAllowPublicShareCoverAuthorizationOverrides: true,
+      publicShareCover: { ...valid, cache: {} }
+    }),
     (error) => error instanceof TypeError &&
       error.message === "publicShareCover.cache must provide get and set functions"
   );
+});
+
+test("production rejects authorization overrides even with the explicit test-only flag", () => {
+  const valid = coverDependencies().dependencies;
+  assert.throws(
+    () => createApp({ publicShareCover: valid }),
+    (error) => error instanceof TypeError &&
+      error.message ===
+        "publicShareCover authorization overrides require an explicit non-production test flag"
+  );
+  const serverUrl = new URL("../src/server.js", import.meta.url).href;
+  const child = spawnSync(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    `
+      const { createApp } = await import(${JSON.stringify(serverUrl)});
+      try {
+        createApp({
+          testOnlyAllowPublicShareCoverAuthorizationOverrides: true,
+          publicShareCover: {
+            verifyQuery() {},
+            async load() {}
+          }
+        });
+        process.exit(2);
+      } catch (error) {
+        if (error?.message !== "publicShareCover authorization overrides require an explicit non-production test flag") {
+          console.error(error);
+          process.exit(3);
+        }
+      }
+    `
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env, NODE_ENV: "production" },
+    encoding: "utf8"
+  });
+  assert.equal(child.status, 0, child.stderr || child.stdout);
+});
+
+test("default cover caches and coordinators are isolated between createApp instances", async () => {
+  const first = coverDependencies({ includeCache: false });
+  const second = coverDependencies({ includeCache: false });
+  await withCoverServer(first.dependencies, async (baseUrl) => {
+    await withCoverServer(second.dependencies, async (secondBaseUrl) => {
+      const responses = await Promise.all([
+        coverRequest(baseUrl),
+        coverRequest(secondBaseUrl)
+      ]);
+      assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+      assert.equal((await coverRequest(baseUrl)).status, 200);
+      assert.equal((await coverRequest(secondBaseUrl)).status, 200);
+    });
+  });
+  assert.equal(first.counts.render, 1);
+  assert.equal(second.counts.render, 1);
 });
 
 test("both public album DTO paths expose explicit friend and timeline cover URLs", () => {
