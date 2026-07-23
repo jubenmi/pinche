@@ -192,6 +192,133 @@ test("Canvas 运行时加载、绘制并导出本地 JPEG 封面", async () => {
   ]);
 });
 
+test("未注入运行时时使用 uni 离屏 Canvas 生成本地 JPEG", async () => {
+  const calls = [];
+  const context = {
+    drawImage(...args) {
+      calls.push(["drawImage", ...args]);
+    }
+  };
+  const offscreenCanvas = {
+    createImage() {
+      const image = {};
+      Object.defineProperty(image, "src", {
+        set(source) {
+          calls.push(["image.src", source]);
+          queueMicrotask(() => image.onload());
+        }
+      });
+      return image;
+    },
+    getContext(kind) {
+      calls.push(["getContext", kind]);
+      return context;
+    }
+  };
+  const uniApi = {
+    createOffscreenCanvas(options) {
+      calls.push(["createOffscreenCanvas", options]);
+      return offscreenCanvas;
+    },
+    canvasToTempFilePath(options) {
+      calls.push(["canvasToTempFilePath", options]);
+      options.success({ tempFilePath: "wxfile://offscreen-cover.jpg" });
+    }
+  };
+
+  const result = await renderAlbumShareCanvasCover({
+    kind: "friend",
+    recipe: coverRecipe([coverImage(1)]),
+    uniApi
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.path, "wxfile://offscreen-cover.jpg");
+  assert.deepEqual(calls.slice(0, 3), [
+    ["createOffscreenCanvas", { type: "2d", width: 1000, height: 800 }],
+    ["getContext", "2d"],
+    ["image.src", "https://cdn.example.test/thumb-1.jpg"]
+  ]);
+  assert.equal(calls[3][0], "drawImage");
+  const exportCall = calls.at(-1);
+  assert.equal(exportCall[0], "canvasToTempFilePath");
+  const { success, fail, ...exportOptions } = exportCall[1];
+  assert.deepEqual(exportOptions, {
+    canvas: offscreenCanvas,
+    x: 0,
+    y: 0,
+    width: 1000,
+    height: 800,
+    destWidth: 1000,
+    destHeight: 800,
+    fileType: "jpg",
+    quality: 0.82
+  });
+  assert.equal(typeof success, "function");
+  assert.equal(typeof fail, "function");
+});
+
+test("离屏 Canvas 不可用时使用提供的页面 Canvas 适配器", async () => {
+  const calls = [];
+  const result = await renderAlbumShareCanvasCover({
+    kind: "timeline",
+    recipe: coverRecipe([coverImage(1)]),
+    uniApi: {},
+    pageCanvasRuntime: {
+      createCanvas: (options) => {
+        calls.push(["createCanvas", options]);
+        return { page: true };
+      },
+      loadImage: (source) => {
+        calls.push(["loadImage", source]);
+        return { source };
+      },
+      drawImage: (canvas, image) => calls.push(["drawImage", canvas, image]),
+      exportCanvas: (_canvas, options) => {
+        calls.push(["exportCanvas", options]);
+        return "wxfile://page-fallback-cover.jpg";
+      }
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.path, "wxfile://page-fallback-cover.jpg");
+  assert.deepEqual(calls[0], ["createCanvas", { width: 1000, height: 1000 }]);
+  assert.deepEqual(calls.at(-1), [
+    "exportCanvas",
+    { width: 1000, height: 1000, fileType: "jpg", quality: 0.82 }
+  ]);
+});
+
+test("标题绘制会尝试执行，但文本运行时失败不会阻塞封面导出", async () => {
+  let titleDraws = 0;
+  let exports = 0;
+  const result = await renderAlbumShareCanvasCover({
+    kind: "friend",
+    title: "雾都夜行｜游玩相册",
+    recipe: coverRecipe([coverImage(1)]),
+    runtime: {
+      createCanvas: () => ({}),
+      loadImage: () => ({}),
+      drawImage: () => {},
+      drawText: () => {
+        titleDraws += 1;
+        throw new Error("text unavailable");
+      },
+      exportCanvas: () => {
+        exports += 1;
+        return "wxfile://cover-without-title.jpg";
+      }
+    }
+  });
+
+  assert.equal(titleDraws, 1);
+  assert.equal(exports, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.kind, "friend");
+  assert.equal(result.path, "wxfile://cover-without-title.jpg");
+});
+
 test("Canvas 加载、运行时与导出失败都以可降级结果返回", async () => {
   const recipe = coverRecipe([coverImage(1)]);
   const loadFailure = await renderAlbumShareCanvasCover({
@@ -303,4 +430,105 @@ test("过期的封面准备请求会丢弃迟到结果", async () => {
     path: "",
     error: "stale_request"
   });
+});
+
+test("失效请求不能污染同键新请求的在途或缓存封面", async () => {
+  const resolves = [];
+  let rendererCalls = 0;
+  const preparation = createAlbumShareCanvasPreparation({
+    renderer: () => {
+      rendererCalls += 1;
+      return new Promise((resolve) => resolves.push(resolve));
+    }
+  });
+  const options = {
+    shareId: 88,
+    kind: "friend",
+    recipe: coverRecipe([coverImage(1)])
+  };
+  const requestA = preparation.beginRequest();
+  const pendingA = preparation.prepare({ ...options, request: requestA });
+  const requestB = preparation.beginRequest();
+  const pendingB = preparation.prepare({ ...options, request: requestB });
+
+  assert.equal(rendererCalls, 2);
+  resolves[0]({ ok: true, kind: "friend", path: "wxfile://stale-a.jpg" });
+  assert.deepEqual(await pendingA, {
+    ok: false,
+    kind: "friend",
+    path: "",
+    error: "stale_request"
+  });
+
+  resolves[1]({ ok: true, kind: "friend", path: "wxfile://fresh-b.jpg" });
+  assert.deepEqual(await pendingB, {
+    ok: true,
+    kind: "friend",
+    path: "wxfile://fresh-b.jpg",
+    cached: false
+  });
+
+  const requestC = preparation.beginRequest();
+  assert.deepEqual(await preparation.prepare({ ...options, request: requestC }), {
+    ok: true,
+    kind: "friend",
+    path: "wxfile://fresh-b.jpg",
+    cached: true
+  });
+});
+
+test("缓存键区分分享、配方摘要和分享渠道", async () => {
+  let rendererCalls = 0;
+  const preparation = createAlbumShareCanvasPreparation({
+    renderer: ({ kind }) => {
+      rendererCalls += 1;
+      return { ok: true, kind, path: `wxfile://cover-${rendererCalls}.jpg` };
+    }
+  });
+  const render = async (options) => preparation.prepare({
+    ...options,
+    request: preparation.beginRequest()
+  });
+  const recipeA = coverRecipe([coverImage(1)]);
+  const recipeB = coverRecipe([coverImage(2)]);
+
+  assert.equal((await render({ shareId: 10, kind: "friend", recipe: recipeA })).path, "wxfile://cover-1.jpg");
+  assert.equal((await render({ shareId: 11, kind: "friend", recipe: recipeA })).path, "wxfile://cover-2.jpg");
+  assert.equal((await render({ shareId: 10, kind: "friend", recipe: recipeB })).path, "wxfile://cover-3.jpg");
+  assert.equal((await render({ shareId: 10, kind: "timeline", recipe: recipeA })).path, "wxfile://cover-4.jpg");
+  assert.equal(rendererCalls, 4);
+});
+
+test("九图配方只加载并绘制前面三个本地预览", async () => {
+  const loaded = [];
+  const drawn = [];
+  const images = Array.from({ length: 9 }, (_, index) => coverImage(index + 1));
+  const localPreviewByMediaId = Object.fromEntries(images.map((image) => [
+    image.id,
+    `wxfile://local-${image.id}.jpg`
+  ]));
+
+  const result = await renderAlbumShareCanvasCover({
+    kind: "friend",
+    recipe: coverRecipe(images),
+    localPreviewByMediaId,
+    runtime: {
+      createCanvas: () => ({}),
+      loadImage: (source) => {
+        loaded.push(source);
+        return { source };
+      },
+      drawImage: (_canvas, image) => drawn.push(image.source),
+      exportCanvas: () => "wxfile://three-images-only.jpg"
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.plan.draws.map((draw) => draw.image.id), [1, 2, 3]);
+  assert.deepEqual(loaded, [
+    "wxfile://local-1.jpg",
+    "wxfile://local-2.jpg",
+    "wxfile://local-3.jpg"
+  ]);
+  assert.deepEqual(drawn, loaded);
 });

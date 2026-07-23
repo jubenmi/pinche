@@ -151,6 +151,181 @@ function normalizedShareId(value) {
   return text ? text : "";
 }
 
+function shortTitle(value) {
+  return trimmedString(value).slice(0, 48);
+}
+
+function titleDrawOptions(plan) {
+  return {
+    x: 36,
+    y: plan.height - 36,
+    maxWidth: plan.width - 72,
+    font: "600 32px sans-serif",
+    fillStyle: "#ffffff",
+    textBaseline: "alphabetic"
+  };
+}
+
+function canvasRuntimeAvailable(runtime) {
+  return Boolean(
+    runtime &&
+    typeof runtime.createCanvas === "function" &&
+    typeof runtime.loadImage === "function" &&
+    typeof runtime.drawImage === "function" &&
+    typeof runtime.exportCanvas === "function"
+  );
+}
+
+function currentUniApi(uniApi) {
+  if (uniApi && typeof uniApi === "object") return uniApi;
+  return typeof uni !== "undefined" && uni ? uni : null;
+}
+
+function callbackCanvasOperation(invoke) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const succeed = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    let returned;
+    try {
+      returned = invoke({ success: succeed, fail });
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    if (returned && typeof returned.then === "function") {
+      returned.then(succeed, fail);
+    } else if (typeof returned === "string" || returned?.tempFilePath || returned?.filePath) {
+      succeed(returned);
+    }
+  });
+}
+
+function exportOffscreenCanvas(uniApi, canvas, options) {
+  const exportOptions = {
+    canvas,
+    x: 0,
+    y: 0,
+    width: options.width,
+    height: options.height,
+    destWidth: options.width,
+    destHeight: options.height,
+    fileType: options.fileType,
+    quality: options.quality
+  };
+  if (typeof canvas?.toTempFilePath === "function") {
+    return callbackCanvasOperation(({ success, fail }) => canvas.toTempFilePath({
+      ...exportOptions,
+      success,
+      fail
+    }));
+  }
+  if (typeof uniApi?.canvasToTempFilePath === "function") {
+    return callbackCanvasOperation(({ success, fail }) => uniApi.canvasToTempFilePath({
+      ...exportOptions,
+      success,
+      fail
+    }));
+  }
+  throw new Error("canvas export unavailable");
+}
+
+export function createAlbumShareCanvasRuntime({ uniApi, pageCanvasRuntime } = {}) {
+  const resolvedUniApi = currentUniApi(uniApi);
+  const fallback = canvasRuntimeAvailable(pageCanvasRuntime) ? pageCanvasRuntime : null;
+  if (typeof resolvedUniApi?.createOffscreenCanvas !== "function") return fallback;
+
+  return {
+    async createCanvas(options) {
+      try {
+        const canvas = await resolvedUniApi.createOffscreenCanvas({
+          type: "2d",
+          width: options.width,
+          height: options.height
+        });
+        const context = canvas?.getContext?.("2d");
+        if (!canvas || !context || typeof canvas.createImage !== "function") {
+          throw new Error("offscreen canvas unavailable");
+        }
+        return { canvas, context };
+      } catch (error) {
+        if (!fallback) throw error;
+        return { fallback: true, canvas: await fallback.createCanvas(options) };
+      }
+    },
+    loadImage(source, canvasHandle) {
+      if (canvasHandle?.fallback) {
+        return fallback.loadImage(source, canvasHandle.canvas);
+      }
+      const canvas = canvasHandle?.canvas;
+      return new Promise((resolve, reject) => {
+        let image;
+        try {
+          image = canvas?.createImage();
+          if (!image) throw new Error("canvas image unavailable");
+          image.onload = () => resolve(image);
+          image.onerror = reject;
+          image.src = source;
+        } catch (error) {
+          reject(error);
+        }
+      });
+    },
+    drawImage(canvasHandle, image, draw) {
+      if (canvasHandle?.fallback) {
+        return fallback.drawImage(canvasHandle.canvas, image, draw);
+      }
+      const context = canvasHandle?.context;
+      if (!context || typeof context.drawImage !== "function") {
+        throw new Error("canvas drawing unavailable");
+      }
+      return context.drawImage(
+        image,
+        draw.source.x,
+        draw.source.y,
+        draw.source.width,
+        draw.source.height,
+        draw.destination.x,
+        draw.destination.y,
+        draw.destination.width,
+        draw.destination.height
+      );
+    },
+    drawText(canvasHandle, text, options) {
+      if (canvasHandle?.fallback) {
+        if (typeof fallback.drawText !== "function") return;
+        return fallback.drawText(canvasHandle.canvas, text, options);
+      }
+      const context = canvasHandle?.context;
+      if (!context || typeof context.fillText !== "function") return;
+      const canRestore = typeof context.save === "function" && typeof context.restore === "function";
+      if (canRestore) context.save();
+      try {
+        context.font = options.font;
+        context.fillStyle = options.fillStyle;
+        context.textBaseline = options.textBaseline;
+        context.fillText(text, options.x, options.y, options.maxWidth);
+      } finally {
+        if (canRestore) context.restore();
+      }
+    },
+    exportCanvas(canvasHandle, options) {
+      if (canvasHandle?.fallback) {
+        return fallback.exportCanvas(canvasHandle.canvas, options);
+      }
+      return exportOffscreenCanvas(resolvedUniApi, canvasHandle?.canvas, options);
+    }
+  };
+}
+
 export function normalizeAlbumShareCoverRecipe(recipe = {}) {
   if (recipe?.version !== ALBUM_SHARE_CANVAS_RECIPE_VERSION) return null;
   const images = normalizedImages(recipe?.images);
@@ -220,26 +395,24 @@ export function resolveAlbumShareCanvasSource(image = {}, localPreviewByMediaId)
 export async function renderAlbumShareCanvasCover({
   kind,
   recipe,
+  title,
   localPreviewByMediaId,
-  runtime
+  runtime,
+  uniApi,
+  pageCanvasRuntime
 } = {}) {
   if (!isSupportedKind(kind)) return failure(kind, "invalid_kind");
   const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
   if (!normalizedRecipe) return failure(kind, "invalid_recipe");
-  if (
-    !runtime ||
-    typeof runtime.createCanvas !== "function" ||
-    typeof runtime.loadImage !== "function" ||
-    typeof runtime.drawImage !== "function" ||
-    typeof runtime.exportCanvas !== "function"
-  ) {
+  const canvasRuntime = runtime || createAlbumShareCanvasRuntime({ uniApi, pageCanvasRuntime });
+  if (!canvasRuntimeAvailable(canvasRuntime)) {
     return failure(kind, "runtime_unavailable");
   }
 
   const plan = albumShareCanvasPlan(kind, normalizedRecipe.images);
   let canvas;
   try {
-    canvas = await runtime.createCanvas({ width: plan.width, height: plan.height });
+    canvas = await canvasRuntime.createCanvas({ width: plan.width, height: plan.height });
   } catch {
     return failure(kind, "runtime_unavailable");
   }
@@ -250,21 +423,30 @@ export async function renderAlbumShareCanvasCover({
     if (!source) return failure(kind, "source_unavailable");
     let image;
     try {
-      image = await runtime.loadImage(source);
+      image = await canvasRuntime.loadImage(source, canvas);
     } catch {
       return failure(kind, "source_load_failed");
     }
     if (!image) return failure(kind, "source_load_failed");
     try {
-      await runtime.drawImage(canvas, image, draw);
+      await canvasRuntime.drawImage(canvas, image, draw);
     } catch {
       return failure(kind, "render_failed");
     }
   }
 
+  const normalizedTitle = shortTitle(title);
+  if (normalizedTitle && typeof canvasRuntime.drawText === "function") {
+    try {
+      await canvasRuntime.drawText(canvas, normalizedTitle, titleDrawOptions(plan));
+    } catch {
+      // Cover export remains useful when a platform does not support text drawing.
+    }
+  }
+
   let exported;
   try {
-    exported = await runtime.exportCanvas(canvas, {
+    exported = await canvasRuntime.exportCanvas(canvas, {
       width: plan.width,
       height: plan.height,
       fileType: "jpg",
@@ -304,6 +486,7 @@ export function createAlbumShareCanvasPreparation({
   let requestSerial = 0;
 
   const isCurrent = (request) => request === currentRequest;
+  const workIsCurrent = (request) => !request || isCurrent(request);
   const resultForRequest = (request, result) => (
     request && !isCurrent(request) ? failure(result.kind, "stale_request") : result
   );
@@ -314,7 +497,7 @@ export function createAlbumShareCanvasPreparation({
       return currentRequest;
     },
     isCurrent,
-    prepare({ shareId, kind, recipe, localPreviewByMediaId, request } = {}) {
+    prepare({ shareId, kind, recipe, title, localPreviewByMediaId, request } = {}) {
       if (!isSupportedKind(kind)) return Promise.resolve(failure(kind, "invalid_kind"));
       if (request && !isCurrent(request)) return Promise.resolve(failure(kind, "stale_request"));
       const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
@@ -333,32 +516,37 @@ export function createAlbumShareCanvasPreparation({
         }));
       }
 
-      let work = inFlight.get(cacheKey);
-      if (!work) {
+      let entry = inFlight.get(cacheKey);
+      if (!entry || entry.request !== request) {
         let rendered;
         try {
           rendered = renderer({
             kind,
             recipe: normalizedRecipe,
+            title,
             localPreviewByMediaId,
             runtime
           });
         } catch {
           rendered = failure(kind, "render_failed");
         }
-        work = Promise.resolve(rendered)
+        const work = Promise.resolve(rendered)
           .then((result) => normalizedRendererResult(result, kind))
           .then((result) => {
+            if (!workIsCurrent(request)) return failure(kind, "stale_request");
             if (result.ok) cachedPaths.set(cacheKey, result.path);
             return result.ok
               ? { ...result, cached: false }
               : result;
           })
           .catch(() => failure(kind, "render_failed"))
-          .finally(() => inFlight.delete(cacheKey));
-        inFlight.set(cacheKey, work);
+          .finally(() => {
+            if (inFlight.get(cacheKey) === entry) inFlight.delete(cacheKey);
+          });
+        entry = { request, work };
+        inFlight.set(cacheKey, entry);
       }
-      return work.then((result) => resultForRequest(request, result));
+      return entry.work.then((result) => resultForRequest(request, result));
     }
   };
 }
