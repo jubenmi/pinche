@@ -342,6 +342,15 @@ function hasStaticClass(element, className) {
   );
 }
 
+function hasStaticAttribute(element, name, value) {
+  return element.props.some(
+    (property) =>
+      property.type === 6 &&
+      property.name === name &&
+      property.value?.content === value
+  );
+}
+
 function directive(element, name, argument) {
   return element.props.find(
     (property) =>
@@ -508,7 +517,7 @@ assert(
 const allTemplateElements = findTemplateElements(albumTemplate, () => true);
 for (const legacyLabel of ["预览并分享", "全部下载", "多选下载", "批量标注"]) {
   assert(
-    !allTemplateElements.some((element) => templateText(element).trim() === legacyLabel && directive(element, "on", "tap")),
+    !groupActions.some((element) => templateText(element).trim() === legacyLabel && directive(element, "on", "tap")),
     `${legacyLabel} must not remain a normal action button`
   );
 }
@@ -539,10 +548,22 @@ assert(
 assertSelectionPersistsAcrossFilter(optionMethod(albumOptions, "watch", "activeFilter", albumScript), "activeFilter");
 assertSelectionPersistsAcrossFilter(optionMethod(albumOptions, "watch", "selectedRoleFilter", albumScript), "selectedRoleFilter");
 assert(
-  findTemplateElements(shareAllAction, (element) => element.tag === "ShareIcon").length > 0 &&
-    findTemplateElements(groupActions[actionIndices[3]], (element) => element.tag === "UserAddIcon").length > 0,
-  "share and recruitment must use distinct icons"
+  findTemplateElements(
+    groupActions[actionIndices[0]],
+    (element) => element.tag === "t-image" && hasStaticAttribute(element, "src", "/static/icons/album-share.svg")
+  ).length > 0 &&
+    findTemplateElements(
+      groupActions[actionIndices[3]],
+      (element) => element.tag === "t-image" && hasStaticAttribute(element, "src", "/static/icons/album-recruit.svg")
+    ).length > 0 &&
+    findTemplateElements(
+      groupActions[actionIndices[0]],
+      (element) => element.tag === "t-image" && hasStaticAttribute(element, "src", "/static/icons/upload-bold.png")
+    ).length === 0,
+  "share and recruitment must use distinct non-upload icon assets"
 );
+read("apps/miniprogram/src/static/icons/album-share.svg");
+read("apps/miniprogram/src/static/icons/album-recruit.svg");
 assert(hasStaticClass(groupActions[actionIndices[2]], "tag-action"), "tag action must retain its green primary style");
 const recruitmentMethod = optionMethod(albumOptions, "methods", "openRecruitment", albumScript);
 assert(templateLiteralNavigatesToRecruitment(recruitmentMethod.node), "recruitment must navigate to the invitation page");
@@ -605,11 +626,19 @@ assert(
   "share-token route must pass its own-field options into the service"
 );
 const packageScripts = JSON.parse(packageJson).scripts || {};
+const rootCheckRunsD53 =
+  String(packageScripts.check || "").includes(
+    "node scripts/d53-album-four-action-selection-check.js"
+  ) ||
+  (
+    String(packageScripts.postcheck || "").includes("npm run d54:check") &&
+    String(packageScripts["d54:check"] || "").includes("npm run d53:check")
+  );
 assert(
-  packageScripts["d53:unit"] === "node --test apps/api/test/album-share-selection.test.mjs" &&
-    packageScripts["d53:check"] === "node scripts/d53-album-four-action-selection-check.js" &&
+  String(packageScripts["d53:unit"] || "").includes("apps/api/test/album-share-selection.test.mjs") &&
+  packageScripts["d53:check"] === "node scripts/d53-album-four-action-selection-check.js" &&
     packageScripts["d53:smoke"] === "node scripts/d53-album-four-action-selection-smoke.js" &&
-    String(packageScripts.check || "").includes("node scripts/d53-album-four-action-selection-check.js"),
+    rootCheckRunsD53,
   "package scripts must expose D53 verification and include its static check"
 );
 

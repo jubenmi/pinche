@@ -2509,13 +2509,13 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   if (
     albumSource.includes('<cover-view v-if="selectionMode && !tagSheetPhoto" class="album-floating-toolbar">') ||
-    !albumSource.includes('<root-portal :enable="selectionMode && !tagSheetPhoto">') ||
-    !albumSource.includes('<view v-if="selectionMode && !tagSheetPhoto" class="album-floating-toolbar">')
+    !albumSource.includes('<root-portal :enable="!timelineMode && selectionMode && !tagSheetPhoto">') ||
+    !albumSource.includes('<view v-if="!timelineMode && selectionMode && !tagSheetPhoto" class="album-floating-toolbar">')
   ) {
-    fail("Album selection toolbar must render in a root-portal view for member and share-preview selection");
+    fail("Album selection toolbar must render in a member-only root-portal view");
   }
   if (
-    !albumFloatingToolbarStyle.includes("height: 132rpx") ||
+    !albumFloatingToolbarStyle.includes("min-height: 172rpx") ||
     !/(^|[;{\n\r])\s*position:\s*fixed/.test(albumFloatingToolbarStyle) ||
     !/(^|[;{\n\r])\s*bottom:\s*0/.test(albumFloatingToolbarStyle) ||
     !/(^|[;{\n\r])\s*left:\s*0/.test(albumFloatingToolbarStyle) ||
@@ -2527,7 +2527,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Album selection toolbar must be a fixed bottom toolbar that paints immediately in WeChat DevTools");
   }
-  if (!albumSelectionPageStyle.includes("padding-bottom: 190rpx")) {
+  if (!albumSelectionPageStyle.includes("padding-bottom: 224rpx")) {
     fail("Album selection mode must reserve scroll content space behind the fixed bottom toolbar");
   }
   if (
@@ -2544,9 +2544,11 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Album bulk tag button must become active after selecting taggable photos");
   }
+  const openShareSelectionModeSource = methodBody(albumSource, "openShareSelectionMode");
   const openDownloadSelectionModeSource = methodBody(albumSource, "openDownloadSelectionMode");
   const openTagSelectionModeSource = methodBody(albumSource, "openTagSelectionMode");
   for (const [modeName, modeSource] of [
+    ["share", openShareSelectionModeSource],
     ["download", openDownloadSelectionModeSource],
     ["tag", openTagSelectionModeSource]
   ]) {
@@ -2559,6 +2561,9 @@ if (!fs.existsSync(pagesJsonPath)) {
       if (!modeSource.includes(requiredSelectionEntryText)) {
         fail(`Album ${modeName} selection mode must clear overlay state before showing the bottom toolbar: ${requiredSelectionEntryText}`);
       }
+    }
+    if (!modeSource.includes(`this.selectionModePurpose = "${modeName}"`)) {
+      fail(`Album ${modeName} selection mode must set one explicit selection purpose`);
     }
   }
   for (const requiredAlbumAdminParityText of [
@@ -2767,9 +2772,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     "scope.writePhotosAlbum",
     "ensurePhotosAlbumPermission",
     "saveAlbumImageToPhotosAlbum",
-    "全部下载",
-    "多选下载",
-    "下载所选",
+    "下载全部（{{ downloadablePhotos.length }}）",
+    "下载选中（{{ selectedPhotoCount }}）",
     "下载照片",
     "this.downloading = true",
     "this.downloadProgressText = `正在保存 ${index + 1}/${photos.length} 张照片...`"
@@ -2790,17 +2794,18 @@ if (!fs.existsSync(pagesJsonPath)) {
     "album-command-icon",
     "album-privacy-button-content",
     "album-privacy-icon",
-    "album-download-all-command",
-    "album-download-selected-command",
     "album-tag-command",
+    "album-share.svg",
+    "album-recruit.svg",
     "/static/icons/album-download.svg",
-    "/static/icons/album-select.svg",
     "/static/icons/album-tag-white.svg",
     "/static/icons/album-privacy.svg",
     "album-filter-panel",
     "角色",
+    "openShareSelectionMode",
     "openDownloadSelectionMode",
-    "openTagSelectionMode"
+    "openTagSelectionMode",
+    "openRecruitment"
   ]) {
     if (!albumSource.includes(requiredAlbumActionGroupText)) {
       fail(`Album page must group header actions by user task: ${requiredAlbumActionGroupText}`);
@@ -2833,9 +2838,10 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
   }
   for (const requiredAlbumToolbarIconPath of [
+    "static/icons/album-share.svg",
     "static/icons/album-download.svg",
-    "static/icons/album-select.svg",
     "static/icons/album-tag-white.svg",
+    "static/icons/album-recruit.svg",
     "static/icons/album-privacy.svg"
   ]) {
     if (!fs.existsSync(path.join(srcRoot, requiredAlbumToolbarIconPath))) {
@@ -2844,11 +2850,43 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const albumActionGroupsStyle = albumSource.match(/\.album-action-groups\s*\{[\s\S]*?\n\}/)?.[0] || "";
   if (
-    !albumActionGroupsStyle.includes(
-      "grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);"
-    )
+    !albumActionGroupsStyle.includes("grid-template-columns: repeat(4, minmax(0, 1fr));")
   ) {
-    fail("Album toolbar commands must use 1/4, 1/4 and 1/2 column widths");
+    fail("Album toolbar commands must use four equal-width columns");
+  }
+  for (const requiredFourActionText of [
+    'src="/static/icons/album-share.svg"',
+    'src="/static/icons/album-download.svg"',
+    'src="/static/icons/album-tag-white.svg"',
+    'src="/static/icons/album-recruit.svg"',
+    ">分享</text>",
+    ">下载</text>",
+    ">标注</text>",
+    ">招募</text>"
+  ]) {
+    if (!albumSource.includes(requiredFourActionText)) {
+      fail(`Album toolbar must render the D53 four-action row: ${requiredFourActionText}`);
+    }
+  }
+  for (const requiredSelectionToolbarText of [
+    "分享全部（{{ shareSelectableMedia.length }}）",
+    "分享选中（{{ selectedPhotoCount }}）",
+    "下载全部（{{ downloadablePhotos.length }}）",
+    "下载选中（{{ selectedPhotoCount }}）",
+    ':disabled="albumBusy || selectedPhotoCount === 0"'
+  ]) {
+    if (!albumSource.includes(requiredSelectionToolbarText)) {
+      fail(`Album D53 selection toolbar must retain all and selected actions: ${requiredSelectionToolbarText}`);
+    }
+  }
+  const downloadAllPhotosSource = methodBody(albumSource, "downloadAllPhotos");
+  const downloadSelectedPhotosSource = methodBody(albumSource, "downloadSelectedPhotos");
+  if (
+    !downloadAllPhotosSource.includes("this.downloadablePhotos") ||
+    !downloadSelectedPhotosSource.includes("this.downloadablePhotos.filter") ||
+    downloadSelectedPhotosSource.includes("this.filteredDownloadablePhotos.filter")
+  ) {
+    fail("Album D53 downloads must use the complete downloadable photo collection for all and selected actions");
   }
   for (const requiredCompactAlbumCommandText of [
     "height: 52rpx",
@@ -2917,7 +2955,6 @@ if (!fs.existsSync(pagesJsonPath)) {
     "albumShareToken",
     "loadPublicAlbum",
     "localAlbumShareSubject",
-    "canRequestAlbumShareToken",
     "/album/public-share",
     "/album/share-token",
     'source: "wechat_share"',
@@ -3477,11 +3514,14 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
   }
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
+  const activeAlbumSharePayloadSource = methodBody(albumSource, "activeAlbumSharePayload");
+  const prepareAlbumShareSnapshotSource = methodBody(albumSource, "prepareAlbumShareSnapshot");
   if (
-    !albumShareAppMessageSource.includes("/pages/session/album") ||
-    !albumShareAppMessageSource.includes('source: "wechat_share"') ||
-    !albumShareAppMessageSource.includes("albumShareToken") ||
-    albumShareAppMessageSource.includes("entry=album")
+    !albumShareAppMessageSource.includes("activeAlbumSharePayload") ||
+    !activeAlbumSharePayloadSource.includes("/pages/session/album") ||
+    !activeAlbumSharePayloadSource.includes('source: "wechat_share"') ||
+    !activeAlbumSharePayloadSource.includes("albumShareToken: this.activeAlbumShareToken") ||
+    activeAlbumSharePayloadSource.includes("entry=album")
   ) {
     fail("Album friend/group sharing must route directly to the public read-only album snapshot");
   }
@@ -3491,7 +3531,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Album friend/group sharing title must include script and store names, not generic 车局相册");
   }
-  if (!albumShareAppMessageSource.includes("imageUrl:")) {
+  if (!activeAlbumSharePayloadSource.includes("imageUrl:")) {
     fail("Album friend/group sharing must set a privacy-safe imageUrl instead of using the live page screenshot");
   }
   if (!albumShareAppMessageSource.includes("this.albumFriendShareImage()")) {
@@ -3531,15 +3571,12 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (albumSource.includes("data.cover_url") || albumSource.includes("data.timeline_cover_url")) {
     fail("Album page must consume generated cover URLs through albumShareCoverResponse");
   }
-  if ((albumSource.match(/this\.prepareAlbumShareCovers\(data(?:,|\))/g) || []).length < 3) {
-    fail("Album share token, initial public load, and public refresh must prepare both cover channels");
+  if ((albumSource.match(/this\.prepareAlbumShareCovers\(data(?:,|\))/g) || []).length < 2) {
+    fail("Album initial public load and public refresh must prepare both cover channels");
   }
-  const ensureAlbumShareTokenSource = methodBody(albumSource, "ensureAlbumShareToken");
   const invalidateAlbumShareStateSource = methodBody(albumSource, "invalidateAlbumShareState");
   const handleAlbumAuthChangeSource = methodBody(albumSource, "handleAlbumAuthChange");
   if (
-    !ensureAlbumShareTokenSource.includes("beginTokenRequest") ||
-    !ensureAlbumShareTokenSource.includes("isTokenRequestCurrent(shareTokenRequest)") ||
     !albumSource.includes("beginCoverRequest") ||
     !albumSource.includes("isCoverRequestCurrent") ||
     !handleAlbumAuthChangeSource.includes("this.invalidateAlbumShareState()") ||
@@ -3559,14 +3596,15 @@ if (!fs.existsSync(pagesJsonPath)) {
       fail(`Album auth invalidation must clear share state: ${requiredInvalidationText}`);
     }
   }
-  assertBefore(
-    ensureAlbumShareTokenSource,
-    "canRequestAlbumShareToken",
-    "/album/share-token",
-    "Album share token prefetch must check for a confirmed local seat before requesting the token endpoint"
-  );
-  if (!ensureAlbumShareTokenSource.includes("this.shareSubject = null")) {
-    fail("Album share token prefetch must clear share subject when the current user cannot create a seat-scoped token");
+  if (
+    albumSource.includes("ensureAlbumShareToken(") ||
+    !prepareAlbumShareSnapshotSource.includes("/album/share-token") ||
+    !prepareAlbumShareSnapshotSource.includes("data: payload") ||
+    !prepareAlbumShareSnapshotSource.includes("this.activeAlbumShareToken = token") ||
+    !prepareAlbumShareSnapshotSource.includes("this.albumShareReadyVisible = true") ||
+    !prepareAlbumShareSnapshotSource.includes("this.showShareMenus()")
+  ) {
+    fail("Album D53 sharing must prepare one active snapshot on demand without legacy token prefetch");
   }
   for (const requiredAlbumReadOnlyText of [
     'v-if="!timelineMode && (canUpload || photos.length || taggablePhotos.length)"',
@@ -3574,16 +3612,6 @@ if (!fs.existsSync(pagesJsonPath)) {
   ]) {
     if (!albumSource.includes(requiredAlbumReadOnlyText)) {
       fail(`Album timeline mode must hide member-only controls: ${requiredAlbumReadOnlyText}`);
-    }
-  }
-  for (const requiredSharePreviewSelectionText of [
-    '<root-portal :enable="selectionMode && !tagSheetPhoto">',
-    "!this.sharePreviewMode ||",
-    '(this.timelineMode && !this.sharePreviewMode)',
-    '(this.timelineMode && this.selectionModePurpose !== "share")'
-  ]) {
-    if (!albumSource.includes(requiredSharePreviewSelectionText)) {
-      fail(`Album timeline selection must remain limited to explicit share preview: ${requiredSharePreviewSelectionText}`);
     }
   }
   if (
