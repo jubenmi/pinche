@@ -30,7 +30,7 @@
 ```
 
 - `.album-primary-actions` 改为 `minmax(0, 1fr) 78rpx`；
-- `.album-privacy-action` 固定 `78rpx × 78rpx`，清除水平文字 padding；
+- `.album-privacy-action` 固定 `78rpx × 78rpx`，保留现有相近的 `12rpx` 圆角，清除水平文字 padding；
 - 模板删除可见“隐私”文本，保留 `aria-label="相册隐私"`；
 - 锁图标维持 36rpx，点击仍执行 `goPrivacy`。
 
