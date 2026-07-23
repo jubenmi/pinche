@@ -1,3 +1,8 @@
+import {
+  albumShareCanvasRecipeDigest,
+  albumShareLocalImagePath
+} from "./albumShareCanvas.js";
+
 export const ALBUM_SHARE_FRIEND_FALLBACK = "/static/art/album-share-friend.jpg";
 export const ALBUM_SHARE_TIMELINE_FALLBACK = "/static/art/album-share-timeline.jpg";
 
@@ -11,11 +16,31 @@ function fallbackFor(kind) {
   throw new TypeError("album share cover kind must be friend or timeline");
 }
 
-export function albumShareCoverResponse(response = {}) {
-  return {
-    friend: trimmedString(response?.friend_cover_url) || trimmedString(response?.cover_url),
-    timeline: trimmedString(response?.timeline_cover_url)
-  };
+function localShareImagePath(value) {
+  const path = trimmedString(value);
+  if (!path) return "";
+  if (
+    path === ALBUM_SHARE_FRIEND_FALLBACK ||
+    path === ALBUM_SHARE_TIMELINE_FALLBACK
+  ) {
+    return path;
+  }
+  return albumShareLocalImagePath(path);
+}
+
+export function albumShareCoverRecipe(response = {}) {
+  const recipe = response?.cover_recipe;
+  return recipe && typeof recipe === "object" && !Array.isArray(recipe) ? recipe : null;
+}
+
+export function albumShareCoverContextKey({ token, recipe, title } = {}) {
+  const normalizedToken = trimmedString(token);
+  if (!normalizedToken) return "";
+  return [
+    encodeURIComponent(normalizedToken),
+    albumShareCanvasRecipeDigest(recipe),
+    encodeURIComponent(trimmedString(title).slice(0, 48))
+  ].join(":");
 }
 
 export function albumShareMenus({ token, friendReady, timelineReady } = {}) {
@@ -27,7 +52,7 @@ export function albumShareMenus({ token, friendReady, timelineReady } = {}) {
 }
 
 export function albumShareImage(kind, imageUrl) {
-  return trimmedString(imageUrl) || fallbackFor(kind);
+  return localShareImagePath(imageUrl) || fallbackFor(kind);
 }
 
 export function createAlbumShareRequestAuthority() {
@@ -61,6 +86,25 @@ export function createAlbumShareRequestAuthority() {
   };
 }
 
+export function albumShareCoverPreparationIsCurrent({
+  requestAuthority,
+  coverRequest,
+  token,
+  canvasPreparation,
+  canvasRequest
+} = {}) {
+  if (
+    typeof requestAuthority?.isCoverRequestCurrent !== "function" ||
+    typeof canvasPreparation?.isCurrent !== "function"
+  ) {
+    return false;
+  }
+  return (
+    requestAuthority.isCoverRequestCurrent(coverRequest, token) === true &&
+    canvasPreparation.isCurrent(canvasRequest) === true
+  );
+}
+
 export function startAlbumShareCoverPreparation({
   response,
   prepare,
@@ -70,13 +114,13 @@ export function startAlbumShareCoverPreparation({
   if (typeof prepare !== "function") {
     throw new TypeError("album share cover preparation requires prepare");
   }
-  const coverUrls = albumShareCoverResponse(response);
+  const recipe = albumShareCoverRecipe(response);
   return ["friend", "timeline"].map((kind) => Promise.resolve()
-    .then(() => prepare(kind, coverUrls[kind]))
-    .catch(() => "")
-    .then((imageUrl) => {
+    .then(() => prepare(kind, recipe))
+    .catch(() => null)
+    .then((result) => {
       if (isCurrent() !== true) return false;
-      onPrepared(kind, trimmedString(imageUrl));
+      onPrepared(kind, albumShareImage(kind, result?.ok === true ? result.path : result));
       return true;
     })
   );
