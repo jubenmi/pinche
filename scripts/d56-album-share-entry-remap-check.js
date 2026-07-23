@@ -399,6 +399,15 @@ check(!/activeAlbumShare/.test(primeEntries.source), "D56 member prewarm must no
 check(hasScopeAllTokenRequest(prepareDefault.node), "D56 default prewarm must POST the existing album token endpoint with exactly { scope: 'all' }");
 check(callsMethod(prepareDefault.node, "beginDefaultAlbumShareRequest"), "D56 default prewarm must use its own request authority");
 check(
+  /defaultAlbumShareKey\s*===\s*requestKey[\s\S]{0,260}defaultAlbumSharePromise[\s\S]{0,100}return this\.defaultAlbumSharePromise/.test(prepareDefault.source),
+  "D56 default prewarm must reuse its in-flight request for the same authority key"
+);
+check(
+  /\.then\(async \(response\)\s*=>\s*\{[\s\S]{0,180}isCurrentDefaultAlbumShareRequest\(requestContext\)[\s\S]{0,520}installDefaultAlbumShareSnapshot/.test(prepareDefault.source) &&
+    /\.catch\(\(\)\s*=>\s*\{[\s\S]{0,180}isCurrentDefaultAlbumShareRequest\(requestContext\)/.test(prepareDefault.source),
+  "D56 default prewarm must close stale success and failure results before mutating entry state"
+);
+check(
   !["albumBusy", "statusText", "albumSharePreparing", "albumShareReadyVisible", "showToast"].some((token) => prepareDefault.source.includes(token)),
   "D56 default prewarm must remain background-only: no busy state, status, ready popup, or toast"
 );
@@ -408,6 +417,10 @@ check(
     /data:\s*\{\s*\}/.test(prepareRecruit.source) &&
     callsMethod(prepareRecruit.node, "isCurrentRecruitInviteRequest"),
   "D56 recruit prewarm must use its isolated current join-invite-token request"
+);
+check(
+  /if\s*\(this\.recruitInvitePromise\)\s*\{\s*return this\.recruitInvitePromise;?\s*\}/.test(prepareRecruit.source),
+  "D56 recruit prewarm must reuse its in-flight invite-token request"
 );
 check(
   /albumShareCanvasCoordinator\.enqueue/.test(prepareCanvas.source) &&
