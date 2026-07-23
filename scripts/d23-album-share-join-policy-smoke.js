@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import sharp from "sharp";
 
 const baseUrl = process.env.BASE_URL || "http://localhost:3018";
 const suffix = Date.now();
@@ -457,11 +458,26 @@ async function main() {
   );
 
   assert(shareTokenPayload.data.cover_url, "a safe album photo should produce a share cover");
-  const publicCover = await rawRequest("GET", shareTokenPayload.data.cover_url);
   assert(
-    (publicCover.headers.get("content-type") || "").includes("image/jpeg"),
-    "the generated public share cover should be a controlled JPEG"
+    shareTokenPayload.data.timeline_cover_url,
+    "a safe album photo should produce a timeline share cover"
   );
+  const expectedCovers = [
+    ["friend", shareTokenPayload.data.cover_url, 1000, 800],
+    ["timeline", shareTokenPayload.data.timeline_cover_url, 1000, 1000]
+  ];
+  for (const [variant, coverUrl, width, height] of expectedCovers) {
+    const publicCover = await rawRequest("GET", coverUrl);
+    assert(
+      (publicCover.headers.get("content-type") || "").includes("image/jpeg"),
+      `${variant} public share cover should be a controlled JPEG`
+    );
+    const metadata = await sharp(publicCover.body).metadata();
+    assert(
+      metadata.format === "jpeg" && metadata.width === width && metadata.height === height,
+      `${variant} public share cover should be ${width}x${height} JPEG`
+    );
+  }
 
   const publicOwn = publicPhoto(publicAlbum, publicOwnPhoto.id);
   assert(publicOwn?.image_url, "public album photo should include public image URL");
@@ -510,6 +526,7 @@ async function main() {
   );
   await rawRequest("GET", publicOwn.image_url, undefined, 403);
   await rawRequest("GET", shareTokenPayload.data.cover_url, undefined, 403);
+  await rawRequest("GET", shareTokenPayload.data.timeline_cover_url, undefined, 403);
   await request(
     "PUT",
     `/api/sessions/${direct.session.id}/album/privacy`,
@@ -534,6 +551,7 @@ async function main() {
   );
   await rawRequest("GET", publicOwn.image_url, undefined, 403);
   await rawRequest("GET", shareTokenPayload.data.cover_url, undefined, 403);
+  await rawRequest("GET", shareTokenPayload.data.timeline_cover_url, undefined, 403);
   const renewedShare = await request(
     "POST",
     `/api/sessions/${direct.session.id}/album/share-token`,
@@ -544,6 +562,18 @@ async function main() {
     Number(renewedShare.data.share_id) !== Number(shareTokenPayload.data.share_id),
     "sharing after revocation should create a new share id"
   );
+  for (const [variant, coverUrl, width, height] of [
+    ["friend", renewedShare.data.cover_url, 1000, 800],
+    ["timeline", renewedShare.data.timeline_cover_url, 1000, 1000]
+  ]) {
+    assert(coverUrl, `renewed share should expose the ${variant} cover URL`);
+    const renewedCover = await rawRequest("GET", coverUrl);
+    const metadata = await sharp(renewedCover.body).metadata();
+    assert(
+      metadata.format === "jpeg" && metadata.width === width && metadata.height === height,
+      `renewed ${variant} cover should remain available at ${width}x${height}`
+    );
+  }
 
   console.log(
     JSON.stringify(
@@ -554,7 +584,7 @@ async function main() {
         reviewSessionId: review.session.id,
         publicPhotoId: publicOwnPhoto.id,
         publicAlbumPage: `pages/session/album?id=${direct.session.id}&source=wechat_timeline&albumShareToken=${encodeURIComponent(
-          shareTokenPayload.data.token
+          renewedShare.data.token
         )}`,
         friendAlbumPage: `pages/session/album?id=${direct.session.id}&source=wechat_share&albumShareToken=${encodeURIComponent(
           renewedShare.data.token
