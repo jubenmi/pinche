@@ -31,29 +31,29 @@
   - [ ] 2.5 在检查中断言分享使用独立图标、招募使用人物加号图标、标注保持绿色主样式。
   - [ ] 2.6 在检查中断言 share / download 模式切换筛选不清空选择，下载选中从完整 `downloadablePhotos` 解析。
   - [ ] 2.7 在检查中断言招募进入角色邀请页且不传 `entry=album`。
-  - [ ] 2.8 新建 `apps/api/test/album-share-selection.test.mjs`，覆盖显式 all、精确 selected、互斥输入、31 项以上 ID、9 项封面和摘要稳定性。
-  - [ ] 2.9 在 `package.json` 增加 `d53:unit` 与 `d53:check`，先运行并确认因功能未实现而失败。
+  - [x] 2.8 新建 `apps/api/test/album-share-selection.test.mjs`，覆盖显式 all、精确 selected、互斥输入、31 项以上 ID、9 项封面和摘要稳定性。
+  - [x] 2.9 在 `package.json` 增加 `d53:unit` 与 `d53:check`，先运行并确认因功能未实现而失败。
 
 - [ ] 3. 扩展分享范围纯契约
-  - [ ] 3.1 在 `apps/api/src/modules/core/service.js` 增加分享输入规范化 helper，输出且只输出 `legacy`、`all`、`selected` 或 `focus` 一种模式。
-  - [ ] 3.2 让 helper 拒绝 `scope`、`mediaIds` 和 `focusMediaId` 的任何冲突组合。
-  - [ ] 3.3 让 selected 模式拒绝空数组、重复 ID、非安全正整数和非数组输入。
-  - [ ] 3.4 移除 `media_ids` 的固定 30 项规范化上限；保留数组安全校验和 `cover_media_ids` 的 9 项上限。
-  - [ ] 3.5 更新 `publicShareSnapshotDigest()` 和快照行规范化，使 31 项以上完整集合摘要稳定且仍校验封面子集。
-  - [ ] 3.6 运行 `npm run d53:unit`，确认纯契约测试通过。
+  - [x] 3.1 在 `apps/api/src/modules/core/service.js` 增加分享输入规范化 helper，输出且只输出 `legacy`、`all`、`selected` 或 `focus` 一种模式。
+  - [x] 3.2 让 helper 拒绝 `scope`、`mediaIds` 和 `focusMediaId` 的任何冲突组合。
+  - [x] 3.3 让 selected 模式拒绝空数组、重复 ID、非安全正整数和非数组输入。
+  - [x] 3.4 移除 `media_ids` 的固定 30 项规范化上限；保留数组安全校验和 `cover_media_ids` 的 9 项上限。
+  - [x] 3.5 更新 `publicShareSnapshotDigest()` 和快照行规范化，使 31 项以上完整集合摘要稳定且仍校验封面子集。
+  - [x] 3.6 运行 `npm run d53:unit`，确认纯契约测试通过。
 
 - [ ] 4. 实现服务端全部与选中分享
-  - [ ] 4.1 修改 `apps/api/src/server.js`，把 `scope`、`mediaIds` 和 `focusMediaId` 传入分享服务。
-  - [ ] 4.2 修改 `createOrReuseSessionAlbumPublicShare()`，为新客户端显式分流 all、selected 和 focus，同时保留无字段 legacy 行为。
-  - [ ] 4.3 all 模式使用现有统一公开资格函数返回提交时全部符合条件的媒体，不应用 30 项或视频数量裁剪。
-  - [ ] 4.4 selected 模式验证每个 ID 属于当前车局完整公开资格集合，任一失效时返回稳定错误 `ALBUM_PUBLIC_SHARE_SELECTION_INVALID`。
-  - [ ] 4.5 selected 模式不自动补齐或替换内容，并按相册稳定时间顺序写入完整精确集合。
-  - [ ] 4.6 focus 模式和 legacy 模式保持既有兼容语义。
-  - [ ] 4.7 封面选择继续只从最终快照中选最多 9 项，并保持安全封面降级。
-  - [ ] 4.8 相同完整快照继续复用，不同媒体集合不得因截断或摘要错误而误复用。
+  - [x] 4.1 修改 `apps/api/src/server.js`，把 `scope`、`mediaIds` 和 `focusMediaId` 传入分享服务。
+  - [x] 4.2 修改 `createOrReuseSessionAlbumPublicShare()`，为新客户端显式分流 all、selected 和 focus，同时保留无字段 legacy 行为。
+  - [x] 4.3 all 模式使用现有统一公开资格函数返回提交时全部符合条件的媒体，不应用 30 项或视频数量裁剪。
+  - [x] 4.4 selected 模式验证每个 ID 属于当前车局完整公开资格集合，任一失效时返回稳定错误 `ALBUM_PUBLIC_SHARE_SELECTION_INVALID`。
+  - [x] 4.5 selected 模式不自动补齐或替换内容，并按相册稳定时间顺序写入完整精确集合。
+  - [x] 4.6 focus 模式和 legacy 模式保持既有兼容语义。
+  - [x] 4.7 封面选择继续只从最终快照中选最多 9 项，并保持安全封面降级。
+  - [x] 4.8 相同完整快照继续复用，不同媒体集合不得因截断或摘要错误而误复用。
 
 - [ ] 5. 建立后端数据库 smoke
-  - [ ] 5.1 新建 `scripts/d53-album-four-action-selection-smoke.js`，建立至少 32 个符合公开资格媒体的车局夹具。
+  - [x] 5.1 新建 `scripts/d53-album-four-action-selection-smoke.js`，建立至少 32 个符合公开资格媒体的车局夹具。
   - [ ] 5.2 验证 `{ scope: "all" }` 的 `visible_count` 与快照包含全部合规媒体。
   - [ ] 5.3 验证 31 项以上 selected 请求成功且快照只包含精确选择集合。
   - [ ] 5.4 验证空、重复、跨车局、作者私有、未审核、处理中视频和隐私阻止媒体关闭式失败。

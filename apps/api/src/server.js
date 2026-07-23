@@ -1607,6 +1607,17 @@ async function bodyFor(request) {
   }
 }
 
+export function publicShareTokenOptions(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+  const options = {};
+  for (const key of ["scope", "mediaIds", "focusMediaId"]) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      options[key] = body[key];
+    }
+  }
+  return options;
+}
+
 function safeTextEqual(left, right) {
   const leftBuffer = Buffer.from(String(left || ""));
   const rightBuffer = Buffer.from(String(right || ""));
@@ -5916,10 +5927,11 @@ async function route(request, response, options = {}) {
   );
   if (request.method === "POST" && sessionAlbumShareTokenId) {
     const user = await getAuthUser(request);
+    const shareOptions = publicShareTokenOptions(body);
     const share = await createOrReuseSessionAlbumPublicShare(
       user,
       sessionAlbumShareTokenId,
-      { focusMediaId: body?.focusMediaId }
+      shareOptions
     );
     const exp = tokenPositiveInteger(
       Math.floor(new Date(share.expires_at).getTime() / 1000),
