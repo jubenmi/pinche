@@ -12,6 +12,7 @@ const FAILURE_CODES = new Set([
   "runtime_unavailable",
   "source_unavailable",
   "source_load_failed",
+  "invalid_image_dimensions",
   "render_failed",
   "export_failed",
   "stale_request"
@@ -33,7 +34,13 @@ function positiveSafeInteger(value) {
 
 function positiveDimension(value) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function imageDimensions(image = {}) {
+  const width = positiveDimension(image?.width);
+  const height = positiveDimension(image?.height);
+  return width && height ? { width, height } : null;
 }
 
 function normalizedFocus(value) {
@@ -76,8 +83,9 @@ function clampedOffset(focus, sourceSize, cropSize) {
 }
 
 function cropToFill(image, destination) {
-  const sourceWidth = positiveDimension(image?.width);
-  const sourceHeight = positiveDimension(image?.height);
+  const dimensions = imageDimensions(image);
+  if (!dimensions) return null;
+  const { width: sourceWidth, height: sourceHeight } = dimensions;
   const destinationRatio = destination.width / destination.height;
   const sourceRatio = sourceWidth / sourceHeight;
   let width = sourceWidth;
@@ -209,9 +217,8 @@ function callbackCanvasOperation(invoke) {
   });
 }
 
-function exportOffscreenCanvas(uniApi, canvas, options) {
+function exportOffscreenCanvas(canvas, options) {
   const exportOptions = {
-    canvas,
     x: 0,
     y: 0,
     width: options.width,
@@ -221,21 +228,14 @@ function exportOffscreenCanvas(uniApi, canvas, options) {
     fileType: options.fileType,
     quality: options.quality
   };
-  if (typeof canvas?.toTempFilePath === "function") {
-    return callbackCanvasOperation(({ success, fail }) => canvas.toTempFilePath({
-      ...exportOptions,
-      success,
-      fail
-    }));
+  if (typeof canvas?.toTempFilePath !== "function") {
+    throw new Error("offscreen canvas export unavailable");
   }
-  if (typeof uniApi?.canvasToTempFilePath === "function") {
-    return callbackCanvasOperation(({ success, fail }) => uniApi.canvasToTempFilePath({
-      ...exportOptions,
-      success,
-      fail
-    }));
-  }
-  throw new Error("canvas export unavailable");
+  return callbackCanvasOperation(({ success, fail }) => canvas.toTempFilePath({
+    ...exportOptions,
+    success,
+    fail
+  }));
 }
 
 export function createAlbumShareCanvasRuntime({ uniApi, pageCanvasRuntime } = {}) {
@@ -252,7 +252,12 @@ export function createAlbumShareCanvasRuntime({ uniApi, pageCanvasRuntime } = {}
           height: options.height
         });
         const context = canvas?.getContext?.("2d");
-        if (!canvas || !context || typeof canvas.createImage !== "function") {
+        if (
+          !canvas ||
+          !context ||
+          typeof canvas.createImage !== "function" ||
+          typeof canvas.toTempFilePath !== "function"
+        ) {
           throw new Error("offscreen canvas unavailable");
         }
         return { canvas, context };
@@ -321,7 +326,7 @@ export function createAlbumShareCanvasRuntime({ uniApi, pageCanvasRuntime } = {}
       if (canvasHandle?.fallback) {
         return fallback.exportCanvas(canvasHandle.canvas, options);
       }
-      return exportOffscreenCanvas(resolvedUniApi, canvasHandle?.canvas, options);
+      return exportOffscreenCanvas(canvasHandle?.canvas, options);
     }
   };
 }
@@ -388,8 +393,21 @@ export function albumShareCanvasPlan(kind, images = []) {
   };
 }
 
-export function resolveAlbumShareCanvasSource(image = {}, localPreviewByMediaId) {
-  return localPreviewFor(image, localPreviewByMediaId) || trimmedString(image?.thumbnail_url);
+export function resolveAlbumShareCanvasSource(
+  image = {},
+  localPreviewByMediaId,
+  thumbnailUrlResolver
+) {
+  // The resolver receives only a remote fallback URL and its normalized descriptor.
+  const localPreview = localPreviewFor(image, localPreviewByMediaId);
+  if (localPreview) return localPreview;
+  const thumbnailUrl = trimmedString(image?.thumbnail_url);
+  if (!thumbnailUrl || typeof thumbnailUrlResolver !== "function") return thumbnailUrl;
+  try {
+    return trimmedString(thumbnailUrlResolver(thumbnailUrl, image));
+  } catch {
+    return "";
+  }
 }
 
 export async function renderAlbumShareCanvasCover({
@@ -397,6 +415,7 @@ export async function renderAlbumShareCanvasCover({
   recipe,
   title,
   localPreviewByMediaId,
+  thumbnailUrlResolver,
   runtime,
   uniApi,
   pageCanvasRuntime
@@ -418,8 +437,13 @@ export async function renderAlbumShareCanvasCover({
   }
   if (!canvas) return failure(kind, "runtime_unavailable");
 
-  for (const draw of plan.draws) {
-    const source = resolveAlbumShareCanvasSource(draw.image, localPreviewByMediaId);
+  const completedDraws = [];
+  for (const pendingDraw of plan.draws) {
+    const source = resolveAlbumShareCanvasSource(
+      pendingDraw.image,
+      localPreviewByMediaId,
+      thumbnailUrlResolver
+    );
     if (!source) return failure(kind, "source_unavailable");
     let image;
     try {
@@ -428,17 +452,27 @@ export async function renderAlbumShareCanvasCover({
       return failure(kind, "source_load_failed");
     }
     if (!image) return failure(kind, "source_load_failed");
+    const dimensions = imageDimensions(pendingDraw.image) || imageDimensions(image);
+    if (!dimensions) return failure(kind, "invalid_image_dimensions");
+    const draw = {
+      ...pendingDraw,
+      source: cropToFill({ ...pendingDraw.image, ...dimensions }, pendingDraw.destination)
+    };
+    if (!draw.source) return failure(kind, "invalid_image_dimensions");
     try {
       await canvasRuntime.drawImage(canvas, image, draw);
     } catch {
       return failure(kind, "render_failed");
     }
+    completedDraws.push(draw);
   }
+
+  const completedPlan = { ...plan, draws: completedDraws };
 
   const normalizedTitle = shortTitle(title);
   if (normalizedTitle && typeof canvasRuntime.drawText === "function") {
     try {
-      await canvasRuntime.drawText(canvas, normalizedTitle, titleDrawOptions(plan));
+      await canvasRuntime.drawText(canvas, normalizedTitle, titleDrawOptions(completedPlan));
     } catch {
       // Cover export remains useful when a platform does not support text drawing.
     }
@@ -457,7 +491,7 @@ export async function renderAlbumShareCanvasCover({
   }
   const path = localTemporaryPath(exported);
   if (!path) return failure(kind, "export_failed");
-  return { ok: true, kind, path, plan };
+  return { ok: true, kind, path, plan: completedPlan };
 }
 
 export function albumShareCanvasRecipeDigest(recipe = {}) {
@@ -476,9 +510,14 @@ export function albumShareCanvasRecipeDigest(recipe = {}) {
 export function createAlbumShareCanvasPreparation({
   renderer = renderAlbumShareCanvasCover,
   runtime,
-  cache = new Map()
+  cache = new Map(),
+  releaseTempPath
 } = {}) {
-  const cachedPaths = cache && typeof cache.get === "function" && typeof cache.set === "function"
+  const cachedPaths = cache &&
+    typeof cache.get === "function" &&
+    typeof cache.set === "function" &&
+    typeof cache.clear === "function" &&
+    typeof cache.values === "function"
     ? cache
     : new Map();
   const inFlight = new Map();
@@ -490,6 +529,27 @@ export function createAlbumShareCanvasPreparation({
   const resultForRequest = (request, result) => (
     request && !isCurrent(request) ? failure(result.kind, "stale_request") : result
   );
+  const invalidate = () => {
+    currentRequest = Object.freeze({ serial: ++requestSerial, invalidated: true });
+  };
+  const releasePath = (path) => {
+    if (!path || typeof releaseTempPath !== "function") return;
+    try {
+      const pending = releaseTempPath(path);
+      if (pending && typeof pending.then === "function") Promise.resolve(pending).catch(() => {});
+    } catch {
+      // Releasing a temporary file must not disturb the share-cover lifecycle.
+    }
+  };
+  const clear = () => {
+    invalidate();
+    const paths = new Set(
+      Array.from(cachedPaths.values(), (path) => localTemporaryPath(path)).filter(Boolean)
+    );
+    cachedPaths.clear();
+    inFlight.clear();
+    paths.forEach(releasePath);
+  };
 
   return {
     beginRequest() {
@@ -497,7 +557,17 @@ export function createAlbumShareCanvasPreparation({
       return currentRequest;
     },
     isCurrent,
-    prepare({ shareId, kind, recipe, title, localPreviewByMediaId, request } = {}) {
+    clear,
+    dispose: clear,
+    prepare({
+      shareId,
+      kind,
+      recipe,
+      title,
+      localPreviewByMediaId,
+      thumbnailUrlResolver,
+      request
+    } = {}) {
       if (!isSupportedKind(kind)) return Promise.resolve(failure(kind, "invalid_kind"));
       if (request && !isCurrent(request)) return Promise.resolve(failure(kind, "stale_request"));
       const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
@@ -505,7 +575,8 @@ export function createAlbumShareCanvasPreparation({
       const normalizedId = normalizedShareId(shareId);
       if (!normalizedId) return Promise.resolve(failure(kind, "invalid_recipe"));
       const digest = albumShareCanvasRecipeDigest(normalizedRecipe);
-      const cacheKey = `${normalizedId}:${digest}:${kind}`;
+      const normalizedTitle = shortTitle(title);
+      const cacheKey = `${normalizedId}:${digest}:${kind}:${encodeURIComponent(normalizedTitle)}`;
       const cachedPath = localTemporaryPath(cachedPaths.get(cacheKey));
       if (cachedPath) {
         return Promise.resolve(resultForRequest(request, {
@@ -523,8 +594,9 @@ export function createAlbumShareCanvasPreparation({
           rendered = renderer({
             kind,
             recipe: normalizedRecipe,
-            title,
+            title: normalizedTitle,
             localPreviewByMediaId,
+            thumbnailUrlResolver,
             runtime
           });
         } catch {
