@@ -3,6 +3,19 @@
     <AuthIdentityBar v-if="!timelineMode" />
     <FeedbackHost />
 
+    <canvas
+      id="album-share-friend-canvas"
+      canvas-id="album-share-friend-canvas"
+      type="2d"
+      class="album-share-canvas album-share-friend-canvas"
+    />
+    <canvas
+      id="album-share-timeline-canvas"
+      canvas-id="album-share-timeline-canvas"
+      type="2d"
+      class="album-share-canvas album-share-timeline-canvas"
+    />
+
     <view v-if="timelineMode && albumSession" class="section public-share-head">
       <view class="public-share-owner">
         <image
@@ -727,6 +740,8 @@ import {
 } from "../../utils/contentModeration";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import {
+  albumShareCoverContextKey,
+  albumShareCoverPreparationIsCurrent,
   albumShareFriendPayload,
   albumShareImage,
   albumShareMenus,
@@ -734,6 +749,14 @@ import {
   createAlbumShareRequestAuthority,
   startAlbumShareCoverPreparation
 } from "../../utils/albumShareCover";
+import {
+  albumShareLocalImagePath,
+  canUseAlbumShareCanvasIdExport as canUseLegacyAlbumShareCanvasIdExport,
+  createAlbumShareCanvasPreparation,
+  createAlbumShareCanvasRuntime,
+  normalizeAlbumShareCoverRecipe,
+  releaseAlbumShareCanvasTempPath
+} from "../../utils/albumShareCanvas";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
 import {
@@ -806,6 +829,10 @@ export default {
       shareFriendCoverPrepared: false,
       shareTimelineCoverPrepared: false,
       albumShareRequestAuthority: createAlbumShareRequestAuthority(),
+      albumShareCanvasPreparation: null,
+      albumShareCanvasPageRuntime: null,
+      albumShareCanvasNodes: {},
+      albumShareCoverContextKey: "",
       shareCounts: { total: 0, photos: 0, videos: 0 },
       albumSession: null,
       photos: [],
@@ -1245,6 +1272,8 @@ export default {
   onHide() {
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
+    this.disposeAlbumShareCanvasPreparation();
+    this.resetAlbumShareCovers({ disposeCanvas: false });
     this.clearAuthorPrivateAlbumState();
   },
   onUnload() {
@@ -1254,6 +1283,8 @@ export default {
     this.resetSingleMediaShareState();
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
+    this.disposeAlbumShareCanvasPreparation();
+    this.resetAlbumShareCovers({ disposeCanvas: false });
     this.clearAuthorPrivateAlbumState();
     this.unobserveAlbumAuthChanges();
     this.albumMediaRefresh?.dispose();
@@ -1387,32 +1418,323 @@ export default {
         });
       });
     },
-    async prepareAlbumShareCoverUrl(kind, remoteUrl) {
-      const remote = await this.prepareShareCoverUrl(remoteUrl);
-      if (remote) return remote;
-      return this.prepareShareCoverUrl(albumShareImage(kind, ""), { normalize: false });
+    albumShareCanvasKind({ width, height } = {}) {
+      if (Number(width) === 1000 && Number(height) === 800) return "friend";
+      if (Number(width) === 1000 && Number(height) === 1000) return "timeline";
+      throw new TypeError("album share canvas dimensions are unsupported");
     },
-    prepareAlbumShareCovers(data, { isCurrent = () => true } = {}) {
-      const coverRequest = this.albumShareRequestAuthority.beginCoverRequest(this.albumShareToken);
+    albumShareCanvasId(kind) {
+      if (kind === "friend") return "album-share-friend-canvas";
+      if (kind === "timeline") return "album-share-timeline-canvas";
+      throw new TypeError("album share canvas kind must be friend or timeline");
+    },
+    async albumShareCanvasNode(kind) {
+      const canvasId = this.albumShareCanvasId(kind);
+      const cached = this.albumShareCanvasNodes?.[kind];
+      if (cached?.canvas && cached.canvasId === canvasId) return cached;
+      if (typeof uni === "undefined" || typeof uni.createSelectorQuery !== "function") {
+        throw new Error("album share page canvas unavailable");
+      }
+      await new Promise((resolve) => this.$nextTick(resolve));
+      const canvas = await new Promise((resolve, reject) => {
+        try {
+          const query = uni.createSelectorQuery();
+          const scopedQuery = typeof query.in === "function" ? query.in(this) : query;
+          scopedQuery
+            .select(`#${canvasId}`)
+            .fields({ node: true, size: true }, (result) => resolve(result?.node || null))
+            .exec();
+        } catch (error) {
+          reject(error);
+        }
+      });
+      if (!canvas || typeof canvas.getContext !== "function") {
+        throw new Error("album share page canvas node unavailable");
+      }
+      const next = { canvas, canvasId };
+      this.albumShareCanvasNodes = {
+        ...(this.albumShareCanvasNodes || {}),
+        [kind]: next
+      };
+      return next;
+    },
+    waitForAlbumShareCanvasDraw(canvas) {
+      if (canvas && typeof canvas.requestAnimationFrame === "function") {
+        return new Promise((resolve) => canvas.requestAnimationFrame(() => resolve()));
+      }
+      return new Promise((resolve) => this.$nextTick(resolve));
+    },
+    invokeAlbumShareCanvasExport(options) {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const success = (result) => {
+          if (settled) return;
+          settled = true;
+          resolve(result);
+        };
+        const fail = (error) => {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        };
+        try {
+          const result = uni.canvasToTempFilePath({ ...options, success, fail }, this);
+          if (result && typeof result.then === "function") result.then(success, fail);
+        } catch (error) {
+          fail(error);
+        }
+      });
+    },
+    canUseAlbumShareCanvasIdExport() {
+      return canUseLegacyAlbumShareCanvasIdExport(
+        typeof uni !== "undefined" ? uni : null
+      );
+    },
+    async exportAlbumSharePageCanvas(canvasHandle, options = {}) {
+      if (
+        !canvasHandle?.canvas ||
+        typeof uni === "undefined" ||
+        typeof uni.canvasToTempFilePath !== "function"
+      ) {
+        throw new Error("album share page canvas export unavailable");
+      }
+      await this.waitForAlbumShareCanvasDraw(canvasHandle.canvas);
+      const exportOptions = {
+        x: 0,
+        y: 0,
+        width: options.width,
+        height: options.height,
+        destWidth: options.width,
+        destHeight: options.height,
+        fileType: options.fileType,
+        quality: options.quality,
+        canvas: canvasHandle.canvas
+      };
+      try {
+        return await this.invokeAlbumShareCanvasExport(exportOptions);
+      } catch (error) {
+        if (!canvasHandle.canvasId || !this.canUseAlbumShareCanvasIdExport()) throw error;
+        const { canvas, ...legacyExportOptions } = exportOptions;
+        return this.invokeAlbumShareCanvasExport({
+          ...legacyExportOptions,
+          canvasId: canvasHandle.canvasId
+        });
+      }
+    },
+    createAlbumSharePageCanvasRuntime() {
+      if (this.albumShareCanvasPageRuntime) return this.albumShareCanvasPageRuntime;
+      const page = this;
+      const runtime = {
+        async createCanvas(options) {
+          const kind = page.albumShareCanvasKind(options);
+          const node = await page.albumShareCanvasNode(kind);
+          node.canvas.width = options.width;
+          node.canvas.height = options.height;
+          const context = node.canvas.getContext("2d");
+          if (!context) throw new Error("album share page canvas context unavailable");
+          return { ...node, context };
+        },
+        loadImage(source, canvasHandle) {
+          return new Promise((resolve, reject) => {
+            let image;
+            try {
+              image = canvasHandle?.canvas?.createImage();
+              if (!image) throw new Error("album share page image unavailable");
+              image.onload = () => resolve(image);
+              image.onerror = reject;
+              image.src = source;
+            } catch (error) {
+              reject(error);
+            }
+          });
+        },
+        drawImage(canvasHandle, image, draw) {
+          const context = canvasHandle?.context;
+          if (!context || typeof context.drawImage !== "function") {
+            throw new Error("album share page canvas drawing unavailable");
+          }
+          return context.drawImage(
+            image,
+            draw.source.x,
+            draw.source.y,
+            draw.source.width,
+            draw.source.height,
+            draw.destination.x,
+            draw.destination.y,
+            draw.destination.width,
+            draw.destination.height
+          );
+        },
+        drawText(canvasHandle, text, options) {
+          const context = canvasHandle?.context;
+          if (!context || typeof context.fillText !== "function") return;
+          const canRestore =
+            typeof context.save === "function" && typeof context.restore === "function";
+          if (canRestore) context.save();
+          try {
+            context.font = options.font;
+            context.fillStyle = options.fillStyle;
+            context.textBaseline = options.textBaseline;
+            context.fillText(text, options.x, options.y, options.maxWidth);
+          } finally {
+            if (canRestore) context.restore();
+          }
+        },
+        exportCanvas(canvasHandle, options) {
+          return page.exportAlbumSharePageCanvas(canvasHandle, options);
+        }
+      };
+      this.albumShareCanvasPageRuntime = runtime;
+      return runtime;
+    },
+    ensureAlbumShareCanvasPreparation() {
+      if (this.albumShareCanvasPreparation) return this.albumShareCanvasPreparation;
+      try {
+        const pageCanvasRuntime = this.createAlbumSharePageCanvasRuntime();
+        const runtime = createAlbumShareCanvasRuntime({ pageCanvasRuntime });
+        this.albumShareCanvasPreparation = createAlbumShareCanvasPreparation({
+          runtime,
+          releaseTempPath: releaseAlbumShareCanvasTempPath
+        });
+      } catch (error) {
+        this.albumShareCanvasPreparation = null;
+      }
+      return this.albumShareCanvasPreparation;
+    },
+    disposeAlbumShareCanvasPreparation() {
+      try {
+        this.albumShareCanvasPreparation?.dispose();
+      } catch (error) {
+        // A stale temporary cover must not interfere with album browsing.
+      }
+      this.albumShareCanvasPreparation = null;
+      this.albumShareCanvasPageRuntime = null;
+      this.albumShareCanvasNodes = {};
+      this.albumShareCoverContextKey = "";
+    },
+    albumShareLocalPreviewByRecipe(recipe) {
+      const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
+      const localPreviewByMediaId = new Map();
+      for (const image of normalizedRecipe?.images || []) {
+        const photoId = String(image.id);
+        const visibleMedia = this.visiblePhotoMedia?.[photoId] || {};
+        const localPreview =
+          albumShareLocalImagePath(visibleMedia.preview) ||
+          albumShareLocalImagePath(visibleMedia.thumbnail);
+        if (localPreview) localPreviewByMediaId.set(photoId, localPreview);
+      }
+      return localPreviewByMediaId;
+    },
+    beginAlbumShareCanvasCoverPreparation({ token, data, title }) {
+      const recipe = data?.cover_recipe || null;
+      const contextKey = albumShareCoverContextKey({ token, recipe, title });
+      if (
+        this.albumShareCoverContextKey &&
+        contextKey !== this.albumShareCoverContextKey
+      ) {
+        this.disposeAlbumShareCanvasPreparation();
+      }
+      this.albumShareCoverContextKey = contextKey;
+      const canvasPreparation = this.ensureAlbumShareCanvasPreparation();
+      return {
+        token,
+        data: { cover_recipe: recipe },
+        title,
+        contextKey,
+        coverRequest: this.albumShareRequestAuthority.beginCoverRequest(token),
+        canvasPreparation,
+        canvasRequest: canvasPreparation?.beginRequest()
+      };
+    },
+    prepareAlbumShareCanvasCover({
+      kind,
+      token,
+      data,
+      title,
+      localPreviewByMediaId,
+      canvasPreparation,
+      canvasRequest
+    }) {
+      if (!canvasPreparation || !canvasRequest) {
+        return { ok: false, kind, path: "", error: "runtime_unavailable" };
+      }
+      return canvasPreparation.prepare({
+        shareId: token,
+        kind,
+        recipe: data?.cover_recipe,
+        title,
+        localPreviewByMediaId,
+        thumbnailUrlResolver: (url) => this.normalizeAlbumMediaUrl(url),
+        request: canvasRequest
+      });
+    },
+    isCurrentAlbumShareCanvasCoverPreparation(context) {
+      return (
+        context?.contextKey === this.albumShareCoverContextKey &&
+        albumShareCoverPreparationIsCurrent({
+          requestAuthority: this.albumShareRequestAuthority,
+          coverRequest: context?.coverRequest,
+          token: context?.token,
+          canvasPreparation: context?.canvasPreparation,
+          canvasRequest: context?.canvasRequest
+        })
+      );
+    },
+    prepareAlbumShareCovers(data) {
+      const token = this.albumShareToken;
+      const title = this.albumShareTitle();
+      const recipe = data?.cover_recipe || null;
+      const contextKey = albumShareCoverContextKey({ token, recipe, title });
+      if (
+        contextKey &&
+        contextKey === this.albumShareCoverContextKey &&
+        this.albumShareCanvasPreparation
+      ) {
+        this.showShareMenus();
+        return [];
+      }
+      if (
+        this.albumShareCoverContextKey &&
+        contextKey !== this.albumShareCoverContextKey
+      ) {
+        this.resetAlbumShareCovers();
+        this.showShareMenus();
+      }
+      const context = this.beginAlbumShareCanvasCoverPreparation({
+        token,
+        data,
+        title
+      });
+      const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(recipe);
       return startAlbumShareCoverPreparation({
-        response: data,
-        prepare: (kind, remoteUrl) => this.prepareAlbumShareCoverUrl(kind, remoteUrl),
-        isCurrent: () => (
-          this.albumShareRequestAuthority.isCoverRequestCurrent(
-            coverRequest,
-            this.albumShareToken
-          ) &&
-          isCurrent() === true
-        ),
+        response: context.data,
+        prepare: (kind) => this.prepareAlbumShareCanvasCover({
+          kind,
+          token,
+          data: context.data,
+          title,
+          localPreviewByMediaId,
+          canvasPreparation: context.canvasPreparation,
+          canvasRequest: context.canvasRequest
+        }),
+        isCurrent: () => this.isCurrentAlbumShareCanvasCoverPreparation(context),
         onPrepared: (kind, imageUrl) => {
           this.applyAlbumShareCover(kind, imageUrl);
           this.showShareMenus();
         }
       });
     },
-    resetAlbumShareCovers({ invalidateRequest = true } = {}) {
+    resetAlbumShareCovers({
+      invalidateRequest = true,
+      disposeCanvas = true
+    } = {}) {
       if (invalidateRequest) {
         this.albumShareRequestAuthority.invalidateCoverRequests();
+      }
+      if (disposeCanvas) {
+        this.disposeAlbumShareCanvasPreparation();
+      } else {
+        this.albumShareCoverContextKey = "";
       }
       this.shareFriendCoverUrl = "";
       this.shareTimelineCoverUrl = "";
@@ -1554,6 +1876,7 @@ export default {
           this.statusText = "";
         }
       }
+      this.disposeAlbumShareCanvasPreparation();
       this.activeAlbumShareToken = "";
       this.activeAlbumShareScope = "";
       this.activeAlbumShareCount = 0;
@@ -2010,17 +2333,13 @@ export default {
             }
             const data = dataOf(response) || {};
             if (this.timelineMode) {
-              this.resetAlbumShareCovers();
-              this.showShareMenus();
               if (!this.isCurrentAlbumListRequest(listRequest)) {
                 return null;
               }
               this.albumSession = this.albumSessionSummary(data);
               this.shareSubject = data.share_subject || this.shareSubject;
               this.shareOwner = data.share_owner || this.shareOwner;
-              this.prepareAlbumShareCovers(data, {
-                isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
-              });
+              this.prepareAlbumShareCovers(data);
               this.shareCounts = {
                 total: Number(data.visible_count || 0),
                 photos: Number(data.photo_count || 0),
@@ -2161,9 +2480,7 @@ export default {
         this.albumSession = this.albumSessionSummary(data);
         this.shareSubject = data.share_subject || this.shareSubject;
         this.shareOwner = data.share_owner || this.shareOwner;
-        this.prepareAlbumShareCovers(data, {
-          isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
-        });
+        this.prepareAlbumShareCovers(data);
         this.shareCounts = {
           total: Number(data.visible_count || 0),
           photos: Number(data.photo_count || 0),
@@ -4571,10 +4888,28 @@ export default {
         });
         this.cancelSelectionMode({ force: true, preserveActiveShare: true });
         this.showShareMenus();
+        const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(data.cover_recipe);
+        const title = this.activeAlbumShareTitle();
+        const coverContext = this.beginAlbumShareCanvasCoverPreparation({
+          token,
+          data,
+          title
+        });
         const coverTasks = startAlbumShareCoverPreparation({
-          response: data,
-          prepare: (kind, remoteUrl) => this.prepareAlbumShareCoverUrl(kind, remoteUrl),
-          isCurrent: () => this.isCurrentAlbumShareSnapshotRequest(shareRequest),
+          response: coverContext.data,
+          prepare: (kind) => this.prepareAlbumShareCanvasCover({
+            kind,
+            token,
+            data,
+            localPreviewByMediaId,
+            title,
+            canvasPreparation: coverContext.canvasPreparation,
+            canvasRequest: coverContext.canvasRequest
+          }),
+          isCurrent: () => (
+            this.isCurrentAlbumShareSnapshotRequest(shareRequest) &&
+            this.isCurrentAlbumShareCanvasCoverPreparation(coverContext)
+          ),
           onPrepared: (kind, imageUrl) => {
             this.applyActiveAlbumShareCover(kind, imageUrl);
             this.showShareMenus();
@@ -4681,6 +5016,24 @@ export default {
 </script>
 
 <style scoped>
+
+.album-share-canvas {
+  position: fixed;
+  top: -1200px;
+  left: -1200px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.album-share-friend-canvas {
+  width: 1000px;
+  height: 800px;
+}
+
+.album-share-timeline-canvas {
+  width: 1000px;
+  height: 1000px;
+}
 
 .preview-untagged-share-note {
   position: fixed;

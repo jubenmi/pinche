@@ -89,8 +89,20 @@ test("active album sharing is request-guarded and prepares independent dual cove
   assert.match(prepareBlock, /installActiveAlbumShareSnapshot/);
   assert.match(prepareBlock, /cancelSelectionMode\(\{ force: true, preserveActiveShare: true \}\)/);
   assert.match(prepareBlock, /startAlbumShareCoverPreparation\(\{/);
+  assert.match(prepareBlock, /albumShareLocalPreviewByRecipe\(data\.cover_recipe\)/);
+  assert.match(
+    prepareBlock,
+    /prepareAlbumShareCanvasCover\(\{\s*kind,\s*token,\s*data,\s*localPreviewByMediaId/
+  );
   assert.match(prepareBlock, /applyActiveAlbumShareCover\(kind, imageUrl\)/);
   assert.match(prepareBlock, /await Promise\.all\(coverTasks\)/);
+  assert.doesNotMatch(prepareBlock, /remoteUrl|cover_url|timeline_cover_url|friend_cover_url/);
+
+  const localMapIndex = prepareBlock.indexOf(
+    "const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(data.cover_recipe)"
+  );
+  const coverTasksIndex = prepareBlock.indexOf("startAlbumShareCoverPreparation({");
+  assert.ok(localMapIndex >= 0 && localMapIndex < coverTasksIndex);
 
   assert.match(albumPageSource, /activeAlbumShareFriendCoverUrl/);
   assert.match(albumPageSource, /activeAlbumShareTimelineCoverUrl/);
@@ -98,6 +110,70 @@ test("active album sharing is request-guarded and prepares independent dual cove
   assert.match(albumPageSource, /activeAlbumShareTimelineCoverPrepared/);
   assert.match(albumPageSource, /albumFriendShareImage\(\)/);
   assert.match(albumPageSource, /albumTimelineShareImage\(\)/);
+});
+
+test("member and public sharing use two hidden renderable 2d Canvas nodes", () => {
+  assert.match(
+    albumPageSource,
+    /<canvas[\s\S]*id="album-share-friend-canvas"[\s\S]*type="2d"/
+  );
+  assert.match(
+    albumPageSource,
+    /<canvas[\s\S]*id="album-share-timeline-canvas"[\s\S]*type="2d"/
+  );
+  assert.match(albumPageSource, /createAlbumShareCanvasPreparation/);
+  assert.match(albumPageSource, /createAlbumShareCanvasRuntime/);
+  assert.match(albumPageSource, /releaseAlbumShareCanvasTempPath/);
+  assert.match(albumPageSource, /albumShareLocalImagePath/);
+  assert.match(albumPageSource, /class="album-share-canvas album-share-friend-canvas"/);
+  assert.match(albumPageSource, /class="album-share-canvas album-share-timeline-canvas"/);
+  assert.doesNotMatch(albumPageSource, /v-if="[^"]*"[^>]*album-share-(?:friend|timeline)-canvas/);
+  assert.doesNotMatch(albumPageSource, /v-show="[^"]*"[^>]*album-share-(?:friend|timeline)-canvas/);
+});
+
+test("public timeline sharing prepares local Canvas covers from the current token and recipe", () => {
+  const prepareBlock = sourceBlock(
+    "prepareAlbumShareCovers(data) {",
+    "resetAlbumShareCovers({"
+  );
+  assert.match(prepareBlock, /albumShareCoverContextKey/);
+  assert.match(prepareBlock, /this\.albumShareToken/);
+  assert.match(prepareBlock, /prepareAlbumShareCanvasCover\(\{/);
+  assert.match(prepareBlock, /isCurrentAlbumShareCanvasCoverPreparation\(context\)/);
+  assert.match(albumPageSource, /albumShareCoverPreparationIsCurrent\(\{/);
+  assert.doesNotMatch(
+    prepareBlock,
+    /isCurrentAlbumListRequest|remoteUrl|cover_url|timeline_cover_url|friend_cover_url/
+  );
+
+  const loadBlock = sourceBlock("async loadPublicAlbum() {", "resetPublicSharePagination() {");
+  assert.match(loadBlock, /this\.prepareAlbumShareCovers\(data\)/);
+  assert.doesNotMatch(loadBlock, /prepareAlbumShareCovers\(data,\s*\{\s*isCurrent/);
+
+  const moreBlock = sourceBlock("async loadMorePublicAlbum() {", "normalizeAlbumMediaUrl(path)");
+  assert.doesNotMatch(moreBlock, /resetAlbumShareCovers|prepareAlbumShareCovers/);
+});
+
+test("Canvas currentness follows share lifecycle and stale temp paths are disposed", () => {
+  const clearActiveBlock = sourceBlock(
+    "clearActiveAlbumShareState({",
+    "closeAlbumShareReady() {"
+  );
+  assert.match(clearActiveBlock, /disposeAlbumShareCanvasPreparation\(\)/);
+
+  const onHideBlock = sourceBlock("onHide() {", "onUnload() {");
+  const onUnloadBlock = sourceBlock("onUnload() {", "onPageScroll(event) {");
+  for (const lifecycleBlock of [onHideBlock, onUnloadBlock]) {
+    assert.match(lifecycleBlock, /disposeAlbumShareCanvasPreparation\(\)/);
+    assert.match(lifecycleBlock, /resetAlbumShareCovers/);
+  }
+
+  const refreshBlock = sourceBlock(
+    "initializeAlbumMediaRefreshController() {",
+    "async loadAlbum() {"
+  );
+  assert.doesNotMatch(refreshBlock, /resetAlbumShareCovers\(\)/);
+  assert.match(refreshBlock, /this\.prepareAlbumShareCovers\(data\)/);
 });
 
 test("native share CTA appears only after the active snapshot is ready", () => {

@@ -6,9 +6,7 @@ import test from "node:test";
 
 import {
   createOrReuseSessionAlbumPublicShare,
-  getPublicSessionAlbumShareCoverMedia,
   getPublicSessionAlbumVideoForPlayback,
-  publicShareCoverMediaIdsDigest,
   publicShareSnapshotDigest,
   selectPublicShareMedia
 } from "../src/modules/core/service.js";
@@ -247,7 +245,7 @@ test("createOrReuseSessionAlbumPublicShare persists and reuses an eligible focus
   assert.equal(second.focus_media_id, 1);
 });
 
-test("createOrReuseSessionAlbumPublicShare persists a safe visual candidate snapshot for a max-nine cover", async () => {
+test("createOrReuseSessionAlbumPublicShare persists a safe three-image Canvas cover snapshot", async () => {
   const safeRolePhotos = Array.from({ length: 14 }, (_, index) => eligibleMedia(index + 1));
   const groupPhoto = eligibleMedia(20);
   const otherUploaderPhoto = eligibleMedia(21, { uploader_user_id: 200 });
@@ -288,8 +286,8 @@ test("createOrReuseSessionAlbumPublicShare persists a safe visual candidate snap
 
   assert.equal(typeof persisted.media_ids, "string");
   assert.equal(typeof persisted.cover_media_ids, "string");
-  assert.deepEqual(persistedCoverMediaIds, [14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 24]);
-  assert.equal(persistedCoverMediaIds.length, 15);
+  assert.deepEqual(persistedCoverMediaIds, [14, 13, 12]);
+  assert.equal(persistedCoverMediaIds.length, 3);
   assert.equal(persistedCoverMediaIds.every((mediaId) => persistedMediaIds.includes(mediaId)), true);
   for (const excludedId of [20, 21, 22, 23]) {
     assert.equal(persistedCoverMediaIds.includes(excludedId), false);
@@ -299,7 +297,7 @@ test("createOrReuseSessionAlbumPublicShare persists a safe visual candidate snap
   assert.equal(connection.shares.length, 1);
 });
 
-test("createOrReuseSessionAlbumPublicShare retains all eligible static photos beyond thirty", async () => {
+test("createOrReuseSessionAlbumPublicShare retains all eligible static photos beyond thirty with three cover IDs", async () => {
   const photos = Array.from({ length: 31 }, (_, index) => eligibleMedia(index + 1));
   const connection = focusedShareConnection(
     photos,
@@ -313,207 +311,16 @@ test("createOrReuseSessionAlbumPublicShare retains all eligible static photos be
   );
 
   assert.equal(share.media_ids.length, 31);
-  assert.equal(share.cover_media_ids.length, 30);
-  assert.deepEqual(share.cover_media_ids, Array.from({ length: 30 }, (_, index) => 31 - index));
+  assert.equal(share.cover_media_ids.length, 3);
+  assert.deepEqual(share.cover_media_ids, [31, 30, 29]);
   assert.equal(new Set(share.media_ids).size, 31);
   assert(share.cover_media_ids.every((mediaId) => share.media_ids.includes(mediaId)));
 });
 
-function publicCoverConnection(options = {}) {
-  const coverMediaIds = options.coverMediaIds || [42, 41];
-  const share = {
-    id: 50,
-    session_id: 10,
-    sharer_user_id: 100,
-    seat_id: 1000,
-    media_ids: [...coverMediaIds, 99],
-    cover_media_ids: coverMediaIds,
-    expires_at: "2099-01-01T00:00:00.000Z",
-    revoked_at: null
-  };
-  share.snapshot_digest = publicShareSnapshotDigest({
-    sessionId: share.session_id,
-    sharerUserId: share.sharer_user_id,
-    seatId: share.seat_id,
-    mediaIds: share.media_ids,
-    coverMediaIds: share.cover_media_ids
-  });
-  const rolePhoto = eligibleMedia(41, { image_width: 1200, image_height: 1600 });
-  const scenePhoto = eligibleMedia(42, { image_width: 1600, image_height: 1200 });
-  const photoRows = options.photoRows || [rolePhoto, scenePhoto];
-  const tagRows = options.tagRows || [
-    { id: 1, photo_id: 41, ...sharerSeatTag() },
-    { id: 2, photo_id: 42, tag_type: "other", user_id: null }
-  ];
-  const calls = [];
-  const connection = {
-    async query(sql, values = []) {
-      if (sql.includes("FROM session_album_public_shares")) {
-        calls.push({ type: "share", sql, values });
-        return [options.activeShare === false ? [] : [share]];
-      }
-      if (sql.includes("FROM sessions session")) {
-        calls.push({ type: "session", values });
-        return [[{
-          id: 10,
-          status: "completed",
-          script_name_snapshot: "  雾都夜行  ",
-          organizer_user_id: 999
-        }]];
-      }
-      if (sql.includes("FROM session_seats")) {
-        calls.push({ type: "seat", values });
-        return [[{
-          id: 1000,
-          name: "Private seat name",
-          role_name: "  侦探  ",
-          confirmed_user_id: 100,
-          status: "confirmed",
-          account_email: "private@example.com"
-        }]];
-      }
-      if (sql.includes("FROM session_album_photos")) {
-        calls.push({ type: "photos", values });
-        return [photoRows];
-      }
-      if (sql.includes("FROM session_album_photo_tags")) {
-        calls.push({ type: "tags", values });
-        return [tagRows];
-      }
-      if (sql.includes("FROM session_album_privacy")) {
-        calls.push({ type: "privacy", values });
-        return [options.privacyRows || []];
-      }
-      throw new Error(`Unexpected public cover test query: ${sql}`);
-    }
-  };
-  return { connection, calls, share, rolePhoto, scenePhoto };
-}
-
-test("getPublicSessionAlbumShareCoverMedia returns ordered safe metadata without mutating rows", async () => {
-  const fixture = publicCoverConnection();
-  const originalRolePhoto = structuredClone(fixture.rolePhoto);
-  const originalScenePhoto = structuredClone(fixture.scenePhoto);
-
-  const result = await getPublicSessionAlbumShareCoverMedia(
-    fixture.share.id,
-    publicShareCoverMediaIdsDigest(fixture.share.cover_media_ids),
-    { withDatabaseConnection: async (work) => work(fixture.connection) }
-  );
-
-  assert.deepEqual(result, {
-    share: {
-      ...fixture.share,
-      media_ids: [42, 41, 99],
-      cover_media_ids: [42, 41],
-      implicit_untagged_media: []
-    },
-    media: [
-      { ...fixture.scenePhoto, public_cover_priority: 1 },
-      { ...fixture.rolePhoto, public_cover_priority: 0 }
-    ],
-    scriptName: "雾都夜行",
-    roleName: "侦探"
-  });
-  assert.deepEqual(fixture.rolePhoto, originalRolePhoto);
-  assert.deepEqual(fixture.scenePhoto, originalScenePhoto);
-  assert.equal("session" in result, false);
-  assert.equal("seat" in result, false);
-  assert.equal("tags" in result, false);
-  assert.equal("privacy" in result, false);
+test("server-composite cover capabilities are no longer exported", () => {
+  assert.equal("getPublicSessionAlbumShareCoverMedia" in coreService, false);
+  assert.equal("publicShareCoverMediaIdsDigest" in coreService, false);
 });
-
-test("getPublicSessionAlbumShareCoverMedia validates connection seam options", async () => {
-  for (const options of [null, "invalid", 42, true, []]) {
-    await assert.rejects(
-      () => getPublicSessionAlbumShareCoverMedia(50, "unused", options),
-      (error) => error instanceof TypeError && error.message === "options must be an object"
-    );
-  }
-
-  for (const withDatabaseConnection of [null, true, {}, "runner"]) {
-    await assert.rejects(
-      () => getPublicSessionAlbumShareCoverMedia(50, "unused", {
-        withDatabaseConnection
-      }),
-      (error) => error instanceof TypeError &&
-        error.message === "withDatabaseConnection must be a function"
-    );
-  }
-});
-
-test("getPublicSessionAlbumShareCoverMedia rejects invalid capabilities before dependent queries", async () => {
-  const digestMismatch = publicCoverConnection();
-  await assert.rejects(
-    () => getPublicSessionAlbumShareCoverMedia(50, "wrong-digest", {
-      withDatabaseConnection: async (work) => work(digestMismatch.connection)
-    }),
-    (error) => error.statusCode === 403 && /token is invalid/.test(error.message)
-  );
-  assert.deepEqual(digestMismatch.calls.map((call) => call.type), ["share"]);
-
-  const inactiveShare = publicCoverConnection({ activeShare: false });
-  await assert.rejects(
-    () => getPublicSessionAlbumShareCoverMedia(50, "unused", {
-      withDatabaseConnection: async (work) => work(inactiveShare.connection)
-    }),
-    (error) => error.statusCode === 403 && /no longer available/.test(error.message)
-  );
-  assert.deepEqual(inactiveShare.calls.map((call) => call.type), ["share"]);
-  assert.match(inactiveShare.calls[0].sql, /revoked_at\s+IS\s+NULL/);
-  assert.match(
-    inactiveShare.calls[0].sql,
-    /expires_at\s*>\s*CURRENT_TIMESTAMP/
-  );
-});
-
-test("getPublicSessionAlbumShareCoverMedia fails closed when snapshot media safety changes", async () => {
-  const cases = [
-    ["missing media", ({ rolePhoto }) => ({ photoRows: [rolePhoto] })],
-    ["moderation", ({ rolePhoto, scenePhoto }) => ({
-      photoRows: [rolePhoto, { ...scenePhoto, moderation_status: "pending" }]
-    })],
-    ["privacy", () => ({
-      privacyRows: [{
-        session_id: 10,
-        user_id: 100,
-        allow_uploaded_visible: 0,
-        allow_tagged_visible: 1
-      }]
-    })],
-    ["tags", () => ({
-      tagRows: [
-        { id: 1, photo_id: 41, ...sharerSeatTag() },
-        {
-          id: 2,
-          photo_id: 42,
-          tag_type: "seat",
-          seat_id: 2000,
-          user_id: 200,
-          seat_user_id: 200
-        }
-      ]
-    })]
-  ];
-
-  for (const [name, buildOverrides] of cases) {
-    const base = publicCoverConnection();
-    const fixture = publicCoverConnection(buildOverrides(base));
-    await assert.rejects(
-      () => getPublicSessionAlbumShareCoverMedia(
-        fixture.share.id,
-        publicShareCoverMediaIdsDigest(fixture.share.cover_media_ids),
-        { withDatabaseConnection: async (work) => work(fixture.connection) }
-      ),
-      (error) => error.statusCode === 403 && /cover is no longer available/.test(error.message),
-      name
-    );
-    const photoCall = fixture.calls.find((call) => call.type === "photos");
-    assert.deepEqual(photoCall.values, [42, 41, 10], name);
-    assert.equal(photoCall.values.includes(99), false, name);
-  }
-});
-
 test("createOrReuseSessionAlbumPublicShare rejects a focus ID excluded by eligibility filtering", async () => {
   const eligible = eligibleMedia(1);
   const unavailable = eligibleMedia(2, { moderation_status: "pending" });
@@ -548,13 +355,25 @@ test("focused album shares validate the focus ID and expose it through the share
     serverSource.indexOf("const sessionAlbumShareTokenId"),
     serverSource.indexOf("const sessionAlbumPublicSharesId")
   );
+  const shareTokenResponse = serverSource.slice(
+    serverSource.indexOf("export function sessionAlbumShareTokenResponse("),
+    serverSource.indexOf("export function attachPublicSessionAlbumMediaUrls(")
+  );
   assert.match(serverSource, /const body = await bodyFor\(request\)/);
   assert.match(shareTokenRoute, /const shareOptions = publicShareTokenOptions\(body\)/);
   assert.match(
     shareTokenRoute,
     /createOrReuseSessionAlbumPublicShare\(\s*user,\s*sessionAlbumShareTokenId,\s*shareOptions\s*\)/
   );
-  assert.match(shareTokenRoute, /focus_media_id: share\.focus_media_id/);
+  assert.match(
+    shareTokenRoute,
+    /data: sessionAlbumShareTokenResponse\(share, claims, albumShareToken\)/
+  );
+  assert.match(shareTokenResponse, /focus_media_id: share\.focus_media_id/);
+  assert.match(
+    shareTokenResponse,
+    /cover_recipe: sessionAlbumPublicCoverRecipe\(\s*share\.cover_media,\s*claims,\s*albumShareToken\s*\)/
+  );
 });
 
 test("createOrReuseSessionAlbumPublicShare rejects invalid supplied focus IDs as unavailable", async () => {

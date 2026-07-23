@@ -746,6 +746,12 @@ function assertTdesignTslibCompatShims(tdesignBuildRoot, label) {
   }
 }
 
+if (!fs.existsSync(miniprogramBuildRoot)) {
+  throw new Error(
+    "Built mini-program output is missing; run npm run build:mp-weixin before this check"
+  );
+}
+
 if (!fs.existsSync(pagesJsonPath)) {
   fail("apps/miniprogram/src/pages.json is missing");
 } else {
@@ -836,13 +842,11 @@ if (!fs.existsSync(pagesJsonPath)) {
     );
   }
 
-  if (fs.existsSync(miniprogramBuildRoot)) {
-    const mainPackageSize = builtMainPackageSize(miniprogramBuildRoot);
-    if (mainPackageSize > mainPackageLimitBytes) {
-      fail(
-        `Built main package exceeds 1.5 MB: ${formatSize(mainPackageSize)} in ${relativePath(miniprogramBuildRoot)}`
-      );
-    }
+  const mainPackageSize = builtMainPackageSize(miniprogramBuildRoot);
+  if (mainPackageSize > mainPackageLimitBytes) {
+    fail(
+      `Built main package exceeds 1.5 MB: ${formatSize(mainPackageSize)} in ${relativePath(miniprogramBuildRoot)}`
+    );
   }
 
   for (const page of pages) {
@@ -3583,14 +3587,15 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (
     !albumShareCoverUtilSource.includes("ALBUM_SHARE_FRIEND_FALLBACK") ||
     !albumShareCoverUtilSource.includes("ALBUM_SHARE_TIMELINE_FALLBACK") ||
-    !albumShareCoverUtilSource.includes("friend_cover_url") ||
-    !albumShareCoverUtilSource.includes("cover_url") ||
-    !albumShareCoverUtilSource.includes("timeline_cover_url")
+    !albumShareCoverUtilSource.includes("cover_recipe") ||
+    !albumShareCoverUtilSource.includes("albumShareLocalImagePath") ||
+    !albumShareCoverUtilSource.includes("albumShareFriendPayload") ||
+    !albumShareCoverUtilSource.includes("albumShareTimelinePayload")
   ) {
-    fail("Album sharing must normalize two generated cover response URLs with both local fallbacks");
+    fail("Album sharing must normalize the client Canvas recipe to local paths or channel fallbacks");
   }
   if (albumSource.includes("data.cover_url") || albumSource.includes("data.timeline_cover_url")) {
-    fail("Album page must consume generated cover URLs through albumShareCoverResponse");
+    fail("Album page must not consume deleted server-composite cover URLs");
   }
   if ((albumSource.match(/this\.prepareAlbumShareCovers\(data(?:,|\))/g) || []).length < 2) {
     fail("Album initial public load and public refresh must prepare both cover channels");
@@ -3599,7 +3604,8 @@ if (!fs.existsSync(pagesJsonPath)) {
   const handleAlbumAuthChangeSource = methodBody(albumSource, "handleAlbumAuthChange");
   if (
     !albumSource.includes("beginCoverRequest") ||
-    !albumSource.includes("isCoverRequestCurrent") ||
+    !albumSource.includes("albumShareCoverPreparationIsCurrent") ||
+    !albumShareCoverUtilSource.includes("isCoverRequestCurrent") ||
     !handleAlbumAuthChangeSource.includes("this.invalidateAlbumShareState()") ||
     !albumOnUnloadSource.includes("this.invalidateAlbumShareState()")
   ) {

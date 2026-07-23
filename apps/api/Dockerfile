@@ -2,8 +2,6 @@ FROM node:24-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache font-noto-cjk
-
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/miniprogram/package.json apps/miniprogram/package.json
