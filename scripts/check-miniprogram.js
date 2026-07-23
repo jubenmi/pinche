@@ -3499,6 +3499,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
   const activeAlbumSharePayloadSource = methodBody(albumSource, "activeAlbumSharePayload");
   const prepareAlbumShareSnapshotSource = methodBody(albumSource, "prepareAlbumShareSnapshot");
+  const installActiveAlbumShareSnapshotSource = methodBody(albumSource, "installActiveAlbumShareSnapshot");
   if (
     !albumShareAppMessageSource.includes("activeAlbumSharePayload") ||
     !activeAlbumSharePayloadSource.includes("/pages/session/album") ||
@@ -3540,8 +3541,12 @@ if (!fs.existsSync(pagesJsonPath)) {
     albumSource.includes("ensureAlbumShareToken(") ||
     !prepareAlbumShareSnapshotSource.includes("/album/share-token") ||
     !prepareAlbumShareSnapshotSource.includes("data: payload") ||
-    !prepareAlbumShareSnapshotSource.includes("this.activeAlbumShareToken = token") ||
-    !prepareAlbumShareSnapshotSource.includes("this.albumShareReadyVisible = true") ||
+    !prepareAlbumShareSnapshotSource.includes("this.installActiveAlbumShareSnapshot") ||
+    !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareToken = token") ||
+    !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareCoverUrl = coverUrl") ||
+    !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareSubject") ||
+    !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareOwner") ||
+    !installActiveAlbumShareSnapshotSource.includes("this.albumShareReadyVisible = true") ||
     !prepareAlbumShareSnapshotSource.includes("this.showShareMenus()")
   ) {
     fail("Album D53 sharing must prepare one active snapshot on demand without legacy token prefetch");

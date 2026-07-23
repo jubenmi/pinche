@@ -123,6 +123,12 @@
   - [x] 12.7 运行 `npm --workspace apps/miniprogram run build:mp-weixin`。
   - [ ] 12.8 检查 git diff，确认只包含本 spec 范围且未覆盖既有工作区改动。
 
+## 2026-07-23 前端命令证据
+
+- `npm run d53:check`：通过（含四操作、用途分支双按钮、活动快照竞态与下载取消契约）。
+- `node scripts/check-miniprogram.js`：通过（14 pages）。
+- `npm --workspace apps/miniprogram run build:mp-weixin`：通过（仅有上游 Sass deprecation 提示）。
+
 - [ ] 13. 微信开发者工具验收
   - [ ] 13.1 确认普通状态四按钮顺序、双字文案、图标区别和四列布局符合设计稿。
   - [ ] 13.2 点击分享，跨多个筛选选择任意数量媒体，确认选择保留。
