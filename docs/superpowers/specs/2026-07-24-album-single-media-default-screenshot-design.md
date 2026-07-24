@@ -1,6 +1,6 @@
 # 相册单张照片默认截图快速分享设计
 
-状态：待用户书面复核
+状态：已批准
 
 日期：2026-07-24
 
@@ -12,7 +12,7 @@
 
 后端凭证负责快照隐私、审核状态、撤销、过期以及接收方访问范围，必须保留。照片资源
 加载和 `getImageInfo` 只用于显式分享封面；微信在 `onShareAppMessage` 返回值未提供
-`imageUrl` 时可以使用当前页面截图，因此这段封面准备可以从单媒体关键路径删除。
+`imageUrl` 时可以使用当前页面截图，因此这段封面准备可以从单张照片关键路径删除。
 
 现有预览器在 `loading` 状态仍显示白色可点击图标，点击后提示“正在准备分享，请稍候”；
 `failed` 状态也允许点击重试。这与“不能分享时显示灰色且不可用”的交互要求不一致。
@@ -21,9 +21,9 @@
 
 1. 单张照片分享继续使用后端 `focusMediaId` 快照凭证，接收方仍进入单张照片公开页，
    并可点击“查看完整相册”。
-2. 单媒体好友分享不再加载或转换分享封面，不再等待 `uni.getImageInfo`。
-3. `onShareAppMessage` 的有效单媒体 payload 只返回 `title` 和 `path`，真正省略
-   `imageUrl`，由微信截取当前照片预览页。
+2. 单张照片好友分享不再加载或转换分享封面，不再等待 `uni.getImageInfo`。
+3. `onShareAppMessage` 的有效单张照片 payload 只返回 `title` 和 `path`，真正省略
+   `imageUrl`，由微信截取当前照片预览页；单视频继续返回现有明确封面。
 4. 准备中、准备失败和内容不可分享时，分享图标统一置灰且不可点击；仅凭证准备成功后
    显示白色微信原生分享按钮。
 5. 保持现有安全关闭行为，不因缩短准备时间泄露无效或过期分享凭证。
@@ -34,7 +34,7 @@
 - 不复用整册分享 token 代替单媒体 token。
 - 不预生成相邻照片或整册照片的单媒体 token。
 - 不生成、保存或发送手机系统级截图文件。
-- 不改变朋友圈、整册相册、选中照片集合、招募分享或失败关闭卡片的封面行为。
+- 不改变单视频、朋友圈、整册相册、选中照片集合、招募分享或失败关闭卡片的封面行为。
 - 不等待原图或展示图完全加载后才开放分享；页面当前可见状态由微信负责截图。
 
 ## 4. 分享状态与界面
@@ -62,14 +62,16 @@
 4. 符合资格时进入 `loading`，立即向
    `/api/sessions/:sessionId/album/share-token` 提交 `{ focusMediaId }`。
 5. 客户端校验响应中的 `focus_media_id` 与当前请求完全一致，并校验 token 和落地路径。
-6. 校验成功后，只缓存 `title`、`path` 和 token，并将对应媒体状态设为 `ready`。
+6. 校验成功后，照片只缓存 `title`、`path` 和 token；视频继续准备并缓存现有
+   `imageUrl`，然后将对应媒体状态设为 `ready`。
 7. 用户点击白色原生分享按钮时，`onShareAppMessage` 按按钮 dataset 中的媒体 ID
-   读取同一条 ready 记录，返回 `{ title, path }`，不设置 `imageUrl`。
+   读取同一条 ready 记录。照片返回 `{ title, path }`，不设置 `imageUrl`；视频继续
+   返回 `{ title, path, imageUrl }`。
 8. 微信使用当前照片预览页作为好友或群聊分享卡片截图；接收方通过原有单媒体路径打开。
 
-单媒体准备关键路径不得调用 `prepareSingleMediaShareCardImage`、
-`loadVisiblePhotoMedia` 或 `prepareShareCoverUrl`。照片本身仍按预览器现有逻辑加载，
-但不再阻塞分享凭证 readiness。
+单张照片准备关键路径不得调用 `prepareSingleMediaShareCardImage`、
+`loadVisiblePhotoMedia` 或 `prepareShareCoverUrl`。视频继续使用这些能力准备明确封面。
+照片本身仍按预览器现有逻辑加载，但不再阻塞分享凭证 readiness。
 
 ## 6. 并发与安全
 
@@ -83,8 +85,8 @@
 
 ## 7. 性能边界
 
-优化后的单媒体分享准备只等待一次必要的分享凭证请求和本地同步校验。以下工作从关键
-路径移除：
+优化后的单张照片分享准备只等待一次必要的分享凭证请求和本地同步校验。以下工作从
+照片关键路径移除：
 
 - 为分享封面额外获取 preview 或 thumbnail URL；
 - 等待展示图资源下载；
@@ -95,16 +97,17 @@
 
 ## 8. 测试
 
-1. 单媒体分享 payload 测试确认 ready 分支仅含 `title`、`path`，没有 `imageUrl`
+1. 单张照片分享 payload 测试确认 ready 分支仅含 `title`、`path`，没有 `imageUrl`
    自有属性。
 2. 页面契约测试确认单媒体准备流程不调用图片加载、封面准备或 `getImageInfo` 路径。
 3. 组件契约测试确认仅 `ready` 渲染 `open-type="share"`；`loading`、`blocked` 和
    `failed` 都应用灰色禁用样式，且没有点击事件。
-4. 状态测试确认成员预览中的不合格媒体显示 `blocked`，原本应隐藏的公开浏览入口仍
+4. 测试确认单视频 ready payload 仍保留明确 `imageUrl`，其封面准备路径不变。
+5. 状态测试确认成员预览中的不合格媒体显示 `blocked`，原本应隐藏的公开浏览入口仍
    保持 `hidden`。
-5. 安全回归测试确认无效 dataset、非 ready 状态和缺失路径仍返回失败关闭 payload，
+6. 安全回归测试确认无效 dataset、非 ready 状态和缺失路径仍返回失败关闭 payload，
    不回退为普通页面分享。
-6. 运行 D50 单媒体分享单元测试、静态契约检查、小程序检查和微信小程序构建。
+7. 运行 D50 单媒体分享单元测试、静态契约检查、小程序检查和微信小程序构建。
 
 ## 9. 验收
 
