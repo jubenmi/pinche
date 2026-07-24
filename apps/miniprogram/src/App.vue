@@ -23,6 +23,29 @@ export default {
 }
 
 page {
+  --action-green: #1f6f5b;
+  --action-green-active: #1a5d4d;
+  --action-green-light: #eef7f4;
+  --action-green-light-active: #e1f1ea;
+  --action-green-border: rgba(31, 111, 91, 0.38);
+  --action-disabled: #aeb8b1;
+  --td-brand-color: var(--action-green);
+  --td-brand-color-active: var(--action-green-active);
+  --td-brand-color-light: var(--action-green-light);
+  --td-brand-color-light-active: var(--action-green-light-active);
+  --td-brand-color-disabled: var(--action-disabled);
+  --td-button-default-bg-color: var(--action-green);
+  --td-button-default-color: #ffffff;
+  --td-button-default-border-color: var(--action-green-active);
+  --td-button-default-active-bg-color: var(--action-green-active);
+  --td-button-default-active-border-color: var(--action-green-active);
+  --td-button-default-disabled-bg: var(--action-disabled);
+  --td-button-default-disabled-color: #ffffff;
+  --td-button-default-disabled-border-color: var(--action-disabled);
+  --td-button-default-outline-color: var(--action-green);
+  --td-button-default-outline-border-color: var(--action-green);
+  --td-button-default-outline-active-bg-color: var(--action-green-light);
+  --td-button-default-outline-active-border-color: var(--action-green-active);
   background-color: #fbfaf6;
   color: #183d34;
   font-family: "Songti SC", "STSong", "PingFang SC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
@@ -85,10 +108,13 @@ page {
 }
 
 .button.secondary {
-  background: rgba(255, 255, 252, 0.96);
-  color: #193d35;
-  border: 1rpx solid #ded8ca;
+  background: var(--action-green-light);
+  color: var(--action-green);
+  border: 1rpx solid var(--action-green-border);
   box-shadow: none;
+  --td-button-default-bg-color: var(--action-green-light);
+  --td-button-default-color: var(--action-green);
+  --td-button-default-border-color: var(--action-green-border);
 }
 
 .button.compact {
@@ -102,10 +128,14 @@ page {
   box-shadow: none;
 }
 
-.button.disabled {
-  background: #aeb8b1;
+.button.disabled,
+.button[disabled] {
+  background: var(--action-disabled);
   color: #ffffff;
   box-shadow: none;
+  --td-button-default-bg-color: var(--action-disabled);
+  --td-button-default-color: #ffffff;
+  --td-button-default-border-color: var(--action-disabled);
 }
 
 .button-icon,

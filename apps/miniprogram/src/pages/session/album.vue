@@ -6219,9 +6219,12 @@ export default {
 }
 
 .floating-toolbar-button.secondary {
-  border: 1rpx solid #ded8ca;
-  background-color: #fffefc;
-  color: #193d35;
+  border: 1rpx solid rgba(31, 111, 91, 0.34);
+  background-color: #eef7f4;
+  color: #1f6f5b;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
 }
 
 .floating-toolbar-button.disabled {

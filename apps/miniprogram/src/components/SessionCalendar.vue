@@ -1565,10 +1565,13 @@ function signupStatusLabel(status) {
   padding: 0 12rpx;
   border: 1rpx solid rgba(36, 116, 95, 0.46);
   border-radius: 10rpx;
-  background: #ffffff;
+  background: #eef7f4;
   color: #24745f;
   font-size: 23rpx;
   line-height: 60rpx;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #24745f;
+  --td-button-default-border-color: rgba(36, 116, 95, 0.46);
 }
 
 .load-more {

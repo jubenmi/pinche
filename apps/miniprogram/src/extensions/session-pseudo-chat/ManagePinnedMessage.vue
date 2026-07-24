@@ -229,6 +229,33 @@ export default {
   margin-top: 22rpx;
 }
 
+.actions .button {
+  border: 1rpx solid #1a5d4d;
+  background: #1f6f5b;
+  color: #ffffff;
+  --td-button-default-bg-color: #1f6f5b;
+  --td-button-default-color: #ffffff;
+  --td-button-default-border-color: #1a5d4d;
+}
+
+.actions .button.secondary {
+  border-color: rgba(31, 111, 91, 0.34);
+  background: #eef7f4;
+  color: #1f6f5b;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
+}
+
+.actions .button[disabled] {
+  border-color: #aeb8b1;
+  background: #aeb8b1;
+  color: #ffffff;
+  --td-button-default-disabled-bg: #aeb8b1;
+  --td-button-default-disabled-color: #ffffff;
+  --td-button-default-disabled-border-color: #aeb8b1;
+}
+
 .pinned-manager.embedded .actions {
   margin-top: 18rpx;
 }

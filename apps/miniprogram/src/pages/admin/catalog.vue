@@ -290,7 +290,7 @@
               <t-button class="mini-button muted" @tap="toggleStore(store)">
                 {{ store.status === "active" ? "下架" : "上架" }}
               </t-button>
-              <t-button class="mini-button muted" @tap="deleteStoreByItem(store)">删除</t-button>
+              <t-button class="mini-button danger" @tap="deleteStoreByItem(store)">删除</t-button>
             </view>
           </view>
         </view>
@@ -392,7 +392,7 @@
               <view class="actions tight">
                 <t-button class="mini-button secondary" @tap="moveScriptRole(index, -1)">上移</t-button>
                 <t-button class="mini-button secondary" @tap="moveScriptRole(index, 1)">下移</t-button>
-                <t-button class="mini-button muted" @tap="removeScriptRole(index)">删除</t-button>
+                <t-button class="mini-button danger" @tap="removeScriptRole(index)">删除</t-button>
               </view>
             </view>
           </view>
@@ -438,7 +438,7 @@
               <view class="actions tight">
                 <t-button class="mini-button secondary" @tap="moveNpcRole(index, -1)">上移</t-button>
                 <t-button class="mini-button secondary" @tap="moveNpcRole(index, 1)">下移</t-button>
-                <t-button class="mini-button muted" @tap="removeNpcRole(index)">删除</t-button>
+                <t-button class="mini-button danger" @tap="removeNpcRole(index)">删除</t-button>
               </view>
             </view>
           </view>
@@ -551,7 +551,7 @@
               <t-button class="mini-button muted" @tap="toggleScript(script)">
                 {{ script.status === "active" ? "下架" : "上架" }}
               </t-button>
-              <t-button class="mini-button muted" @tap="deleteScriptByItem(script)">删除</t-button>
+              <t-button class="mini-button danger" @tap="deleteScriptByItem(script)">删除</t-button>
             </view>
           </view>
         </view>
@@ -2317,13 +2317,20 @@ async function runBulkDelete(kind) {
 .mini-button.secondary,
 .tool-button.secondary,
 .button.secondary {
-  background: #eef2f7;
-  color: #334155;
+  border: 1rpx solid rgba(31, 122, 104, 0.34);
+  background: #eef7f4;
+  color: #1f6f5b;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 122, 104, 0.34);
 }
 
 .mini-button.muted {
-  background: #64748b;
+  background: #2b765f;
   color: #ffffff;
+  --td-button-default-bg-color: #2b765f;
+  --td-button-default-color: #ffffff;
+  --td-button-default-border-color: #1f6f5b;
 }
 
 .mini-button.danger,
