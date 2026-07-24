@@ -961,8 +961,8 @@ export default {
   min-height: 88rpx;
   padding: 22rpx 28rpx;
   border-radius: 999rpx;
-  background: #ffffff;
-  color: #153f34;
+  background: #1f6f5b;
+  color: #ffffff;
   font-size: 28rpx;
   font-weight: 700;
   text-align: center;

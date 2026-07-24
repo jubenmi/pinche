@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, transformWithEsbuild } from "vite";
 import uniPlugin from "@dcloudio/vite-plugin-uni";
 
 const uni = typeof uniPlugin === "function" ? uniPlugin : uniPlugin.default;
@@ -55,7 +55,9 @@ const tdesignRuntimePathsToCopy = [
   "config-provider/reactive-state.js",
   "config-provider/use-config.js",
   "locale/zh_CN.js",
-  "miniprogram_npm/dayjs"
+  "miniprogram_npm/dayjs",
+  "miniprogram_npm/tinycolor2",
+  "miniprogram_npm/tslib"
 ];
 const nativeTdesignTags = new Set([
   "root-portal",
@@ -109,7 +111,8 @@ export default defineConfig({
       }
     }),
     copyTdesignMiniprogramNpmPlugin(),
-    stripDcloudPreloadAssetPlugin()
+    stripDcloudPreloadAssetPlugin(),
+    compileTdesignMiniprogramRuntimePlugin()
   ]
 });
 
@@ -137,24 +140,51 @@ function copyTdesignMiniprogramNpmPlugin() {
   };
 }
 
+function compileTdesignMiniprogramRuntimePlugin() {
+  let tdesignOutputRoot = "";
+
+  return {
+    name: "pinche:compile-tdesign-miniprogram-runtime",
+    enforce: "post",
+    writeBundle(outputOptions) {
+      if (!outputOptions.dir) {
+        return;
+      }
+      tdesignOutputRoot = path.join(outputOptions.dir, "wxcomponents", tdesignPackageName);
+    },
+    async closeBundle() {
+      await compileTdesignModulesForWechatRuntime(tdesignOutputRoot);
+    }
+  };
+}
+
 function preseedTdesignMiniprogramNpmPackage() {
-  copyTdesignComponentNpmPackage(tdesignSourceRoot, { preserveExisting: true });
+  copyTdesignComponentNpmPackage(tdesignSourceRoot, {
+    includeRuntime: false,
+    preserveExisting: true
+  });
 }
 
 function copyTdesignComponentNpmPackage(tdesignTarget, options = {}) {
-  const sourceRoot =
+  const componentSourceRoot =
     path.resolve(tdesignTarget) === path.resolve(tdesignSourceRoot)
       ? tdesignPackageDistRoot
       : tdesignSourceRoot;
-  if (!fs.existsSync(sourceRoot)) {
+  if (!fs.existsSync(componentSourceRoot)) {
     return;
   }
 
   for (const folder of tdesignComponentFoldersToCopy) {
-    copyPath(path.join(sourceRoot, folder), path.join(tdesignTarget, folder), options);
+    copyPath(path.join(componentSourceRoot, folder), path.join(tdesignTarget, folder), options);
   }
-  for (const runtimePath of tdesignRuntimePathsToCopy) {
-    copyPath(path.join(sourceRoot, runtimePath), path.join(tdesignTarget, runtimePath), options);
+  if (options.includeRuntime !== false) {
+    for (const runtimePath of tdesignRuntimePathsToCopy) {
+      copyPath(
+        path.join(tdesignPackageDistRoot, runtimePath),
+        path.join(tdesignTarget, runtimePath),
+        options
+      );
+    }
   }
   rewriteTdesignIconFontCss(tdesignTarget, options);
   addTdesignTslibCompatShims(tdesignTarget);
@@ -201,6 +231,35 @@ function addTdesignTslibCompatShims(tdesignPackageRoot) {
     if (!fs.existsSync(shimPath)) {
       fs.writeFileSync(shimPath, shimSource);
     }
+  }
+}
+
+async function compileTdesignModulesForWechatRuntime(tdesignPackageRoot) {
+  if (!fs.existsSync(tdesignPackageRoot)) {
+    return;
+  }
+
+  for (const file of walkOutputFiles(tdesignPackageRoot)) {
+    const normalizedFile = file.replaceAll(path.sep, "/");
+    if (/\.d\.ts$/i.test(file)) {
+      fs.rmSync(file);
+      continue;
+    }
+    if (!/\.js$/i.test(file) || normalizedFile.includes("/miniprogram_npm/")) {
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    if (!/(^|\n)\s*(?:import|export)\b/.test(source)) {
+      continue;
+    }
+    const transformed = await transformWithEsbuild(source, file, {
+      format: "cjs",
+      loader: "js",
+      minify: true,
+      sourcemap: false,
+      target: "es2017"
+    });
+    fs.writeFileSync(file, transformed.code);
   }
 }
 

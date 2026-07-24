@@ -1402,17 +1402,26 @@ export default {
   height: 44rpx;
   margin: 0;
   padding: 0;
-  border: 1rpx solid #e5dece;
+  border: 1rpx solid rgba(31, 111, 91, 0.34);
   border-radius: 8rpx;
-  background: #ffffff;
-  color: #526159;
+  background: #eef7f4;
+  color: #1f6f5b;
   font-size: 22rpx;
   font-weight: 600;
   line-height: 42rpx;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
 }
 
-.message-panel-tool.disabled {
-  color: #9aa39d;
+.message-panel-tool.disabled,
+.message-panel-tool[disabled] {
+  border-color: #aeb8b1;
+  background: #aeb8b1;
+  color: #ffffff;
+  --td-button-default-disabled-bg: #aeb8b1;
+  --td-button-default-disabled-color: #ffffff;
+  --td-button-default-disabled-border-color: #aeb8b1;
 }
 
 .message-empty {
@@ -1590,12 +1599,15 @@ export default {
   height: 54rpx;
   margin: 0;
   padding: 0;
-  border: 1rpx solid #ded8ca;
+  border: 1rpx solid rgba(31, 111, 91, 0.34);
   border-radius: 10rpx;
-  background: #ffffff;
-  color: #526159;
+  background: #eef7f4;
+  color: #1f6f5b;
   font-size: 24rpx;
   line-height: 54rpx;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
 }
 
 .profile-preview {
@@ -1822,13 +1834,16 @@ export default {
   height: 70rpx;
   width: 100%;
   margin: 18rpx 0 0;
-  border: 1rpx solid #e5dece;
+  border: 1rpx solid rgba(31, 111, 91, 0.34);
   border-radius: 14rpx;
-  background: #ffffff;
-  color: #7d4b42;
+  background: #eef7f4;
+  color: #1f6f5b;
   font-size: 26rpx;
   font-weight: 600;
   line-height: 70rpx;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
 }
 
 .phone-modal {
@@ -1877,12 +1892,15 @@ export default {
   height: 70rpx;
   width: 100%;
   margin: 18rpx 0 0;
-  border: 1rpx solid #e5dece;
+  border: 1rpx solid rgba(31, 111, 91, 0.34);
   border-radius: 14rpx;
-  background: #ffffff;
-  color: #526159;
+  background: #eef7f4;
+  color: #1f6f5b;
   font-size: 26rpx;
   font-weight: 600;
   line-height: 70rpx;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
 }
 </style>

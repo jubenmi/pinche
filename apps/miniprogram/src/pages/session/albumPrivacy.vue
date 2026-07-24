@@ -64,7 +64,13 @@
     </view>
 
     <view class="bottom-action">
-      <t-button class="button" :class="{ disabled: saving }" @tap="savePrivacy">
+      <t-button
+        class="button"
+        theme="primary"
+        :class="{ disabled: saving }"
+        :disabled="saving"
+        @tap="savePrivacy"
+      >
         {{ saving ? "保存中..." : "保存设置" }}
       </t-button>
     </view>

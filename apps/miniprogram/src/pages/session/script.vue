@@ -91,7 +91,12 @@
     </view>
 
     <view class="bottom-action">
-      <t-button class="button" :class="{ disabled: !selectedScript }" @tap="goNext">下一步</t-button>
+      <t-button
+        class="button"
+        :class="{ disabled: !selectedScript }"
+        :disabled="!selectedScript"
+        @tap="goNext"
+      >下一步</t-button>
     </view>
   </view>
 </template>

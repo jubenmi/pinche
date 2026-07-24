@@ -89,7 +89,9 @@ const tdesignRequiredRuntimePaths = [
   "config-provider/reactive-state.js",
   "config-provider/use-config.js",
   "locale/zh_CN.js",
-  "miniprogram_npm/dayjs"
+  "miniprogram_npm/dayjs",
+  "miniprogram_npm/tinycolor2",
+  "miniprogram_npm/tslib"
 ];
 const tdesignNativePrimitiveTags = ["button", "image", "input", "picker", "switch", "textarea"];
 const tdesignRequiredHighPriorityTags = ["t-badge", "t-empty", "t-notice-bar", "t-search", "t-tag"];
@@ -3919,6 +3921,9 @@ if (!fs.existsSync(pagesJsonPath)) {
     "generateBundle",
     "preseedTdesignMiniprogramNpmPackage",
     "copyTdesignMiniprogramNpmPlugin",
+    "compileTdesignMiniprogramRuntimePlugin",
+    "compileTdesignModulesForWechatRuntime",
+    "closeBundle",
     "tdesign-miniprogram",
     "copyTdesignComponentNpmPackage",
     "preserveExisting: true",
@@ -4036,6 +4041,15 @@ if (
 }
 if (!rootPackageJson.scripts?.check?.includes("npm run test:miniprogram-dev-artifacts")) {
   fail("Root check must run the miniprogram dev artifact freshness tests");
+}
+if (
+  rootPackageJson.scripts?.["test:miniprogram-tdesign-runtime"] !==
+  "npm --workspace apps/miniprogram run test:tdesign-runtime"
+) {
+  fail("Root package must expose the TDesign WeChat runtime compatibility test");
+}
+if (!rootPackageJson.scripts?.check?.includes("npm run test:miniprogram-tdesign-runtime")) {
+  fail("Root check must run the TDesign WeChat runtime compatibility test");
 }
 
 if (!fs.existsSync(d35AdminCatalogCheckPath)) {
