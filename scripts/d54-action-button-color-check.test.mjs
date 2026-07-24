@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import {
@@ -113,4 +114,21 @@ test("reports required static contract patterns that are missing", () => {
     ]),
     [{ file: "sample.vue", name: "green button token" }]
   );
+});
+
+test("marks catalog list deletion controls as danger actions", () => {
+  const source = fs.readFileSync("apps/miniprogram/src/pages/admin/catalog.vue", "utf8");
+
+  for (const handler of [
+    "deleteStoreByItem(store)",
+    "deleteScriptByItem(script)",
+    "removeScriptRole(index)",
+    "removeNpcRole(index)"
+  ]) {
+    assert.match(
+      source,
+      new RegExp(`class="mini-button danger" @tap="${handler.replace(/[().]/g, "\\$&")}"`),
+      `${handler} must be rendered as a danger action`
+    );
+  }
 });

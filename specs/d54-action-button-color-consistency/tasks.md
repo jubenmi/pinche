@@ -694,7 +694,7 @@ node --check scripts/d54-action-button-color-check.js
 node --check scripts/lib/action-button-style-contract.mjs
 ```
 
-Expected: 全部 exit 0；unit 8/8 PASS；check 输出扫描文件数且无违规。
+Expected: 全部 exit 0；unit 全部 PASS；check 输出扫描文件数且无违规。
 
 - [x] **Step 3：运行跨端回归**
 
@@ -785,3 +785,4 @@ git commit -m "test(ui): enforce action button color consistency"
 - 2026-07-24：发现开发者工具启动时 TDesign 组件以原始 ESM（`import`/`export`）进入微信 `require` 运行时，导致 `Unexpected token 'export'`，继发 148 条组件未定义错误。构建末尾现将组件脚本转换为 CommonJS，补齐 `dayjs`、`tinycolor2`、`tslib` 运行时依赖，并移除非运行时 `.d.ts` 文件；新增 3 项构建产物测试且接入根检查。实际开发者工具重新编译后首页正常渲染，稳定态控制台为 0 errors / 0 warnings。热重载期间仅出现开发者工具自身的 `routeDone ... webviewId` 记录，清空后未复现；未将其视为应用错误。
 - 2026-07-24：复审发现后台存在两处 CSS 层叠遗漏：抽屉 `.close-button` 的后置规则将文字覆盖为中性灰，且 `.danger` 的 `!important` 会让 disabled 危险按钮保留红字。先新增 `apps/admin-web/test/buttonStyleContract.test.mjs`，两项断言均按预期失败；随后将抽屉关闭文字恢复为 `--admin-accent-strong`，并让共享 disabled 规则以 `#ffffff !important` 覆盖危险文字。`npm --workspace apps/admin-web run check`、`npm run d54:unit`、`npm run d54:check`、完整 `npm run check` 均通过。
 - 2026-07-24：开发者工具在已登录真实账号下完成了部分只读视觉抽查：建车店家未选择时“下一步”为灰色，选中既有店家后可进入剧本页；车头管理页普通操作处于绿色体系，底部“取消本车”为红色。未提交建车、保存设置、发送消息、取消车或任何会改动真实数据的操作。相册隐私、角色、聊天、管理员目录以及后台浏览器的完整真实状态组合尚未逐一验收，因此 Task 6 Step 5 和最终人工验收继续保持未勾选。
+- 2026-07-24：继续在已登录真实账号下进行只读验收，且未创建、保存、发送、删除或更改任何真实业务数据。建车流程的店家、剧本页均观察到“未选=灰色 disabled、选中既有资料=深绿”；角色页选择会进入“确认反串”业务弹窗，为避免改变真实用户状态未确认。车头管理页观察到保存置顶为深绿、申请提醒/车局详情及关闭座位为浅绿、已保存为灰色 disabled；相册隐私页观察到保存设置为深绿、停止我的相册分享为红色。聊天空输入的发送为灰色 disabled；开发者工具未能可靠注入临时文本，未执行发送。管理员目录页观察到主操作深绿、次要操作浅绿；首次列表验收发现“删除”错误继承绿色，根因是 4 个删除调用点误用 `muted` 类。先新增 9/9 通过的契约测试，再改为 `danger`，重新编译并实机复验列表“编辑=深绿、下架=绿色、删除=红色”。控制台均为 0 errors，警告仅为开发者工具环境提示。后台浏览器和会产生持久变更的禁用/保存中组合未重新实机覆盖，Task 6 Step 5 与最终人工验收继续保持未勾选。

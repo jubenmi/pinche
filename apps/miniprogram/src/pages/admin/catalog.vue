@@ -290,7 +290,7 @@
               <t-button class="mini-button muted" @tap="toggleStore(store)">
                 {{ store.status === "active" ? "下架" : "上架" }}
               </t-button>
-              <t-button class="mini-button muted" @tap="deleteStoreByItem(store)">删除</t-button>
+              <t-button class="mini-button danger" @tap="deleteStoreByItem(store)">删除</t-button>
             </view>
           </view>
         </view>
@@ -392,7 +392,7 @@
               <view class="actions tight">
                 <t-button class="mini-button secondary" @tap="moveScriptRole(index, -1)">上移</t-button>
                 <t-button class="mini-button secondary" @tap="moveScriptRole(index, 1)">下移</t-button>
-                <t-button class="mini-button muted" @tap="removeScriptRole(index)">删除</t-button>
+                <t-button class="mini-button danger" @tap="removeScriptRole(index)">删除</t-button>
               </view>
             </view>
           </view>
@@ -438,7 +438,7 @@
               <view class="actions tight">
                 <t-button class="mini-button secondary" @tap="moveNpcRole(index, -1)">上移</t-button>
                 <t-button class="mini-button secondary" @tap="moveNpcRole(index, 1)">下移</t-button>
-                <t-button class="mini-button muted" @tap="removeNpcRole(index)">删除</t-button>
+                <t-button class="mini-button danger" @tap="removeNpcRole(index)">删除</t-button>
               </view>
             </view>
           </view>
@@ -551,7 +551,7 @@
               <t-button class="mini-button muted" @tap="toggleScript(script)">
                 {{ script.status === "active" ? "下架" : "上架" }}
               </t-button>
-              <t-button class="mini-button muted" @tap="deleteScriptByItem(script)">删除</t-button>
+              <t-button class="mini-button danger" @tap="deleteScriptByItem(script)">删除</t-button>
             </view>
           </view>
         </view>
