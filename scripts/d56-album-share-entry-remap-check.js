@@ -296,6 +296,7 @@ function hasScopeAllTokenRequest(node) {
 }
 
 const albumSource = read("apps/miniprogram/src/pages/session/album.vue");
+const albumShareEntrySource = read("apps/miniprogram/src/utils/albumShareEntry.js");
 const packageJson = JSON.parse(read("package.json") || "{}");
 const albumSfc = parseSfc(albumSource, { filename: "apps/miniprogram/src/pages/session/album.vue" });
 check(albumSfc.errors.length === 0, "D56 album SFC must parse without errors");
@@ -464,10 +465,24 @@ check(!/activeAlbumShare|recruitInviteToken|singleMediaShareAuthority/.test(defa
 check(/singleMediaShareFailClosedPayload\(\)/.test(unknownBranch), "D56 unknown sharing buttons must fail closed");
 check(/defaultAlbumShareTimelinePayload\(\)/.test(onShareTimeline.source) && !/activeAlbumShareToken/.test(onShareTimeline.source), "D56 member timeline menu must use only the default-all timeline payload");
 check(/albumShareToken/.test(onShareTimeline.source), "D56 public timeline mode must retain its routed public token behavior");
-check(/defaultAlbumShareToken/.test(showShareMenus.source) && /defaultAlbumShareFriendCoverPrepared/.test(showShareMenus.source) && /defaultAlbumShareTimelineCoverPrepared/.test(showShareMenus.source), "D56 member menus must stay hidden until their default cover channel is ready");
+check(
+  /defaultAlbumShareToken/.test(showShareMenus.source) &&
+    !/defaultAlbumShareFriendCoverPrepared/.test(showShareMenus.source) &&
+    /defaultAlbumShareTimelineCoverPrepared/.test(showShareMenus.source),
+  "D56 friend menus must depend on the default token while timeline keeps its cover gate"
+);
 check(!/activeAlbumShareToken|recruitInviteToken|singleMediaShareAuthority/.test(showShareMenus.source), "D56 member menu visibility must not reuse active, recruit, or single state");
 check(!/activeAlbumShare|recruitInviteToken|singleMediaShareAuthority/.test(defaultPayload.source), "D56 default payload must fail closed rather than borrowing an active, recruit, or single token");
 check(!/defaultAlbumShare/.test(activePayload.source), "D56 active payload must remain button-only and independent of default-all state");
+check(
+  /friendReady:\s*Boolean\(token\)/.test(albumShareEntrySource),
+  "D56 member default friend readiness must come directly from its non-empty token"
+);
+check(
+  !/imageUrl|defaultAlbumShareFriendCoverPrepared/.test(defaultPayload.source) &&
+    !/imageUrl|activeAlbumShareFriendCoverPrepared/.test(activePayload.source),
+  "D56 full-album friend payloads must omit imageUrl and friend-cover readiness"
+);
 
 const apiFiles = walk("apps/api/src");
 check(!apiFiles.some((file) => /(^|\/)album-share-cover(?:\/|$)/i.test(file)), "D56 must not reintroduce apps/api/src/modules/album-share-cover");

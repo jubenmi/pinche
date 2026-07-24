@@ -546,6 +546,16 @@ includesAll(
   ],
   "channel-local share-cover helper"
 );
+const friendPayload = between(
+  cover,
+  "export function albumShareFriendPayload(",
+  "export function albumShareTimelinePayload(",
+  "friend default screenshot payload"
+);
+check(
+  !friendPayload.includes("imageUrl"),
+  "Friend album payload must omit imageUrl so WeChat uses the current-page screenshot"
+);
 check(
   !/(?:loadCurrentAlbumShareTokenResponse|rememberAlbumShareLocalPreviewHandoff|takeAlbumShareLocalPreviewHandoff|forgetAlbumShareLocalPreviewHandoff|ALBUM_SHARE_LOCAL_PREVIEW_HANDOFF)/.test(cover),
   "Obsolete preview response and cross-page local-image handoff helpers must be absent"
@@ -597,11 +607,16 @@ includesAll(
     "const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(data.cover_recipe)",
     "beginAlbumShareCanvasCoverPreparation({",
     "startAlbumShareCoverPreparation({",
+    'kinds: ["timeline"]',
     "prepareAlbumShareCanvasCover({",
     "isCurrentAlbumShareCanvasCoverPreparation(coverContext)",
     "applyActiveAlbumShareCover(kind, imageUrl)"
   ],
   "active share recipe, local-path snapshot, and stale-request guard"
+);
+check(
+  !activeSharePreparation.includes("ALBUM_PUBLIC_SHARE_COVER_UNAVAILABLE"),
+  "Active friend sharing must not fail when only the timeline Canvas is unavailable"
 );
 check(
   activeSharePreparation.indexOf("albumShareLocalPreviewByRecipe(data.cover_recipe)") <
@@ -612,6 +627,27 @@ check(
   !/(?:remoteUrl|cover_url|timeline_cover_url|friend_cover_url)/.test(activeSharePreparation),
   "Active sharing must not prepare or forward server-composite cover URLs"
 );
+const publicSharePreparation = between(
+  albumPage,
+  "prepareAlbumShareCovers(data) {",
+  "resetAlbumShareCovers({",
+  "public timeline-only Canvas preparation"
+);
+const defaultSharePreparation = between(
+  albumPage,
+  "prepareDefaultAlbumShare() {",
+  "handleRecruitShareTap() {",
+  "member-default timeline-only Canvas preparation"
+);
+for (const [label, source] of [
+  ["public", publicSharePreparation],
+  ["member-default", defaultSharePreparation]
+]) {
+  check(
+    source.includes('kinds: ["timeline"]'),
+    `D55 ${label} full-album sharing must only prepare the timeline Canvas`
+  );
+}
 check(
   !/(?:prepareAlbumSharePreview|ensureAlbumShareToken|sharePreviewMode|loadCurrentAlbumShareTokenResponse|rememberAlbumShareLocalPreviewHandoff|takeAlbumShareLocalPreviewHandoff|forgetAlbumShareLocalPreviewHandoff)/.test(albumPage),
   "D53 member flow must not regain the obsolete preview page, preview mode, or cross-page handoff"
@@ -633,6 +669,8 @@ includesAll(
 includesAll(
   miniCoverTest,
   [
+    "好友分享省略 imageUrl 以使用微信默认页面截图",
+    "调用方可以只准备朋友圈 Canvas",
     "远程 URL 永远不能作为分享 imageUrl",
     "一个渠道 Canvas 失败会使用该渠道静态图",
     "不阻塞另一个渠道",
@@ -647,7 +685,7 @@ includesAll(
   miniPreviewTest,
   [
     "member page exposes the four compact actions and removes the preview step",
-    "active album sharing is request-guarded and prepares independent dual covers",
+    "active album sharing is request-guarded and only prepares its timeline cover",
     "member and public sharing use two hidden renderable 2d Canvas nodes",
     "public timeline sharing prepares local Canvas covers from the current token and recipe",
     "Canvas currentness follows share lifecycle and stale temp paths are disposed"
