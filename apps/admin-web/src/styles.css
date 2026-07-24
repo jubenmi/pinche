@@ -2046,7 +2046,7 @@ td {
 .user-box button:disabled {
   border-color: var(--admin-action-disabled);
   background: var(--admin-action-disabled);
-  color: #ffffff;
+  color: #ffffff !important;
   opacity: 1;
   box-shadow: none;
   transform: none;
@@ -2685,7 +2685,7 @@ td {
   height: 36px;
   min-width: 64px;
   padding: 0 10px;
-  color: var(--admin-muted-strong);
+  color: var(--admin-accent-strong);
 }
 
 .drawer-form {
