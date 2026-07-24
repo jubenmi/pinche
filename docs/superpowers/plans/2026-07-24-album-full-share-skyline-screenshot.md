@@ -1,5 +1,9 @@
 # Album Full-Share Skyline Screenshot Implementation Plan
 
+> **Superseded:** This plan migrated the 5,300+ line album page to Skyline. It is retained as
+> decision history and must not be executed further. The replacement plan uses the first usable
+> album media as the Moments cover and does not introduce Skyline.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace full-album Moments Canvas covers with a privacy-safe Skyline DOM screenshot while keeping full-album friend/group shares on WeChat's native page screenshot.

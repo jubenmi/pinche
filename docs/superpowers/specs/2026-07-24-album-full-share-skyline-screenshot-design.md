@@ -1,6 +1,10 @@
 # 相册整册朋友圈使用 Skyline 页面截图设计
 
-状态：用户已确认
+状态：已被 `2026-07-24-album-timeline-representative-image-design.md` 取代
+
+> 取代原因：相册主页面包含瀑布流、视频、Swiper、弹层、固定定位、`root-portal`
+> 和 `onPageScroll`，不适合作为首个 Skyline 迁移页面；用户随后明确要求完全不引入
+> Skyline。保留本文作为决策历史，不再按本文实施。
 
 日期：2026-07-24
 
