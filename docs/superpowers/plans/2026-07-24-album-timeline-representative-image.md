@@ -12,6 +12,8 @@
 
 ### Task 1: Restore the original WebView compiler configuration
 
+> 已完成（2026-07-24）：配置测试 2/2 通过，原编译器生产构建通过。
+
 **Files:**
 - Modify: `apps/miniprogram/package.json`
 - Modify: `package-lock.json`
@@ -19,7 +21,7 @@
 - Delete: `apps/miniprogram/test/albumShareSkyline.test.mjs`
 - Create: `apps/miniprogram/test/albumShareWebView.test.mjs`
 
-- [ ] **Step 1: Write the failing WebView configuration test**
+- [x] **Step 1: Write the failing WebView configuration test**
 
 Create `apps/miniprogram/test/albumShareWebView.test.mjs`:
 
@@ -55,7 +57,7 @@ test("uni compiler packages return to the pre-Skyline version", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run:
 
@@ -66,7 +68,7 @@ node --test apps/miniprogram/test/albumShareWebView.test.mjs
 Expected: two failures because the album page is configured for Skyline and the three compiler
 packages use `3.0.0-5010520260709002`.
 
-- [ ] **Step 3: Restore package and page configuration**
+- [x] **Step 3: Restore package and page configuration**
 
 Set the three direct compiler packages to:
 
@@ -87,7 +89,7 @@ npm run build:mp-weixin -w @pinche/miniprogram
 
 Expected: test 2/2 PASS and production build exit 0.
 
-- [ ] **Step 4: Commit the renderer rollback**
+- [x] **Step 4: Commit the renderer rollback**
 
 ```bash
 git add apps/miniprogram/package.json package-lock.json apps/miniprogram/src/pages.json \

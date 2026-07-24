@@ -9,27 +9,21 @@ const pagesJson = JSON.parse(
   fs.readFileSync(new URL("../src/pages.json", import.meta.url), "utf8")
 );
 
-const SKYLINE_UNI_VERSION = "3.0.0-5010520260709002";
+const ORIGINAL_UNI_VERSION = "3.0.0-5000720260410001";
 
-test("album page alone opts into Skyline and GlassEasel", () => {
-  const album = pagesJson.pages.find((page) => page.path === "pages/session/album");
-  assert.equal(album?.style?.renderer, "skyline");
-  assert.equal(album?.style?.componentFramework, "glass-easel");
-
-  for (const page of pagesJson.pages.filter(
-    (item) => item.path !== "pages/session/album"
-  )) {
+test("every page keeps the default WebView renderer", () => {
+  for (const page of pagesJson.pages) {
     assert.notEqual(page?.style?.renderer, "skyline", page.path);
     assert.notEqual(page?.style?.componentFramework, "glass-easel", page.path);
   }
 });
 
-test("uni compiler packages use the stable snapshot-capable release", () => {
+test("uni compiler packages return to the pre-Skyline version", () => {
   for (const name of [
     "@dcloudio/uni-app",
     "@dcloudio/uni-mp-weixin",
     "@dcloudio/vite-plugin-uni"
   ]) {
-    assert.equal(packageJson.devDependencies[name], SKYLINE_UNI_VERSION, name);
+    assert.equal(packageJson.devDependencies[name], ORIGINAL_UNI_VERSION, name);
   }
 });

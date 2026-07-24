@@ -79,9 +79,7 @@
     {
       "path": "pages/session/album",
       "style": {
-        "navigationBarTitleText": "相册",
-        "renderer": "skyline",
-        "componentFramework": "glass-easel"
+        "navigationBarTitleText": "相册"
       }
     },
     {
