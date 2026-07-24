@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -54,9 +55,27 @@ const completeInvitePreparationSource = `
   }
 `;
 
-test("invite guard independently requires empty-token and network failure state", () => {
+test("invite guard accepts the complete preparation and retry contract", () => {
   assert.deepEqual(invitePreparationContractFailures(completeInvitePreparationSource), []);
+});
 
+test("invite guard requires the empty-token failure assignment", () => {
+  const missingEmptyTokenAssignment = completeInvitePreparationSource.replace(
+    `      if (!this.inviteToken) {
+        this.invitePrepareError = true;
+        this.statusText = "分享准备失败，请重试。";
+      }`,
+    `      if (!this.inviteToken) {
+        this.statusText = "分享准备失败，请重试。";
+      }`
+  );
+  assert.match(
+    invitePreparationContractFailures(missingEmptyTokenAssignment).join("\n"),
+    /empty-token response/
+  );
+});
+
+test("invite guard independently requires the network catch assignment", () => {
   const missingCatchAssignment = completeInvitePreparationSource.replace(
     `      this.inviteToken = "";
       this.invitePrepareError = true;
@@ -70,7 +89,33 @@ test("invite guard independently requires empty-token and network failure state"
   );
 });
 
-test("invite guard requires begin and successful retry to clear stale failure state", () => {
+test("invite guard requires preparation start to clear stale failure state", () => {
+  const missingPrepareStartClear = completeInvitePreparationSource.replace(
+    `    this.invitePreparing = true;
+    this.invitePrepareError = false;`,
+    `    this.invitePreparing = true;`
+  );
+  assert.match(
+    invitePreparationContractFailures(missingPrepareStartClear).join("\n"),
+    /preparation begin/
+  );
+});
+
+test("invite guard requires retry start to clear stale failure state", () => {
+  const missingRetryStartClear = completeInvitePreparationSource.replace(
+    `  async retryPrepareInvite() {
+    this.invitePrepareError = false;
+    this.statusText = "";`,
+    `  async retryPrepareInvite() {
+    this.statusText = "";`
+  );
+  assert.match(
+    invitePreparationContractFailures(missingRetryStartClear).join("\n"),
+    /retry begin/
+  );
+});
+
+test("invite guard requires successful retry to clear stale failure state", () => {
   const missingSuccessClear = completeInvitePreparationSource.replace(
     `    if (this.inviteToken) {
       this.invitePrepareError = false;
@@ -112,18 +157,25 @@ test("fixed image guard rejects non-JPEG bytes and the wrong aspect ratio", () =
   );
 });
 
-test("Skyline guard accepts disabled flags but rejects a Skyline page renderer", () => {
+test("Skyline guard accepts disabled flags and unrelated text", () => {
   assert.equal(
     pagesUseSkylineRenderer({
+      description: "Skyline is not enabled here",
       pages: [
         {
           path: "pages/session/share",
-          style: { skylineRenderEnable: false }
+          style: {
+            skylineRenderEnable: false,
+            note: "mentions Skyline without selecting a renderer"
+          }
         }
       ]
     }),
     false
   );
+});
+
+test("Skyline guard rejects top-level, global, and subpackage renderer selections", () => {
   assert.equal(
     pagesUseSkylineRenderer({
       pages: [
@@ -135,4 +187,58 @@ test("Skyline guard accepts disabled flags but rejects a Skyline page renderer",
     }),
     true
   );
+  assert.equal(
+    pagesUseSkylineRenderer({
+      globalStyle: { renderer: "skyline" },
+      pages: []
+    }),
+    true
+  );
+  assert.equal(
+    pagesUseSkylineRenderer({
+      pages: [],
+      subPackages: [
+        {
+          root: "feature",
+          pages: [
+            {
+              path: "share",
+              style: { renderer: "SKYLINE" }
+            }
+          ]
+        }
+      ]
+    }),
+    true
+  );
+});
+
+test("Skyline guard rejects skylineRenderEnable true anywhere", () => {
+  assert.equal(
+    pagesUseSkylineRenderer({
+      pages: [],
+      settings: {
+        nested: [{ skylineRenderEnable: true }]
+      }
+    }),
+    true
+  );
+});
+
+test("importing D56 helpers does not execute the repository integration check", () => {
+  const checkerUrl = new URL("./d56-unified-session-share-check.js", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `await import(${JSON.stringify(checkerUrl)});`
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "");
 });

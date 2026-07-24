@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = process.cwd();
 const servicePath = path.join(root, "apps/api/src/modules/core/service.js");
@@ -168,11 +169,24 @@ export function fixedClaimImageFailures(buffer, maxBytes = 200 * 1024) {
 }
 
 export function pagesUseSkylineRenderer(pagesJson) {
-  return (pagesJson?.pages || []).some((page) => {
-    if (!page || typeof page !== "object") {
-      return false;
+  if (Array.isArray(pagesJson)) {
+    return pagesJson.some(pagesUseSkylineRenderer);
+  }
+  if (!pagesJson || typeof pagesJson !== "object") {
+    return false;
+  }
+  return Object.entries(pagesJson).some(([key, value]) => {
+    if (
+      key === "renderer" &&
+      typeof value === "string" &&
+      value.trim().toLowerCase() === "skyline"
+    ) {
+      return true;
     }
-    return String(page.style?.renderer || "").trim().toLowerCase() === "skyline";
+    if (key === "skylineRenderEnable" && value === true) {
+      return true;
+    }
+    return pagesUseSkylineRenderer(value);
   });
 }
 
@@ -204,16 +218,8 @@ function methodBody(source, methodName) {
   return "";
 }
 
-function hasTrueSkylineRenderEnable(value) {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if (value.skylineRenderEnable === true) {
-    return true;
-  }
-  return Object.values(value).some(hasTrueSkylineRenderEnable);
-}
-
+export function runD56Check() {
+failures.length = 0;
 const serviceSource = read(servicePath);
 if (!/export\s+function\s+sessionHasStarted\s*\(/.test(serviceSource)) {
   fail("API service must export sessionHasStarted");
@@ -348,7 +354,7 @@ const shareRouteCount = (pagesJson.pages || []).filter(
 if (shareRouteCount !== 1) {
   fail(`pages.json must register pages/session/share exactly once, found ${shareRouteCount}`);
 }
-if (pagesUseSkylineRenderer(pagesJson) || hasTrueSkylineRenderEnable(pagesJson)) {
+if (pagesUseSkylineRenderer(pagesJson)) {
   fail("pages.json must not select the Skyline renderer or enable Skyline rendering");
 }
 
@@ -358,8 +364,10 @@ for (const configPath of privateConfigPaths) {
   }
   try {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    if (hasTrueSkylineRenderEnable(config)) {
-      fail(`${path.relative(root, configPath)} must not enable skylineRenderEnable`);
+    if (pagesUseSkylineRenderer(config)) {
+      fail(
+        `${path.relative(root, configPath)} must not select Skyline or enable skylineRenderEnable`
+      );
     }
   } catch {
     fail(`${path.relative(root, configPath)} must contain valid JSON`);
@@ -382,4 +390,11 @@ if (failures.length) {
   process.exitCode = 1;
 } else {
   console.log("D56 unified session share check passed");
+}
+return [...failures];
+}
+
+const directEntryPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
+if (directEntryPath === fileURLToPath(import.meta.url)) {
+  runD56Check();
 }
