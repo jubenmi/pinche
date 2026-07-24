@@ -1385,8 +1385,7 @@ export default {
           id: this.sessionId,
           source: "wechat_share",
           albumShareToken: this.albumShareToken
-        })}`,
-        imageUrl: this.albumFriendShareImage()
+        })}`
       });
     }
     return singleMediaShareFailClosedPayload();
@@ -1431,7 +1430,6 @@ export default {
       }
       const memberDefaultState = memberDefaultAlbumShareState({
         defaultAlbumShareToken: this.defaultAlbumShareToken,
-        defaultAlbumShareFriendCoverPrepared: this.defaultAlbumShareFriendCoverPrepared,
         defaultAlbumShareTimelineCoverPrepared: this.defaultAlbumShareTimelineCoverPrepared
       });
       const token = this.timelineMode
@@ -1440,9 +1438,6 @@ export default {
       if (!token || this.selectionMode) return;
       const menus = albumShareMenus({
         token,
-        friendReady: this.timelineMode
-          ? this.shareFriendCoverPrepared
-          : memberDefaultState.friendReady,
         timelineReady: this.timelineMode
           ? this.shareTimelineCoverPrepared
           : memberDefaultState.timelineReady
@@ -1774,6 +1769,7 @@ export default {
       const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(recipe);
       return startAlbumShareCoverPreparation({
         response: context.data,
+        kinds: ["timeline"],
         prepare: (kind) => this.prepareAlbumShareCanvasCover({
           kind,
           token,
@@ -1867,8 +1863,7 @@ export default {
     defaultAlbumSharePayload() {
       if (
         this.timelineMode ||
-        !this.defaultAlbumShareToken ||
-        !this.defaultAlbumShareFriendCoverPrepared
+        !this.defaultAlbumShareToken
       ) {
         return singleMediaShareFailClosedPayload();
       }
@@ -1878,8 +1873,7 @@ export default {
           id: this.sessionId,
           source: "wechat_share",
           albumShareToken: this.defaultAlbumShareToken
-        })}`,
-        imageUrl: albumShareImage("friend", this.defaultAlbumShareFriendCoverUrl)
+        })}`
       });
     },
     defaultAlbumShareTimelinePayload() {
@@ -1925,8 +1919,7 @@ export default {
     activeAlbumSharePayload() {
       if (
         this.timelineMode ||
-        !this.activeAlbumShareToken ||
-        !this.activeAlbumShareFriendCoverPrepared
+        !this.activeAlbumShareToken
       ) {
         showToast({ title: "当前分享尚未准备好", icon: "none" });
         return singleMediaShareFailClosedPayload();
@@ -1937,8 +1930,7 @@ export default {
           id: this.sessionId,
           source: "wechat_share",
           albumShareToken: this.activeAlbumShareToken
-        })}`,
-        imageUrl: this.albumFriendShareImage()
+        })}`
       });
     },
     beginAlbumShareSnapshotRequest() {
@@ -1971,7 +1963,7 @@ export default {
         photos: Number(data.photo_count || 0),
         videos: Number(data.video_count || 0)
       };
-      this.albumShareReadyVisible = false;
+      this.albumShareReadyVisible = true;
     },
     installDefaultAlbumShareSnapshot(data, token) {
       this.defaultAlbumShareToken = token;
@@ -5138,6 +5130,7 @@ export default {
           const token = typeof data.token === "string" ? data.token.trim() : "";
           if (!token) return "";
           this.installDefaultAlbumShareSnapshot(data, token);
+          this.showShareMenus();
           const title = this.defaultAlbumShareTitle();
           const recipe = data.cover_recipe || null;
           const contextKey = albumShareCoverContextKey({ token, recipe, title });
@@ -5155,6 +5148,7 @@ export default {
           const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(recipe);
           const coverTasks = startAlbumShareCoverPreparation({
             response: coverContext.data,
+            kinds: ["timeline"],
             prepare: (kind) => this.prepareAlbumShareCanvasCover({
               kind,
               token,
@@ -5314,6 +5308,7 @@ export default {
         });
         const coverTasks = startAlbumShareCoverPreparation({
           response: coverContext.data,
+          kinds: ["timeline"],
           prepare: (kind) => this.prepareAlbumShareCanvasCover({
             kind,
             token,
@@ -5335,12 +5330,6 @@ export default {
         await Promise.all(coverTasks);
         if (!this.isCurrentAlbumShareSnapshotRequest(shareRequest)) {
           return;
-        }
-        if (!this.activeAlbumShareFriendCoverPrepared) {
-          throw albumMediaError(
-            "ALBUM_PUBLIC_SHARE_COVER_UNAVAILABLE",
-            "分享封面准备失败，请稍后重试。"
-          );
         }
         this.statusText = "";
       } catch (error) {

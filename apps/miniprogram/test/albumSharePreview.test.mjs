@@ -79,16 +79,21 @@ test("download uses the same empty batch-selection pattern with two actions", ()
   assert.match(albumPageSource, /下载选中（\{\{ selectedPhotoCount \}\}）/);
 });
 
-test("active album sharing is request-guarded and prepares independent dual covers", () => {
+test("active album sharing is request-guarded and only prepares its timeline cover", () => {
   const prepareBlock = sourceBlock(
     "async prepareAlbumShareSnapshot(payload) {",
     "openBulkTagSheet() {"
+  );
+  const installSnapshotBlock = sourceBlock(
+    "installActiveAlbumShareSnapshot(data, { token, scope }) {",
+    "installDefaultAlbumShareSnapshot(data, token) {"
   );
   assert.match(prepareBlock, /beginAlbumShareSnapshotRequest\(\)/);
   assert.match(prepareBlock, /isCurrentAlbumShareSnapshotRequest\(shareRequest\)/);
   assert.match(prepareBlock, /installActiveAlbumShareSnapshot/);
   assert.match(prepareBlock, /cancelSelectionMode\(\{ force: true, preserveActiveShare: true \}\)/);
   assert.match(prepareBlock, /startAlbumShareCoverPreparation\(\{/);
+  assert.match(prepareBlock, /kinds:\s*\[\s*"timeline"\s*\]/);
   assert.match(prepareBlock, /albumShareLocalPreviewByRecipe\(data\.cover_recipe\)/);
   assert.match(
     prepareBlock,
@@ -96,7 +101,9 @@ test("active album sharing is request-guarded and prepares independent dual cove
   );
   assert.match(prepareBlock, /applyActiveAlbumShareCover\(kind, imageUrl\)/);
   assert.match(prepareBlock, /await Promise\.all\(coverTasks\)/);
+  assert.doesNotMatch(prepareBlock, /ALBUM_PUBLIC_SHARE_COVER_UNAVAILABLE/);
   assert.doesNotMatch(prepareBlock, /remoteUrl|cover_url|timeline_cover_url|friend_cover_url/);
+  assert.match(installSnapshotBlock, /this\.albumShareReadyVisible\s*=\s*true/);
 
   const localMapIndex = prepareBlock.indexOf(
     "const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(data.cover_recipe)"
@@ -139,6 +146,7 @@ test("public timeline sharing prepares local Canvas covers from the current toke
   assert.match(prepareBlock, /albumShareCoverContextKey/);
   assert.match(prepareBlock, /this\.albumShareToken/);
   assert.match(prepareBlock, /prepareAlbumShareCanvasCover\(\{/);
+  assert.match(prepareBlock, /kinds:\s*\[\s*"timeline"\s*\]/);
   assert.match(prepareBlock, /isCurrentAlbumShareCanvasCoverPreparation\(context\)/);
   assert.match(albumPageSource, /albumShareCoverPreparationIsCurrent\(\{/);
   assert.doesNotMatch(
@@ -196,7 +204,7 @@ test("native share CTA appears only after the active snapshot is ready", () => {
   assert.match(shareMenuBlock, /memberDefaultAlbumShareState\(\{/);
   assert.match(shareMenuBlock, /defaultAlbumShareToken:\s*this\.defaultAlbumShareToken/);
   assert.match(shareMenuBlock, /:\s*memberDefaultState\.token/);
-  assert.match(shareMenuBlock, /:\s*memberDefaultState\.friendReady/);
+  assert.doesNotMatch(shareMenuBlock, /friendReady|FriendCoverPrepared/);
   assert.match(shareMenuBlock, /:\s*memberDefaultState\.timelineReady/);
 });
 

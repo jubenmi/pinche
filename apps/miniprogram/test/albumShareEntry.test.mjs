@@ -362,6 +362,11 @@ test("member default all-photo sharing has its own silent state, authority, and 
   assert.match(prepareDefault, /data:\s*\{\s*scope:\s*"all"\s*\}/);
   assert.match(source, /this\.defaultAlbumShareAuthority\.begin\(/);
   assert.doesNotMatch(prepareDefault, /albumBusy|statusText|albumSharePreparing|albumShareReadyVisible/);
+  assert.match(
+    prepareDefault,
+    /this\.installDefaultAlbumShareSnapshot\(data, token\)[\s\S]*this\.showShareMenus\(\)/
+  );
+  assert.match(prepareDefault, /kinds:\s*\[\s*"timeline"\s*\]/);
 });
 
 test("member menu payloads read only the default all-photo snapshot while active remains button-only", async () => {
@@ -382,14 +387,32 @@ test("member menu payloads read only the default all-photo snapshot while active
     "if (intent.kind === ALBUM_SHARE_INTENT.DEFAULT_ALL)",
     "if (intent.kind === ALBUM_SHARE_INTENT.PUBLIC)"
   );
+  const publicBranch = sourceBlock(
+    appMessage,
+    "if (intent.kind === ALBUM_SHARE_INTENT.PUBLIC)",
+    "\n    return singleMediaShareFailClosedPayload();\n  },"
+  );
+  const defaultPayload = sourceBlock(
+    source,
+    "defaultAlbumSharePayload() {",
+    "defaultAlbumShareTimelinePayload() {"
+  );
+  const activePayload = sourceBlock(
+    source,
+    "activeAlbumSharePayload() {",
+    "beginAlbumShareSnapshotRequest() {"
+  );
 
   assert.match(activeBranch, /activeAlbumSharePayload\(\)/);
   assert.match(memberMenuBranch, /defaultAlbumSharePayload\(\)/);
   assert.doesNotMatch(memberMenuBranch, /activeAlbumShareToken|recruitInviteToken|singleMediaShareAuthority/);
+  assert.doesNotMatch(publicBranch, /imageUrl|albumFriendShareImage/);
+  assert.doesNotMatch(defaultPayload, /defaultAlbumShareFriendCoverPrepared|imageUrl/);
+  assert.doesNotMatch(activePayload, /activeAlbumShareFriendCoverPrepared|imageUrl/);
   assert.match(timeline, /defaultAlbumShareTimelinePayload\(\)/);
   assert.doesNotMatch(timeline, /activeAlbumShareToken/);
   assert.match(menus, /defaultAlbumShareToken/);
-  assert.match(menus, /defaultAlbumShareFriendCoverPrepared/);
+  assert.doesNotMatch(menus, /defaultAlbumShareFriendCoverPrepared/);
   assert.match(menus, /defaultAlbumShareTimelineCoverPrepared/);
   assert.doesNotMatch(menus, /activeAlbumShareToken/);
 });
