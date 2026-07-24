@@ -38,7 +38,7 @@
 - Create: `scripts/d54-action-button-color-check.test.mjs`
 - Create: `scripts/lib/action-button-style-contract.mjs`
 
-- [ ] **Step 1：写扫描 helper 的失败测试**
+- [x] **Step 1：写扫描 helper 的失败测试**
 
 创建 `scripts/d54-action-button-color-check.test.mjs`：
 
@@ -119,13 +119,13 @@ test("accepts a concrete class-only disabled exception", () => {
 });
 ```
 
-- [ ] **Step 2：运行测试并确认按预期失败**
+- [x] **Step 2：运行测试并确认按预期失败**
 
 Run: `node --test scripts/d54-action-button-color-check.test.mjs`
 
 Expected: FAIL，错误指出 `scripts/lib/action-button-style-contract.mjs` 不存在。
 
-- [ ] **Step 3：写最小扫描 helper**
+- [x] **Step 3：写最小扫描 helper**
 
 创建 `scripts/lib/action-button-style-contract.mjs`：
 
@@ -185,13 +185,13 @@ export function findClassOnlyDisabledBindings(source, file, exceptions = []) {
 }
 ```
 
-- [ ] **Step 4：运行 helper 测试并确认转绿**
+- [x] **Step 4：运行 helper 测试并确认转绿**
 
 Run: `node --test scripts/d54-action-button-color-check.test.mjs`
 
-Expected: PASS，6 个测试全部通过。
+Expected: PASS，8 个测试全部通过。
 
-- [ ] **Step 5：提交扫描 helper**
+- [x] **Step 5：提交扫描 helper**
 
 ```bash
 git add scripts/lib/action-button-style-contract.mjs scripts/d54-action-button-color-check.test.mjs
@@ -203,7 +203,7 @@ git commit -m "test(ui): define action button color contract"
 **Files:**
 - Create: `scripts/d54-action-button-color-check.js`
 
-- [ ] **Step 1：创建业务源码扫描入口**
+- [x] **Step 1：创建业务源码扫描入口**
 
 创建 `scripts/d54-action-button-color-check.js`：
 
@@ -277,7 +277,7 @@ if (violations.length > 0) process.exit(1);
 console.log(`D54 action button color check passed (${files.length} source files)`);
 ```
 
-- [ ] **Step 2：运行 D54 检查并确认准确红灯**
+- [x] **Step 2：运行 D54 检查并确认准确红灯**
 
 Run: `node scripts/d54-action-button-color-check.js`
 
@@ -294,7 +294,7 @@ apps/admin-web/src/styles.css :: .secondary-action
 
 若首个失败来自语法解析或非按钮卡片，先修扫描器/增加具体 `{ file, selector, reason }` 例外，再重跑，直到红灯只指向真实遗留。
 
-- [ ] **Step 3：提交全项目失败契约**
+- [x] **Step 3：提交全项目失败契约**
 
 ```bash
 git add scripts/d54-action-button-color-check.js
@@ -310,7 +310,7 @@ git commit -m "test(ui): audit neutral enabled buttons"
 - Modify: `apps/miniprogram/src/pages/session/script.vue`
 - Modify: `apps/miniprogram/src/pages/session/role.vue`
 
-- [ ] **Step 1：在 App.vue 建立动作令牌和 TDesign 映射**
+- [x] **Step 1：在 App.vue 建立动作令牌和 TDesign 映射**
 
 在 `page` 规则加入：
 
@@ -364,7 +364,7 @@ git commit -m "test(ui): audit neutral enabled buttons"
 }
 ```
 
-- [ ] **Step 2：修复截图复现点**
+- [x] **Step 2：修复截图复现点**
 
 将相册隐私页按钮改为：
 
@@ -380,7 +380,7 @@ git commit -m "test(ui): audit neutral enabled buttons"
 </t-button>
 ```
 
-- [ ] **Step 3：补齐三个选择流程的真实 disabled**
+- [x] **Step 3：补齐三个选择流程的真实 disabled**
 
 分别使用与现有 class 相同的表达式：
 
@@ -401,13 +401,13 @@ git commit -m "test(ui): audit neutral enabled buttons"
 </t-button>
 ```
 
-- [ ] **Step 4：运行 D54 检查确认状态缺陷消失**
+- [x] **Step 4：运行 D54 检查确认状态缺陷消失**
 
 Run: `node --test scripts/d54-action-button-color-check.test.mjs && node scripts/d54-action-button-color-check.js`
 
 Expected: helper unit PASS；D54 check 仍因其他局部/后台中性按钮失败，但不再报告 `App.vue .button.secondary` 和四个 class-only disabled。
 
-- [ ] **Step 5：提交小程序基础主题**
+- [x] **Step 5：提交小程序基础主题**
 
 ```bash
 git add apps/miniprogram/src/App.vue \
@@ -430,7 +430,7 @@ git commit -m "fix(miniprogram): align enabled button states"
 - Modify: `apps/miniprogram/src/extensions/session-pseudo-chat/ManagePinnedMessage.vue`
 - Modify: `packages/talk/miniprogram/ManagePinnedMessage.vue`
 
-- [ ] **Step 1：把 AuthIdentityBar 的可用中性按钮改为浅绿**
+- [x] **Step 1：把 AuthIdentityBar 的可用中性按钮改为浅绿**
 
 保留各自尺寸，将颜色声明统一为：
 
@@ -453,7 +453,7 @@ git commit -m "fix(miniprogram): align enabled button states"
 
 不要合并原文件中尺寸、margin、font 和 line-height 规则，只替换上述颜色声明。
 
-- [ ] **Step 2：把页面 muted/secondary 按钮改为浅绿**
+- [x] **Step 2：把页面 muted/secondary 按钮改为浅绿**
 
 在 `manage.vue`：
 
@@ -493,7 +493,7 @@ git commit -m "fix(miniprogram): align enabled button states"
 
 `.tab`、`.toggle` 和 `.danger` 保持各自选择/危险语义。
 
-- [ ] **Step 3：同步聊天低强调操作**
+- [x] **Step 3：同步聊天低强调操作**
 
 在宿主和包源的 `ChatEntry.vue` 保留布局，给 `.draft-button` 和 `.chat-modal-close` 使用：
 
@@ -530,7 +530,7 @@ git commit -m "fix(miniprogram): align enabled button states"
 
 宿主继续使用 `t-button/@tap`，包源继续使用原生 `button/@click`。
 
-- [ ] **Step 4：运行 D54 与 talk 回归**
+- [x] **Step 4：运行 D54 与 talk 回归**
 
 Run:
 
@@ -541,7 +541,7 @@ npm --workspace @jubenmi/talk run test
 
 Expected: D54 不再报告小程序或 talk 中性可用按钮；talk 全部测试 PASS。后台遗留可继续使总检查保持红灯。
 
-- [ ] **Step 5：提交小程序局部样式**
+- [x] **Step 5：提交小程序局部样式**
 
 ```bash
 git add apps/miniprogram/src/components/AuthIdentityBar.vue \
@@ -562,7 +562,7 @@ git commit -m "fix(miniprogram): remove neutral enabled actions"
 **Files:**
 - Modify: `apps/admin-web/src/styles.css`
 
-- [ ] **Step 1：增加后台动作派生令牌**
+- [x] **Step 1：增加后台动作派生令牌**
 
 在 `:root` 增加：
 
@@ -572,7 +572,7 @@ git commit -m "fix(miniprogram): remove neutral enabled actions"
   --admin-action-disabled: #c9d6d2;
 ```
 
-- [ ] **Step 2：把通用文字操作改为浅绿**
+- [x] **Step 2：把通用文字操作改为浅绿**
 
 保留现有尺寸/圆角规则，将颜色规则收敛为：
 
@@ -603,7 +603,7 @@ git commit -m "fix(miniprogram): remove neutral enabled actions"
 
 将 `.user-box button` 中明确显示“退出”的文字操作使用相同浅绿；不要覆盖 `.nav-item`、`.sidebar-collapse`、`.shell-toggle` 和 `.tabs button`。
 
-- [ ] **Step 3：统一批量操作与危险操作**
+- [x] **Step 3：统一批量操作与危险操作**
 
 ```css
 .bulk-action-button,
@@ -629,7 +629,7 @@ git commit -m "fix(miniprogram): remove neutral enabled actions"
 
 保留 publish 的绿色语义，并删除被新基础规则完全覆盖的旧 archive 中性色声明；不改布局属性。
 
-- [ ] **Step 4：统一操作族 disabled**
+- [x] **Step 4：统一操作族 disabled**
 
 ```css
 .toolbar button:disabled,
@@ -647,7 +647,7 @@ git commit -m "fix(miniprogram): remove neutral enabled actions"
 }
 ```
 
-- [ ] **Step 5：运行后台定向验证和 D54 检查**
+- [x] **Step 5：运行后台定向验证和 D54 检查**
 
 Run:
 
@@ -659,7 +659,7 @@ npm run build:admin-web
 
 Expected: D54 check PASS；后台 check PASS；Vite build exit 0。
 
-- [ ] **Step 6：提交后台样式**
+- [x] **Step 6：提交后台样式**
 
 ```bash
 git add apps/admin-web/src/styles.css
@@ -672,7 +672,7 @@ git commit -m "fix(admin): align enabled action button colors"
 - Modify: `package.json`
 - Modify: `specs/d54-action-button-color-consistency/tasks.md`
 
-- [ ] **Step 1：在根 package.json 增加 D54 命令**
+- [x] **Step 1：在根 package.json 增加 D54 命令**
 
 在 `scripts` 增加：
 
@@ -683,7 +683,7 @@ git commit -m "fix(admin): align enabled action button colors"
 
 把 `npm run d54:unit && npm run d54:check &&` 放在 `precheck` 最前部；把 `node --check scripts/d54-action-button-color-check.js && node --check scripts/lib/action-button-style-contract.mjs && npm run d54:check &&` 放在 `check` 最前部。
 
-- [ ] **Step 2：运行 D54 定向验证**
+- [x] **Step 2：运行 D54 定向验证**
 
 Run:
 
@@ -694,9 +694,9 @@ node --check scripts/d54-action-button-color-check.js
 node --check scripts/lib/action-button-style-contract.mjs
 ```
 
-Expected: 全部 exit 0；unit 6/6 PASS；check 输出扫描文件数且无违规。
+Expected: 全部 exit 0；unit 8/8 PASS；check 输出扫描文件数且无违规。
 
-- [ ] **Step 3：运行跨端回归**
+- [x] **Step 3：运行跨端回归**
 
 Run:
 
@@ -709,7 +709,7 @@ npm run build:mp-weixin
 
 Expected: 所有测试 PASS；两个构建 exit 0。既有 Sass deprecation warning 可记录，但不得出现新的编译错误。
 
-- [ ] **Step 4：运行完整根检查**
+- [x] **Step 4：运行完整根检查**
 
 Run: `npm run check`
 
@@ -737,7 +737,7 @@ danger=红色
 
 任何不能在当前环境真实执行的手工项保持未勾选，不能用构建成功代替。
 
-- [ ] **Step 6：更新 tasks 验证记录并检查最终差异**
+- [x] **Step 6：更新 tasks 验证记录并检查最终差异**
 
 Run:
 
@@ -749,7 +749,7 @@ git diff --stat
 
 Expected: `git diff --check` exit 0；仅包含 D54 代码、测试、spec 和验证记录，不包含用户已有无关改动。
 
-- [ ] **Step 7：提交检查接线和验证记录**
+- [x] **Step 7：提交检查接线和验证记录**
 
 ```bash
 git add package.json \
@@ -762,18 +762,23 @@ git commit -m "test(ui): enforce action button color consistency"
 
 ## D54 验收清单
 
-- [ ] 相册隐私页“保存设置”可用时为现有深绿，保存中为真实灰色禁用。
-- [ ] 所有小程序可用文字按钮属于深绿或浅绿体系。
-- [ ] talk 宿主与包源按钮语义一致。
-- [ ] 后台主要、低强调和批量可用操作属于绿色体系。
-- [ ] 灰色只出现在真实 disabled，红色只出现在危险操作。
-- [ ] 纯图标、标签、筛选、分段和状态控件未被误改。
-- [ ] `npm run d54:unit` 与 `npm run d54:check` 通过。
-- [ ] talk、后台检查、后台构建和小程序构建通过。
-- [ ] `npm run check` 通过。
+- [x] 相册隐私页“保存设置”可用时为现有深绿，保存中为真实灰色禁用。
+- [x] 所有小程序可用文字按钮属于深绿或浅绿体系。
+- [x] talk 宿主与包源按钮语义一致。
+- [x] 后台主要、低强调和批量可用操作属于绿色体系。
+- [x] 灰色只出现在真实 disabled，红色只出现在危险操作。
+- [x] 纯图标、标签、筛选、分段和状态控件未被误改。
+- [x] `npm run d54:unit` 与 `npm run d54:check` 通过。
+- [x] talk、后台检查、后台构建和小程序构建通过。
+- [x] `npm run check` 通过。
 - [ ] 微信开发者工具和后台浏览器代表页面完成实际验收。
 
 ## 验证记录
 
 - 2026-07-24：用户确认采用“语义统一 + 全项目审计”；可用文字按钮使用项目现有协调绿色，禁用保留灰色，危险操作保留红色；纯图标和非按钮型控件不强制改色。
 - 2026-07-24：D54 requirements/design/tasks 三件套已建立，业务实现尚未开始。
+- 2026-07-24：先建立 RED/GREEN 契约；helper 缺失时测试按预期失败，补齐实现后 `npm run d54:unit` 8/8 通过，`npm run d54:check` 覆盖 35 个业务源码文件并通过。
+- 2026-07-24：`npm --workspace @jubenmi/talk run test` 8/8、`npm --workspace apps/admin-web run check` 7/7、`npm run build:admin-web`、`npm run build:mp-weixin` 和完整 `npm run check` 均 exit 0。小程序构建仅输出既有 Sass 弃用提示。
+- 2026-07-24：后台浏览器实际验收通过。普通、次要和批量上/下架操作为浅绿 `#eef8f3`，危险下架/删除为红色 `#fff1ef`；加载中的控件呈真实 disabled。导航、标签页等非操作控件未纳入按钮改色。
+- 2026-07-24：开发者工具成功编译 D54 构建产物且控制台无错误，但模拟器 `pages/index/index` 保持空白，未能完成相册隐私、建车和聊天的代表页视觉验收；对应人工验收项继续保持未勾选。
+- 2026-07-24：按用户授权清理测试数据：删除 7 个 D23/D53 测试车局、7 个测试剧本和 7 个测试店家；店家删除先被引用约束拦截，随后先清理关联车局再完成删除。保留所有非 D23/D53 真实记录。
