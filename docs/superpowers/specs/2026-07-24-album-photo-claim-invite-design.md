@@ -31,16 +31,40 @@
 
 ## 渲染方案
 
-继续使用当前微信小程序 WebView 渲染模式，不切换 Skyline。
+采用页面级混合渲染：
+
+- 现有相册页继续使用 Skyline。
+- 照片认领邀请页明确使用 WebView。
+- Skyline 相册通过普通 `navigateTo` 打开 WebView 邀请页。
+- 从邀请页返回时回到原 Skyline 相册，不重建另一套相册页面。
 
 原因：
 
-- 页面只有场次摘要、六个左右的角色席位和一个分享按钮，不需要 Skyline 的长列表或高频动画能力。
-- 当前项目关闭了 Skyline，迁移需要自定义导航栏、局部 `scroll-view` 和额外真机兼容验证。
+- 相册的图片浏览、滚动与手势继续获得 Skyline 的渲染收益。
+- 邀请页只有场次摘要、六个左右的角色席位和一个分享按钮，不需要 Skyline 的长列表或高频动画能力。
 - 现有 `RoleSeatBoard` 使用 CSS Grid；Skyline 不支持 `display: grid`，切换后无法原样复用。
 - 此前的错误来自 TDesign 自定义按钮未透传分享 dataset，与渲染引擎无关。
 
-Skyline `snapshot` 或 Canvas 海报导出不在本次范围。当前目标是让页面在常见手机首屏内完整呈现，方便用户直接截图分享。
+页面 renderer 必须写入受版本控制的页面配置，不能只依赖开发者工具的私有开关：
+
+```json
+{
+  "path": "pages/session/album",
+  "style": {
+    "renderer": "skyline"
+  }
+},
+{
+  "path": "pages/session/share",
+  "style": {
+    "renderer": "webview"
+  }
+}
+```
+
+实现时保留相册已有的 Skyline 导航、滚动和 renderer 选项，仅补充或确认邀请页的 WebView 配置。
+
+Skyline `snapshot` 或 Canvas 海报导出不在本次范围。当前目标是让 WebView 邀请页在常见手机首屏内完整呈现，方便用户直接截图分享。
 
 ## 页面与组件
 
@@ -104,7 +128,7 @@ Skyline `snapshot` 或 Canvas 海报导出不在本次范围。当前目标是�
 ### 发起方
 
 1. 相册页已持有 `sessionId`。
-2. 点击“邀请认领”跳转邀请页。
+2. 在 Skyline 相册点击“邀请认领”，通过 `navigateTo` 跳转到 WebView 邀请页。
 3. 邀请页加载车局快照、角色席位和当前认领状态。
 4. 邀请页准备可分享的邀请 token。
 5. token 准备完成后启用原生分享按钮。
@@ -160,21 +184,26 @@ Skyline `snapshot` 或 Canvas 海报导出不在本次范围。当前目标是�
 
 1. 相册“邀请认领”入口只导航，不触发直接分享。
 2. 导航 URL 包含正确的车局 ID 和 `entry=album`。
-3. 邀请页分享路径包含 `id`、`entry`、`shareCode`、`inviteToken` 和 `source=wechat_share`。
-4. 分享标题使用“照片待认领”，不包含“上车”“发车”或“招募”。
-5. 缺少 token 时返回不可分享状态，而不是错误相册路径。
-6. 模板使用原生分享按钮。
-7. `RoleSeatBoard` 仍由邀请页直接引用，没有复制组件或截图资源。
+3. 相册页面配置保持 `renderer=skyline`。
+4. 邀请页面配置明确为 `renderer=webview`。
+5. 邀请页分享路径包含 `id`、`entry`、`shareCode`、`inviteToken` 和 `source=wechat_share`。
+6. 分享标题使用“照片待认领”，不包含“上车”“发车”或“招募”。
+7. 缺少 token 时返回不可分享状态，而不是错误相册路径。
+8. 模板使用原生分享按钮。
+9. `RoleSeatBoard` 仍由邀请页直接引用，没有复制组件或截图资源。
 
 ### 手工验证
 
-1. 从已结束车局的相册点击“邀请认领”。
-2. 邀请页首屏完整显示场次、六个席位和分享按钮。
-3. 截图不需要滚动拼接。
-4. 微信好友和群聊分享卡片标题正确。
-5. 接收方打开分享卡片后能看到同一车局和实时席位状态。
-6. 接收方选择角色、认领成功并进入相册。
-7. iOS、Android 各验证一次；低版本仍使用 WebView。
+1. 确认相册实际运行在 Skyline。
+2. 从已结束车局的 Skyline 相册点击“邀请认领”。
+3. 确认打开的邀请页实际运行在 WebView。
+4. 邀请页首屏完整显示场次、六个席位和分享按钮。
+5. 截图不需要滚动拼接。
+6. 微信好友和群聊分享卡片标题正确。
+7. 接收方打开分享卡片后能看到同一车局和实时席位状态。
+8. 接收方选择角色、认领成功并进入相册。
+9. 从邀请页返回后仍回到原 Skyline 相册，筛选和滚动状态没有异常丢失。
+10. iOS、Android 各验证一次。
 
 ## 范围边界
 
@@ -187,7 +216,7 @@ Skyline `snapshot` 或 Canvas 海报导出不在本次范围。当前目标是�
 
 本次不包含：
 
-- Skyline 迁移。
+- 改造或重写现有 Skyline 相册。
 - 保存海报到相册。
 - Canvas 或 `snapshot` 图片导出。
 - 重做 `RoleSeatBoard`。
@@ -197,6 +226,7 @@ Skyline `snapshot` 或 Canvas 海报导出不在本次范围。当前目标是�
 ## 验收标准
 
 - 相册点击“邀请认领”必定打开邀请页，不直接弹出微信分享。
+- 相册继续使用 Skyline，邀请页明确使用 WebView。
 - 页面与分享卡片没有开局前招募语义。
 - 页面生产实现直接复用现有 `RoleSeatBoard`。
 - 六角色场次可在常见手机首屏中完成截图。
