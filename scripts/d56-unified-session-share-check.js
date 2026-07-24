@@ -18,6 +18,164 @@ const privateConfigPaths = [
 
 const failures = [];
 
+function blockBodyAfterPattern(source, pattern) {
+  const match = pattern.exec(source);
+  if (!match) {
+    return "";
+  }
+  const afterMatch = source.slice(match.index + match[0].length);
+  const openBraceOffset = afterMatch.match(/^\s*\{/)?.[0].lastIndexOf("{") ?? -1;
+  if (openBraceOffset < 0) {
+    return "";
+  }
+  const openBrace = match.index + match[0].length + openBraceOffset;
+  let depth = 1;
+  for (let index = openBrace + 1; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+    if (depth === 0) return source.slice(openBrace + 1, index);
+  }
+  return "";
+}
+
+export function invitePreparationContractFailures(source) {
+  const contractFailures = [];
+  const prepareSource = methodBody(source, "prepareJoinInviteToken");
+  const retrySource = methodBody(source, "retryPrepareInvite");
+  const tryIndex = prepareSource.indexOf("try");
+  const prepareBeginSource =
+    tryIndex >= 0 ? prepareSource.slice(0, tryIndex) : prepareSource;
+  const emptyTokenSource = blockBodyAfterPattern(
+    prepareSource,
+    /if\s*\(\s*!this\.inviteToken\s*\)/
+  );
+  const networkCatchSource = blockBodyAfterPattern(
+    prepareSource,
+    /catch\s*\([^)]*\)/
+  );
+  const retryAwaitIndex = retrySource.indexOf("await this.prepareJoinInviteToken()");
+  const retryBeginSource =
+    retryAwaitIndex >= 0 ? retrySource.slice(0, retryAwaitIndex) : retrySource;
+  const retrySuccessSource = blockBodyAfterPattern(
+    retrySource,
+    /if\s*\(\s*this\.inviteToken\s*\)/
+  );
+
+  if (!prepareBeginSource.includes("this.invitePrepareError = false")) {
+    contractFailures.push("invite preparation begin must clear invitePrepareError");
+  }
+  if (!emptyTokenSource.includes("this.invitePrepareError = true")) {
+    contractFailures.push("empty-token response must set invitePrepareError");
+  }
+  if (!networkCatchSource.includes("this.invitePrepareError = true")) {
+    contractFailures.push("network catch must set invitePrepareError");
+  }
+  if (
+    !retryBeginSource.includes("this.invitePrepareError = false") ||
+    !retryBeginSource.includes('this.statusText = ""')
+  ) {
+    contractFailures.push("retry begin must clear invite failure state");
+  }
+  if (
+    !retrySuccessSource.includes("this.invitePrepareError = false") ||
+    !retrySuccessSource.includes('this.statusText = ""')
+  ) {
+    contractFailures.push("successful retry must clear invite failure state");
+  }
+  return contractFailures;
+}
+
+const JPEG_SOF_MARKERS = new Set([
+  0xc0, 0xc1, 0xc2, 0xc3,
+  0xc5, 0xc6, 0xc7,
+  0xc9, 0xca, 0xcb,
+  0xcd, 0xce, 0xcf
+]);
+
+export function jpegDimensions(input) {
+  const buffer = Buffer.isBuffer(input) ? input : Buffer.from(input || []);
+  if (
+    buffer.length < 4 ||
+    buffer[0] !== 0xff ||
+    buffer[1] !== 0xd8
+  ) {
+    return null;
+  }
+
+  let offset = 2;
+  while (offset < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      return null;
+    }
+    while (offset < buffer.length && buffer[offset] === 0xff) {
+      offset += 1;
+    }
+    if (offset >= buffer.length) {
+      return null;
+    }
+
+    const marker = buffer[offset];
+    offset += 1;
+    if (marker === 0xd9 || marker === 0xda) {
+      return null;
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) {
+      continue;
+    }
+    if (offset + 2 > buffer.length) {
+      return null;
+    }
+
+    const segmentLength = buffer.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > buffer.length) {
+      return null;
+    }
+    if (JPEG_SOF_MARKERS.has(marker)) {
+      if (segmentLength < 7) {
+        return null;
+      }
+      const height = buffer.readUInt16BE(offset + 3);
+      const width = buffer.readUInt16BE(offset + 5);
+      return width > 0 && height > 0 ? { width, height } : null;
+    }
+    offset += segmentLength;
+  }
+  return null;
+}
+
+export function fixedClaimImageFailures(buffer, maxBytes = 200 * 1024) {
+  const imageFailures = [];
+  if (!buffer?.length) {
+    imageFailures.push("fixed claim share image must be nonempty");
+    return imageFailures;
+  }
+  if (buffer.length >= maxBytes) {
+    imageFailures.push(
+      `fixed claim share image must remain below 200 KB, found ${buffer.length} bytes`
+    );
+  }
+  const dimensions = jpegDimensions(buffer);
+  if (!dimensions) {
+    imageFailures.push("fixed claim share image must be a valid JPEG with SOF dimensions");
+    return imageFailures;
+  }
+  if (dimensions.width * 4 !== dimensions.height * 5) {
+    imageFailures.push(
+      `fixed claim share image must keep a 5:4 ratio, found ${dimensions.width}x${dimensions.height}`
+    );
+  }
+  return imageFailures;
+}
+
+export function pagesUseSkylineRenderer(pagesJson) {
+  return (pagesJson?.pages || []).some((page) => {
+    if (!page || typeof page !== "object") {
+      return false;
+    }
+    return String(page.style?.renderer || "").trim().toLowerCase() === "skyline";
+  });
+}
+
 function fail(message) {
   failures.push(message);
 }
@@ -154,15 +312,8 @@ if (
 ) {
   fail("Published-session sharing must be gated by loaded session state and a ready payload");
 }
-const prepareInviteSource = methodBody(shareSource, "prepareJoinInviteToken");
-const retryInviteSource = methodBody(shareSource, "retryPrepareInvite");
-if (
-  !prepareInviteSource.includes("this.invitePrepareError = true") ||
-  !retryInviteSource.includes("this.invitePrepareError = false") ||
-  !retryInviteSource.includes('this.statusText = ""') ||
-  !retryInviteSource.includes("await this.prepareJoinInviteToken()")
-) {
-  fail("Invite retry must clear stale failure state and only reappear after a new preparation error");
+for (const contractFailure of invitePreparationContractFailures(shareSource)) {
+  fail(`Invite retry contract: ${contractFailure}`);
 }
 
 const albumSource = read(albumPath);
@@ -197,8 +348,8 @@ const shareRouteCount = (pagesJson.pages || []).filter(
 if (shareRouteCount !== 1) {
   fail(`pages.json must register pages/session/share exactly once, found ${shareRouteCount}`);
 }
-if (/skyline/i.test(pagesSource) || hasTrueSkylineRenderEnable(pagesJson)) {
-  fail("pages.json must not enable or select Skyline");
+if (pagesUseSkylineRenderer(pagesJson) || hasTrueSkylineRenderEnable(pagesJson)) {
+  fail("pages.json must not select the Skyline renderer or enable Skyline rendering");
 }
 
 for (const configPath of privateConfigPaths) {
@@ -218,12 +369,9 @@ for (const configPath of privateConfigPaths) {
 if (!fs.existsSync(fixedImagePath)) {
   fail("Fixed claim share image is missing");
 } else {
-  const imageSize = fs.statSync(fixedImagePath).size;
-  if (imageSize <= 0) {
-    fail("Fixed claim share image must be nonempty");
-  }
-  if (imageSize >= 200 * 1024) {
-    fail(`Fixed claim share image must remain below 200 KB, found ${imageSize} bytes`);
+  const imageBuffer = fs.readFileSync(fixedImagePath);
+  for (const imageFailure of fixedClaimImageFailures(imageBuffer)) {
+    fail(imageFailure);
   }
 }
 
