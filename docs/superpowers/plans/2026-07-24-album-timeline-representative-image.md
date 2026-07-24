@@ -101,11 +101,14 @@ git commit -m "build(album): keep sharing on webview"
 
 ### Task 2: Select the first usable representative image
 
+> 已完成（2026-07-24）：代表图选择器测试 8/8 通过。为保持中间提交可编译，
+> 相册页仍在引用的旧 Canvas 导出延后到 Task 3 与调用方一起删除。
+
 **Files:**
 - Modify: `apps/miniprogram/src/utils/albumShareCover.js`
 - Replace: `apps/miniprogram/test/albumShareCover.test.mjs`
 
-- [ ] **Step 1: Write failing representative-image tests**
+- [x] **Step 1: Write failing representative-image tests**
 
 Replace the Canvas-specific cover tests with focused contracts:
 
@@ -210,7 +213,7 @@ test("share menu adds Moments only after a representative image is ready", () =>
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -221,7 +224,7 @@ node --test apps/miniprogram/test/albumShareCover.test.mjs
 Expected: FAIL because `selectAlbumShareTimelineImage` is not exported and timeline payloads still
 use static fallbacks.
 
-- [ ] **Step 3: Implement the minimal selector**
+- [x] **Step 3: Implement the minimal selector**
 
 Refactor `albumShareCover.js` so it no longer imports `albumShareCanvas.js`. Implement:
 
@@ -277,10 +280,11 @@ export function selectAlbumShareTimelineImage({
 
 Keep `albumShareMenus`, `createAlbumShareRequestAuthority`, and friend payload behavior. Change
 `albumShareTimelinePayload` to return `null` when `imageUrl` is neither a valid local temporary path
-nor an HTTP(S) URL. Remove fallback constants, Canvas context/digest functions, Canvas preparation
-helpers, and static fallback selection.
+nor an HTTP(S) URL. Add the selector without changing the old page imports in this intermediate
+commit; remove fallback constants, Canvas context/digest functions, Canvas preparation helpers,
+and static fallback selection together with their page consumers in Task 3.
 
-- [ ] **Step 4: Run cover tests and commit**
+- [x] **Step 4: Run cover tests and commit**
 
 ```bash
 node --test apps/miniprogram/test/albumShareCover.test.mjs
