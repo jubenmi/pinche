@@ -2813,12 +2813,20 @@ if (!fs.existsSync(pagesJsonPath)) {
     "角色",
     "openShareSelectionMode",
     "openDownloadSelectionMode",
-    "openTagSelectionMode",
-    "openRecruitment"
+    "openTagSelectionMode"
   ]) {
     if (!albumSource.includes(requiredAlbumActionGroupText)) {
       fail(`Album page must group header actions by user task: ${requiredAlbumActionGroupText}`);
     }
+  }
+  if (
+    !albumSource.includes(':open-type="recruitInviteToken ? \'share\' : \'\'"') ||
+    !albumSource.includes('data-album-share="recruit"') ||
+    !albumSource.includes('@tap="handleRecruitShareTap"') ||
+    albumSource.includes("openRecruitment") ||
+    /navigateTo\s*\([\s\S]{0,240}\/pages\/session\/share/.test(albumSource)
+  ) {
+    fail("Album recruitment action must use the token-gated native share entry without legacy invitation navigation");
   }
   for (const forbiddenAlbumActionGroupText of [
     "album-action-group-title",

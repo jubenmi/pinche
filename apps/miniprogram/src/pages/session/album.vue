@@ -82,6 +82,7 @@
           <t-button
             class="button secondary album-privacy-action"
             :disabled="albumBusy"
+            aria-label="相册隐私"
             @tap="goPrivacy"
           >
             <view class="album-privacy-button-content">
@@ -90,7 +91,6 @@
                 src="/static/icons/album-privacy.svg"
                 mode="aspectFit"
               />
-              <text>隐私</text>
             </view>
           </t-button>
         </view>
@@ -132,6 +132,24 @@
             </view>
           </t-button>
           <t-button
+            class="album-command"
+            size="extra-small"
+            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
+            :disabled="albumBusy"
+            :open-type="recruitInviteToken ? 'share' : ''"
+            data-album-share="recruit"
+            @tap="handleRecruitShareTap"
+          >
+            <view class="album-command-content">
+              <t-image
+                class="album-command-icon"
+                src="/static/icons/album-recruit.svg"
+                mode="aspectFit"
+              />
+              <text class="album-command-label">招募</text>
+            </view>
+          </t-button>
+          <t-button
             class="album-command album-tag-command tag-action"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; border-color: #1f6f5b; background: #1f6f5b; color: #ffffff; font-size: 23rpx; font-weight: 700; line-height: 52rpx; --td-button-default-bg-color: #1f6f5b; --td-button-default-color: #ffffff; --td-button-default-border-color: #1f6f5b;"
@@ -145,22 +163,6 @@
                 mode="aspectFit"
               />
               <text class="album-command-label">标注</text>
-            </view>
-          </t-button>
-          <t-button
-            class="album-command"
-            size="extra-small"
-            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
-            :disabled="albumBusy"
-            @tap="openRecruitment"
-          >
-            <view class="album-command-content">
-              <t-image
-                class="album-command-icon"
-                src="/static/icons/album-recruit.svg"
-                mode="aspectFit"
-              />
-              <text class="album-command-label">招募</text>
             </view>
           </t-button>
         </view>
@@ -705,6 +707,7 @@ import {
 } from "../../utils/api";
 import {
   albumMediaError,
+  formatBeijingDateTime,
   isApprovedAlbumImageDownloadCandidate,
   isModerationPublished
 } from "@pinche/shared";
@@ -749,6 +752,15 @@ import {
   createAlbumShareRequestAuthority,
   startAlbumShareCoverPreparation
 } from "../../utils/albumShareCover";
+import {
+  ALBUM_SHARE_INTENT,
+  albumShareAppMessageIntent,
+  memberDefaultAlbumShareMediaFingerprint,
+  memberDefaultAlbumShareState,
+  recruitmentSharePayload,
+  createAlbumShareEntryAuthority,
+  createAlbumShareEntryCoordinator
+} from "../../utils/albumShareEntry";
 import {
   albumShareLocalImagePath,
   canUseAlbumShareCanvasIdExport as canUseLegacyAlbumShareCanvasIdExport,
@@ -800,6 +812,19 @@ export default {
       sessionId: "",
       timelineMode: false,
       albumShareToken: "",
+      defaultAlbumShareToken: "",
+      defaultAlbumShareFriendCoverUrl: "",
+      defaultAlbumShareTimelineCoverUrl: "",
+      defaultAlbumShareFriendCoverPrepared: false,
+      defaultAlbumShareTimelineCoverPrepared: false,
+      defaultAlbumShareSubject: null,
+      defaultAlbumShareCounts: { total: 0, photos: 0, videos: 0 },
+      defaultAlbumShareGeneration: 0,
+      defaultAlbumSharePromise: null,
+      defaultAlbumShareKey: "",
+      defaultAlbumShareAuthority: createAlbumShareEntryAuthority(),
+      defaultAlbumShareCoverRequestAuthority: createAlbumShareRequestAuthority(),
+      defaultAlbumShareCoverContextKey: "",
       activeAlbumShareToken: "",
       activeAlbumShareScope: "",
       activeAlbumShareCount: 0,
@@ -813,6 +838,10 @@ export default {
       albumShareRequestVersion: 0,
       albumSharePreparing: false,
       albumShareReadyVisible: false,
+      recruitInviteToken: "",
+      recruitInviteGeneration: 0,
+      recruitInvitePromise: null,
+      recruitInviteAuthority: createAlbumShareEntryAuthority(),
       singleMediaShareRequested: false,
       focusedPublicMode: false,
       focusedPublicMediaUnavailable: false,
@@ -829,10 +858,13 @@ export default {
       shareFriendCoverPrepared: false,
       shareTimelineCoverPrepared: false,
       albumShareRequestAuthority: createAlbumShareRequestAuthority(),
+      activeAlbumShareCoverRequestAuthority: createAlbumShareRequestAuthority(),
       albumShareCanvasPreparation: null,
       albumShareCanvasPageRuntime: null,
       albumShareCanvasNodes: {},
       albumShareCoverContextKey: "",
+      activeAlbumShareCoverContextKey: "",
+      albumShareCanvasCoordinator: createAlbumShareEntryCoordinator(),
       shareCounts: { total: 0, photos: 0, videos: 0 },
       albumSession: null,
       photos: [],
@@ -1261,6 +1293,9 @@ export default {
     }
     const auth = getCurrentUser();
     const accountChanged = this.handleAlbumAuthChange(auth);
+    if (this.sessionId && this.currentUserId && (!this.defaultAlbumShareToken || !this.recruitInviteToken)) {
+      this.primeAlbumShareEntries();
+    }
     const skipRefresh = this.consumePreviewReturnRefreshSkip();
     if (skipRefresh && !accountChanged) {
       return;
@@ -1270,21 +1305,31 @@ export default {
     }
   },
   onHide() {
+    if (!this.timelineMode) {
+      this.invalidateDefaultAlbumShare();
+      this.invalidateRecruitInviteShare();
+    }
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
+    this.albumShareCanvasCoordinator?.invalidate();
     this.disposeAlbumShareCanvasPreparation();
     this.resetAlbumShareCovers({ disposeCanvas: false });
     this.clearAuthorPrivateAlbumState();
   },
   onUnload() {
     if (!this.timelineMode) {
-      this.invalidateAlbumShareState();
+      this.invalidateDefaultAlbumShare();
+      this.invalidateRecruitInviteShare();
     }
     this.resetSingleMediaShareState();
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
+    this.albumShareCanvasCoordinator?.invalidate();
     this.disposeAlbumShareCanvasPreparation();
     this.resetAlbumShareCovers({ disposeCanvas: false });
+    if (!this.timelineMode) {
+      this.invalidateAlbumShareState();
+    }
     this.clearAuthorPrivateAlbumState();
     this.unobserveAlbumAuthChanges();
     this.albumMediaRefresh?.dispose();
@@ -1300,52 +1345,55 @@ export default {
     }
   },
   onShareAppMessage(options) {
-    if (options?.from === "button" && options?.target?.dataset?.albumShare === "active") {
+    const intent = albumShareAppMessageIntent(options, {
+      timelineMode: this.timelineMode
+    });
+    if (intent.kind === ALBUM_SHARE_INTENT.RECRUIT) {
+      return (
+        recruitmentSharePayload({
+          sessionId: this.sessionId,
+          inviteToken: this.recruitInviteToken,
+          title: this.albumShareSessionTitle()
+        }) || singleMediaShareFailClosedPayload()
+      );
+    }
+    if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE) {
       return this.activeAlbumSharePayload();
     }
-    if (options?.from === "button") {
-      const mediaId = normalizeFocusedMediaId(options?.target?.dataset?.mediaId);
-      if (mediaId) {
-        const entry = this.singleMediaShareAuthority.entryFor(mediaId);
-        if (entry?.status === "ready" && entry.path) {
-          return {
-            title: entry.title || this.albumShareTitle(),
-            path: entry.path,
-            imageUrl: entry.imageUrl || ""
-          };
-        }
-        return singleMediaShareFailClosedPayload();
+    if (intent.kind === ALBUM_SHARE_INTENT.SINGLE) {
+      const entry = this.singleMediaShareAuthority.entryFor(intent.mediaId);
+      if (entry?.status === "ready" && entry.path) {
+        return {
+          title: entry.title || this.albumShareTitle(),
+          path: entry.path,
+          imageUrl: entry.imageUrl || ""
+        };
       }
-    }
-    const albumShareToken = this.timelineMode
-      ? this.albumShareToken
-      : this.activeAlbumShareToken;
-    if (
-      !albumShareToken ||
-      (!this.timelineMode && !this.activeAlbumShareFriendCoverPrepared)
-    ) {
       return singleMediaShareFailClosedPayload();
     }
-    return albumShareFriendPayload({
-      title: this.timelineMode
-        ? this.albumShareTitle()
-        : this.activeAlbumShareTitle(),
-      path: `/pages/session/album${queryString({
-        id: this.sessionId,
-        source: "wechat_share",
-        albumShareToken
-      })}`,
-      imageUrl: this.albumFriendShareImage()
-    });
+    if (intent.kind === ALBUM_SHARE_INTENT.UNKNOWN) {
+      return singleMediaShareFailClosedPayload();
+    }
+    if (intent.kind === ALBUM_SHARE_INTENT.DEFAULT_ALL) {
+      return this.defaultAlbumSharePayload();
+    }
+    if (intent.kind === ALBUM_SHARE_INTENT.PUBLIC) {
+      if (!this.albumShareToken) return singleMediaShareFailClosedPayload();
+      return albumShareFriendPayload({
+        title: this.albumShareTitle(),
+        path: `/pages/session/album${queryString({
+          id: this.sessionId,
+          source: "wechat_share",
+          albumShareToken: this.albumShareToken
+        })}`,
+        imageUrl: this.albumFriendShareImage()
+      });
+    }
+    return singleMediaShareFailClosedPayload();
   },
   onShareTimeline() {
-    const albumShareToken = this.timelineMode
-      ? this.albumShareToken
-      : this.activeAlbumShareToken;
-    if (
-      !albumShareToken ||
-      (!this.timelineMode && !this.activeAlbumShareTimelineCoverPrepared)
-    ) {
+    if (!this.timelineMode) return this.defaultAlbumShareTimelinePayload();
+    if (!this.albumShareToken) {
       return {
         title: "分享暂不可用",
         query: "",
@@ -1353,10 +1401,8 @@ export default {
       };
     }
     return albumShareTimelinePayload({
-      title: this.timelineMode
-        ? this.albumTimelineTitle()
-        : this.activeAlbumShareTimelineTitle(),
-      query: this.albumTimelineQuery(albumShareToken),
+      title: this.albumTimelineTitle(),
+      query: this.albumTimelineQuery(this.albumShareToken),
       imageUrl: this.albumTimelineShareImage()
     });
   },
@@ -1383,18 +1429,23 @@ export default {
       if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
         uni.hideShareMenu({ menus: allMenus });
       }
+      const memberDefaultState = memberDefaultAlbumShareState({
+        defaultAlbumShareToken: this.defaultAlbumShareToken,
+        defaultAlbumShareFriendCoverPrepared: this.defaultAlbumShareFriendCoverPrepared,
+        defaultAlbumShareTimelineCoverPrepared: this.defaultAlbumShareTimelineCoverPrepared
+      });
       const token = this.timelineMode
         ? this.albumShareToken
-        : this.activeAlbumShareToken;
+        : memberDefaultState.token;
       if (!token || this.selectionMode) return;
       const menus = albumShareMenus({
         token,
         friendReady: this.timelineMode
           ? this.shareFriendCoverPrepared
-          : this.activeAlbumShareFriendCoverPrepared,
+          : memberDefaultState.friendReady,
         timelineReady: this.timelineMode
           ? this.shareTimelineCoverPrepared
-          : this.activeAlbumShareTimelineCoverPrepared
+          : memberDefaultState.timelineReady
       });
       if (menus.length === 0) return;
       showWechatShareMenus({
@@ -1602,6 +1653,7 @@ export default {
       return this.albumShareCanvasPreparation;
     },
     disposeAlbumShareCanvasPreparation() {
+      this.albumShareCanvasCoordinator?.invalidate();
       try {
         this.albumShareCanvasPreparation?.dispose();
       } catch (error) {
@@ -1611,6 +1663,8 @@ export default {
       this.albumShareCanvasPageRuntime = null;
       this.albumShareCanvasNodes = {};
       this.albumShareCoverContextKey = "";
+      this.activeAlbumShareCoverContextKey = "";
+      this.defaultAlbumShareCoverContextKey = "";
     },
     albumShareLocalPreviewByRecipe(recipe) {
       const normalizedRecipe = normalizeAlbumShareCoverRecipe(recipe);
@@ -1625,25 +1679,27 @@ export default {
       }
       return localPreviewByMediaId;
     },
-    beginAlbumShareCanvasCoverPreparation({ token, data, title }) {
+    beginAlbumShareCanvasCoverPreparation({
+      token,
+      data,
+      title,
+      requestAuthority = this.albumShareRequestAuthority,
+      isCurrent
+    }) {
       const recipe = data?.cover_recipe || null;
       const contextKey = albumShareCoverContextKey({ token, recipe, title });
-      if (
-        this.albumShareCoverContextKey &&
-        contextKey !== this.albumShareCoverContextKey
-      ) {
-        this.disposeAlbumShareCanvasPreparation();
-      }
-      this.albumShareCoverContextKey = contextKey;
       const canvasPreparation = this.ensureAlbumShareCanvasPreparation();
       return {
         token,
         data: { cover_recipe: recipe },
         title,
         contextKey,
-        coverRequest: this.albumShareRequestAuthority.beginCoverRequest(token),
+        requestAuthority,
+        isCurrent: typeof isCurrent === "function"
+          ? isCurrent
+          : () => contextKey === this.albumShareCoverContextKey,
+        coverRequest: requestAuthority.beginCoverRequest(token),
         canvasPreparation,
-        canvasRequest: canvasPreparation?.beginRequest()
       };
     },
     prepareAlbumShareCanvasCover({
@@ -1653,30 +1709,38 @@ export default {
       title,
       localPreviewByMediaId,
       canvasPreparation,
-      canvasRequest
+      isCurrent = () => true
     }) {
-      if (!canvasPreparation || !canvasRequest) {
-        return { ok: false, kind, path: "", error: "runtime_unavailable" };
+      if (!canvasPreparation) {
+        return Promise.resolve({ ok: false, kind, path: "", error: "runtime_unavailable" });
       }
-      return canvasPreparation.prepare({
-        shareId: token,
-        kind,
-        recipe: data?.cover_recipe,
-        title,
-        localPreviewByMediaId,
-        thumbnailUrlResolver: (url) => this.normalizeAlbumMediaUrl(url),
-        request: canvasRequest
+      return this.albumShareCanvasCoordinator.enqueue(async (canvasJob) => {
+        if (!canvasJob.isCurrent() || isCurrent() !== true) {
+          return { ok: false, kind, path: "", error: "stale_request" };
+        }
+        const canvasRequest = canvasPreparation.beginRequest();
+        const result = await canvasPreparation.prepare({
+          shareId: token,
+          kind,
+          recipe: data?.cover_recipe,
+          title,
+          localPreviewByMediaId,
+          thumbnailUrlResolver: (url) => this.normalizeAlbumMediaUrl(url),
+          request: canvasRequest
+        });
+        if (!canvasJob.isCurrent() || isCurrent() !== true) {
+          return { ok: false, kind, path: "", error: "stale_request" };
+        }
+        return result;
       });
     },
     isCurrentAlbumShareCanvasCoverPreparation(context) {
       return (
-        context?.contextKey === this.albumShareCoverContextKey &&
+        context?.isCurrent?.() === true &&
         albumShareCoverPreparationIsCurrent({
-          requestAuthority: this.albumShareRequestAuthority,
+          requestAuthority: context?.requestAuthority,
           coverRequest: context?.coverRequest,
-          token: context?.token,
-          canvasPreparation: context?.canvasPreparation,
-          canvasRequest: context?.canvasRequest
+          token: context?.token
         })
       );
     },
@@ -1700,10 +1764,12 @@ export default {
         this.resetAlbumShareCovers();
         this.showShareMenus();
       }
+      this.albumShareCoverContextKey = contextKey;
       const context = this.beginAlbumShareCanvasCoverPreparation({
         token,
         data,
-        title
+        title,
+        isCurrent: () => contextKey === this.albumShareCoverContextKey
       });
       const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(recipe);
       return startAlbumShareCoverPreparation({
@@ -1715,7 +1781,7 @@ export default {
           title,
           localPreviewByMediaId,
           canvasPreparation: context.canvasPreparation,
-          canvasRequest: context.canvasRequest
+          isCurrent: () => this.isCurrentAlbumShareCanvasCoverPreparation(context)
         }),
         isCurrent: () => this.isCurrentAlbumShareCanvasCoverPreparation(context),
         onPrepared: (kind, imageUrl) => {
@@ -1778,7 +1844,61 @@ export default {
       }》`;
     },
     albumShareSessionTitle() {
-      return `${this.albumScriptName || "剧本待定"}｜${this.albumStoreName || "店家待定"}`;
+      return `${this.albumScriptName || "剧本待定"}｜${this.albumStoreName || "店家待定"}｜${formatBeijingDateTime(this.albumSession?.start_at, "时间待定")}`;
+    },
+    defaultAlbumShareSubjectLabel() {
+      return (
+        this.defaultAlbumShareSubject?.role_name ||
+        this.defaultAlbumShareSubject?.seat_name ||
+        this.defaultAlbumShareSubject?.label ||
+        ""
+      );
+    },
+    defaultAlbumShareTitle() {
+      return `我在《${this.albumScriptName || "剧本待定"}》中饰演「${
+        this.defaultAlbumShareSubjectLabel() || "角色待定"
+      }」｜游玩相册`;
+    },
+    defaultAlbumShareTimelineTitle() {
+      return `这一晚，我是「${this.defaultAlbumShareSubjectLabel() || "角色待定"}」｜《${
+        this.albumScriptName || "剧本待定"
+      }》`;
+    },
+    defaultAlbumSharePayload() {
+      if (
+        this.timelineMode ||
+        !this.defaultAlbumShareToken ||
+        !this.defaultAlbumShareFriendCoverPrepared
+      ) {
+        return singleMediaShareFailClosedPayload();
+      }
+      return albumShareFriendPayload({
+        title: this.defaultAlbumShareTitle(),
+        path: `/pages/session/album${queryString({
+          id: this.sessionId,
+          source: "wechat_share",
+          albumShareToken: this.defaultAlbumShareToken
+        })}`,
+        imageUrl: albumShareImage("friend", this.defaultAlbumShareFriendCoverUrl)
+      });
+    },
+    defaultAlbumShareTimelinePayload() {
+      if (
+        this.timelineMode ||
+        !this.defaultAlbumShareToken ||
+        !this.defaultAlbumShareTimelineCoverPrepared
+      ) {
+        return {
+          title: "分享暂不可用",
+          query: "",
+          imageUrl: "/static/art/ticket-landscape.jpg"
+        };
+      }
+      return albumShareTimelinePayload({
+        title: this.defaultAlbumShareTimelineTitle(),
+        query: this.albumTimelineQuery(this.defaultAlbumShareToken),
+        imageUrl: albumShareImage("timeline", this.defaultAlbumShareTimelineCoverUrl)
+      });
     },
     albumFriendShareImage() {
       const coverUrl = !this.timelineMode && this.activeAlbumShareToken
@@ -1853,6 +1973,33 @@ export default {
       };
       this.albumShareReadyVisible = false;
     },
+    installDefaultAlbumShareSnapshot(data, token) {
+      this.defaultAlbumShareToken = token;
+      this.defaultAlbumShareFriendCoverUrl = "";
+      this.defaultAlbumShareTimelineCoverUrl = "";
+      this.defaultAlbumShareFriendCoverPrepared = false;
+      this.defaultAlbumShareTimelineCoverPrepared = false;
+      this.defaultAlbumShareSubject = data.share_subject || this.localAlbumShareSubject();
+      this.defaultAlbumShareCounts = {
+        total: Number(data.visible_count || 0),
+        photos: Number(data.photo_count || 0),
+        videos: Number(data.video_count || 0)
+      };
+    },
+    applyDefaultAlbumShareCover(kind, imageUrl) {
+      const preparedUrl = String(imageUrl || "").trim();
+      if (kind === "friend") {
+        this.defaultAlbumShareFriendCoverUrl = preparedUrl;
+        this.defaultAlbumShareFriendCoverPrepared = Boolean(preparedUrl);
+        return;
+      }
+      if (kind === "timeline") {
+        this.defaultAlbumShareTimelineCoverUrl = preparedUrl;
+        this.defaultAlbumShareTimelineCoverPrepared = Boolean(preparedUrl);
+        return;
+      }
+      throw new TypeError("default album share cover kind must be friend or timeline");
+    },
     applyActiveAlbumShareCover(kind, imageUrl) {
       const preparedUrl = String(imageUrl || "").trim();
       if (kind === "friend") {
@@ -1876,7 +2023,8 @@ export default {
           this.statusText = "";
         }
       }
-      this.disposeAlbumShareCanvasPreparation();
+      this.activeAlbumShareCoverRequestAuthority.invalidateCoverRequests();
+      this.activeAlbumShareCoverContextKey = "";
       this.activeAlbumShareToken = "";
       this.activeAlbumShareScope = "";
       this.activeAlbumShareCount = 0;
@@ -2068,7 +2216,9 @@ export default {
       const nextUserId = auth?.user?.id || "";
       const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
       if (accountChanged) {
+        this.invalidateDefaultAlbumShare();
         this.invalidateAlbumShareState();
+        this.invalidateRecruitInviteShare();
         this.resetSingleMediaShareState();
         this.cancelSelectionMode({ force: true });
         this.clearActiveAlbumShareState({ hideMenus: true });
@@ -2312,10 +2462,19 @@ export default {
       this.albumMediaRefresh = createAlbumMediaRefreshController({
         readAlbum: () => ({ photos: this.photos }),
         writeAlbum: (next) => {
+          const beforeMedia = memberDefaultAlbumShareMediaFingerprint(this.photos);
+          const nextMedia = memberDefaultAlbumShareMediaFingerprint(next.photos);
+          const nextPhotos = (next.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+          if (!this.timelineMode && beforeMedia !== nextMedia) {
+            this.invalidateDefaultAlbumShare({ hideMenus: true });
+          }
           this.mediaLoadSerial += 1;
-          this.photos = (next.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+          this.photos = nextPhotos;
           this.pruneUnpublishedAlbumMediaState(this.photos);
           this.refreshWaterfall();
+          if (!this.timelineMode && beforeMedia !== nextMedia) {
+            this.primeAlbumShareEntries();
+          }
         },
         reloadAlbum: async () => {
           const listRequest = this.beginAlbumListRequest();
@@ -2368,6 +2527,10 @@ export default {
               errorCode: error?.code || "MEDIA_REFRESH_FAILED"
             });
             if (error?.statusCode === 401 || error?.statusCode === 403) {
+              if (!this.timelineMode) {
+                this.invalidateDefaultAlbumShare({ hideMenus: true });
+                this.invalidateRecruitInviteShare();
+              }
               return {
                 photos: [],
                 isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
@@ -2397,6 +2560,8 @@ export default {
         this.listThumbnailLoadedById = {};
         this.listThumbnailFailedById = {};
         this.mediaLoadSerial += 1;
+        this.invalidateRecruitInviteShare();
+        this.invalidateDefaultAlbumShare({ hideMenus: true });
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.albumSession = this.albumSessionSummary(data);
@@ -2405,7 +2570,10 @@ export default {
         this.statusText = "";
         this.refreshWaterfall();
         if (this.canUpload) {
-          await this.loadPeople();
+          await this.loadPeople(() => this.isCurrentAlbumListRequest(listRequest));
+          if (!this.isCurrentAlbumListRequest(listRequest)) {
+            return;
+          }
           this.ensureSelectedRoleFilter();
         } else {
           this.people = [];
@@ -2413,11 +2581,14 @@ export default {
         }
         this.applyAlbumNavigationTitle();
         this.albumMediaRefresh?.schedule();
+        this.primeAlbumShareEntries();
       } catch (error) {
         if (!this.isCurrentAlbumListRequest(listRequest)) {
           return;
         }
         if (error?.statusCode === 401 || error?.statusCode === 403) {
+          this.invalidateDefaultAlbumShare({ hideMenus: true });
+          this.invalidateRecruitInviteShare();
           this.mediaLoadSerial += 1;
           this.photos = [];
           this.pruneUnpublishedAlbumMediaState(this.photos);
@@ -3520,7 +3691,7 @@ export default {
       }
       return "height:328rpx;";
     },
-    async loadPeople() {
+    async loadPeople(isCurrent = () => true) {
       let people = [];
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album/people` });
@@ -3528,11 +3699,21 @@ export default {
       } catch (error) {
         people = [];
       }
-      this.people = this.mergePeople([...people, ...(await this.loadSessionPeopleFallback())]);
+      if (!isCurrent()) {
+        return;
+      }
+      const fallbackPeople = await this.loadSessionPeopleFallback(isCurrent);
+      if (!isCurrent()) {
+        return;
+      }
+      this.people = this.mergePeople([...people, ...fallbackPeople]);
     },
-    async loadSessionPeopleFallback() {
+    async loadSessionPeopleFallback(isCurrent = () => true) {
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
+        if (!isCurrent()) {
+          return [];
+        }
         const session = dataOf(response) || {};
         this.applyAlbumSessionFallback(session);
         return this.sessionDetailPeople(session);
@@ -4785,11 +4966,236 @@ export default {
       this.selectedPhotoIds = [];
       this.topActionsFloating = false;
     },
-    openRecruitment() {
-      if (this.timelineMode || this.albumBusy || !this.sessionId) {
+    beginRecruitInviteRequest() {
+      const authorityRequest = this.recruitInviteAuthority.begin({
+        sessionId: this.sessionId,
+        userId: this.currentUserId,
+        mediaVersion: this.mediaLoadSerial
+      });
+      if (!authorityRequest) {
+        return null;
+      }
+      return {
+        authorityRequest,
+        sessionId: String(this.sessionId || ""),
+        userId: String(this.currentUserId || ""),
+        generation: this.recruitInviteGeneration
+      };
+    },
+    isCurrentRecruitInviteRequest(requestContext) {
+      return Boolean(
+        requestContext &&
+          !this.timelineMode &&
+          requestContext.sessionId === String(this.sessionId || "") &&
+          requestContext.userId === String(this.currentUserId || "") &&
+          requestContext.generation === this.recruitInviteGeneration &&
+          this.recruitInviteAuthority.isCurrent(requestContext.authorityRequest)
+      );
+    },
+    invalidateRecruitInviteShare() {
+      this.recruitInviteGeneration += 1;
+      this.recruitInviteToken = "";
+      this.recruitInvitePromise = null;
+      this.recruitInviteAuthority.invalidate();
+    },
+    prepareRecruitInvite() {
+      if (
+        this.timelineMode ||
+        !this.sessionId ||
+        !this.currentUserId
+      ) {
+        return Promise.resolve("");
+      }
+      const requestContext = this.beginRecruitInviteRequest();
+      if (!requestContext) {
+        return Promise.resolve("");
+      }
+      if (this.recruitInviteToken) {
+        return Promise.resolve(this.recruitInviteToken);
+      }
+      if (this.recruitInvitePromise) {
+        return this.recruitInvitePromise;
+      }
+
+      let requestPromise;
+      requestPromise = request({
+        url: `/api/sessions/${this.sessionId}/join-invite-token`,
+        method: "POST",
+        data: {}
+      })
+        .then((response) => {
+          if (!this.isCurrentRecruitInviteRequest(requestContext)) {
+            return "";
+          }
+          const token = typeof dataOf(response)?.token === "string"
+            ? dataOf(response).token.trim()
+            : "";
+          this.recruitInviteToken = token;
+          return token;
+        })
+        .catch(() => {
+          if (this.isCurrentRecruitInviteRequest(requestContext)) {
+            this.recruitInviteToken = "";
+          }
+          return "";
+        })
+        .finally(() => {
+          if (
+            this.isCurrentRecruitInviteRequest(requestContext) &&
+            this.recruitInvitePromise === requestPromise
+          ) {
+            this.recruitInvitePromise = null;
+          }
+        });
+      this.recruitInvitePromise = requestPromise;
+      return requestPromise;
+    },
+    beginDefaultAlbumShareRequest() {
+      const authorityRequest = this.defaultAlbumShareAuthority.begin({
+        sessionId: this.sessionId,
+        userId: this.currentUserId,
+        mediaVersion: this.mediaLoadSerial
+      });
+      if (!authorityRequest) return null;
+      return {
+        authorityRequest,
+        sessionId: String(this.sessionId || ""),
+        userId: String(this.currentUserId || ""),
+        generation: this.defaultAlbumShareGeneration
+      };
+    },
+    isCurrentDefaultAlbumShareRequest(requestContext) {
+      return Boolean(
+        requestContext &&
+          !this.timelineMode &&
+          requestContext.sessionId === String(this.sessionId || "") &&
+          requestContext.userId === String(this.currentUserId || "") &&
+          requestContext.generation === this.defaultAlbumShareGeneration &&
+          this.defaultAlbumShareAuthority.isCurrent(requestContext.authorityRequest)
+      );
+    },
+    clearDefaultAlbumShareState({ hideMenus = false } = {}) {
+      this.defaultAlbumShareToken = "";
+      this.defaultAlbumShareFriendCoverUrl = "";
+      this.defaultAlbumShareTimelineCoverUrl = "";
+      this.defaultAlbumShareFriendCoverPrepared = false;
+      this.defaultAlbumShareTimelineCoverPrepared = false;
+      this.defaultAlbumShareSubject = null;
+      this.defaultAlbumShareCounts = { total: 0, photos: 0, videos: 0 };
+      this.defaultAlbumSharePromise = null;
+      this.defaultAlbumShareKey = "";
+      this.defaultAlbumShareCoverContextKey = "";
+      if (hideMenus) this.showShareMenus();
+    },
+    invalidateDefaultAlbumShare({ hideMenus = false } = {}) {
+      this.defaultAlbumShareGeneration += 1;
+      this.defaultAlbumShareAuthority.invalidate();
+      this.defaultAlbumShareCoverRequestAuthority.invalidateCoverRequests();
+      this.clearDefaultAlbumShareState({ hideMenus });
+    },
+    primeAlbumShareEntries() {
+      if (this.timelineMode || !this.sessionId || !this.currentUserId) {
         return;
       }
-      uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}` });
+      this.prepareRecruitInvite();
+      if (this.shareSelectableMedia.length === 0) {
+        this.invalidateDefaultAlbumShare({ hideMenus: true });
+        return;
+      }
+      this.prepareDefaultAlbumShare();
+    },
+    prepareDefaultAlbumShare() {
+      if (
+        this.timelineMode ||
+        !this.sessionId ||
+        !this.currentUserId ||
+        this.shareSelectableMedia.length === 0
+      ) {
+        return Promise.resolve("");
+      }
+      const requestContext = this.beginDefaultAlbumShareRequest();
+      if (!requestContext) return Promise.resolve("");
+      const requestKey = requestContext.authorityRequest.key;
+      if (this.defaultAlbumShareKey === requestKey) {
+        if (this.defaultAlbumShareToken) return Promise.resolve(this.defaultAlbumShareToken);
+        if (this.defaultAlbumSharePromise) return this.defaultAlbumSharePromise;
+      }
+
+      this.clearDefaultAlbumShareState();
+      this.defaultAlbumShareGeneration += 1;
+      requestContext.generation = this.defaultAlbumShareGeneration;
+      this.defaultAlbumShareKey = requestKey;
+
+      let requestPromise;
+      requestPromise = request({
+        url: `/api/sessions/${this.sessionId}/album/share-token`,
+        method: "POST",
+        data: { scope: "all" }
+      })
+        .then(async (response) => {
+          if (!this.isCurrentDefaultAlbumShareRequest(requestContext)) return "";
+          const data = dataOf(response) || {};
+          const token = typeof data.token === "string" ? data.token.trim() : "";
+          if (!token) return "";
+          this.installDefaultAlbumShareSnapshot(data, token);
+          const title = this.defaultAlbumShareTitle();
+          const recipe = data.cover_recipe || null;
+          const contextKey = albumShareCoverContextKey({ token, recipe, title });
+          this.defaultAlbumShareCoverContextKey = contextKey;
+          const coverContext = this.beginAlbumShareCanvasCoverPreparation({
+            token,
+            data,
+            title,
+            requestAuthority: this.defaultAlbumShareCoverRequestAuthority,
+            isCurrent: () => (
+              this.isCurrentDefaultAlbumShareRequest(requestContext) &&
+              contextKey === this.defaultAlbumShareCoverContextKey
+            )
+          });
+          const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(recipe);
+          const coverTasks = startAlbumShareCoverPreparation({
+            response: coverContext.data,
+            prepare: (kind) => this.prepareAlbumShareCanvasCover({
+              kind,
+              token,
+              data: coverContext.data,
+              title,
+              localPreviewByMediaId,
+              canvasPreparation: coverContext.canvasPreparation,
+              isCurrent: () => this.isCurrentAlbumShareCanvasCoverPreparation(coverContext)
+            }),
+            isCurrent: () => this.isCurrentAlbumShareCanvasCoverPreparation(coverContext),
+            onPrepared: (kind, imageUrl) => {
+              this.applyDefaultAlbumShareCover(kind, imageUrl);
+              this.showShareMenus();
+            }
+          });
+          await Promise.all(coverTasks);
+          return token;
+        })
+        .catch(() => {
+          if (this.isCurrentDefaultAlbumShareRequest(requestContext)) {
+            this.clearDefaultAlbumShareState({ hideMenus: true });
+          }
+          return "";
+        })
+        .finally(() => {
+          if (
+            this.isCurrentDefaultAlbumShareRequest(requestContext) &&
+            this.defaultAlbumSharePromise === requestPromise
+          ) {
+            this.defaultAlbumSharePromise = null;
+          }
+        });
+      this.defaultAlbumSharePromise = requestPromise;
+      return requestPromise;
+    },
+    handleRecruitShareTap() {
+      if (this.timelineMode || !this.sessionId || this.recruitInviteToken) {
+        return;
+      }
+      this.prepareRecruitInvite();
+      showToast({ title: "正在准备招募分享，请稍后再点", icon: "none" });
     },
     toggleSelectionMode() {
       if (this.timelineMode || this.albumBusy) {
@@ -4890,10 +5296,21 @@ export default {
         this.showShareMenus();
         const localPreviewByMediaId = this.albumShareLocalPreviewByRecipe(data.cover_recipe);
         const title = this.activeAlbumShareTitle();
+        const contextKey = albumShareCoverContextKey({
+          token,
+          recipe: data.cover_recipe,
+          title
+        });
+        this.activeAlbumShareCoverContextKey = contextKey;
         const coverContext = this.beginAlbumShareCanvasCoverPreparation({
           token,
           data,
-          title
+          title,
+          requestAuthority: this.activeAlbumShareCoverRequestAuthority,
+          isCurrent: () => (
+            this.isCurrentAlbumShareSnapshotRequest(shareRequest) &&
+            contextKey === this.activeAlbumShareCoverContextKey
+          )
         });
         const coverTasks = startAlbumShareCoverPreparation({
           response: coverContext.data,
@@ -4904,7 +5321,7 @@ export default {
             localPreviewByMediaId,
             title,
             canvasPreparation: coverContext.canvasPreparation,
-            canvasRequest: coverContext.canvasRequest
+            isCurrent: () => this.isCurrentAlbumShareCanvasCoverPreparation(coverContext)
           }),
           isCurrent: () => (
             this.isCurrentAlbumShareSnapshotRequest(shareRequest) &&
@@ -5185,7 +5602,7 @@ export default {
 
 .album-primary-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 180rpx;
+  grid-template-columns: minmax(0, 1fr) 78rpx;
   gap: 12rpx;
 }
 
@@ -5227,14 +5644,17 @@ export default {
 }
 
 .album-privacy-action {
-  padding: 0 18rpx;
+  width: 78rpx;
+  min-width: 78rpx;
+  height: 78rpx;
+  padding: 0;
 }
 
 .album-privacy-button-content {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10rpx;
+  gap: 0;
   width: 100%;
   min-width: 0;
 }
@@ -5309,7 +5729,7 @@ export default {
 }
 
 .album-tag-command {
-  grid-column: 3;
+  grid-column: 4;
   border-color: #1f6f5b;
   background: #1f6f5b;
   color: #ffffff;
