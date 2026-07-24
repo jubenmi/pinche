@@ -6,7 +6,8 @@ import {
   fixedClaimImageFailures,
   invitePreparationContractFailures,
   jpegDimensions,
-  pagesUseSkylineRenderer
+  pagesUseSkylineRenderer,
+  skylineFileFailures
 } from "./d56-unified-session-share-check.js";
 
 function jpegFixture({ width, height, marker = 0xc0 }) {
@@ -157,6 +158,14 @@ test("fixed image guard rejects non-JPEG bytes and the wrong aspect ratio", () =
   );
 });
 
+test("fixed image guard rejects a same-ratio dimension mutation away from 560x448", () => {
+  const mutatedSameRatioImage = jpegFixture({ width: 1120, height: 896 });
+  assert.match(
+    fixedClaimImageFailures(mutatedSameRatioImage).join("\n"),
+    /560x448/
+  );
+});
+
 test("Skyline guard accepts disabled flags and unrelated text", () => {
   assert.equal(
     pagesUseSkylineRenderer({
@@ -222,6 +231,84 @@ test("Skyline guard rejects skylineRenderEnable true anywhere", () => {
       }
     }),
     true
+  );
+});
+
+test("project-wide Skyline guard accepts disabled flags and unrelated source strings", () => {
+  assert.deepEqual(
+    skylineFileFailures([
+      {
+        path: "apps/miniprogram/src/pages.json",
+        source: JSON.stringify({
+          globalStyle: { renderer: "webview" },
+          pages: [{ path: "pages/session/share" }]
+        })
+      },
+      {
+        path: "apps/miniprogram/project.config.json",
+        source: JSON.stringify({
+          setting: {
+            skylineRenderEnable: false,
+            note: "Skyline remains disabled"
+          }
+        })
+      },
+      {
+        path: "apps/miniprogram/src/pages/session/share.vue",
+        source: `<text>Skyline is unrelated prose, not a renderer selection.</text>`
+      }
+    ]),
+    []
+  );
+});
+
+test("project-wide Skyline guard catches renderer mutations in JSON and source config", () => {
+  const baselineFiles = [
+    {
+      path: "apps/miniprogram/src/pages.json",
+      source: `{"globalStyle":{"renderer":"webview"}}`
+    },
+    {
+      path: "apps/miniprogram/vite.config.js",
+      source: `export default { renderer: "webview", skylineRenderEnable: false }`
+    }
+  ];
+  assert.deepEqual(skylineFileFailures(baselineFiles), []);
+
+  const jsonRendererMutation = baselineFiles.map((file) => ({
+    ...file,
+    source:
+      file.path.endsWith("pages.json")
+        ? file.source.replace('"webview"', '"skyline"')
+        : file.source
+  }));
+  assert.match(
+    skylineFileFailures(jsonRendererMutation).join("\n"),
+    /pages\.json/
+  );
+
+  const sourceRendererMutation = baselineFiles.map((file) => ({
+    ...file,
+    source:
+      file.path.endsWith("vite.config.js")
+        ? file.source.replace('renderer: "webview"', 'renderer: "skyline"')
+        : file.source
+  }));
+  assert.match(
+    skylineFileFailures(sourceRendererMutation).join("\n"),
+    /vite\.config\.js/
+  );
+
+  const sourceFlagMutation = baselineFiles.map((file) => ({
+    ...file,
+    source:
+      file.path.endsWith("vite.config.js")
+        ? file.source.replace("skylineRenderEnable: false", "skylineRenderEnable: true")
+        : file.source
+  }));
+  assert.match(
+    skylineFileFailures(sourceFlagMutation).join("\n"),
+    /vite\.config\.js/
   );
 });
 

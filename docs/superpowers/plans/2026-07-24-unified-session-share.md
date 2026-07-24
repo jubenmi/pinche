@@ -741,3 +741,52 @@ git log --oneline -6
 ```
 
 Expected: no whitespace errors; only intentional feature files and the user’s pre-existing unrelated changes remain.
+
+### Task 7: Final-review hardening
+
+**Files:**
+
+- Modify: `apps/api/src/modules/core/service.js`
+- Modify: `apps/api/test/session-share-lifecycle.test.mjs`
+- Modify: `apps/miniprogram/src/pages/session/share.vue`
+- Create: `apps/miniprogram/test/sessionSharePage.test.mjs`
+- Modify: `scripts/d56-unified-session-share-check.js`
+- Modify: `scripts/d56-unified-session-share-check.test.mjs`
+- Modify: `package.json`
+
+- [x] **Step 1: Refresh the authoritative lifecycle on show and at the start boundary**
+
+  Add a behavioral regression that loads `has_started=false`, hides sharing during a later
+  refresh, and only emits a claim-mode payload after a fresh `has_started=true` response and
+  token-ready state. Reuse the page's request-promise guards so concurrent lifecycle hooks do
+  not race or duplicate requests.
+
+- [x] **Step 2: Respect public NPC occupancy flags**
+
+  Add a public invite-preview regression for stripped NPC identity fields with `is_bound` or
+  `has_pending_signup`, then include those flags in the existing taken-state calculation without
+  exposing private identity data.
+
+- [x] **Step 3: Fail the top-right share menu closed**
+
+  Cover load failure, token failure, invite-preview readiness, and later successful preparation.
+  Hide both share menus whenever `shareReady` is false, and reevaluate menu visibility after
+  loads, token attempts, lifecycle refreshes, and retries.
+
+- [x] **Step 4: Block cancelled-session invitation tokens**
+
+  Add an API regression that rejects token authorization for a cancelled session and a page
+  regression for the permanent `车局已取消，无法分享` state. Do not show the generic retryable
+  preparation error or mint a token for that state.
+
+- [x] **Step 5: Harden fixed-image and project-wide WebView guards**
+
+  Mutate a valid-sized JPEG fixture to another 5:4 size and require exact `560x448`. Mutate
+  relevant miniprogram JSON/source/config fixtures to enable Skyline and require the project-wide
+  guard to catch them while accepting disabled flags and unrelated prose.
+
+- [x] **Step 6: Verify and commit**
+
+  Run focused D56 tests/checks, adjacent privacy/login/claim checks, the miniprogram build, and
+  the full relevant repository verification. Confirm that no generated build output or Developer
+  Tools configuration mutation is included before committing.

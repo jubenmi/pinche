@@ -8,15 +8,11 @@ const helperPath = path.join(root, "apps/miniprogram/src/utils/sessionShare.js")
 const sharePath = path.join(root, "apps/miniprogram/src/pages/session/share.vue");
 const albumPath = path.join(root, "apps/miniprogram/src/pages/session/album.vue");
 const pagesPath = path.join(root, "apps/miniprogram/src/pages.json");
+const miniprogramRoot = path.join(root, "apps/miniprogram");
 const fixedImagePath = path.join(
   root,
   "apps/miniprogram/src/static/art/photo-claim-share.jpg"
 );
-const privateConfigPaths = [
-  path.join(root, "apps/miniprogram/project.private.config.json"),
-  path.join(root, "apps/miniprogram/src/project.private.config.json")
-];
-
 const failures = [];
 
 function blockBodyAfterPattern(source, pattern) {
@@ -164,6 +160,10 @@ export function fixedClaimImageFailures(buffer, maxBytes = 200 * 1024) {
     imageFailures.push(
       `fixed claim share image must keep a 5:4 ratio, found ${dimensions.width}x${dimensions.height}`
     );
+  } else if (dimensions.width !== 560 || dimensions.height !== 448) {
+    imageFailures.push(
+      `fixed claim share image must be exactly 560x448, found ${dimensions.width}x${dimensions.height}`
+    );
   }
   return imageFailures;
 }
@@ -188,6 +188,56 @@ export function pagesUseSkylineRenderer(pagesJson) {
     }
     return pagesUseSkylineRenderer(value);
   });
+}
+
+export function sourceUsesSkylineRenderer(source = "") {
+  return (
+    /(?:^|[,{;\s])renderer\s*[:=]\s*["'`]skyline["'`]/im.test(source) ||
+    /(?:^|[,{;\s])skylineRenderEnable\s*[:=]\s*true\b/im.test(source)
+  );
+}
+
+export function skylineFileFailures(files = []) {
+  const skylineFailures = [];
+  for (const file of files) {
+    const filePath = String(file?.path || "");
+    const source = String(file?.source || "");
+    if (path.extname(filePath).toLowerCase() === ".json") {
+      try {
+        if (pagesUseSkylineRenderer(JSON.parse(source))) {
+          skylineFailures.push(`${filePath} must not enable the Skyline renderer`);
+        }
+      } catch {
+        skylineFailures.push(`${filePath} must contain valid JSON`);
+      }
+      continue;
+    }
+    if (sourceUsesSkylineRenderer(source)) {
+      skylineFailures.push(`${filePath} must not enable the Skyline renderer`);
+    }
+  }
+  return skylineFailures;
+}
+
+function relevantMiniprogramFiles(directory = miniprogramRoot) {
+  const ignoredDirectories = new Set(["node_modules", "dist", "unpackage", "test"]);
+  const relevantExtensions = new Set([".json", ".js", ".mjs", ".cjs", ".ts", ".vue"]);
+  const files = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name.startsWith(".") && entry.isDirectory()) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      if (!ignoredDirectories.has(entry.name)) {
+        files.push(...relevantMiniprogramFiles(path.join(directory, entry.name)));
+      }
+      continue;
+    }
+    if (entry.isFile() && relevantExtensions.has(path.extname(entry.name).toLowerCase())) {
+      files.push(path.join(directory, entry.name));
+    }
+  }
+  return files.sort();
 }
 
 function fail(message) {
@@ -290,8 +340,7 @@ if (
 for (const forbiddenPattern of [
   [/\bcanvas\b|createCanvasContext|canvasToTempFilePath/i, "Canvas"],
   [/\bsnapshot\s*\(|takeSnapshot|screen(?:shot|capture)/i, "snapshot"],
-  [/\bposter\b|generatePoster|createPoster/i, "poster"],
-  [/\bskyline\b/i, "Skyline"]
+  [/\bposter\b|generatePoster|createPoster/i, "poster"]
 ]) {
   if (forbiddenPattern[0].test(shareSource)) {
     fail(`Unified share page must not use ${forbiddenPattern[1]}`);
@@ -358,20 +407,12 @@ if (pagesUseSkylineRenderer(pagesJson)) {
   fail("pages.json must not select the Skyline renderer or enable Skyline rendering");
 }
 
-for (const configPath of privateConfigPaths) {
-  if (!fs.existsSync(configPath)) {
-    continue;
-  }
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    if (pagesUseSkylineRenderer(config)) {
-      fail(
-        `${path.relative(root, configPath)} must not select Skyline or enable skylineRenderEnable`
-      );
-    }
-  } catch {
-    fail(`${path.relative(root, configPath)} must contain valid JSON`);
-  }
+const skylineFiles = relevantMiniprogramFiles().map((filePath) => ({
+  path: path.relative(root, filePath),
+  source: fs.readFileSync(filePath, "utf8")
+}));
+for (const skylineFailure of skylineFileFailures(skylineFiles)) {
+  fail(skylineFailure);
 }
 
 if (!fs.existsSync(fixedImagePath)) {

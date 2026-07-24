@@ -4254,6 +4254,13 @@ export async function getSessionForViewer(id, options = {}) {
   });
 }
 
+export function assertSessionJoinInviteTokenAllowed(session = {}) {
+  if (String(session.status || "") === "cancelled") {
+    throw conflict("Cancelled sessions cannot create join invitation tokens");
+  }
+  return session;
+}
+
 export async function assertSessionJoinInviteAllowed(user, sessionId) {
   const id = positiveId(sessionId, "sessionId");
   return withDatabaseConnection(async (connection) => {
@@ -4264,6 +4271,7 @@ export async function assertSessionJoinInviteAllowed(user, sessionId) {
     if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
       throw forbidden("Only session members can share a join invitation");
     }
+    assertSessionJoinInviteTokenAllowed(session);
     return { session_id: id };
   });
 }

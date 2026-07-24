@@ -54,7 +54,7 @@
     "d53:unit": "node --test apps/api/test/album-share-selection.test.mjs apps/api/test/request-body-limits.test.mjs",
     "d53:check": "node scripts/d53-album-four-action-selection-check.js",
     "d53:smoke": "node scripts/d53-album-four-action-selection-smoke.js",
-    "unified-share:unit": "node --test apps/api/test/session-share-lifecycle.test.mjs apps/miniprogram/test/sessionShare.test.mjs scripts/d56-unified-session-share-check.test.mjs",
+    "unified-share:unit": "node --test apps/api/test/session-share-lifecycle.test.mjs apps/miniprogram/test/sessionShare.test.mjs apps/miniprogram/test/sessionSharePage.test.mjs scripts/d56-unified-session-share-check.test.mjs",
     "unified-share:check": "node scripts/d56-unified-session-share-check.js",
     "d8:qa": "node scripts/d8-qa-check.js",
     "d9:release-check": "node scripts/d9-release-check.js",

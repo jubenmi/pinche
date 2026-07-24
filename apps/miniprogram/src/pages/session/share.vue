@@ -57,7 +57,11 @@
       />
     </view>
 
-    <view v-if="sessionLoadError" class="session-load-error">
+    <view v-if="shareUnavailableText" class="session-load-error">
+      <text class="session-load-error-text">{{ shareUnavailableText }}</text>
+    </view>
+
+    <view v-else-if="sessionLoadError" class="session-load-error">
       <text class="session-load-error-text">{{ sessionLoadError }}</text>
       <button
         class="session-load-retry"
@@ -152,6 +156,9 @@ import {
 } from "../../utils/subscribeMessages";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
 
+const MAX_START_BOUNDARY_TIMER_MS = 2_147_000_000;
+const POST_BOUNDARY_RETRY_MS = 1_000;
+
 export default {
   components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost },
   data() {
@@ -171,6 +178,9 @@ export default {
       sessionLoaded: false,
       sessionLoadSerial: 0,
       sessionLoadPromise: null,
+      shareRefreshPromise: null,
+      startBoundaryTimer: null,
+      startBoundaryRefreshPending: false,
       invitePreparing: false,
       invitePrepareError: false,
       navigatingAlbum: false,
@@ -199,6 +209,18 @@ export default {
     shareButtonText() {
       return this.sharePresentation.buttonText;
     },
+    shareUnavailableText() {
+      return this.sessionLoaded && this.session.status === "cancelled"
+        ? "车局已取消，无法分享"
+        : "";
+    },
+    shareLifecycleFresh() {
+      if (!this.sessionId || !this.sessionLoaded || this.session.has_started !== false) {
+        return true;
+      }
+      const startAtMs = Date.parse(this.session.start_at);
+      return Number.isFinite(startAtMs) && startAtMs > Date.now();
+    },
     shareReady() {
       if (!this.sessionId) {
         return !this.sessionLoadError;
@@ -208,6 +230,8 @@ export default {
         this.sessionLoaded &&
         String(this.session.id || "") === String(this.sessionId) &&
         this.inviteToken &&
+        this.shareLifecycleFresh &&
+        !this.shareUnavailableText &&
         !this.sessionLoadError
       );
     },
@@ -220,6 +244,7 @@ export default {
         !this.inviteToken &&
         !this.invitePreparing &&
         this.invitePrepareError &&
+        !this.shareUnavailableText &&
         !this.sessionLoadError
       );
     },
@@ -380,7 +405,9 @@ export default {
           const duplicateCurrentUserPendingNpcRole = pendingByCurrentUser && !pendingMine;
           const effectiveBoundUserId = duplicateCurrentUserNpcRole ? 0 : boundUserId;
           const effectivePendingUserId = duplicateCurrentUserPendingNpcRole ? 0 : pendingUserId;
-          const taken = effectiveBoundUserId > 0 || effectivePendingUserId > 0;
+          const taken = effectiveBoundUserId > 0 || effectivePendingUserId > 0 ||
+            Boolean(role.is_bound) ||
+            Boolean(role.has_pending_signup);
           const displayRole =
             duplicateCurrentUserNpcRole || duplicateCurrentUserPendingNpcRole
               ? {
@@ -462,7 +489,7 @@ export default {
     this.sessionId = options.id || fromQuery.sessionId || stored.sessionId || "";
     this.inviteToken = options.inviteToken || "";
     if (this.sessionId) {
-      await this.loadPublishedSession(this.sessionId);
+      await this.refreshPublishedShareState();
       if (options.seatId) {
         const seatRole = this.roleOptions.find(
           (role) => Number(role.seatId || role.id) === Number(options.seatId)
@@ -475,8 +502,6 @@ export default {
             : `你已选择 ${this.role.name}，确认后会释放原角色。`;
         }
       }
-      await this.prepareJoinInviteToken();
-      this.showShareMenus();
       return;
     }
     const sameScript =
@@ -517,7 +542,20 @@ export default {
     writeCreateFlow(flow);
     this.showShareMenus();
   },
+  onShow() {
+    if (!this.sessionId) {
+      this.showShareMenus();
+      return;
+    }
+    return this.refreshPublishedShareState();
+  },
+  onHide() {
+    this.startBoundaryRefreshPending = false;
+    this.clearStartBoundaryRefresh();
+  },
   onUnload() {
+    this.startBoundaryRefreshPending = false;
+    this.clearStartBoundaryRefresh();
     this.unbindAuthChangeListener();
   },
   onShareAppMessage() {
@@ -633,6 +671,88 @@ export default {
       this.pendingRole = null;
       this.confirmedCrossCastRoleKey = "";
     },
+    hideShareMenus() {
+      if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
+        uni.hideShareMenu({
+          menus: ["shareAppMessage", "shareTimeline"]
+        });
+      }
+    },
+    clearStartBoundaryRefresh() {
+      if (this.startBoundaryTimer !== null) {
+        clearTimeout(this.startBoundaryTimer);
+        this.startBoundaryTimer = null;
+      }
+    },
+    scheduleStartBoundaryRefresh() {
+      this.clearStartBoundaryRefresh();
+      if (this.shareUnavailableText || this.session.has_started !== false) {
+        return;
+      }
+      const startAtMs = Date.parse(this.session.start_at);
+      if (!Number.isFinite(startAtMs)) {
+        return;
+      }
+      const remainingMs = startAtMs - Date.now();
+      const delay =
+        remainingMs <= 0
+          ? POST_BOUNDARY_RETRY_MS
+          : Math.min(remainingMs, MAX_START_BOUNDARY_TIMER_MS);
+      this.startBoundaryTimer = setTimeout(() => {
+        this.startBoundaryTimer = null;
+        const currentStartAtMs = Date.parse(this.session.start_at);
+        if (
+          !this.shareUnavailableText &&
+          this.session.has_started === false &&
+          Number.isFinite(currentStartAtMs) &&
+          currentStartAtMs <= Date.now()
+        ) {
+          return this.handleStartBoundaryRefresh();
+        }
+        return this.scheduleStartBoundaryRefresh();
+      }, delay);
+    },
+    handleStartBoundaryRefresh() {
+      this.startBoundaryRefreshPending = true;
+      this.showShareMenus();
+      if (this.shareRefreshPromise) {
+        return this.shareRefreshPromise;
+      }
+      this.startBoundaryRefreshPending = false;
+      return this.refreshPublishedShareState();
+    },
+    refreshPublishedShareState() {
+      if (!this.sessionId) {
+        this.showShareMenus();
+        return Promise.resolve(false);
+      }
+      if (this.shareRefreshPromise) {
+        return this.shareRefreshPromise;
+      }
+      const refreshPromise = this.performPublishedShareStateRefresh();
+      this.shareRefreshPromise = refreshPromise;
+      const finishRefresh = () => {
+        if (this.shareRefreshPromise === refreshPromise) {
+          this.shareRefreshPromise = null;
+        }
+        if (this.startBoundaryRefreshPending) {
+          this.startBoundaryRefreshPending = false;
+          this.refreshPublishedShareState();
+        }
+      };
+      void refreshPromise.then(finishRefresh, finishRefresh);
+      return refreshPromise;
+    },
+    async performPublishedShareStateRefresh() {
+      this.clearStartBoundaryRefresh();
+      this.hideShareMenus();
+      const loaded = await this.loadPublishedSession(this.sessionId);
+      if (loaded) {
+        this.scheduleStartBoundaryRefresh();
+        await this.prepareJoinInviteToken();
+      }
+      return Boolean(this.shareReady);
+    },
     roleOccupantAvatarUrl(role) {
       const auth = getCurrentUser();
       const currentUserSelected =
@@ -718,6 +838,7 @@ export default {
       this.sessionLoaded = false;
       this.sessionLoadError = "";
       this.statusText = "";
+      this.showShareMenus();
       const loadPromise = this.performPublishedSessionLoad(sessionId, serial);
       this.sessionLoadPromise = loadPromise;
       return loadPromise;
@@ -781,7 +902,9 @@ export default {
           note: this.note
         });
         this.updateNavigationBarTitle();
-        if (!this.role && !this.currentUserNpcRole && !this.statusText) {
+        if (session.status === "cancelled") {
+          this.statusText = "车局已取消，无法分享";
+        } else if (!this.role && !this.currentUserNpcRole && !this.statusText) {
           this.statusText =
             this.isClaimMode
               ? "请选择自己玩过的角色完成认领。"
@@ -803,6 +926,7 @@ export default {
         if (serial === this.sessionLoadSerial) {
           this.sessionLoading = false;
           this.sessionLoadPromise = null;
+          this.showShareMenus();
         }
       }
     },
@@ -814,7 +938,9 @@ export default {
         this.sessionLoading ||
         !this.sessionLoaded ||
         String(this.session.id || "") !== String(this.sessionId) ||
-        this.session.access_scope !== "member"
+        this.session.access_scope !== "member" ||
+        !this.shareLifecycleFresh ||
+        this.shareUnavailableText
       ) {
         return;
       }
@@ -833,10 +959,21 @@ export default {
         }
       } catch (error) {
         this.inviteToken = "";
-        this.invitePrepareError = true;
-        this.statusText = "分享准备失败，请重试。";
+        if (error?.statusCode === 409) {
+          this.invitePrepareError = false;
+          this.session = {
+            ...this.session,
+            status: "cancelled"
+          };
+          this.statusText = "车局已取消，无法分享";
+          this.clearStartBoundaryRefresh();
+        } else {
+          this.invitePrepareError = true;
+          this.statusText = "分享准备失败，请重试。";
+        }
       } finally {
         this.invitePreparing = false;
+        this.showShareMenus();
       }
     },
     async retryPrepareInvite() {
@@ -855,10 +992,7 @@ export default {
       if (!this.sessionId || this.sessionLoading) {
         return;
       }
-      const loaded = await this.loadPublishedSession(this.sessionId);
-      if (loaded) {
-        await this.prepareJoinInviteToken();
-      }
+      await this.refreshPublishedShareState();
     },
     updateNavigationBarTitle() {
       if (typeof uni !== "undefined" && typeof uni.setNavigationBarTitle === "function") {
@@ -1309,6 +1443,10 @@ export default {
       }
     },
     showShareMenus() {
+      if (!this.shareReady) {
+        this.hideShareMenus();
+        return;
+      }
       const showFriendShareMenu = () => {
         showWechatShareMenus({
           withShareTicket: true,
