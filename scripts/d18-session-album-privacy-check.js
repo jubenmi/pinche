@@ -265,7 +265,7 @@ assert(
   "album title fallback must infer role names from the current user's own seat-tagged photos"
 );
 assert(
-  /loadSessionPeopleFallback\(\)[\s\S]{0,600}this\.applyAlbumSessionFallback\(session\)/.test(albumPage),
+  /loadSessionPeopleFallback\([^)]*\)[\s\S]{0,600}this\.applyAlbumSessionFallback\(session\)/.test(albumPage),
   "album page must fall back to session detail metadata when album API lacks script name"
 );
 assert(

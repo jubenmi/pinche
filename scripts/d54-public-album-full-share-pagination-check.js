@@ -84,8 +84,8 @@ assert(
 );
 assert(
   packageJson.scripts.postcheck ===
-    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check",
-  "D54 checks must run before the D55 checks in the root check lifecycle"
+    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check",
+  "D54 checks must run before D55 and D56 checks in the root check lifecycle"
 );
 
 console.log("D54 public album full-share pagination checks passed");

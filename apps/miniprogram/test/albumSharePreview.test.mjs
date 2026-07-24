@@ -20,7 +20,7 @@ test("member page exposes the four compact actions and removes the preview step"
     ["openShareSelectionMode", "分享", "album-share.svg"],
     ["openDownloadSelectionMode", "下载", "album-download.svg"],
     ["openTagSelectionMode", "标注", "album-tag-white.svg"],
-    ["openRecruitment", "招募", "album-recruit.svg"]
+    ["handleRecruitShareTap", "招募", "album-recruit.svg"]
   ]) {
     assert.match(albumPageSource, new RegExp(`@tap="${handler}"`));
     assert.match(albumPageSource, new RegExp(`>${label}<`));
@@ -156,10 +156,10 @@ test("public timeline sharing prepares local Canvas covers from the current toke
 
 test("Canvas currentness follows share lifecycle and stale temp paths are disposed", () => {
   const clearActiveBlock = sourceBlock(
-    "clearActiveAlbumShareState({",
+    "clearActiveAlbumShareState({ hideMenus = true, invalidateRequest = true } = {}) {",
     "closeAlbumShareReady() {"
   );
-  assert.match(clearActiveBlock, /disposeAlbumShareCanvasPreparation\(\)/);
+  assert.doesNotMatch(clearActiveBlock, /disposeAlbumShareCanvasPreparation\(\)/);
 
   const onHideBlock = sourceBlock("onHide() {", "onUnload() {");
   const onUnloadBlock = sourceBlock("onUnload() {", "onPageScroll(event) {");
@@ -186,16 +186,18 @@ test("native share CTA appears only after the active snapshot is ready", () => {
     "onShareAppMessage(options) {",
     "onShareTimeline() {"
   );
-  assert.match(shareAppMessageBlock, /dataset\?\.albumShare === "active"/);
+  assert.match(shareAppMessageBlock, /intent\.kind === ALBUM_SHARE_INTENT\.ACTIVE/);
   assert.match(shareAppMessageBlock, /activeAlbumSharePayload\(\)/);
 
   const shareMenuBlock = sourceBlock(
     "showShareMenus() {",
     "async prepareShareCoverUrl"
   );
-  assert.match(shareMenuBlock, /this\.timelineMode\s*\?\s*this\.albumShareToken\s*:\s*this\.activeAlbumShareToken/);
-  assert.match(shareMenuBlock, /this\.shareFriendCoverPrepared\s*:\s*this\.activeAlbumShareFriendCoverPrepared/);
-  assert.match(shareMenuBlock, /this\.shareTimelineCoverPrepared\s*:\s*this\.activeAlbumShareTimelineCoverPrepared/);
+  assert.match(shareMenuBlock, /memberDefaultAlbumShareState\(\{/);
+  assert.match(shareMenuBlock, /defaultAlbumShareToken:\s*this\.defaultAlbumShareToken/);
+  assert.match(shareMenuBlock, /:\s*memberDefaultState\.token/);
+  assert.match(shareMenuBlock, /:\s*memberDefaultState\.friendReady/);
+  assert.match(shareMenuBlock, /:\s*memberDefaultState\.timelineReady/);
 });
 
 test("public album initial load is not invalidated by the first onShow refresh", () => {
