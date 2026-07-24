@@ -213,7 +213,7 @@ test("public shared albums keep cursor pagination, retry state, and bottom loadi
 test("single-image sharing explicitly allows an owned untagged image and explains exposure", () => {
   const singleShareBlock = sourceBlock(
     "async prepareSingleMediaShare(photo",
-    "handleSingleMediaShareStatusTap"
+    "showFullPublicAlbum() {"
   );
   assert.match(singleShareBlock, /includeOwnedUntaggedImages: true/);
   assert.match(albumPageSource, /未标注，仅在你主动分享后公开/);
