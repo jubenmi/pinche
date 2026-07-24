@@ -4074,6 +4074,12 @@ export async function createSession(user, body) {
   return withTransaction((connection) => createSessionWithConnection(connection, user, body));
 }
 
+export function sessionHasStarted(session = {}, nowMs = Date.now()) {
+  const startAtMs = new Date(session?.start_at || "").getTime();
+  const normalizedNowMs = Number(nowMs);
+  return Number.isFinite(startAtMs) && Number.isFinite(normalizedNowMs) && startAtMs <= normalizedNowMs;
+}
+
 function publicSessionAvailable(session) {
   const startAt = new Date(session.start_at).getTime();
   return (
@@ -4150,6 +4156,7 @@ async function memberSessionDetail(connection, session) {
     store_latitude: storeLocation?.latitude ?? null,
     store_longitude: storeLocation?.longitude ?? null,
     join_policy: safeSession.join_policy || "review_required",
+    has_started: sessionHasStarted(safeSession),
     join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
     npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
     active_album_photo_count: activeAlbumPhotoCount,
@@ -4190,6 +4197,7 @@ async function publicSessionPreview(connection, session, accessScope = "public_p
     store_latitude: storeLocation?.latitude ?? null,
     store_longitude: storeLocation?.longitude ?? null,
     join_policy: safeSession.join_policy || "review_required",
+    has_started: sessionHasStarted(safeSession),
     join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
     npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
     seats: seats.map(publicSeatResponse),
