@@ -6,7 +6,6 @@ import {
   ALBUM_SHARE_INTENT,
   albumShareAppMessageIntent,
   createAlbumShareEntryAuthority,
-  createAlbumShareEntryCoordinator,
   memberDefaultAlbumShareMediaFingerprint,
   memberDefaultAlbumShareState,
   recruitmentSharePayload
@@ -113,63 +112,6 @@ test("album share entry authority fails closed for invalid identity without disp
   assert.equal(invalid, null);
   assert.equal(authority.isCurrent(invalid), false);
   assert.equal(authority.isCurrent(valid), true);
-});
-
-test("album share entry coordinator runs renderer jobs strictly in order", async () => {
-  const coordinator = createAlbumShareEntryCoordinator();
-  const order = [];
-  let releaseFirst;
-  const firstGate = new Promise((resolve) => {
-    releaseFirst = resolve;
-  });
-
-  const first = coordinator.enqueue(async () => {
-    order.push("startA");
-    await firstGate;
-    order.push("endA");
-  });
-  const second = coordinator.enqueue(async () => {
-    order.push("startB");
-    order.push("endB");
-  });
-
-  await Promise.resolve();
-  assert.deepEqual(order, ["startA"]);
-  releaseFirst();
-  await Promise.all([first, second]);
-
-  assert.deepEqual(order, ["startA", "endA", "startB", "endB"]);
-});
-
-test("album share entry coordinator invalidates a running job and skips stale queued renderers", async () => {
-  const coordinator = createAlbumShareEntryCoordinator();
-  const order = [];
-  let releaseFirst;
-  let isFirstCurrent;
-  const firstGate = new Promise((resolve) => {
-    releaseFirst = resolve;
-  });
-
-  const first = coordinator.enqueue(async ({ isCurrent }) => {
-    isFirstCurrent = isCurrent;
-    order.push("startA");
-    await firstGate;
-    order.push("endA");
-  });
-  const second = coordinator.enqueue(async () => {
-    order.push("startB");
-    order.push("endB");
-  });
-
-  await Promise.resolve();
-  assert.equal(isFirstCurrent(), true);
-  coordinator.invalidate();
-  assert.equal(isFirstCurrent(), false);
-  releaseFirst();
-  await Promise.all([first, second]);
-  await coordinator.whenIdle();
-
-  assert.deepEqual(order, ["startA", "endA"]);
 });
 
 function sourceBlock(source, startMarker, endMarker) {
@@ -300,7 +242,7 @@ test("recruit share titles include script, store, and Beijing-formatted start ti
   const sessionTitle = sourceBlock(
     source,
     "albumShareSessionTitle() {",
-    "albumFriendShareImage() {"
+    "defaultAlbumShareSubjectLabel() {"
   );
   const appMessage = sourceBlock(source, "onShareAppMessage(options) {", "watch: {");
   const recruitBranch = sourceBlock(
@@ -339,9 +281,7 @@ test("member default all-photo sharing has its own silent state, authority, and 
 
   for (const field of [
     "defaultAlbumShareToken",
-    "defaultAlbumShareFriendCoverUrl",
     "defaultAlbumShareTimelineCoverUrl",
-    "defaultAlbumShareFriendCoverPrepared",
     "defaultAlbumShareTimelineCoverPrepared",
     "defaultAlbumShareSubject",
     "defaultAlbumShareCounts",
@@ -362,9 +302,16 @@ test("member default all-photo sharing has its own silent state, authority, and 
   assert.match(prepareDefault, /data:\s*\{\s*scope:\s*"all"\s*\}/);
   assert.match(source, /this\.defaultAlbumShareAuthority\.begin\(/);
   assert.doesNotMatch(prepareDefault, /albumBusy|statusText|albumSharePreparing|albumShareReadyVisible/);
+  assert.match(
+    prepareDefault,
+    /this\.installDefaultAlbumShareSnapshot\(data, token\)[\s\S]*this\.showShareMenus\(\)/
+  );
+  assert.match(prepareDefault, /this\.selectAlbumShareTimelineImage\(data\)/);
+  assert.match(prepareDefault, /this\.applyDefaultAlbumShareTimelineImage\(/);
+  assert.doesNotMatch(prepareDefault, /Canvas|startAlbumShareCoverPreparation/);
 });
 
-test("member menu payloads read only the default all-photo snapshot while active remains button-only", async () => {
+test("member menu payloads isolate active and default full-album snapshots", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
@@ -382,23 +329,42 @@ test("member menu payloads read only the default all-photo snapshot while active
     "if (intent.kind === ALBUM_SHARE_INTENT.DEFAULT_ALL)",
     "if (intent.kind === ALBUM_SHARE_INTENT.PUBLIC)"
   );
+  const publicBranch = sourceBlock(
+    appMessage,
+    "if (intent.kind === ALBUM_SHARE_INTENT.PUBLIC)",
+    "\n    return singleMediaShareFailClosedPayload();\n  },"
+  );
+  const defaultPayload = sourceBlock(
+    source,
+    "defaultAlbumSharePayload() {",
+    "defaultAlbumShareTimelinePayload() {"
+  );
+  const activePayload = sourceBlock(
+    source,
+    "activeAlbumSharePayload() {",
+    "beginAlbumShareSnapshotRequest() {"
+  );
 
   assert.match(activeBranch, /activeAlbumSharePayload\(\)/);
   assert.match(memberMenuBranch, /defaultAlbumSharePayload\(\)/);
   assert.doesNotMatch(memberMenuBranch, /activeAlbumShareToken|recruitInviteToken|singleMediaShareAuthority/);
+  assert.doesNotMatch(publicBranch, /imageUrl|albumFriendShareImage/);
+  assert.doesNotMatch(defaultPayload, /defaultAlbumShareFriendCoverPrepared|imageUrl/);
+  assert.doesNotMatch(activePayload, /activeAlbumShareFriendCoverPrepared|imageUrl/);
+  assert.match(timeline, /albumShareReadyVisible/);
+  assert.match(timeline, /activeAlbumShareToken/);
+  assert.match(timeline, /activeAlbumShareTimelinePayload\(\)/);
   assert.match(timeline, /defaultAlbumShareTimelinePayload\(\)/);
-  assert.doesNotMatch(timeline, /activeAlbumShareToken/);
   assert.match(menus, /defaultAlbumShareToken/);
-  assert.match(menus, /defaultAlbumShareFriendCoverPrepared/);
+  assert.doesNotMatch(menus, /defaultAlbumShareFriendCoverPrepared/);
   assert.match(menus, /defaultAlbumShareTimelineCoverPrepared/);
-  assert.doesNotMatch(menus, /activeAlbumShareToken/);
 });
 
-test("member menu state keeps a selected active snapshot out of the default all-photo payload", () => {
+test("member default all-photo sharing opens friend sharing from its token", () => {
   assert.deepEqual(
     memberDefaultAlbumShareState({
       defaultAlbumShareToken: "default-all-token",
-      defaultAlbumShareFriendCoverPrepared: true,
+      defaultAlbumShareFriendCoverPrepared: false,
       defaultAlbumShareTimelineCoverPrepared: false,
       activeAlbumShareToken: "selected-active-token",
       activeAlbumShareFriendCoverPrepared: true,
@@ -457,7 +423,7 @@ test("member default media fingerprint ignores signed URLs but tracks share sema
   );
 });
 
-test("member lifecycle invalidates default and recruit entries before Canvas disposal", async () => {
+test("member lifecycle invalidates share entries without Canvas cleanup", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
@@ -466,17 +432,9 @@ test("member lifecycle invalidates default and recruit entries before Canvas dis
   const onUnload = sourceBlock(source, "onUnload() {", "onPageScroll(event) {");
 
   for (const lifecycle of [onHide, onUnload]) {
-    const invalidateDefault = lifecycle.indexOf("this.invalidateDefaultAlbumShare()");
-    const invalidateRecruit = lifecycle.indexOf("this.invalidateRecruitInviteShare()");
-    const invalidateCanvas = lifecycle.indexOf("this.albumShareCanvasCoordinator?.invalidate()");
-    const disposeCanvas = lifecycle.indexOf("this.disposeAlbumShareCanvasPreparation()");
-
-    assert.notEqual(invalidateDefault, -1);
-    assert.notEqual(invalidateRecruit, -1);
-    assert.notEqual(invalidateCanvas, -1);
-    assert.ok(invalidateDefault < disposeCanvas);
-    assert.ok(invalidateRecruit < disposeCanvas);
-    assert.ok(invalidateCanvas < disposeCanvas);
+    assert.match(lifecycle, /this\.invalidateDefaultAlbumShare\(\)/);
+    assert.match(lifecycle, /this\.invalidateRecruitInviteShare\(\)/);
+    assert.doesNotMatch(lifecycle, /Canvas|canvas/);
   }
 });
 

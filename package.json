@@ -45,7 +45,7 @@
     "d54:check": "node scripts/d54-public-album-full-share-pagination-check.js && npm run d53:check",
     "action-button:unit": "node --test scripts/d54-action-button-color-check.test.mjs",
     "action-button:check": "node scripts/d54-action-button-color-check.js",
-    "d55:unit": "node --test apps/api/test/album-public-share-cover-recipe.test.mjs apps/miniprogram/test/albumShareCanvas.test.mjs apps/miniprogram/test/albumShareCover.test.mjs",
+    "d55:unit": "node --test apps/api/test/album-public-share-cover-recipe.test.mjs apps/miniprogram/test/albumShareCover.test.mjs apps/miniprogram/test/albumShareWebView.test.mjs",
     "d55:check": "node scripts/d55-client-canvas-album-share-cover-check.js",
     "d56:unit": "node --test apps/miniprogram/test/albumShareEntry.test.mjs",
     "d56:check": "node scripts/d56-album-share-entry-remap-check.js",
