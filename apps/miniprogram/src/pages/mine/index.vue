@@ -579,7 +579,9 @@ function profileNameWithGenderSymbol(nickname, value) {
 }
 
 .mini-button.muted {
-  background: #64748b;
+  background: #2b765f;
+  --td-button-default-bg-color: #2b765f;
+  --td-button-default-border-color: #1f6f5b;
 }
 
 .notice {

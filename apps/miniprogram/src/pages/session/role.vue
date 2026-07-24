@@ -17,7 +17,12 @@
     />
 
     <view class="bottom-action">
-      <t-button class="button" :class="{ disabled: !selectedRole }" @tap="goNext">下一步</t-button>
+      <t-button
+        class="button"
+        :class="{ disabled: !selectedRole }"
+        :disabled="!selectedRole"
+        @tap="goNext"
+      >下一步</t-button>
     </view>
   </view>
 </template>

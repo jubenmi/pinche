@@ -636,9 +636,12 @@ export default {
 
 .role-action.ghost,
 .role-action.muted {
-  border: 1rpx solid #ded8ca;
-  background: #ffffff;
-  color: #193d35;
+  border: 1rpx solid rgba(31, 111, 91, 0.34);
+  background: #eef7f4;
+  color: #1f6f5b;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
 }
 
 .role-action.disabled {

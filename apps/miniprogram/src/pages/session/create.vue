@@ -112,7 +112,12 @@
     </view>
 
     <view class="bottom-action">
-      <t-button class="button" :class="{ disabled: !selectedStore }" @tap="goNext">下一步</t-button>
+      <t-button
+        class="button"
+        :class="{ disabled: !selectedStore }"
+        :disabled="!selectedStore"
+        @tap="goNext"
+      >下一步</t-button>
     </view>
   </view>
 </template>

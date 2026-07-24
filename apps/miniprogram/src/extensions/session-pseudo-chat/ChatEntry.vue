@@ -431,8 +431,15 @@ export default {
   height: 48rpx;
   margin: 0;
   padding: 0 14rpx;
+  border: 1rpx solid rgba(31, 111, 91, 0.34);
+  border-radius: 10rpx;
+  background: #eef7f4;
+  color: #1f6f5b;
   font-size: 22rpx;
   line-height: 48rpx;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
 }
 
 .empty {
@@ -554,10 +561,14 @@ export default {
   height: 56rpx;
   padding: 0;
   border-radius: 28rpx;
-  background: #f1eee6;
-  color: #365148;
+  border: 1rpx solid rgba(31, 111, 91, 0.34);
+  background: #eef7f4;
+  color: #1f6f5b;
   font-size: 24rpx;
   line-height: 56rpx;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 111, 91, 0.34);
 }
 
 .chat-modal-body {

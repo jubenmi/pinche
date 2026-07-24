@@ -2317,13 +2317,20 @@ async function runBulkDelete(kind) {
 .mini-button.secondary,
 .tool-button.secondary,
 .button.secondary {
-  background: #eef2f7;
-  color: #334155;
+  border: 1rpx solid rgba(31, 122, 104, 0.34);
+  background: #eef7f4;
+  color: #1f6f5b;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #1f6f5b;
+  --td-button-default-border-color: rgba(31, 122, 104, 0.34);
 }
 
 .mini-button.muted {
-  background: #64748b;
+  background: #2b765f;
   color: #ffffff;
+  --td-button-default-bg-color: #2b765f;
+  --td-button-default-color: #ffffff;
+  --td-button-default-border-color: #1f6f5b;
 }
 
 .mini-button.danger,
