@@ -492,3 +492,5 @@
   2. 等待 `develop` CI 成功；
   3. 合并推送 `main` 并等待 CI；
   4. 合并推送 `publish` 并等待最终 CI。
+
+  - 进行中（2026-07-24）：按用户当前授权仅推进 `develop`。`53ca21d1` 已快进推送至 `develop`，GitHub Actions Docker Publish（run `30057643691`）成功。`main` 与 `publish` 未推进；它们仍等待剩余分享交互手工验收及明确发布授权。
