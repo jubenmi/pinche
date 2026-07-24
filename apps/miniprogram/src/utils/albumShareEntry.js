@@ -175,35 +175,3 @@ export function createAlbumShareEntryAuthority() {
     }
   };
 }
-
-export function createAlbumShareEntryCoordinator() {
-  let tail = Promise.resolve();
-  let generation = 0;
-
-  function enqueue(renderer) {
-    if (typeof renderer !== "function") {
-      throw new TypeError("album share renderer must be a function");
-    }
-
-    const rendererGeneration = generation;
-    const context = Object.freeze({
-      generation: rendererGeneration,
-      isCurrent: () => rendererGeneration === generation
-    });
-    const result = tail.then(() => {
-      if (!context.isCurrent()) return undefined;
-      return renderer(context);
-    });
-    tail = result.catch(() => undefined);
-    return result;
-  }
-
-  return Object.freeze({
-    enqueue,
-    run: enqueue,
-    whenIdle: () => tail,
-    invalidate: () => {
-      generation += 1;
-    }
-  });
-}

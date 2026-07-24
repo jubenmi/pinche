@@ -6,7 +6,6 @@ import {
   ALBUM_SHARE_INTENT,
   albumShareAppMessageIntent,
   createAlbumShareEntryAuthority,
-  createAlbumShareEntryCoordinator,
   memberDefaultAlbumShareMediaFingerprint,
   memberDefaultAlbumShareState,
   recruitmentSharePayload
@@ -113,63 +112,6 @@ test("album share entry authority fails closed for invalid identity without disp
   assert.equal(invalid, null);
   assert.equal(authority.isCurrent(invalid), false);
   assert.equal(authority.isCurrent(valid), true);
-});
-
-test("album share entry coordinator runs renderer jobs strictly in order", async () => {
-  const coordinator = createAlbumShareEntryCoordinator();
-  const order = [];
-  let releaseFirst;
-  const firstGate = new Promise((resolve) => {
-    releaseFirst = resolve;
-  });
-
-  const first = coordinator.enqueue(async () => {
-    order.push("startA");
-    await firstGate;
-    order.push("endA");
-  });
-  const second = coordinator.enqueue(async () => {
-    order.push("startB");
-    order.push("endB");
-  });
-
-  await Promise.resolve();
-  assert.deepEqual(order, ["startA"]);
-  releaseFirst();
-  await Promise.all([first, second]);
-
-  assert.deepEqual(order, ["startA", "endA", "startB", "endB"]);
-});
-
-test("album share entry coordinator invalidates a running job and skips stale queued renderers", async () => {
-  const coordinator = createAlbumShareEntryCoordinator();
-  const order = [];
-  let releaseFirst;
-  let isFirstCurrent;
-  const firstGate = new Promise((resolve) => {
-    releaseFirst = resolve;
-  });
-
-  const first = coordinator.enqueue(async ({ isCurrent }) => {
-    isFirstCurrent = isCurrent;
-    order.push("startA");
-    await firstGate;
-    order.push("endA");
-  });
-  const second = coordinator.enqueue(async () => {
-    order.push("startB");
-    order.push("endB");
-  });
-
-  await Promise.resolve();
-  assert.equal(isFirstCurrent(), true);
-  coordinator.invalidate();
-  assert.equal(isFirstCurrent(), false);
-  releaseFirst();
-  await Promise.all([first, second]);
-  await coordinator.whenIdle();
-
-  assert.deepEqual(order, ["startA", "endA"]);
 });
 
 function sourceBlock(source, startMarker, endMarker) {

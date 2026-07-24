@@ -2979,11 +2979,10 @@ if (!fs.existsSync(pagesJsonPath)) {
     'source: "wechat_share"',
     "source: \"wechat_timeline\"",
     "albumTimelineQuery",
-    "shareFriendCoverUrl",
     "shareTimelineCoverUrl",
-    "shareFriendCoverPrepared",
     "shareTimelineCoverPrepared",
-    "prepareAlbumShareCovers",
+    "prepareAlbumShareTimelineImage",
+    "selectAlbumShareTimelineImage",
     "showWechatShareMenus",
     "(!this.timelineMode && !token)"
   ]) {
@@ -3555,7 +3554,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   );
   const prepareAlbumShareSnapshotSource = methodBody(albumSource, "prepareAlbumShareSnapshot");
   const installActiveAlbumShareSnapshotSource = methodBody(albumSource, "installActiveAlbumShareSnapshot");
-  const applyActiveAlbumShareCoverSource = methodBody(albumSource, "applyActiveAlbumShareCover");
+  const applyActiveAlbumShareTimelineImageSource = methodBody(
+    albumSource,
+    "applyActiveAlbumShareTimelineImage"
+  );
   if (
     !albumShareAppMessageSource.includes("activeAlbumSharePayload") ||
     !activeAlbumSharePayloadSource.includes("/pages/session/album") ||
@@ -3597,41 +3599,41 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Album sharing session title must be built from script and store names");
   }
   const albumShareTimelineSource = methodBody(albumSource, "onShareTimeline");
-  if (!albumShareTimelineSource.includes("query:") || albumShareTimelineSource.includes("path:")) {
-    fail("Album Moments sharing must return query only");
-  }
-  if (!albumShareTimelineSource.includes("this.albumTimelineShareImage()")) {
-    fail("Album Moments sharing must use the timeline cover getter");
+  if (
+    !albumShareTimelineSource.includes("publicAlbumShareTimelinePayload()") ||
+    !albumShareTimelineSource.includes("albumShareReadyVisible") ||
+    !albumShareTimelineSource.includes("activeAlbumShareTimelinePayload()") ||
+    !albumShareTimelineSource.includes("defaultAlbumShareTimelinePayload()")
+  ) {
+    fail("Album Moments sharing must isolate public, active and default representative images");
   }
   if (
-    !albumShareCoverUtilSource.includes("ALBUM_SHARE_FRIEND_FALLBACK") ||
-    !albumShareCoverUtilSource.includes("ALBUM_SHARE_TIMELINE_FALLBACK") ||
+    albumShareCoverUtilSource.includes("ALBUM_SHARE_FRIEND_FALLBACK") ||
+    albumShareCoverUtilSource.includes("ALBUM_SHARE_TIMELINE_FALLBACK") ||
     !albumShareCoverUtilSource.includes("cover_recipe") ||
     !albumShareCoverUtilSource.includes("albumShareLocalImagePath") ||
+    !albumShareCoverUtilSource.includes("selectAlbumShareTimelineImage") ||
+    !albumShareCoverUtilSource.includes("thumbnailUrlResolver") ||
     !albumShareCoverUtilSource.includes("albumShareFriendPayload") ||
     !albumShareCoverUtilSource.includes("albumShareTimelinePayload")
   ) {
-    fail("Album sharing must normalize the client Canvas recipe to local paths or channel fallbacks");
+    fail("Album sharing must select one local-first representative image without static fallback");
   }
   if (albumSource.includes("data.cover_url") || albumSource.includes("data.timeline_cover_url")) {
     fail("Album page must not consume deleted server-composite cover URLs");
   }
-  if ((albumSource.match(/this\.prepareAlbumShareCovers\(data(?:,|\))/g) || []).length < 2) {
-    fail("Album initial public load and public refresh must prepare the timeline cover");
+  if ((albumSource.match(/this\.prepareAlbumShareTimelineImage\(data\)/g) || []).length < 2) {
+    fail("Album initial public load and public refresh must select the timeline image");
   }
   const invalidateAlbumShareStateSource = methodBody(albumSource, "invalidateAlbumShareState");
   const handleAlbumAuthChangeSource = methodBody(albumSource, "handleAlbumAuthChange");
   if (
-    !albumSource.includes("beginCoverRequest") ||
-    !albumSource.includes("albumShareCoverPreparationIsCurrent") ||
-    !albumShareCoverUtilSource.includes("isCoverRequestCurrent") ||
     !handleAlbumAuthChangeSource.includes("this.invalidateAlbumShareState()") ||
     !albumOnUnloadSource.includes("this.invalidateAlbumShareState()")
   ) {
-    fail("Album sharing must invalidate stale token and cover preparations after an account change or unload");
+    fail("Album sharing must clear token-bound representative images after account change or unload");
   }
   for (const requiredInvalidationText of [
-    "albumShareRequestAuthority.invalidate()",
     'this.albumShareToken = ""',
     "this.shareSubject = null",
     "this.shareCounts = { total: 0, photos: 0, videos: 0 }",
@@ -3647,14 +3649,13 @@ if (!fs.existsSync(pagesJsonPath)) {
     !prepareAlbumShareSnapshotSource.includes("/album/share-token") ||
     !prepareAlbumShareSnapshotSource.includes("data: payload") ||
     !prepareAlbumShareSnapshotSource.includes("this.installActiveAlbumShareSnapshot") ||
-    !prepareAlbumShareSnapshotSource.includes("startAlbumShareCoverPreparation") ||
-    !prepareAlbumShareSnapshotSource.includes("this.applyActiveAlbumShareCover") ||
+    !prepareAlbumShareSnapshotSource.includes("this.selectAlbumShareTimelineImage(data)") ||
+    !prepareAlbumShareSnapshotSource.includes("this.applyActiveAlbumShareTimelineImage") ||
     !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareToken = token") ||
     !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareSubject") ||
     !installActiveAlbumShareSnapshotSource.includes("this.activeAlbumShareOwner") ||
-    !applyActiveAlbumShareCoverSource.includes("this.activeAlbumShareFriendCoverUrl") ||
-    !applyActiveAlbumShareCoverSource.includes("this.activeAlbumShareTimelineCoverUrl") ||
-    !applyActiveAlbumShareCoverSource.includes("this.albumShareReadyVisible") ||
+    !applyActiveAlbumShareTimelineImageSource.includes("this.activeAlbumShareTimelineCoverUrl") ||
+    !applyActiveAlbumShareTimelineImageSource.includes("this.activeAlbumShareTimelineCoverPrepared") ||
     !prepareAlbumShareSnapshotSource.includes("this.showShareMenus()")
   ) {
     fail("Album D53 sharing must prepare one active snapshot on demand without legacy token prefetch");

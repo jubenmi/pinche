@@ -443,6 +443,9 @@ git commit -m "refactor(album): remove canvas share covers"
 
 ### Task 4: Align static gates and verify the production package
 
+> 已完成（2026-07-24）：删除残留的 Canvas 队列协调器，更新分享专项门禁；
+> D55 13/13、D56 20/20、页面行为 11/11 通过，D48/D53/小程序总检查及生产构建通过。
+
 **Files:**
 - Modify: `scripts/d55-client-canvas-album-share-cover-check.js`
 - Modify: `scripts/d56-album-share-entry-remap-check.js`
@@ -450,9 +453,11 @@ git commit -m "refactor(album): remove canvas share covers"
 - Modify: `scripts/d53-album-four-action-selection-check.js`
 - Modify: `scripts/check-miniprogram.js`
 - Modify: `package.json`
+- Modify: `apps/miniprogram/src/utils/albumShareEntry.js`
+- Modify: `apps/miniprogram/test/albumShareEntry.test.mjs`
 - Modify: `docs/superpowers/plans/2026-07-24-album-timeline-representative-image.md`
 
-- [ ] **Step 1: Run old gates and verify RED**
+- [x] **Step 1: Run old gates and verify RED**
 
 ```bash
 npm run d55:check
@@ -463,7 +468,7 @@ node scripts/check-miniprogram.js
 
 Expected: old Canvas-specific assertions fail.
 
-- [ ] **Step 2: Replace historical Canvas assertions**
+- [x] **Step 2: Replace historical Canvas assertions**
 
 Update D55/D56/D48 and the general mini-program check to require:
 
@@ -482,7 +487,7 @@ Change the root focused command to:
 "d55:unit": "node --test apps/api/test/album-public-share-cover-recipe.test.mjs apps/miniprogram/test/albumShareCover.test.mjs apps/miniprogram/test/albumShareWebView.test.mjs"
 ```
 
-- [ ] **Step 3: Run the complete automated verification**
+- [x] **Step 3: Run the complete automated verification**
 
 ```bash
 npm run d55:unit
@@ -497,7 +502,7 @@ npm run build:mp-weixin -w @pinche/miniprogram
 
 Expected: every test/gate passes and production build exits 0.
 
-- [ ] **Step 4: Inspect generated artifacts**
+- [x] **Step 4: Inspect generated artifacts**
 
 ```bash
 rg -n '<canvas|canvasToTempFilePath|albumShareCanvas|<snapshot|renderer.:.skyline' \
@@ -506,7 +511,7 @@ rg -n '<canvas|canvasToTempFilePath|albumShareCanvas|<snapshot|renderer.:.skylin
 
 Expected: no matches.
 
-- [ ] **Step 5: Final diff review and documentation**
+- [x] **Step 5: Final diff review and documentation**
 
 ```bash
 git diff --check
@@ -520,3 +525,17 @@ Mark completed checkboxes in this plan and append exact automated test/build evi
 git add scripts package.json docs/superpowers/plans/2026-07-24-album-timeline-representative-image.md
 git commit -m "test(album): gate representative share image"
 ```
+
+#### Verification evidence
+
+- `npm run d55:unit`: 13/13 PASS
+- `npm run d55:check`: PASS
+- `npm run d56:unit`: 20/20 PASS
+- `npm run d56:check`: PASS
+- `node --test apps/miniprogram/test/albumSharePreview.test.mjs`: 11/11 PASS
+- `node scripts/d48-album-sharing-role-claim-separation-check.js`: PASS
+- `node scripts/d53-album-four-action-selection-check.js`: PASS
+- `node scripts/check-miniprogram.js`: PASS（14 pages）
+- `npm run build:mp-weixin -w @pinche/miniprogram`: PASS
+- 生成的 `pages/session/album.*` 不含 Canvas、Snapshot 或 Skyline 标记，且页面 JSON
+  未声明 Skyline/GlassEasel。

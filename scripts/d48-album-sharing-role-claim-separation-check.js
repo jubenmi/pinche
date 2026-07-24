@@ -93,30 +93,29 @@ assert(
   "album sharing must route friend/group and timeline recipients to the public album page"
 );
 assert(
-  albumPage.includes("prepareAlbumShareCovers") &&
-    albumPage.includes("prepareAlbumShareCanvasCover") &&
-    albumPage.includes("createAlbumShareCanvasPreparation") &&
-    albumPage.includes("shareFriendCoverPrepared") &&
+  albumPage.includes("prepareAlbumShareTimelineImage") &&
+    albumPage.includes("selectAlbumShareTimelineImage") &&
+    albumPage.includes("albumShareLocalPreviewByMediaId") &&
     albumPage.includes("shareTimelineCoverPrepared") &&
-    albumPage.includes("thumbnailUrlResolver: (url) => this.normalizeAlbumMediaUrl(url)") &&
-    albumPage.includes("isCurrentAlbumShareCanvasCoverPreparation"),
-  "album sharing must prepare each local Canvas channel cover before enabling its share menu"
+    albumPage.includes("thumbnailUrlResolver: (url) => this.normalizeAlbumMediaUrl(url)"),
+  "album sharing must select one local-first representative image before enabling Moments"
 );
 assert(
   albumPage.match(/this\.albumSession = this\.albumSessionSummary\(data\);/g)?.length >= 3,
   "public album refresh must preserve header metadata when onLoad and onShow race"
 );
 assert(
-  albumPage.includes("shareFriendCoverUrl") &&
+  !albumPage.includes("shareFriendCoverUrl") &&
     albumPage.includes("shareTimelineCoverUrl"),
-  "album sharing must retain separate safe local covers for both share channels"
+  "friend sharing must use the page screenshot while Moments retains one representative image"
 );
 const albumShareCoverHelper = read("apps/miniprogram/src/utils/albumShareCover.js");
 assert(
   albumShareCoverHelper.includes("albumShareLocalImagePath") &&
-    albumShareCoverHelper.includes("ALBUM_SHARE_FRIEND_FALLBACK") &&
-    albumShareCoverHelper.includes("ALBUM_SHARE_TIMELINE_FALLBACK"),
-  "album sharing must accept only local Canvas paths or channel-specific static fallbacks"
+    albumShareCoverHelper.includes("selectAlbumShareTimelineImage") &&
+    albumShareCoverHelper.includes("thumbnailUrlResolver") &&
+    !albumShareCoverHelper.includes("ALBUM_SHARE_TIMELINE_FALLBACK"),
+  "album sharing must prefer a local image, fall back online, and omit static full-album fallback"
 );
 const singleMediaShareHelper = read("apps/miniprogram/src/utils/albumSingleMediaShare.js");
 assert(
