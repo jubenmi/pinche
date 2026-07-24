@@ -43,10 +43,9 @@ export function albumShareCoverContextKey({ token, recipe, title } = {}) {
   ].join(":");
 }
 
-export function albumShareMenus({ token, friendReady, timelineReady } = {}) {
+export function albumShareMenus({ token, timelineReady } = {}) {
   if (!trimmedString(token)) return [];
-  const menus = [];
-  if (friendReady === true) menus.push("shareAppMessage");
+  const menus = ["shareAppMessage"];
   if (timelineReady === true) menus.push("shareTimeline");
   return menus;
 }
@@ -106,6 +105,7 @@ export function albumShareCoverPreparationIsCurrent({
 
 export function startAlbumShareCoverPreparation({
   response,
+  kinds = ["friend", "timeline"],
   prepare,
   isCurrent = () => true,
   onPrepared = () => {}
@@ -114,7 +114,7 @@ export function startAlbumShareCoverPreparation({
     throw new TypeError("album share cover preparation requires prepare");
   }
   const recipe = albumShareCoverRecipe(response);
-  return ["friend", "timeline"].map((kind) => Promise.resolve()
+  return kinds.map((kind) => Promise.resolve()
     .then(() => prepare(kind, recipe))
     .catch(() => null)
     .then((result) => {
@@ -125,11 +125,10 @@ export function startAlbumShareCoverPreparation({
   );
 }
 
-export function albumShareFriendPayload({ title, path, imageUrl } = {}) {
+export function albumShareFriendPayload({ title, path } = {}) {
   return {
     title: trimmedString(title),
-    path: trimmedString(path),
-    imageUrl: albumShareImage("friend", imageUrl)
+    path: trimmedString(path)
   };
 }
 

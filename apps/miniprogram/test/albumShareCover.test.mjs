@@ -46,15 +46,15 @@ test("响应只读取客户端 Canvas 配方，不读取旧远程合成封面 UR
   assert.equal(albumShareCoverRecipe({ cover_url: "https://cdn.example.test/legacy.jpg" }), null);
 });
 
-test("只开放已准备成功且有 token 的菜单", () => {
-  assert.deepEqual(albumShareMenus({ token: "t", friendReady: true, timelineReady: false }), [
+test("有效 token 立即开放好友菜单，朋友圈仍等待独立封面", () => {
+  assert.deepEqual(albumShareMenus({ token: "t", friendReady: false, timelineReady: false }), [
     "shareAppMessage"
   ]);
-  assert.deepEqual(albumShareMenus({ token: "t", friendReady: true, timelineReady: true }), [
+  assert.deepEqual(albumShareMenus({ token: "t", friendReady: false, timelineReady: true }), [
     "shareAppMessage",
     "shareTimeline"
   ]);
-  assert.deepEqual(albumShareMenus({ token: "", friendReady: true, timelineReady: true }), []);
+  assert.deepEqual(albumShareMenus({ token: "", friendReady: false, timelineReady: true }), []);
 });
 
 test("远程 URL 永远不能作为分享 imageUrl，按渠道降级到本地静态图", () => {
@@ -77,19 +77,21 @@ test("远程 URL 永远不能作为分享 imageUrl，按渠道降级到本地静
   assert.throws(() => albumShareImage("poster", ""), /kind/);
 });
 
-test("好友与时间线使用各自的微信分享返回结构", () => {
-  assert.deepEqual(
-    albumShareFriendPayload({
-      title: " 好友标题 ",
-      path: " /pages/session/album?id=1&albumShareToken=t ",
-      imageUrl: " wxfile://tmp/friend-cover "
-    }),
-    {
-      title: "好友标题",
-      path: "/pages/session/album?id=1&albumShareToken=t",
-      imageUrl: "wxfile://tmp/friend-cover"
-    }
-  );
+test("好友分享省略 imageUrl 以使用微信默认页面截图", () => {
+  const payload = albumShareFriendPayload({
+    title: " 好友标题 ",
+    path: " /pages/session/album?id=1&albumShareToken=t ",
+    imageUrl: " wxfile://tmp/friend-cover "
+  });
+
+  assert.deepEqual(payload, {
+    title: "好友标题",
+    path: "/pages/session/album?id=1&albumShareToken=t"
+  });
+  assert.equal(Object.hasOwn(payload, "imageUrl"), false);
+});
+
+test("时间线继续使用独立微信分享封面", () => {
   assert.deepEqual(
     albumShareTimelinePayload({
       title: " 时间线标题 ",
@@ -102,6 +104,26 @@ test("好友与时间线使用各自的微信分享返回结构", () => {
       imageUrl: "wxfile://tmp/timeline-cover"
     }
   );
+});
+
+test("调用方可以只准备朋友圈 Canvas", async () => {
+  const preparedKinds = [];
+  const jobs = startAlbumShareCoverPreparation({
+    response: {
+      cover_recipe: {
+        version: "client-canvas-v1",
+        images: [{ id: 1, thumbnail_url: "/api/thumb" }]
+      }
+    },
+    kinds: ["timeline"],
+    prepare: async (kind) => {
+      preparedKinds.push(kind);
+      return { ok: true, path: "wxfile://tmp/timeline.jpg" };
+    }
+  });
+
+  await Promise.all(jobs);
+  assert.deepEqual(preparedKinds, ["timeline"]);
 });
 
 test("好友 Canvas 完成后不等待慢速时间线，配方按渠道独立准备并跳过过期结果", async () => {
