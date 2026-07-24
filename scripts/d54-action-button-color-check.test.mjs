@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   extractStyleBlocks,
   findClassOnlyDisabledBindings,
+  findMissingRequiredSourcePatterns,
   findNeutralEnabledButtonRules
 } from "./lib/action-button-style-contract.mjs";
 
@@ -26,6 +27,36 @@ test("reports neutral enabled text-button rules", () => {
     [
       { file: "sample.vue", selector: ".button.secondary", value: "#ffffff" },
       { file: "sample.vue", selector: ".mini-button.muted", value: "#64748b" }
+    ]
+  );
+});
+
+test("reports neutral rules for named text-action classes", () => {
+  const source = `
+    <style>
+    .message-panel-tool { background: #ffffff; }
+    .profile-logout { background: #fffefb; }
+    .phone-skip { background: #ffffff; }
+    .chat-modal-close { background: #f8fafc; }
+    .role-action.ghost { background: #ffffff; }
+    .city-location-action { background: #ffffff; }
+    .profile-close { background: #ffffff; }
+    .floating-toolbar-button.secondary { background: #fffefc; }
+    .album-image-viewer__primary-action { background: #ffffff; }
+    </style>
+  `;
+  assert.deepEqual(
+    findNeutralEnabledButtonRules(source, "sample.vue"),
+    [
+      { file: "sample.vue", selector: ".message-panel-tool", value: "#ffffff" },
+      { file: "sample.vue", selector: ".profile-logout", value: "#fffefb" },
+      { file: "sample.vue", selector: ".phone-skip", value: "#ffffff" },
+      { file: "sample.vue", selector: ".chat-modal-close", value: "#f8fafc" },
+      { file: "sample.vue", selector: ".role-action.ghost", value: "#ffffff" },
+      { file: "sample.vue", selector: ".city-location-action", value: "#ffffff" },
+      { file: "sample.vue", selector: ".profile-close", value: "#ffffff" },
+      { file: "sample.vue", selector: ".floating-toolbar-button.secondary", value: "#fffefc" },
+      { file: "sample.vue", selector: ".album-image-viewer__primary-action", value: "#ffffff" }
     ]
   );
 });
@@ -70,5 +101,16 @@ test("accepts a concrete class-only disabled exception", () => {
       { file: "sample.vue", expression: "decorative", reason: "non-interactive view" }
     ]),
     []
+  );
+});
+
+test("reports required static contract patterns that are missing", () => {
+  const source = '<t-button theme="primary" :disabled="saving">保存</t-button>';
+  assert.deepEqual(
+    findMissingRequiredSourcePatterns(source, "sample.vue", [
+      { name: "primary theme", pattern: /theme="primary"/ },
+      { name: "green button token", pattern: /--action-green/ }
+    ]),
+    [{ file: "sample.vue", name: "green button token" }]
   );
 });
