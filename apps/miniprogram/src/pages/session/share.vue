@@ -59,11 +59,36 @@
 
     <view v-if="sessionLoadError" class="session-load-error">
       <text class="session-load-error-text">{{ sessionLoadError }}</text>
-      <button class="session-load-retry" @tap="retryLoadSession">重新加载</button>
+      <button
+        class="session-load-retry"
+        :disabled="sessionLoading"
+        @tap="retryLoadSession"
+      >
+        重新加载
+      </button>
     </view>
 
-    <view class="share-actions">
+    <view v-else class="share-actions">
       <button
+        v-if="showInviteRetry"
+        class="button wechat-action"
+        :disabled="invitePreparing"
+        @tap="retryPrepareInvite"
+      >
+        <view class="wechat-action-content">
+          <t-image
+            class="button-icon"
+            src="/static/icons/share-light.svg"
+            mode="aspectFit"
+            width="48rpx"
+            height="48rpx"
+            custom-style="width: 48rpx; height: 48rpx; opacity: 0.82;"
+          />
+          <text>重新准备分享</text>
+        </view>
+      </button>
+      <button
+        v-else
         class="button wechat-action"
         open-type="share"
         :disabled="!shareReady"
@@ -142,6 +167,10 @@ export default {
       inviteToken: "",
       session: {},
       sessionLoadError: "",
+      sessionLoading: false,
+      sessionLoaded: false,
+      sessionLoadSerial: 0,
+      sessionLoadPromise: null,
       invitePreparing: false,
       navigatingAlbum: false,
       currentUserId: "",
@@ -170,7 +199,26 @@ export default {
       return this.sharePresentation.buttonText;
     },
     shareReady() {
-      return Boolean(this.sessionId && this.inviteToken && !this.sessionLoadError);
+      if (!this.sessionId) {
+        return !this.sessionLoadError;
+      }
+      return Boolean(
+        !this.sessionLoading &&
+        this.sessionLoaded &&
+        String(this.session.id || "") === String(this.sessionId) &&
+        this.inviteToken &&
+        !this.sessionLoadError
+      );
+    },
+    showInviteRetry() {
+      return Boolean(
+        this.sessionId &&
+        this.sessionLoaded &&
+        !this.sessionLoading &&
+        !this.inviteToken &&
+        !this.invitePreparing &&
+        !this.sessionLoadError
+      );
     },
     isClaimMode() {
       return this.shareMode === "claim";
@@ -479,7 +527,7 @@ export default {
         scriptName: this.scriptName,
         mode: this.shareMode
       });
-      if (!payload) {
+      if (!this.shareReady || !payload) {
         showToast({ title: "分享尚未准备好，请稍后重试", icon: "none" });
         return undefined;
       }
@@ -657,15 +705,33 @@ export default {
       }
       return auth;
     },
-    async loadPublishedSession(sessionId) {
+    loadPublishedSession(sessionId) {
+      if (this.sessionLoading && this.sessionLoadPromise) {
+        return this.sessionLoadPromise;
+      }
+      const serial = this.sessionLoadSerial + 1;
+      this.sessionLoadSerial = serial;
+      this.sessionLoading = true;
+      this.sessionLoaded = false;
       this.sessionLoadError = "";
       this.statusText = "";
+      const loadPromise = this.performPublishedSessionLoad(sessionId, serial);
+      this.sessionLoadPromise = loadPromise;
+      return loadPromise;
+    },
+    async performPublishedSessionLoad(sessionId, serial) {
       try {
         const inviteQuery = this.inviteToken
           ? `?inviteToken=${encodeURIComponent(this.inviteToken)}`
           : "";
         const response = await request({ url: `/api/sessions/${sessionId}${inviteQuery}` });
+        if (serial !== this.sessionLoadSerial) {
+          return false;
+        }
         const session = dataOf(response) || {};
+        if (String(session.id || "") !== String(sessionId)) {
+          throw new Error("session response mismatch");
+        }
         this.session = session;
         this.store = {
           id: session.store_id,
@@ -720,11 +786,21 @@ export default {
                 ? "选择角色后将直接加入本局。"
                 : "选择角色提交申请，等待车头审核。";
         }
+        this.sessionLoaded = true;
         return true;
       } catch (error) {
+        if (serial !== this.sessionLoadSerial) {
+          return false;
+        }
+        this.sessionLoaded = false;
         this.sessionLoadError = "车局加载失败，请重试";
         showToast({ title: this.sessionLoadError, icon: "none" });
         return false;
+      } finally {
+        if (serial === this.sessionLoadSerial) {
+          this.sessionLoading = false;
+          this.sessionLoadPromise = null;
+        }
       }
     },
     async prepareJoinInviteToken() {
@@ -732,6 +808,9 @@ export default {
         this.invitePreparing ||
         this.inviteToken ||
         !this.sessionId ||
+        this.sessionLoading ||
+        !this.sessionLoaded ||
+        String(this.session.id || "") !== String(this.sessionId) ||
         this.session.access_scope !== "member"
       ) {
         return;
@@ -754,8 +833,14 @@ export default {
         this.invitePreparing = false;
       }
     },
+    async retryPrepareInvite() {
+      if (this.invitePreparing) {
+        return;
+      }
+      await this.prepareJoinInviteToken();
+    },
     async retryLoadSession() {
-      if (!this.sessionId) {
+      if (!this.sessionId || this.sessionLoading) {
         return;
       }
       const loaded = await this.loadPublishedSession(this.sessionId);
@@ -777,10 +862,10 @@ export default {
       ) {
         return false;
       }
-      const photoCount = Number(
-        this.session.active_album_photo_count || this.session.photo_count || 0
-      );
-      if (photoCount <= 0) {
+      const rawPhotoCount =
+        this.session.active_album_photo_count ?? this.session.photo_count ?? 0;
+      const photoCount = Number(rawPhotoCount);
+      if (!Number.isFinite(photoCount) || photoCount <= 0) {
         this.statusText = "角色已认领，照片上传后即可查看。";
         return false;
       }
