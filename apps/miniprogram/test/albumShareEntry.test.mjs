@@ -394,11 +394,11 @@ test("member menu payloads read only the default all-photo snapshot while active
   assert.doesNotMatch(menus, /activeAlbumShareToken/);
 });
 
-test("member menu state keeps a selected active snapshot out of the default all-photo payload", () => {
+test("member default all-photo sharing opens friend sharing from its token", () => {
   assert.deepEqual(
     memberDefaultAlbumShareState({
       defaultAlbumShareToken: "default-all-token",
-      defaultAlbumShareFriendCoverPrepared: true,
+      defaultAlbumShareFriendCoverPrepared: false,
       defaultAlbumShareTimelineCoverPrepared: false,
       activeAlbumShareToken: "selected-active-token",
       activeAlbumShareFriendCoverPrepared: true,

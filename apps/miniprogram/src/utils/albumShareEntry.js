@@ -121,12 +121,12 @@ export function recruitmentSharePayload({
 
 export function memberDefaultAlbumShareState({
   defaultAlbumShareToken,
-  defaultAlbumShareFriendCoverPrepared,
   defaultAlbumShareTimelineCoverPrepared
 } = {}) {
+  const token = trimmedString(defaultAlbumShareToken);
   return {
-    token: trimmedString(defaultAlbumShareToken),
-    friendReady: defaultAlbumShareFriendCoverPrepared === true,
+    token,
+    friendReady: Boolean(token),
     timelineReady: defaultAlbumShareTimelineCoverPrepared === true
   };
 }
