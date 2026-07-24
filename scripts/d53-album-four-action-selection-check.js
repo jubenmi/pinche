@@ -603,32 +603,29 @@ assert(containsObjectProperty(shareAllMethod.node, "scope", "all"), "分享全�
 const shareSelectedMethod = optionMethod(albumOptions, "methods", "shareSelectedAlbumMedia", albumScript);
 assert(containsObjectPropertyIdentifier(shareSelectedMethod.node, "mediaIds", "mediaIds"), "分享选中 must submit selected mediaIds");
 const prepareAlbumShareSnapshot = optionMethod(albumOptions, "methods", "prepareAlbumShareSnapshot", albumScript);
-const applyActiveAlbumShareCover = optionMethod(
+const applyActiveAlbumShareTimelineImage = optionMethod(
   albumOptions,
   "methods",
-  "applyActiveAlbumShareCover",
+  "applyActiveAlbumShareTimelineImage",
   albumScript
 );
 assert(
   prepareAlbumShareSnapshot.source.includes("const shareRequest = this.beginAlbumShareSnapshotRequest()") &&
     prepareAlbumShareSnapshot.source.includes("if (!this.isCurrentAlbumShareSnapshotRequest(shareRequest))") &&
-    prepareAlbumShareSnapshot.source.includes("startAlbumShareCoverPreparation") &&
-    prepareAlbumShareSnapshot.source.includes("await Promise.all(coverTasks)") &&
-    prepareAlbumShareSnapshot.source.includes("this.applyActiveAlbumShareCover") &&
+    prepareAlbumShareSnapshot.source.includes("this.selectAlbumShareTimelineImage(data)") &&
+    prepareAlbumShareSnapshot.source.includes("this.applyActiveAlbumShareTimelineImage") &&
     prepareAlbumShareSnapshot.source.includes("this.installActiveAlbumShareSnapshot") &&
     prepareAlbumShareSnapshot.source.includes("this.clearActiveAlbumShareState({ hideMenus: true, invalidateRequest: false })") &&
-    applyActiveAlbumShareCover.source.includes("this.activeAlbumShareFriendCoverPrepared") &&
-    applyActiveAlbumShareCover.source.includes("this.activeAlbumShareTimelineCoverPrepared"),
-  "share preparation must guard every async boundary and prepare both active cover channels"
+    applyActiveAlbumShareTimelineImage.source.includes("this.activeAlbumShareTimelineCoverUrl") &&
+    applyActiveAlbumShareTimelineImage.source.includes("this.activeAlbumShareTimelineCoverPrepared"),
+  "share preparation must guard the token response and install the active representative image"
 );
 const clearActiveAlbumShareState = optionMethod(albumOptions, "methods", "clearActiveAlbumShareState", albumScript);
 assert(
   clearActiveAlbumShareState.source.includes("this.albumShareRequestVersion += 1") &&
     clearActiveAlbumShareState.source.includes("this.albumSharePreparing = false") &&
     [
-      "activeAlbumShareFriendCoverUrl",
       "activeAlbumShareTimelineCoverUrl",
-      "activeAlbumShareFriendCoverPrepared",
       "activeAlbumShareTimelineCoverPrepared",
       "activeAlbumShareSubject",
       "activeAlbumShareOwner",
