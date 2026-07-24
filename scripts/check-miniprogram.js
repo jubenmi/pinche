@@ -2815,7 +2815,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     "角色",
     "openShareSelectionMode",
     "openDownloadSelectionMode",
-    "openTagSelectionMode"
+    "openTagSelectionMode",
+    "openClaimShare"
   ]) {
     if (!albumSource.includes(requiredAlbumActionGroupText)) {
       fail(`Album page must group header actions by user task: ${requiredAlbumActionGroupText}`);
@@ -2881,11 +2882,20 @@ if (!fs.existsSync(pagesJsonPath)) {
     ">分享</text>",
     ">下载</text>",
     ">标注</text>",
-    ">招募</text>"
+    ">邀请认领</text>"
   ]) {
     if (!albumSource.includes(requiredFourActionText)) {
       fail(`Album toolbar must render the D53 four-action row: ${requiredFourActionText}`);
     }
+  }
+  const openClaimShareSource = methodBody(albumSource, "openClaimShare");
+  if (
+    !openClaimShareSource.includes("this.timelineMode || this.albumBusy || !this.sessionId") ||
+    !openClaimShareSource.includes(
+      'uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}&entry=album` });'
+    )
+  ) {
+    fail("Album claim action must navigate to the invitation page with entry=album");
   }
   for (const requiredSelectionToolbarText of [
     "分享全部（{{ shareSelectableMedia.length }}）",
