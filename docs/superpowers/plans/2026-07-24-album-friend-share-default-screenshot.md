@@ -31,7 +31,7 @@
 - Modify: `apps/miniprogram/test/albumShareCover.test.mjs`
 - Modify: `apps/miniprogram/src/utils/albumShareCover.js`
 
-- [ ] **Step 1: 写好友 payload、菜单和指定渠道准备的失败测试**
+- [x] **Step 1: 写好友 payload、菜单和指定渠道准备的失败测试**
 
 把好友 payload 断言改为没有 `imageUrl` 自有属性，并增加 token 直接开放好友菜单、`kinds: ["timeline"]` 不调用 friend renderer 的测试：
 
@@ -84,7 +84,7 @@ test("调用方可以只准备朋友圈 Canvas", async () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认 RED**
+- [x] **Step 2: 运行测试并确认 RED**
 
 Run:
 
@@ -94,7 +94,7 @@ node --test apps/miniprogram/test/albumShareCover.test.mjs
 
 Expected: FAIL；好友 payload 仍包含 `imageUrl`，好友菜单仍受 `friendReady` 控制，准备器仍调用两个渠道。
 
-- [ ] **Step 3: 最小实现默认截图和按渠道准备**
+- [x] **Step 3: 最小实现默认截图和按渠道准备**
 
 把工具函数改为：
 
@@ -136,7 +136,7 @@ export function albumShareFriendPayload({ title, path } = {}) {
 }
 ```
 
-- [ ] **Step 4: 运行工具测试并确认 GREEN**
+- [x] **Step 4: 运行工具测试并确认 GREEN**
 
 Run:
 
@@ -146,7 +146,7 @@ node --test apps/miniprogram/test/albumShareCover.test.mjs
 
 Expected: PASS，0 failures。
 
-- [ ] **Step 5: 提交工具契约**
+- [x] **Step 5: 提交工具契约**
 
 ```bash
 git add apps/miniprogram/src/utils/albumShareCover.js apps/miniprogram/test/albumShareCover.test.mjs
@@ -155,11 +155,13 @@ git commit -m "fix(album): use default screenshot friend payloads"
 
 ### Task 2: 让成员默认整册 readiness 只依赖 token
 
+当前执行项：先写成员默认状态失败测试。
+
 **Files:**
 - Modify: `apps/miniprogram/test/albumShareEntry.test.mjs`
 - Modify: `apps/miniprogram/src/utils/albumShareEntry.js`
 
-- [ ] **Step 1: 写成员默认状态失败测试**
+- [x] **Step 1: 写成员默认状态失败测试**
 
 把现有状态断言调整为：即使好友 Canvas 未准备，只要默认 token 存在，好友分享就绪；朋友圈仍遵循自己的封面状态。
 
@@ -181,7 +183,7 @@ test("member default all-photo sharing opens friend sharing from its token", () 
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认 RED**
+- [x] **Step 2: 运行测试并确认 RED**
 
 Run:
 
@@ -191,7 +193,7 @@ node --test apps/miniprogram/test/albumShareEntry.test.mjs
 
 Expected: FAIL；`friendReady` 仍为 `false`。
 
-- [ ] **Step 3: 最小实现 token readiness**
+- [x] **Step 3: 最小实现 token readiness**
 
 ```js
 export function memberDefaultAlbumShareState({
@@ -207,7 +209,7 @@ export function memberDefaultAlbumShareState({
 }
 ```
 
-- [ ] **Step 4: 运行成员入口测试并确认 GREEN**
+- [x] **Step 4: 运行成员入口测试并确认 GREEN**
 
 Run:
 
@@ -217,7 +219,7 @@ node --test apps/miniprogram/test/albumShareEntry.test.mjs
 
 Expected: PASS，0 failures。
 
-- [ ] **Step 5: 提交 readiness 变更**
+- [x] **Step 5: 提交 readiness 变更**
 
 ```bash
 git add apps/miniprogram/src/utils/albumShareEntry.js apps/miniprogram/test/albumShareEntry.test.mjs
@@ -226,12 +228,14 @@ git commit -m "fix(album): gate friend sharing on snapshot token"
 
 ### Task 3: 切换相册页三个好友入口并保留朋友圈 Canvas
 
+当前执行项：先写页面三个好友入口和朋友圈独立 Canvas 的失败测试。
+
 **Files:**
 - Modify: `apps/miniprogram/test/albumShareEntry.test.mjs`
 - Modify: `apps/miniprogram/test/albumSharePreview.test.mjs`
 - Modify: `apps/miniprogram/src/pages/session/album.vue`
 
-- [ ] **Step 1: 写页面行为失败测试**
+- [x] **Step 1: 写页面行为失败测试**
 
 新增静态行为测试，分别提取 `onShareAppMessage`、`defaultAlbumSharePayload`、
 `activeAlbumSharePayload`、`prepareAlbumShareCovers`、`prepareDefaultAlbumShare` 和
@@ -258,7 +262,7 @@ assert.match(timelinePayloadSource, /imageUrl:\s*albumShareImage\("timeline"/);
 assert.match(failClosedPayloadSource, /imageUrl:\s*SINGLE_MEDIA_SHARE_SAFE_CARD_IMAGE/);
 ```
 
-- [ ] **Step 2: 运行页面测试并确认 RED**
+- [x] **Step 2: 运行页面测试并确认 RED**
 
 Run:
 
@@ -268,7 +272,7 @@ node --test apps/miniprogram/test/albumShareEntry.test.mjs apps/miniprogram/test
 
 Expected: FAIL；三个好友分支仍传封面且等待 friend Canvas，准备器仍生成双渠道。
 
-- [ ] **Step 3: 最小修改相册页**
+- [x] **Step 3: 最小修改相册页**
 
 实施以下窄改动：
 
@@ -303,7 +307,7 @@ startAlbumShareCoverPreparation({
 `ALBUM_PUBLIC_SHARE_COVER_UNAVAILABLE` 好友封面失败分支。朋友圈的
 `imageUrl`、readiness、fallback 和 Canvas 回调保持不变。
 
-- [ ] **Step 4: 运行页面测试并确认 GREEN**
+- [x] **Step 4: 运行页面测试并确认 GREEN**
 
 Run:
 
@@ -313,7 +317,7 @@ node --test apps/miniprogram/test/albumShareEntry.test.mjs apps/miniprogram/test
 
 Expected: PASS，0 failures。
 
-- [ ] **Step 5: 提交页面行为**
+- [x] **Step 5: 提交页面行为**
 
 ```bash
 git add apps/miniprogram/src/pages/session/album.vue apps/miniprogram/test/albumShareEntry.test.mjs apps/miniprogram/test/albumSharePreview.test.mjs
@@ -322,11 +326,13 @@ git commit -m "fix(album): share friend cards from page screenshots"
 
 ### Task 4: 对齐 D55/D56 静态契约
 
+当前执行项：运行旧静态契约，确认它会拒绝新的默认截图行为。
+
 **Files:**
 - Modify: `scripts/d55-client-canvas-album-share-cover-check.js`
 - Modify: `scripts/d56-album-share-entry-remap-check.js`
 
-- [ ] **Step 1: 运行现有静态检查并确认 RED**
+- [x] **Step 1: 运行现有静态检查并确认 RED**
 
 Run:
 
@@ -337,7 +343,7 @@ npm run d56:check
 
 Expected: 至少一个检查 FAIL，因为旧契约仍要求好友 Canvas 和好友封面 readiness。
 
-- [ ] **Step 2: 更新静态检查的精确契约**
+- [x] **Step 2: 更新静态检查的精确契约**
 
 D55 改为要求三个整册准备点都包含：
 
@@ -349,7 +355,7 @@ D55 改为要求三个整册准备点都包含：
 `imageUrl`。D56 改为要求 `memberDefaultAlbumShareState` 的 `friendReady` 来自非空
 token，并且 `showShareMenus` 不读取 active snapshot 或好友封面状态。
 
-- [ ] **Step 3: 运行静态检查并确认 GREEN**
+- [x] **Step 3: 运行静态检查并确认 GREEN**
 
 Run:
 
@@ -360,7 +366,7 @@ npm run d56:check
 
 Expected: 两条命令均 PASS。
 
-- [ ] **Step 4: 提交静态契约**
+- [x] **Step 4: 提交静态契约**
 
 ```bash
 git add scripts/d55-client-canvas-album-share-cover-check.js scripts/d56-album-share-entry-remap-check.js
@@ -369,10 +375,12 @@ git commit -m "test(album): gate default screenshot sharing"
 
 ### Task 5: 全量验证和规格收尾
 
+当前执行项：运行聚焦单元测试、静态检查和微信小程序构建。
+
 **Files:**
 - Modify: `docs/superpowers/plans/2026-07-24-album-friend-share-default-screenshot.md`
 
-- [ ] **Step 1: 运行聚焦单元测试**
+- [x] **Step 1: 运行聚焦单元测试**
 
 Run:
 
@@ -384,7 +392,7 @@ node --test apps/miniprogram/test/albumSharePreview.test.mjs
 
 Expected: 全部 PASS，0 failures。
 
-- [ ] **Step 2: 运行聚焦静态检查**
+- [x] **Step 2: 运行聚焦静态检查**
 
 Run:
 
@@ -396,7 +404,7 @@ node scripts/check-miniprogram.js
 
 Expected: 全部 PASS。
 
-- [ ] **Step 3: 构建微信小程序**
+- [x] **Step 3: 构建微信小程序**
 
 Run:
 
@@ -406,7 +414,7 @@ npm run build:mp-weixin
 
 Expected: exit 0，生成 `apps/miniprogram/dist/build/mp-weixin`。
 
-- [ ] **Step 4: 检查最终差异和规格覆盖**
+- [x] **Step 4: 检查最终差异和规格覆盖**
 
 Run:
 
@@ -418,7 +426,7 @@ git diff --stat origin/develop...HEAD
 
 Expected: 无空白错误；差异只包含设计/计划、相册分享工具、相册页、相关测试和静态检查。
 
-- [ ] **Step 5: 更新本计划复选框并提交验证记录**
+- [x] **Step 5: 更新本计划复选框并提交验证记录**
 
 把所有已完成步骤改为 `- [x]`，在本任务下记录实际测试命令和结果，然后执行：
 
@@ -426,3 +434,15 @@ Expected: 无空白错误；差异只包含设计/计划、相册分享工具、
 git add docs/superpowers/plans/2026-07-24-album-friend-share-default-screenshot.md
 git commit -m "docs(album): record screenshot share verification"
 ```
+
+实际验证记录（2026-07-24）：
+
+- `npm run d55:unit`：47/47 PASS，0 failures。
+- `npm run d56:unit`：22/22 PASS，0 failures。
+- `node --test apps/miniprogram/test/albumSharePreview.test.mjs`：11/11 PASS，0 failures。
+- `npm run d55:check`：PASS。
+- `npm run d56:check`：PASS。
+- `node scripts/check-miniprogram.js`：PASS，检查 14 个页面。
+- `npm run build:mp-weixin`：exit 0；仅输出既有 Sass deprecation warnings。
+- `git diff --check origin/develop...HEAD`：无空白错误。
+- 最终规格复核：成员默认全量分享、成员主动快照分享、公开相册再分享均省略好友 `imageUrl`；朋友圈继续使用独立方形 Canvas；单媒体、招募和 fail-closed payload 保持显式封面。
