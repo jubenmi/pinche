@@ -677,19 +677,19 @@ git commit -m "fix(admin): align enabled action button colors"
 在 `scripts` 增加：
 
 ```json
-"d54:unit": "node --test scripts/d54-action-button-color-check.test.mjs",
-"d54:check": "node scripts/d54-action-button-color-check.js"
+"action-button:unit": "node --test scripts/d54-action-button-color-check.test.mjs",
+"action-button:check": "node scripts/d54-action-button-color-check.js"
 ```
 
-把 `npm run d54:unit && npm run d54:check &&` 放在 `precheck` 最前部；把 `node --check scripts/d54-action-button-color-check.js && node --check scripts/lib/action-button-style-contract.mjs && npm run d54:check &&` 放在 `check` 最前部。
+把 `npm run action-button:unit && npm run action-button:check &&` 接入 `postcheck`；保留其他功能已经占用的 `d54:*` 命令。
 
 - [x] **Step 2：运行 D54 定向验证**
 
 Run:
 
 ```bash
-npm run d54:unit
-npm run d54:check
+npm run action-button:unit
+npm run action-button:check
 node --check scripts/d54-action-button-color-check.js
 node --check scripts/lib/action-button-style-contract.mjs
 ```
@@ -768,7 +768,7 @@ git commit -m "test(ui): enforce action button color consistency"
 - [x] 后台主要、低强调和批量可用操作属于绿色体系。
 - [x] 灰色只出现在真实 disabled，红色只出现在危险操作。
 - [x] 纯图标、标签、筛选、分段和状态控件未被误改。
-- [x] `npm run d54:unit` 与 `npm run d54:check` 通过。
+- [x] `npm run action-button:unit` 与 `npm run action-button:check` 通过。
 - [x] talk、后台检查、后台构建和小程序构建通过。
 - [x] `npm run check` 通过。
 - [ ] 微信开发者工具和后台浏览器代表页面完成实际验收。
@@ -777,12 +777,12 @@ git commit -m "test(ui): enforce action button color consistency"
 
 - 2026-07-24：用户确认采用“语义统一 + 全项目审计”；可用文字按钮使用项目现有协调绿色，禁用保留灰色，危险操作保留红色；纯图标和非按钮型控件不强制改色。
 - 2026-07-24：D54 requirements/design/tasks 三件套已建立，业务实现尚未开始。
-- 2026-07-24：先建立 RED/GREEN 契约；helper 缺失时测试按预期失败，补齐实现后 `npm run d54:unit` 8/8 通过，`npm run d54:check` 覆盖 35 个业务源码文件并通过。
+- 2026-07-24：先建立 RED/GREEN 契约；helper 缺失时测试按预期失败，补齐实现后 `npm run action-button:unit` 8/8 通过，`npm run action-button:check` 覆盖 35 个业务源码文件并通过。
 - 2026-07-24：`npm --workspace @jubenmi/talk run test` 8/8、`npm --workspace apps/admin-web run check` 7/7、`npm run build:admin-web`、`npm run build:mp-weixin` 和完整 `npm run check` 均 exit 0。小程序构建仅输出既有 Sass 弃用提示。
 - 2026-07-24：后台浏览器实际验收通过。普通、次要和批量上/下架操作为浅绿 `#eef8f3`，危险下架/删除为红色 `#fff1ef`；加载中的控件呈真实 disabled。导航、标签页等非操作控件未纳入按钮改色。
 - 2026-07-24：开发者工具成功编译 D54 构建产物且控制台无错误，但模拟器 `pages/index/index` 保持空白，未能完成相册隐私、建车和聊天的代表页视觉验收；对应人工验收项继续保持未勾选。
 - 2026-07-24：按用户授权清理测试数据：删除 7 个 D23/D53 测试车局、7 个测试剧本和 7 个测试店家；店家删除先被引用约束拦截，随后先清理关联车局再完成删除。保留所有非 D23/D53 真实记录。
 - 2026-07-24：发现开发者工具启动时 TDesign 组件以原始 ESM（`import`/`export`）进入微信 `require` 运行时，导致 `Unexpected token 'export'`，继发 148 条组件未定义错误。构建末尾现将组件脚本转换为 CommonJS，补齐 `dayjs`、`tinycolor2`、`tslib` 运行时依赖，并移除非运行时 `.d.ts` 文件；新增 3 项构建产物测试且接入根检查。实际开发者工具重新编译后首页正常渲染，稳定态控制台为 0 errors / 0 warnings。热重载期间仅出现开发者工具自身的 `routeDone ... webviewId` 记录，清空后未复现；未将其视为应用错误。
-- 2026-07-24：复审发现后台存在两处 CSS 层叠遗漏：抽屉 `.close-button` 的后置规则将文字覆盖为中性灰，且 `.danger` 的 `!important` 会让 disabled 危险按钮保留红字。先新增 `apps/admin-web/test/buttonStyleContract.test.mjs`，两项断言均按预期失败；随后将抽屉关闭文字恢复为 `--admin-accent-strong`，并让共享 disabled 规则以 `#ffffff !important` 覆盖危险文字。`npm --workspace apps/admin-web run check`、`npm run d54:unit`、`npm run d54:check`、完整 `npm run check` 均通过。
+- 2026-07-24：复审发现后台存在两处 CSS 层叠遗漏：抽屉 `.close-button` 的后置规则将文字覆盖为中性灰，且 `.danger` 的 `!important` 会让 disabled 危险按钮保留红字。先新增 `apps/admin-web/test/buttonStyleContract.test.mjs`，两项断言均按预期失败；随后将抽屉关闭文字恢复为 `--admin-accent-strong`，并让共享 disabled 规则以 `#ffffff !important` 覆盖危险文字。`npm --workspace apps/admin-web run check`、`npm run action-button:unit`、`npm run action-button:check`、完整 `npm run check` 均通过。
 - 2026-07-24：开发者工具在已登录真实账号下完成了部分只读视觉抽查：建车店家未选择时“下一步”为灰色，选中既有店家后可进入剧本页；车头管理页普通操作处于绿色体系，底部“取消本车”为红色。未提交建车、保存设置、发送消息、取消车或任何会改动真实数据的操作。相册隐私、角色、聊天、管理员目录以及后台浏览器的完整真实状态组合尚未逐一验收，因此 Task 6 Step 5 和最终人工验收继续保持未勾选。
 - 2026-07-24：继续在已登录真实账号下进行只读验收，且未创建、保存、发送、删除或更改任何真实业务数据。建车流程的店家、剧本页均观察到“未选=灰色 disabled、选中既有资料=深绿”；角色页选择会进入“确认反串”业务弹窗，为避免改变真实用户状态未确认。车头管理页观察到保存置顶为深绿、申请提醒/车局详情及关闭座位为浅绿、已保存为灰色 disabled；相册隐私页观察到保存设置为深绿、停止我的相册分享为红色。聊天空输入的发送为灰色 disabled；开发者工具未能可靠注入临时文本，未执行发送。管理员目录页观察到主操作深绿、次要操作浅绿；首次列表验收发现“删除”错误继承绿色，根因是 4 个删除调用点误用 `muted` 类。先新增 9/9 通过的契约测试，再改为 `danger`，重新编译并实机复验列表“编辑=深绿、下架=绿色、删除=红色”。控制台均为 0 errors，警告仅为开发者工具环境提示。后台浏览器和会产生持久变更的禁用/保存中组合未重新实机覆盖，Task 6 Step 5 与最终人工验收继续保持未勾选。

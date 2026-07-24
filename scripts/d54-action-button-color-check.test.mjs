@@ -132,3 +132,19 @@ test("marks catalog list deletion controls as danger actions", () => {
     );
   }
 });
+
+test("registers distinct action-button checks without replacing the existing D54 commands", () => {
+  const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+
+  assert.equal(
+    packageJson.scripts["action-button:unit"],
+    "node --test scripts/d54-action-button-color-check.test.mjs"
+  );
+  assert.equal(
+    packageJson.scripts["action-button:check"],
+    "node scripts/d54-action-button-color-check.js"
+  );
+  assert.match(packageJson.scripts.postcheck, /npm run action-button:unit/);
+  assert.match(packageJson.scripts.postcheck, /npm run action-button:check/);
+  assert.match(packageJson.scripts["d54:check"], /d54-public-album-full-share-pagination-check/);
+});
