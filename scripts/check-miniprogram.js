@@ -3548,6 +3548,11 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   const albumShareAppMessageSource = methodBody(albumSource, "onShareAppMessage");
   const activeAlbumSharePayloadSource = methodBody(albumSource, "activeAlbumSharePayload");
+  const defaultAlbumSharePayloadSource = methodBody(albumSource, "defaultAlbumSharePayload");
+  const albumShareFriendPayloadSource = methodBody(
+    albumShareCoverUtilSource,
+    "albumShareFriendPayload"
+  );
   const prepareAlbumShareSnapshotSource = methodBody(albumSource, "prepareAlbumShareSnapshot");
   const installActiveAlbumShareSnapshotSource = methodBody(albumSource, "installActiveAlbumShareSnapshot");
   const applyActiveAlbumShareCoverSource = methodBody(albumSource, "applyActiveAlbumShareCover");
@@ -3566,11 +3571,15 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Album friend/group sharing title must include script and store names, not generic 车局相册");
   }
-  if (!activeAlbumSharePayloadSource.includes("imageUrl:")) {
-    fail("Album friend/group sharing must set a privacy-safe imageUrl instead of using the live page screenshot");
+  if (
+    activeAlbumSharePayloadSource.includes("imageUrl:") ||
+    defaultAlbumSharePayloadSource.includes("imageUrl:") ||
+    albumShareFriendPayloadSource.includes("imageUrl:")
+  ) {
+    fail("Full-album friend/group sharing must omit imageUrl and use the live page screenshot");
   }
-  if (!albumShareAppMessageSource.includes("this.albumFriendShareImage()")) {
-    fail("Album friend/group sharing must use the friend cover getter");
+  if (albumShareAppMessageSource.includes("this.albumFriendShareImage()")) {
+    fail("Full-album friend/group sharing must not use the obsolete friend cover getter");
   }
   const albumShareTitleSource = methodBody(albumSource, "albumShareTitle");
   if (
@@ -3608,7 +3617,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Album page must not consume deleted server-composite cover URLs");
   }
   if ((albumSource.match(/this\.prepareAlbumShareCovers\(data(?:,|\))/g) || []).length < 2) {
-    fail("Album initial public load and public refresh must prepare both cover channels");
+    fail("Album initial public load and public refresh must prepare the timeline cover");
   }
   const invalidateAlbumShareStateSource = methodBody(albumSource, "invalidateAlbumShareState");
   const handleAlbumAuthChangeSource = methodBody(albumSource, "handleAlbumAuthChange");
