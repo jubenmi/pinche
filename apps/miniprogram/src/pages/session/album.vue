@@ -580,7 +580,6 @@
       @video-error="handlePreviewVideoError"
       @need-video="handlePreviewVideoRequest"
       @download="handlePreviewDownload"
-      @share-status-tap="handleSingleMediaShareStatusTap"
       @primary-action="showFullPublicAlbum"
     />
 
@@ -755,6 +754,7 @@ import {
   publicAlbumMediaCaption,
   singleMediaShareCardImage,
   singleMediaShareFailClosedPayload,
+  singleMediaShareReadyPayload,
   singleMediaShareRouteState,
   singleMediaSharePath
 } from "../../utils/albumSingleMediaShare";
@@ -915,10 +915,16 @@ export default {
     },
     previewShareStatus() {
       this.singleMediaShareStateVersion;
-      if (this.timelineMode || !this.previewOverlayVisible) {
+      if (this.timelineMode || !this.previewOverlayVisible || !this.previewCurrentPhoto) {
         return "hidden";
       }
-      return this.singleMediaShareAuthority.currentEntry(this.previewCurrentPhoto?.id)?.status || "hidden";
+      if (!this.isSingleMediaShareEligible(this.previewCurrentPhoto)) {
+        return "blocked";
+      }
+      return (
+        this.singleMediaShareAuthority.currentEntry(this.previewCurrentPhoto.id)?.status ||
+        "loading"
+      );
     },
     previewShowsOwnedUntaggedShareNote() {
       const photo = this.previewCurrentPhoto;
@@ -1317,12 +1323,9 @@ export default {
     }
     if (intent.kind === ALBUM_SHARE_INTENT.SINGLE) {
       const entry = this.singleMediaShareAuthority.entryFor(intent.mediaId);
-      if (entry?.status === "ready" && entry.path) {
-        return {
-          title: entry.title || this.albumShareTitle(),
-          path: entry.path,
-          imageUrl: entry.imageUrl || ""
-        };
+      const payload = singleMediaShareReadyPayload(entry, this.albumShareTitle());
+      if (payload) {
+        return payload;
       }
       return singleMediaShareFailClosedPayload();
     }
@@ -1686,13 +1689,13 @@ export default {
       }
       return singleMediaShareCardImage(await this.prepareShareCoverUrl(source));
     },
-    async prepareSingleMediaShare(photo, { force = false } = {}) {
+    async prepareSingleMediaShare(photo) {
       const mediaId = normalizeFocusedMediaId(photo?.id);
       if (!this.isSingleMediaShareEligible(photo) || !mediaId) {
         return null;
       }
       const cachedEntry = this.singleMediaShareAuthority.entryFor(mediaId);
-      if (cachedEntry?.status === "ready" || (!force && cachedEntry)) {
+      if (cachedEntry) {
         return cachedEntry;
       }
       const shareRequest = this.singleMediaShareAuthority.begin(mediaId);
@@ -1722,44 +1725,22 @@ export default {
         if (!path) {
           throw albumMediaError("ALBUM_PUBLIC_SHARE_RESPONSE_INVALID", "当前内容暂时无法分享");
         }
-        const imageUrl = await this.prepareSingleMediaShareCardImage(photo);
+        const imageUrl = this.isImageMedia(photo)
+          ? ""
+          : await this.prepareSingleMediaShareCardImage(photo);
         const entry = this.singleMediaShareAuthority.resolve(shareRequest, {
           title: this.albumShareSessionTitle() || this.albumShareTitle(),
           path,
-          imageUrl,
-          token
+          token,
+          ...(imageUrl ? { imageUrl } : {})
         });
         this.singleMediaShareStateVersion += 1;
         return entry;
       } catch (error) {
         const entry = this.singleMediaShareAuthority.reject(shareRequest, error);
         this.singleMediaShareStateVersion += 1;
-        if (force && entry?.status === "failed") {
-          showModal({
-            title: "分享暂不可用",
-            content: error?.userMessage || "分享准备失败，请稍后再试。",
-            showCancel: false,
-            confirmText: "知道了"
-          });
-        }
         return entry;
       }
-    },
-    handleSingleMediaShareStatusTap(event) {
-      const payload = event?.detail || event || {};
-      const mediaId = normalizeFocusedMediaId(payload.mediaId);
-      const entry = this.singleMediaShareAuthority.entryFor(mediaId);
-      if (entry?.status === "failed") {
-        const photo = this.previewPhotos.find((item) => normalizeFocusedMediaId(item?.id) === mediaId);
-        if (photo) {
-          this.prepareSingleMediaShare(photo, { force: true });
-        }
-        return;
-      }
-      showToast({
-        title: entry?.status === "blocked" ? "该内容当前不可分享" : "正在准备分享，请稍候",
-        icon: "none"
-      });
     },
     showFullPublicAlbum() {
       this.focusedPublicMode = false;

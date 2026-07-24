@@ -114,11 +114,10 @@
         </button>
         <view
           v-else-if="shareStatus !== 'hidden' && currentPhoto"
-          class="album-image-viewer__icon-button"
-          :class="{ 'album-image-viewer__icon-button--disabled': ['blocked', 'failed'].includes(shareStatus) }"
+          class="album-image-viewer__icon-button album-image-viewer__icon-button--disabled"
           aria-role="button"
-          aria-label="分享状态"
-          @tap.stop="$emit('share-status-tap', { mediaId: currentPhoto.id, status: shareStatus })"
+          aria-label="分享不可用"
+          aria-disabled="true"
         >
           <t-image
             class="album-image-viewer__share-icon"
@@ -950,6 +949,7 @@ export default {
 
 .album-image-viewer__icon-button--disabled {
   opacity: 0.38;
+  pointer-events: none;
 }
 
 .album-image-viewer__primary-action {
