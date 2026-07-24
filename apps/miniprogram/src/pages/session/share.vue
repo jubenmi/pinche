@@ -52,16 +52,21 @@
     <view class="share-role-board">
       <RoleSeatBoard
         :sections="roleSeatSections"
-        empty-text="暂无可选角色。"
+        :empty-text="isClaimMode ? '暂无待认领角色。' : '暂无可选角色。'"
         @itemtap="handleSharedRoleTap"
       />
     </view>
 
+    <view v-if="sessionLoadError" class="session-load-error">
+      <text class="session-load-error-text">{{ sessionLoadError }}</text>
+      <button class="session-load-retry" @tap="retryLoadSession">重新加载</button>
+    </view>
+
     <view class="share-actions">
-      <t-button
+      <button
         class="button wechat-action"
         open-type="share"
-        custom-style="height: 88rpx; min-height: 88rpx; border-color: #1a5d4d; background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%); color: #ffffff; --td-button-default-bg-color: #1f6f5b; --td-button-default-color: #ffffff; --td-button-default-border-color: #1a5d4d;"
+        :disabled="!shareReady"
         @tap="persistFlow"
       >
         <view class="wechat-action-content">
@@ -73,9 +78,9 @@
             height="48rpx"
             custom-style="width: 48rpx; height: 48rpx; opacity: 0.82;"
           />
-          <text>分享给好友或群聊</text>
+          <text>{{ shareReady ? shareButtonText : "分享准备中…" }}</text>
         </view>
-      </t-button>
+      </button>
     </view>
   </view>
 </template>
@@ -108,6 +113,11 @@ import {
 } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import {
+  buildSessionSharePayload,
+  resolveSessionShareMode,
+  sessionSharePresentation
+} from "../../utils/sessionShare";
+import {
   isConfirmedSessionMember,
   requestSubscriptionAfterConfirmedJoin
 } from "../../utils/sessionMembership";
@@ -131,6 +141,8 @@ export default {
       sessionId: "",
       inviteToken: "",
       session: {},
+      sessionLoadError: "",
+      invitePreparing: false,
       navigatingAlbum: false,
       currentUserId: "",
       currentUserGender: "",
@@ -142,23 +154,32 @@ export default {
     };
   },
   computed: {
-    isAlbumEntry() {
-      return this.entry === "album";
+    shareMode() {
+      return resolveSessionShareMode(this.session);
+    },
+    sharePresentation() {
+      return sessionSharePresentation(this.shareMode);
     },
     pageTitle() {
-      return this.isAlbumEntry ? "查看车局相册" : "邀请好友认领角色";
+      return this.sharePresentation.pageTitle;
     },
     pageIntro() {
-      if (this.isAlbumEntry) {
-        return "同车成员可直接进入相册；未上车先选择角色。";
-      }
-      return "发送给好友或群聊，对方可以查看实时角色并申请认领。";
+      return this.sharePresentation.pageIntro;
+    },
+    shareButtonText() {
+      return this.sharePresentation.buttonText;
+    },
+    shareReady() {
+      return Boolean(this.sessionId && this.inviteToken && !this.sessionLoadError);
+    },
+    isClaimMode() {
+      return this.shareMode === "claim";
     },
     statusPillText() {
-      if (this.isAlbumEntry) {
-        return this.session.join_policy === "direct" ? "可直接上车" : "需车头审核";
+      if (this.isClaimMode) {
+        return "照片角色待认领";
       }
-      return "可继续分享";
+      return this.session.join_policy === "direct" ? "可直接上车" : "需车头审核";
     },
     storeName() {
       if (this.session.id) {
@@ -207,6 +228,9 @@ export default {
       return this.roleCards.filter((role) => role.stateKind === "taken").length;
     },
     roleSummaryText() {
+      if (this.isClaimMode) {
+        return `${this.availableCount} 个待认领，${this.mineCount} 个我认领，${this.switchingCount} 个换认领，${this.takenCount} 个已认领`;
+      }
       return `${this.availableCount} 个可选，${this.mineCount} 个我选，${this.switchingCount} 个换选，${this.takenCount} 个已选`;
     },
     roleCards() {
@@ -247,17 +271,7 @@ export default {
           ownerGender: this.roleOccupantGender(role),
           boardType: "seat",
           stateKind,
-          stateLabel: stateKind === "switching"
-            ? "换选"
-            : stateKind === "mine"
-              ? ""
-              : stateKind === "taken"
-                ? "已选"
-                : stateKind === "pendingReview"
-                  ? "待审"
-                  : stateKind === "unavailable"
-                    ? "不可选"
-                  : "可选"
+          stateLabel: this.roleStateLabel(stateKind)
         };
       });
     },
@@ -356,15 +370,7 @@ export default {
             mine,
             boardType: "npc",
             stateKind,
-            stateLabel: stateKind === "mine"
-              ? ""
-              : stateKind === "pendingReview"
-                ? "待审"
-                : stateKind === "taken"
-                  ? "已选"
-                  : stateKind === "unavailable"
-                    ? "不可选"
-                    : "可选"
+            stateLabel: this.roleStateLabel(stateKind)
           };
         });
     },
@@ -383,7 +389,11 @@ export default {
         sections.push({
           key: "npc",
           title: "NPC角色",
-          summary: this.npcSelfJoinEnabled ? "工作人员可选择自己的NPC角色" : "本场NPC由车头安排",
+          summary: this.npcSelfJoinEnabled
+            ? this.isClaimMode
+              ? "工作人员可认领自己的NPC角色"
+              : "工作人员可选择自己的NPC角色"
+            : "本场NPC由车头安排",
           items: this.npcRoleCards
         });
       }
@@ -409,7 +419,9 @@ export default {
         if (seatRole && this.currentUserId && !seatRole.taken && this.isRoleClaimable(seatRole)) {
           this.pendingRole = seatRole;
         } else if (seatRole && this.role && !isSameRole(seatRole, this.role)) {
-          this.statusText = `你已选择 ${this.role.name}，确认后会释放原角色。`;
+          this.statusText = this.isClaimMode
+            ? `你已认领 ${this.role.name}，确认后会释放原角色。`
+            : `你已选择 ${this.role.name}，确认后会释放原角色。`;
         }
       }
       await this.prepareJoinInviteToken();
@@ -459,18 +471,19 @@ export default {
   },
   onShareAppMessage() {
     const flow = this.persistFlow();
-    const title = this.shareCardTitle();
     if (this.sessionId) {
-      const shareCode = `s${this.sessionId}-${Date.now()}`;
-      const entryQuery = this.entry ? `&entry=${encodeURIComponent(this.entry)}` : "";
-      const inviteQuery = this.inviteToken
-        ? `&inviteToken=${encodeURIComponent(this.inviteToken)}`
-        : "";
-      return {
-        title,
-        path: `/pages/session/share?id=${this.sessionId}${entryQuery}&shareCode=${shareCode}${inviteQuery}&source=wechat_share`,
-        imageUrl: "/static/art/ticket-landscape.jpg"
-      };
+      const payload = buildSessionSharePayload({
+        sessionId: this.sessionId,
+        inviteToken: this.inviteToken,
+        shareCode: `s${this.sessionId}-${Date.now()}`,
+        scriptName: this.scriptName,
+        mode: this.shareMode
+      });
+      if (!payload) {
+        showToast({ title: "分享尚未准备好，请稍后重试", icon: "none" });
+        return undefined;
+      }
+      return payload;
     }
     return {
       title: this.shareCardTitle(),
@@ -497,6 +510,46 @@ export default {
     },
     shareCardTitle() {
       return `${this.scriptName}｜${this.storeName}｜${this.startText}`;
+    },
+    selectionCopy() {
+      if (this.isClaimMode) {
+        return {
+          phoneTitle: "授权手机号后认领",
+          phoneContent: "认领角色前需要授权手机号，便于核对本局玩家。",
+          directNote: "相册认领页认领角色",
+          success: "角色已认领",
+          conflict: "这个角色已被认领"
+        };
+      }
+      return {
+        phoneTitle: "授权手机号后上车",
+        phoneContent: "上车前需要授权手机号，方便车头沟通和审核。",
+        directNote: "分享页选择角色上车",
+        success: "已上车",
+        conflict: "这个角色已被选择"
+      };
+    },
+    roleStateLabel(stateKind) {
+      if (this.isClaimMode) {
+        const labels = {
+          mine: "我认领",
+          taken: "已认领",
+          pendingReview: "待确认",
+          unavailable: "不可认领",
+          available: "待认领",
+          switching: "换认领"
+        };
+        return labels[stateKind] || "";
+      }
+      const labels = {
+        mine: "",
+        taken: "已选",
+        pendingReview: "待审",
+        unavailable: "不可选",
+        available: "可选",
+        switching: "换选"
+      };
+      return labels[stateKind] || "";
     },
     hasSeatSelectionLogin() {
       const auth = getCurrentUser();
@@ -584,11 +637,15 @@ export default {
     async ensureSeatSelectionLogin(options = {}) {
       const wasLoggedIn = this.hasSeatSelectionLogin();
       const auth = await ensureLoggedIn({
-        content: "登录后可以选择角色并锁定你的位置。",
+        content: this.isClaimMode
+          ? "登录后可以认领自己玩过的角色。"
+          : "登录后可以选择角色并锁定你的位置。",
         ...options
       });
       if (!auth?.user) {
-        this.statusText = "登录后可继续选择角色。";
+        this.statusText = this.isClaimMode
+          ? "登录后可继续认领角色。"
+          : "登录后可继续选择角色。";
         return null;
       }
       this.currentUserId = auth.user.id || "";
@@ -596,14 +653,13 @@ export default {
       if (options.refreshAfterFreshLogin === true && !wasLoggedIn) {
         if (this.sessionId) {
           await this.loadPublishedSession(this.sessionId);
-          if (this.redirectAlbumMemberIfNeeded()) {
-            return null;
-          }
         }
       }
       return auth;
     },
     async loadPublishedSession(sessionId) {
+      this.sessionLoadError = "";
+      this.statusText = "";
       try {
         const inviteQuery = this.inviteToken
           ? `?inviteToken=${encodeURIComponent(this.inviteToken)}`
@@ -655,21 +711,32 @@ export default {
           startText: this.startText,
           note: this.note
         });
-        this.redirectAlbumMemberIfNeeded();
-        if (this.isAlbumEntry && !this.role && !this.currentUserNpcRole && !this.statusText) {
+        this.updateNavigationBarTitle();
+        if (!this.role && !this.currentUserNpcRole && !this.statusText) {
           this.statusText =
-            this.session.join_policy === "direct"
-              ? "选择角色后会直接进入相册。"
-              : "选择角色提交申请，车头确认后可进入相册。";
+            this.isClaimMode
+              ? "请选择自己玩过的角色完成认领。"
+              : this.session.join_policy === "direct"
+                ? "选择角色后将直接加入本局。"
+                : "选择角色提交申请，等待车头审核。";
         }
+        return true;
       } catch (error) {
-        showToast({ title: "车局加载失败", icon: "none" });
+        this.sessionLoadError = "车局加载失败，请重试";
+        showToast({ title: this.sessionLoadError, icon: "none" });
+        return false;
       }
     },
     async prepareJoinInviteToken() {
-      if (this.inviteToken || !this.sessionId || this.session.access_scope !== "member") {
+      if (
+        this.invitePreparing ||
+        this.inviteToken ||
+        !this.sessionId ||
+        this.session.access_scope !== "member"
+      ) {
         return;
       }
+      this.invitePreparing = true;
       try {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/join-invite-token`,
@@ -677,21 +744,53 @@ export default {
           data: {}
         });
         this.inviteToken = dataOf(response)?.token || "";
+        if (!this.inviteToken) {
+          this.statusText = "分享准备失败，请重试。";
+        }
       } catch (error) {
         this.inviteToken = "";
+        this.statusText = "分享准备失败，请重试。";
+      } finally {
+        this.invitePreparing = false;
       }
     },
-    redirectAlbumMemberIfNeeded() {
+    async retryLoadSession() {
+      if (!this.sessionId) {
+        return;
+      }
+      const loaded = await this.loadPublishedSession(this.sessionId);
+      if (loaded) {
+        await this.prepareJoinInviteToken();
+      }
+    },
+    updateNavigationBarTitle() {
+      if (typeof uni !== "undefined" && typeof uni.setNavigationBarTitle === "function") {
+        uni.setNavigationBarTitle({ title: this.pageTitle });
+      }
+    },
+    openAlbumAfterClaim(wasConfirmedMember = false) {
       if (
-        !this.isAlbumEntry ||
+        !this.isClaimMode ||
+        wasConfirmedMember ||
         !this.sessionId ||
-        (!this.role && !this.currentUserNpcRole) ||
         this.navigatingAlbum
       ) {
         return false;
       }
+      const photoCount = Number(
+        this.session.active_album_photo_count || this.session.photo_count || 0
+      );
+      if (photoCount <= 0) {
+        this.statusText = "角色已认领，照片上传后即可查看。";
+        return false;
+      }
       this.navigatingAlbum = true;
-      uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
+      uni.redirectTo({
+        url: `/pages/session/album?id=${this.sessionId}`,
+        fail: () => {
+          this.navigatingAlbum = false;
+        }
+      });
       return true;
     },
     roleKey(role) {
@@ -759,11 +858,12 @@ export default {
       }
       const currentRoleName = currentRole.name || "当前角色";
       const nextRoleName = role.name || "新角色";
+      const actionText = this.isClaimMode ? "换认领" : "换选";
       return new Promise((resolve) => {
         showModal({
-          title: "确认换选",
+          title: `确认${actionText}`,
           content: `将从 ${currentRoleName} 换到 ${nextRoleName}，原角色会释放，是否继续？`,
-          confirmText: "换选",
+          confirmText: actionText,
           cancelText: "取消",
           success(result) {
             resolve(Boolean(result.confirm));
@@ -789,22 +889,23 @@ export default {
         this.sessionId
           ? this.roleCards.find((item) => this.roleKey(item) === selectedRoleKey) || role
           : role;
-      if (this.isAlbumEntry && !this.currentUserId) {
-        await this.loadPublishedSession(this.sessionId);
-        if (this.redirectAlbumMemberIfNeeded()) {
-          return;
-        }
-      }
+      const copy = this.selectionCopy();
       if (targetRole.taken && !targetRole.mine) {
-        showToast({ title: "这个角色已被选择", icon: "none" });
+        showToast({ title: copy.conflict, icon: "none" });
         return;
       }
       if (!targetRole.claimable && !targetRole.mine) {
-        showToast({ title: "这个角色暂不可选择", icon: "none" });
+        showToast({
+          title: this.isClaimMode ? "这个角色暂不可认领" : "这个角色暂不可选择",
+          icon: "none"
+        });
         return;
       }
       if (targetRole.taken && targetRole.mine) {
-        showToast({ title: "这是你当前选择的角色", icon: "none" });
+        showToast({
+          title: this.isClaimMode ? "这是你已认领的角色" : "这是你当前选择的角色",
+          icon: "none"
+        });
         return;
       }
       this.roleSelectionSubmitting = true;
@@ -855,7 +956,7 @@ export default {
     },
     roleDisplayText(role) {
       if (!role?.name) {
-        return "待选";
+        return this.isClaimMode ? "待认领" : "待选";
       }
       const symbol = roleGenderSymbol(role.roleGender);
       const suffix = isCrossCast(this.currentUserGender, role.roleGender) ? "（反串）" : "";
@@ -864,15 +965,19 @@ export default {
     async confirmRole(role = null, options = {}) {
       const targetRole = role || this.pendingRole;
       const revealPending = options.revealPending !== false;
+      const copy = this.selectionCopy();
       if (!targetRole) {
-        showToast({ title: "先选择一个可选角色", icon: "none" });
+        showToast({
+          title: this.isClaimMode ? "先选择一个待认领角色" : "先选择一个可选角色",
+          icon: "none"
+        });
         return;
       }
       const auth = await this.ensureSeatSelectionLogin({
         refreshAfterFreshLogin: true,
         requirePhone: this.joinRequiresPhone,
-        phoneRequiredTitle: "授权手机号后上车",
-        phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
+        phoneRequiredTitle: copy.phoneTitle,
+        phoneRequiredContent: copy.phoneContent
       });
       if (!auth) {
         if (revealPending) {
@@ -906,9 +1011,10 @@ export default {
         this.pendingRole = null;
       }
       this.persistFlow();
-      showToast({ title: "角色已选择", icon: "none" });
+      showToast({ title: copy.success, icon: "none" });
     },
     async claimSeat(role) {
+      const copy = this.selectionCopy();
       try {
         const seatId = role.seatId || role.id;
         if (this.session.join_policy === "direct") {
@@ -917,7 +1023,7 @@ export default {
             url: `/api/session-seats/${seatId}/claim`,
             method: "POST",
             data: {
-              note: this.isAlbumEntry ? "相册分享页直接上车" : "分享页选择角色上车"
+              note: copy.directNote
             }
           });
           const joinResult = dataOf(claimResponse)?.join_result;
@@ -930,19 +1036,23 @@ export default {
           this.pendingRole = null;
           await this.loadPublishedSession(this.sessionId);
           if (joinResult !== "joined") {
-            this.statusText = "上车结果异常，请刷新后确认角色状态。";
-            showToast({ title: "上车结果异常，请稍后确认", icon: "none" });
+            this.statusText = this.isClaimMode
+              ? "认领结果异常，请刷新后确认角色状态。"
+              : "上车结果异常，请刷新后确认角色状态。";
+            showToast({
+              title: this.isClaimMode ? "认领结果异常，请稍后确认" : "上车结果异常，请稍后确认",
+              icon: "none"
+            });
             return;
           }
-          if (this.isAlbumEntry && joinResult === "joined") {
-            if (!this.navigatingAlbum) {
-              uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
-            }
+          if (this.openAlbumAfterClaim(wasConfirmedMember)) {
             return;
           }
-          this.statusText = "已上车。";
+          if (!(this.isClaimMode && !wasConfirmedMember)) {
+            this.statusText = `${copy.success}。`;
+          }
           showToast({
-            title: "已上车",
+            title: copy.success,
             icon: "none"
           });
           return;
@@ -952,24 +1062,30 @@ export default {
           method: "POST",
           data: {
             seatId,
-            note: this.isAlbumEntry ? "相册分享页申请上车" : "分享页选择角色申请上车"
+            note: copy.directNote
           }
         });
         this.pendingRole = null;
         await this.loadPublishedSession(this.sessionId);
-        this.statusText = "已提交申请，等待车头审核。";
+        this.statusText = this.isClaimMode
+          ? "已提交认领，等待车头确认。"
+          : "已提交申请，等待车头审核。";
         showToast({
-          title: "已提交申请",
+          title: this.isClaimMode ? "已提交认领" : "已提交申请",
           icon: "none"
         });
         requestSignupReviewedSubscription();
       } catch (error) {
         if (error?.statusCode === 409) {
-          this.statusText = "你已经申请过这个角色，请等待车头审核。";
+          this.statusText = copy.conflict;
         } else if (error?.statusCode === 401) {
-          this.statusText = "请先登录后再选择角色。";
+          this.statusText = this.isClaimMode
+            ? "请先登录后再认领角色。"
+            : "请先登录后再选择角色。";
         } else {
-          this.statusText = "申请失败，请稍后重试。";
+          this.statusText = this.isClaimMode
+            ? "角色认领失败，请稍后重试。"
+            : "申请失败，请稍后重试。";
         }
       }
     },
@@ -984,10 +1100,13 @@ export default {
       if (!loginAuth) {
         return;
       }
+      const copy = this.selectionCopy();
       const targetRole = this.npcRoleCards.find((item) => this.roleKey(item) === selectedRoleKey) || npcRole;
       if (!targetRole.mine) {
         if (targetRole.stateKind === "pendingReview") {
-          this.statusText = "已提交NPC角色申请，等待车头审核。";
+          this.statusText = this.isClaimMode
+            ? "已提交NPC角色认领，等待车头确认。"
+            : "已提交NPC角色申请，等待车头审核。";
           return;
         }
         if (!this.npcSelfJoinEnabled) {
@@ -995,17 +1114,16 @@ export default {
           return;
         }
         if (!targetRole.claimable) {
-          showToast({ title: "这个NPC角色已被选择", icon: "none" });
+          showToast({ title: copy.conflict, icon: "none" });
           return;
         }
       }
 
       if (targetRole.mine) {
-        if (this.isAlbumEntry) {
-          uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
-        } else {
-          showToast({ title: "这是你的NPC角色", icon: "none" });
-        }
+        showToast({
+          title: this.isClaimMode ? "这是你已认领的NPC角色" : "这是你的NPC角色",
+          icon: "none"
+        });
         return;
       }
 
@@ -1023,8 +1141,8 @@ export default {
         const auth = await this.ensureSeatSelectionLogin({
           refreshAfterFreshLogin: true,
           requirePhone: this.joinRequiresPhone,
-          phoneRequiredTitle: "授权手机号后上车",
-          phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
+          phoneRequiredTitle: copy.phoneTitle,
+          phoneRequiredContent: copy.phoneContent
         });
         if (!auth) {
           return;
@@ -1034,7 +1152,7 @@ export default {
           url: `/api/session-npc-roles/${targetRole.id}/claim`,
           method: "POST",
           data: {
-            note: this.isAlbumEntry ? "相册分享页选择NPC角色" : "分享页选择NPC角色"
+            note: copy.directNote
           }
         });
         const result = dataOf(response) || {};
@@ -1046,33 +1164,48 @@ export default {
             requestSessionRescheduledSubscription
           );
           await this.loadPublishedSession(this.sessionId);
-          this.statusText = "已选择NPC角色。";
-          if (this.isAlbumEntry && !this.navigatingAlbum) {
-            uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
+          if (this.openAlbumAfterClaim(wasConfirmedMember)) {
             return;
           }
-          showToast({ title: "已选择NPC角色", icon: "none" });
+          if (!(this.isClaimMode && !wasConfirmedMember)) {
+            this.statusText = this.isClaimMode ? `${copy.success}。` : "已选择NPC角色。";
+          }
+          showToast({ title: this.isClaimMode ? copy.success : "已选择NPC角色", icon: "none" });
           return;
         }
         if (result.join_result === "pending_review") {
           await this.loadPublishedSession(this.sessionId);
-          this.statusText = "已提交NPC角色申请，等待车头审核。";
-          showToast({ title: "已提交申请", icon: "none" });
+          this.statusText = this.isClaimMode
+            ? "已提交NPC角色认领，等待车头确认。"
+            : "已提交NPC角色申请，等待车头审核。";
+          showToast({
+            title: this.isClaimMode ? "已提交认领" : "已提交申请",
+            icon: "none"
+          });
           requestSignupReviewedSubscription();
           return;
         }
         await this.loadPublishedSession(this.sessionId);
-        this.statusText = "上车结果异常，请刷新后确认NPC角色状态。";
-        showToast({ title: "上车结果异常，请稍后确认", icon: "none" });
+        this.statusText = this.isClaimMode
+          ? "认领结果异常，请刷新后确认NPC角色状态。"
+          : "上车结果异常，请刷新后确认NPC角色状态。";
+        showToast({
+          title: this.isClaimMode ? "认领结果异常，请稍后确认" : "上车结果异常，请稍后确认",
+          icon: "none"
+        });
       } catch (error) {
         if (error?.statusCode === 403) {
           this.statusText = "本场NPC由车头安排。";
         } else if (error?.statusCode === 409) {
-          this.statusText = "这个NPC角色已被选择或正在审核。";
+          this.statusText = copy.conflict;
         } else if (error?.statusCode === 401) {
-          this.statusText = "请先登录后再选择NPC角色。";
+          this.statusText = this.isClaimMode
+            ? "请先登录后再认领NPC角色。"
+            : "请先登录后再选择NPC角色。";
         } else {
-          this.statusText = "NPC角色申请失败，请稍后重试。";
+          this.statusText = this.isClaimMode
+            ? "NPC角色认领失败，请稍后重试。"
+            : "NPC角色申请失败，请稍后重试。";
         }
       } finally {
         this.roleSelectionSubmitting = false;
@@ -1219,13 +1352,67 @@ export default {
   margin-top: 28rpx;
 }
 
+.session-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin-top: 24rpx;
+  padding: 22rpx 24rpx;
+  border: 1rpx solid rgba(184, 99, 72, 0.28);
+  border-radius: 14rpx;
+  background: rgba(251, 241, 236, 0.9);
+}
+
+.session-load-error-text {
+  flex: 1;
+  color: #8b4936;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.session-load-retry {
+  flex-shrink: 0;
+  min-width: 136rpx;
+  margin: 0;
+  padding: 0 22rpx;
+  border: 1rpx solid rgba(26, 93, 77, 0.32);
+  border-radius: 999rpx;
+  background: #ffffff;
+  color: #1a5d4d;
+  font-size: 24rpx;
+  line-height: 56rpx;
+}
+
+.session-load-retry::after,
+.wechat-action::after {
+  border: 0;
+}
+
 .wechat-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
+  height: 88rpx;
+  min-height: 88rpx;
+  margin: 0;
+  padding: 0 24rpx;
   border: 1rpx solid #1a5d4d;
+  border-radius: 12rpx;
   background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%);
   color: #ffffff;
+  font-size: 28rpx;
   font-weight: 700;
+  line-height: 1;
   box-shadow: 0 16rpx 34rpx rgba(31, 111, 91, 0.22);
+}
+
+.wechat-action[disabled] {
+  border-color: rgba(26, 93, 77, 0.32);
+  background: linear-gradient(145deg, #809b92 0%, #91aaa1 100%);
+  color: rgba(255, 255, 255, 0.84);
+  box-shadow: none;
 }
 
 .wechat-action-content {
