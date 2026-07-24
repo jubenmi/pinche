@@ -681,7 +681,7 @@ git commit -m "fix(admin): align enabled action button colors"
 "action-button:check": "node scripts/d54-action-button-color-check.js"
 ```
 
-把 `npm run action-button:unit && npm run action-button:check &&` 接入 `postcheck`；保留其他功能已经占用的 `d54:*` 命令。
+把 `npm run action-button:unit && npm run action-button:check &&` 接入根 `check`；保留其他功能已经占用的 `d54:*` 命令与既有 `postcheck` 顺序。
 
 - [x] **Step 2：运行 D54 定向验证**
 
