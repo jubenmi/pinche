@@ -298,6 +298,9 @@ Expected: focused cover tests PASS.
 
 ### Task 3: Replace the three full-album Canvas flows
 
+> 已完成（2026-07-24）：代表图/入口/页面源码测试 41/41 通过，生产构建通过；
+> 相册页 Canvas 节点、运行时和专用文件已删除。
+
 **Files:**
 - Modify: `apps/miniprogram/src/pages/session/album.vue`
 - Modify: `apps/miniprogram/test/albumShareEntry.test.mjs`
@@ -305,7 +308,7 @@ Expected: focused cover tests PASS.
 - Delete: `apps/miniprogram/src/utils/albumShareCanvas.js`
 - Delete: `apps/miniprogram/test/albumShareCanvas.test.mjs`
 
-- [ ] **Step 1: Write failing integration contracts**
+- [x] **Step 1: Write failing integration contracts**
 
 Update the source-contract tests to require:
 
@@ -343,7 +346,7 @@ assert.match(timeline, /defaultAlbumShareTimelinePayload\(\)/);
 Also keep assertions that full-album friend payloads contain no `imageUrl`, and that single-media,
 recruitment, and fail-closed payloads retain their explicit images.
 
-- [ ] **Step 2: Run integration tests and verify RED**
+- [x] **Step 2: Run integration tests and verify RED**
 
 ```bash
 node --test apps/miniprogram/test/albumShareEntry.test.mjs \
@@ -352,7 +355,7 @@ node --test apps/miniprogram/test/albumShareEntry.test.mjs \
 
 Expected: FAIL because Canvas nodes and preparation still exist.
 
-- [ ] **Step 3: Replace Canvas preparation with synchronous image selection**
+- [x] **Step 3: Replace Canvas preparation with synchronous image selection**
 
 In `album.vue`:
 
@@ -396,7 +399,7 @@ selectAlbumShareTimelineImage(data) {
    runtime, node, export, disposal, and cover-task awaiting.
 8. Keep token/list request currentness checks already guarding the response.
 
-- [ ] **Step 4: Isolate active, default, and public Moments payloads**
+- [x] **Step 4: Isolate active, default, and public Moments payloads**
 
 Implement `activeAlbumShareTimelinePayload()` and route:
 
@@ -413,7 +416,7 @@ onShareTimeline() {
 Every full-album timeline payload returns `null` without its own token and representative image.
 Public focused single-media behavior continues using its corresponding public media image.
 
-- [ ] **Step 5: Delete Canvas code and verify focused tests**
+- [x] **Step 5: Delete Canvas code and verify focused tests**
 
 Delete `albumShareCanvas.js` and `albumShareCanvas.test.mjs`, then run:
 
@@ -425,7 +428,7 @@ node --test apps/miniprogram/test/albumShareCover.test.mjs \
 
 Expected: all focused tests PASS.
 
-- [ ] **Step 6: Commit the integrated representative image**
+- [x] **Step 6: Commit the integrated representative image**
 
 ```bash
 git add -A apps/miniprogram/src/pages/session/album.vue \
@@ -444,6 +447,7 @@ git commit -m "refactor(album): remove canvas share covers"
 - Modify: `scripts/d55-client-canvas-album-share-cover-check.js`
 - Modify: `scripts/d56-album-share-entry-remap-check.js`
 - Modify: `scripts/d48-album-sharing-role-claim-separation-check.js`
+- Modify: `scripts/d53-album-four-action-selection-check.js`
 - Modify: `scripts/check-miniprogram.js`
 - Modify: `package.json`
 - Modify: `docs/superpowers/plans/2026-07-24-album-timeline-representative-image.md`

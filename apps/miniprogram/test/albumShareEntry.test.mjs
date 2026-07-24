@@ -300,7 +300,7 @@ test("recruit share titles include script, store, and Beijing-formatted start ti
   const sessionTitle = sourceBlock(
     source,
     "albumShareSessionTitle() {",
-    "albumFriendShareImage() {"
+    "defaultAlbumShareSubjectLabel() {"
   );
   const appMessage = sourceBlock(source, "onShareAppMessage(options) {", "watch: {");
   const recruitBranch = sourceBlock(
@@ -339,9 +339,7 @@ test("member default all-photo sharing has its own silent state, authority, and 
 
   for (const field of [
     "defaultAlbumShareToken",
-    "defaultAlbumShareFriendCoverUrl",
     "defaultAlbumShareTimelineCoverUrl",
-    "defaultAlbumShareFriendCoverPrepared",
     "defaultAlbumShareTimelineCoverPrepared",
     "defaultAlbumShareSubject",
     "defaultAlbumShareCounts",
@@ -366,10 +364,12 @@ test("member default all-photo sharing has its own silent state, authority, and 
     prepareDefault,
     /this\.installDefaultAlbumShareSnapshot\(data, token\)[\s\S]*this\.showShareMenus\(\)/
   );
-  assert.match(prepareDefault, /kinds:\s*\[\s*"timeline"\s*\]/);
+  assert.match(prepareDefault, /this\.selectAlbumShareTimelineImage\(data\)/);
+  assert.match(prepareDefault, /this\.applyDefaultAlbumShareTimelineImage\(/);
+  assert.doesNotMatch(prepareDefault, /Canvas|startAlbumShareCoverPreparation/);
 });
 
-test("member menu payloads read only the default all-photo snapshot while active remains button-only", async () => {
+test("member menu payloads isolate active and default full-album snapshots", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
@@ -409,12 +409,13 @@ test("member menu payloads read only the default all-photo snapshot while active
   assert.doesNotMatch(publicBranch, /imageUrl|albumFriendShareImage/);
   assert.doesNotMatch(defaultPayload, /defaultAlbumShareFriendCoverPrepared|imageUrl/);
   assert.doesNotMatch(activePayload, /activeAlbumShareFriendCoverPrepared|imageUrl/);
+  assert.match(timeline, /albumShareReadyVisible/);
+  assert.match(timeline, /activeAlbumShareToken/);
+  assert.match(timeline, /activeAlbumShareTimelinePayload\(\)/);
   assert.match(timeline, /defaultAlbumShareTimelinePayload\(\)/);
-  assert.doesNotMatch(timeline, /activeAlbumShareToken/);
   assert.match(menus, /defaultAlbumShareToken/);
   assert.doesNotMatch(menus, /defaultAlbumShareFriendCoverPrepared/);
   assert.match(menus, /defaultAlbumShareTimelineCoverPrepared/);
-  assert.doesNotMatch(menus, /activeAlbumShareToken/);
 });
 
 test("member default all-photo sharing opens friend sharing from its token", () => {
@@ -480,7 +481,7 @@ test("member default media fingerprint ignores signed URLs but tracks share sema
   );
 });
 
-test("member lifecycle invalidates default and recruit entries before Canvas disposal", async () => {
+test("member lifecycle invalidates share entries without Canvas cleanup", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
@@ -489,17 +490,9 @@ test("member lifecycle invalidates default and recruit entries before Canvas dis
   const onUnload = sourceBlock(source, "onUnload() {", "onPageScroll(event) {");
 
   for (const lifecycle of [onHide, onUnload]) {
-    const invalidateDefault = lifecycle.indexOf("this.invalidateDefaultAlbumShare()");
-    const invalidateRecruit = lifecycle.indexOf("this.invalidateRecruitInviteShare()");
-    const invalidateCanvas = lifecycle.indexOf("this.albumShareCanvasCoordinator?.invalidate()");
-    const disposeCanvas = lifecycle.indexOf("this.disposeAlbumShareCanvasPreparation()");
-
-    assert.notEqual(invalidateDefault, -1);
-    assert.notEqual(invalidateRecruit, -1);
-    assert.notEqual(invalidateCanvas, -1);
-    assert.ok(invalidateDefault < disposeCanvas);
-    assert.ok(invalidateRecruit < disposeCanvas);
-    assert.ok(invalidateCanvas < disposeCanvas);
+    assert.match(lifecycle, /this\.invalidateDefaultAlbumShare\(\)/);
+    assert.match(lifecycle, /this\.invalidateRecruitInviteShare\(\)/);
+    assert.doesNotMatch(lifecycle, /Canvas|canvas/);
   }
 });
 
