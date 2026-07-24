@@ -157,6 +157,22 @@ export function singleMediaShareCardImage(value, fallback = SINGLE_MEDIA_SHARE_S
   return image || fallback;
 }
 
+export function singleMediaShareReadyPayload(entry, fallbackTitle = "") {
+  if (entry?.status !== "ready" || typeof entry?.path !== "string" || !entry.path.trim()) {
+    return null;
+  }
+  const title =
+    typeof entry.title === "string" && entry.title.trim()
+      ? entry.title
+      : String(fallbackTitle || "").trim();
+  const payload = {
+    title,
+    path: entry.path
+  };
+  const imageUrl = typeof entry.imageUrl === "string" ? entry.imageUrl.trim() : "";
+  return Object.freeze(imageUrl ? { ...payload, imageUrl } : payload);
+}
+
 export function publicAlbumMediaCaption(photo, shareSubjectLabel = "") {
   if (photo?.media_type === "video") {
     return "打开小程序查看视频";

@@ -84,6 +84,7 @@ for (const helperName of [
   "singleMediaShareRouteState",
   "focusedPublicSnapshotProjection",
   "singleMediaShareCardImage",
+  "singleMediaShareReadyPayload",
   "createFocusedPublicVideoRequestContext",
   "isFocusedPublicVideoRequestCurrent"
 ]) {
@@ -98,7 +99,7 @@ assert(
   "D50 album page must pass the focused-mode 查看完整相册 primary action"
 );
 
-const senderPreparation = methodBlock(albumPage, "prepareSingleMediaShare", "handleSingleMediaShareStatusTap");
+const senderPreparation = methodBlock(albumPage, "prepareSingleMediaShare", "showFullPublicAlbum");
 assertOrdered(
   senderPreparation,
   [
@@ -119,6 +120,21 @@ assertOrdered(
 assert(
   senderPreparation.includes("!this.isSingleMediaShareEligible(photo)"),
   "D50 sender must fail closed before requesting an ineligible media item"
+);
+assertOrdered(
+  senderPreparation,
+  [
+    "const imageUrl = this.isImageMedia(photo)",
+    '? ""',
+    ": await this.prepareSingleMediaShareCardImage(photo);",
+    "...(imageUrl ? { imageUrl } : {})"
+  ],
+  "D50 photos must skip explicit cover preparation while videos retain their cover"
+);
+assert(
+  !senderPreparation.includes("force") &&
+    !senderPreparation.includes("showModal("),
+  "D50 disabled non-ready share states must not expose a click-driven retry path"
 );
 
 const shareCallback = methodBlock(albumPage, "onShareAppMessage", "onShareTimeline");
@@ -141,11 +157,11 @@ assertOrdered(
     "const intent = albumShareAppMessageIntent(options,",
     "if (intent.kind === ALBUM_SHARE_INTENT.SINGLE)",
     "this.singleMediaShareAuthority.entryFor(intent.mediaId)",
-    'entry?.status === "ready"',
-    "entry.path",
-    "entry.imageUrl"
+    "singleMediaShareReadyPayload(entry, this.albumShareTitle())",
+    "if (payload)",
+    "return payload"
   ],
-  "D50 native single-media share must read the exact routed dataset cache entry"
+  "D50 native single-media share must read the exact routed dataset entry and build a media-aware payload"
 );
 assert(
   !shareCallback.includes("previewCurrentIndex"),
@@ -161,6 +177,11 @@ const buttonShareCallback = shareCallback.slice(0, pageShareStart);
 assert(
   !buttonShareCallback.includes("return {}") && !buttonShareCallback.includes("albumShareToken"),
   "D50 invalid button sharing must not fall back to page sharing or expose a snapshot token"
+);
+assert(
+  buttonShareCallback.includes("singleMediaShareReadyPayload") &&
+    !buttonShareCallback.includes("entry.imageUrl"),
+  "D50 button sharing must delegate photo omission and video cover preservation to the payload helper"
 );
 
 const publicLoad = methodBlock(albumPage, "loadPublicAlbum", "normalizeAlbumMediaUrl");
@@ -251,12 +272,13 @@ assert(
 assert(
   (viewer.match(/src="\/static\/icons\/share-light\.svg"/g) || []).length === 2 &&
     viewer.includes("album-image-viewer__share-icon") &&
-    viewer.includes("'album-image-viewer__icon-button--disabled': ['blocked', 'failed'].includes(shareStatus)") &&
-    !viewer.includes('>\n          分享\n        </button>') &&
+    viewer.includes('class="album-image-viewer__icon-button album-image-viewer__icon-button--disabled"') &&
+    viewer.includes('aria-disabled="true"') &&
+    !viewer.includes("share-status-tap") &&
     !viewer.includes('"准备中"') &&
     !viewer.includes('"不可分享"') &&
     !viewer.includes('"重试分享"'),
-  "D50 album viewer must keep one share glyph across states, gray unavailable states, and never render share status text"
+  "D50 non-ready viewer share states must use one gray glyph without any interaction"
 );
 assertOrdered(
   viewer,
@@ -276,7 +298,6 @@ assertOrdered(
     'open-type="share"',
     ':data-media-id="currentPhoto.id"',
     'v-else-if="shareStatus !== \'hidden\' && currentPhoto"',
-    'share-status-tap',
     'v-if="primaryActionLabel"',
     'primary-action'
   ],
@@ -286,18 +307,23 @@ assert(
   !viewer.includes("share-token") && !viewer.includes("albumShareToken"),
   "D50 viewer must remain presentational and must not own share tokens"
 );
-assertOrdered(
-  albumPage,
-  [
-    "const entry = this.singleMediaShareAuthority.reject(shareRequest, error);",
-    'if (force && entry?.status === "failed")',
-    "showModal({",
-    'title: "分享暂不可用"',
-    'content: error?.userMessage || "分享准备失败，请稍后再试。"',
-    "showCancel: false",
-    'confirmText: "知道了"'
-  ],
-  "D50 only user-forced share preparation failures may use a modal without changing the share glyph"
+const previewShareStatusStart = albumPage.indexOf("previewShareStatus()");
+const previewShareStatusBlock = albumPage.slice(
+  previewShareStatusStart,
+  albumPage.indexOf("previewMediaProgress()", previewShareStatusStart)
+);
+assert(
+  previewShareStatusStart >= 0 &&
+    previewShareStatusBlock.includes('if (!this.isSingleMediaShareEligible(this.previewCurrentPhoto))') &&
+    previewShareStatusBlock.includes('return "blocked";') &&
+    previewShareStatusBlock.includes("?.status ||") &&
+    previewShareStatusBlock.includes('"loading"'),
+  "D50 member previews must project ineligible media as blocked and pending eligible media as loading"
+);
+assert(
+  !albumPage.includes('@share-status-tap="handleSingleMediaShareStatusTap"') &&
+    !albumPage.includes("handleSingleMediaShareStatusTap(event)"),
+  "D50 album page must not retain a click handler for disabled share states"
 );
 assert(
   viewer.includes(`:class="{ 'album-image-viewer__slide--with-primary-action': primaryActionLabel }"`) &&

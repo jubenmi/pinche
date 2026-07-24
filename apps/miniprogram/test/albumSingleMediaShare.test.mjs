@@ -127,6 +127,41 @@ test("uses only the same-media share image and a safe explicit fallback", () => 
   assert.equal(singleMediaShareCardImage(null), "/static/art/ticket-landscape.jpg");
 });
 
+test("omits imageUrl for photo screenshots while retaining an explicit video cover", () => {
+  assert.equal(typeof albumSingleMediaShare.singleMediaShareReadyPayload, "function");
+  const photoPayload = albumSingleMediaShare.singleMediaShareReadyPayload(
+    {
+      status: "ready",
+      title: "单张照片",
+      path: "/pages/session/album?focusMediaId=12"
+    },
+    "相册"
+  );
+  assert.deepEqual(photoPayload, {
+    title: "单张照片",
+    path: "/pages/session/album?focusMediaId=12"
+  });
+  assert.equal(Object.hasOwn(photoPayload, "imageUrl"), false);
+
+  assert.deepEqual(
+    albumSingleMediaShare.singleMediaShareReadyPayload({
+      status: "ready",
+      title: "单个视频",
+      path: "/pages/session/album?focusMediaId=13",
+      imageUrl: "wxfile://video-cover.jpg"
+    }),
+    {
+      title: "单个视频",
+      path: "/pages/session/album?focusMediaId=13",
+      imageUrl: "wxfile://video-cover.jpg"
+    }
+  );
+  assert.equal(
+    albumSingleMediaShare.singleMediaShareReadyPayload({ status: "loading", path: "/unsafe" }),
+    null
+  );
+});
+
 test("returns a credential-free fail-closed payload after a button-cache reset or invalid dataset", () => {
   const authority = createSingleMediaShareAuthority();
   authority.begin(12);
