@@ -16,11 +16,11 @@ const PRESENTATIONS = Object.freeze({
 })
 
 export function resolveSessionShareMode(session = {}) {
-  if (typeof session.has_started === 'boolean') {
+  if (typeof session?.has_started === 'boolean') {
     return session.has_started ? 'claim' : 'join'
   }
 
-  const startAt = Date.parse(session.start_at)
+  const startAt = Date.parse(session?.start_at)
   return Number.isFinite(startAt) && startAt <= Date.now() ? 'claim' : 'join'
 }
 

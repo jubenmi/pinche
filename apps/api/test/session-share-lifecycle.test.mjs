@@ -7,6 +7,7 @@ const now = Date.parse("2026-07-24T12:00:00.000Z");
 
 test("session lifecycle reports whether the configured start time has passed", () => {
   assert.equal(sessionHasStarted({ start_at: "2026-07-24T11:59:59Z" }, now), true);
+  assert.equal(sessionHasStarted({ start_at: "2026-07-24T12:00:00Z" }, now), true);
   assert.equal(sessionHasStarted({ start_at: "2026-07-24T12:00:01Z" }, now), false);
 });
 

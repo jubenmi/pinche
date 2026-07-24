@@ -172,6 +172,7 @@ export default {
       sessionLoadSerial: 0,
       sessionLoadPromise: null,
       invitePreparing: false,
+      invitePrepareError: false,
       navigatingAlbum: false,
       currentUserId: "",
       currentUserGender: "",
@@ -215,8 +216,10 @@ export default {
         this.sessionId &&
         this.sessionLoaded &&
         !this.sessionLoading &&
+        this.session.access_scope === "member" &&
         !this.inviteToken &&
         !this.invitePreparing &&
+        this.invitePrepareError &&
         !this.sessionLoadError
       );
     },
@@ -816,6 +819,7 @@ export default {
         return;
       }
       this.invitePreparing = true;
+      this.invitePrepareError = false;
       try {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/join-invite-token`,
@@ -824,10 +828,12 @@ export default {
         });
         this.inviteToken = dataOf(response)?.token || "";
         if (!this.inviteToken) {
+          this.invitePrepareError = true;
           this.statusText = "分享准备失败，请重试。";
         }
       } catch (error) {
         this.inviteToken = "";
+        this.invitePrepareError = true;
         this.statusText = "分享准备失败，请重试。";
       } finally {
         this.invitePreparing = false;
@@ -837,7 +843,13 @@ export default {
       if (this.invitePreparing) {
         return;
       }
+      this.invitePrepareError = false;
+      this.statusText = "";
       await this.prepareJoinInviteToken();
+      if (this.inviteToken) {
+        this.invitePrepareError = false;
+        this.statusText = "";
+      }
     },
     async retryLoadSession() {
       if (!this.sessionId || this.sessionLoading) {
