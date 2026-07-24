@@ -12,13 +12,19 @@
 
 ### Task 1: Upgrade uni-app and enable Skyline only for the album page
 
+> 已完成（2026-07-24）：配置测试 2/2 通过，生产构建通过，生成页配置确认仅相册页为
+> Skyline + GlassEasel。
+> `5010520260709001` 的 `uni-cli-shared`/`uni-shared` CommonJS 契约不一致，构建稳定复现
+> `H5_BUILT_IN_TAG_NAMES` 为 `undefined`；执行时采用同批次官方热修复
+> `5010520260709002`，不改变 Skyline 技术路线。
+
 **Files:**
 - Modify: `apps/miniprogram/package.json`
 - Modify: `package-lock.json`
 - Modify: `apps/miniprogram/src/pages.json`
 - Create: `apps/miniprogram/test/albumShareSkyline.test.mjs`
 
-- [ ] **Step 1: Write the failing compiler and page-config test**
+- [x] **Step 1: Write the failing compiler and page-config test**
 
 Create `apps/miniprogram/test/albumShareSkyline.test.mjs`:
 
@@ -34,7 +40,7 @@ const pagesJson = JSON.parse(
   fs.readFileSync(new URL("../src/pages.json", import.meta.url), "utf8")
 );
 
-const SKYLINE_UNI_VERSION = "3.0.0-5010520260709001";
+const SKYLINE_UNI_VERSION = "3.0.0-5010520260709002";
 
 test("album page alone opts into Skyline and GlassEasel", () => {
   const album = pagesJson.pages.find((page) => page.path === "pages/session/album");
@@ -58,7 +64,7 @@ test("uni compiler packages use the stable snapshot-capable release", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run:
 
@@ -68,14 +74,14 @@ node --test apps/miniprogram/test/albumShareSkyline.test.mjs
 
 Expected: FAIL because the album page has no renderer settings and the three packages still use `3.0.0-5000720260410001`.
 
-- [ ] **Step 3: Upgrade the three aligned compiler packages**
+- [x] **Step 3: Upgrade the three aligned compiler packages**
 
 Change `apps/miniprogram/package.json`:
 
 ```json
-"@dcloudio/uni-app": "3.0.0-5010520260709001",
-"@dcloudio/uni-mp-weixin": "3.0.0-5010520260709001",
-"@dcloudio/vite-plugin-uni": "3.0.0-5010520260709001"
+"@dcloudio/uni-app": "3.0.0-5010520260709002",
+"@dcloudio/uni-mp-weixin": "3.0.0-5010520260709002",
+"@dcloudio/vite-plugin-uni": "3.0.0-5010520260709002"
 ```
 
 Then run:
@@ -84,9 +90,9 @@ Then run:
 npm install
 ```
 
-Expected: `package-lock.json` resolves the three direct dependencies and their aligned `@dcloudio/*` transitive packages to the `5010520260709001` release.
+Expected: `package-lock.json` resolves the three direct dependencies and their aligned `@dcloudio/*` transitive packages to the `5010520260709002` release.
 
-- [ ] **Step 4: Configure only the album page for Skyline**
+- [x] **Step 4: Configure only the album page for Skyline**
 
 Change the album entry in `apps/miniprogram/src/pages.json`:
 
@@ -103,7 +109,7 @@ Change the album entry in `apps/miniprogram/src/pages.json`:
 
 Do not add `renderer` or `componentFramework` to `globalStyle`, `manifest.json`, or any other page.
 
-- [ ] **Step 5: Run the config test and production build**
+- [x] **Step 5: Run the config test and production build**
 
 Run:
 
@@ -120,7 +126,7 @@ node -e 'const fs=require("node:fs");const p="apps/miniprogram/dist/build/mp-wei
 
 Expected: exit 0.
 
-- [ ] **Step 6: Commit the compatibility gate**
+- [x] **Step 6: Commit the compatibility gate**
 
 ```bash
 git add apps/miniprogram/package.json package-lock.json apps/miniprogram/src/pages.json apps/miniprogram/test/albumShareSkyline.test.mjs
