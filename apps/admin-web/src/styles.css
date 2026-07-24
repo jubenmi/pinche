@@ -5,6 +5,9 @@
   --admin-accent-strong: #086452;
   --admin-danger: #b42318;
   --admin-danger-soft: #fff1ef;
+  --admin-action-soft: #eef8f3;
+  --admin-action-soft-hover: #e1f3ed;
+  --admin-action-disabled: #c9d6d2;
   --admin-page: #f5f7f6;
   --admin-surface: #ffffff;
   --admin-surface-muted: #f8faf9;
@@ -479,9 +482,9 @@ nav {
 .user-box button {
   height: 36px;
   padding: 0 14px;
-  background: #ffffff;
-  color: var(--admin-muted-strong);
-  border-color: var(--admin-border);
+  background: var(--admin-action-soft);
+  color: var(--admin-accent-strong);
+  border-color: rgba(15, 123, 103, 0.28);
 }
 
 .user-box .user-profile-trigger {
@@ -890,10 +893,19 @@ nav {
 .close-button {
   height: 42px;
   padding: 0 16px;
-  border: 1px solid var(--admin-border);
-  background: #ffffff;
-  color: var(--admin-text);
+  border: 1px solid rgba(15, 123, 103, 0.28);
+  background: var(--admin-action-soft);
+  color: var(--admin-accent-strong);
   font-weight: 700;
+}
+
+.toolbar button:hover:not(:disabled),
+.secondary-action:hover:not(:disabled),
+.action-button:hover:not(:disabled),
+.close-button:hover:not(:disabled),
+.user-box button:hover:not(:disabled) {
+  border-color: rgba(15, 123, 103, 0.4);
+  background: var(--admin-action-soft-hover);
 }
 
 .toolbar button:not(.primary) {
@@ -921,7 +933,6 @@ nav {
 
 .secondary-action {
   min-width: 104px;
-  background: #ffffff;
 }
 
 .bulk-actions {
@@ -962,10 +973,10 @@ nav {
   min-width: 92px;
   height: 36px;
   padding: 0 13px;
-  border: 1px solid var(--admin-border);
+  border: 1px solid rgba(15, 123, 103, 0.24);
   border-radius: 8px;
-  background: #ffffff;
-  color: var(--admin-muted-strong);
+  background: var(--admin-action-soft);
+  color: var(--admin-accent-strong);
   font-size: 13px;
   font-weight: 800;
   line-height: 1;
@@ -999,13 +1010,14 @@ nav {
 }
 
 .bulk-action-button--archive {
-  border-color: #d7e0dc;
-  background: #f8faf9;
+  border-color: rgba(15, 123, 103, 0.24);
+  background: var(--admin-action-soft);
+  color: var(--admin-accent-strong);
 }
 
 .bulk-action-button--archive:hover:not(:disabled) {
-  border-color: #c6d2ce;
-  background: #eef3f1;
+  border-color: rgba(15, 123, 103, 0.34);
+  background: var(--admin-action-soft-hover);
 }
 
 .bulk-action-button--danger {
@@ -1160,7 +1172,7 @@ td {
   height: 34px;
   min-width: 62px;
   padding: 0 11px;
-  border-color: var(--admin-border);
+  border-color: rgba(15, 123, 103, 0.28);
   font-size: 13px;
 }
 
@@ -1170,7 +1182,8 @@ td {
 
 .action-button.danger {
   border-color: #f1c7c2;
-  background: #ffffff;
+  background: var(--admin-danger-soft);
+  color: var(--admin-danger);
 }
 
 .empty-cell {
@@ -1211,10 +1224,22 @@ td {
 .review-footer-actions button {
   height: 38px;
   padding: 0 13px;
-  border: 1px solid var(--admin-border);
-  background: #ffffff;
-  color: var(--admin-text);
+  border: 1px solid rgba(15, 123, 103, 0.28);
+  background: var(--admin-action-soft);
+  color: var(--admin-accent-strong);
   font-weight: 700;
+}
+
+.review-footer-actions .primary {
+  border-color: var(--admin-accent);
+  background: var(--admin-accent);
+  color: #ffffff;
+}
+
+.review-footer-actions .danger {
+  border-color: #f1c7c2;
+  background: var(--admin-danger-soft);
+  color: var(--admin-danger) !important;
 }
 
 .table-footer {
@@ -1997,17 +2022,34 @@ td {
 .mini-stepper button {
   min-height: 38px;
   padding: 0 14px;
-  border: 1px solid var(--admin-border);
+  border: 1px solid rgba(15, 123, 103, 0.28);
   border-radius: 8px;
-  background: #ffffff;
-  color: var(--admin-muted-strong);
+  background: var(--admin-action-soft);
+  color: var(--admin-accent-strong);
   font-weight: 800;
 }
 
 .mini-stepper button.active {
   border-color: var(--admin-accent);
-  background: #e1f3ed;
-  color: var(--admin-accent-strong);
+  background: var(--admin-accent);
+  color: #ffffff;
+}
+
+.toolbar button:disabled,
+.primary:disabled,
+.secondary-action:disabled,
+.action-button:disabled,
+.close-button:disabled,
+.bulk-action-button:disabled,
+.review-footer-actions button:disabled,
+.mini-stepper button:disabled,
+.user-box button:disabled {
+  border-color: var(--admin-action-disabled);
+  background: var(--admin-action-disabled);
+  color: #ffffff;
+  opacity: 1;
+  box-shadow: none;
+  transform: none;
 }
 
 .mini-grid {
