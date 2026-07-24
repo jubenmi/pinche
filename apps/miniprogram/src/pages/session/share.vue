@@ -1132,24 +1132,24 @@ export default {
           );
           this.pendingRole = null;
           await this.loadPublishedSession(this.sessionId);
-          if (joinResult !== "joined") {
-            this.statusText = this.isClaimMode
-              ? "认领结果异常，请刷新后确认角色状态。"
-              : "上车结果异常，请刷新后确认角色状态。";
+          if (joinResult === "joined") {
+            if (this.openAlbumAfterClaim(wasConfirmedMember)) {
+              return;
+            }
+            if (!(this.isClaimMode && !wasConfirmedMember)) {
+              this.statusText = `${copy.success}。`;
+            }
             showToast({
-              title: this.isClaimMode ? "认领结果异常，请稍后确认" : "上车结果异常，请稍后确认",
+              title: copy.success,
               icon: "none"
             });
             return;
           }
-          if (this.openAlbumAfterClaim(wasConfirmedMember)) {
-            return;
-          }
-          if (!(this.isClaimMode && !wasConfirmedMember)) {
-            this.statusText = `${copy.success}。`;
-          }
+          this.statusText = this.isClaimMode
+            ? "认领结果异常，请刷新后确认角色状态。"
+            : "上车结果异常，请刷新后确认角色状态。";
           showToast({
-            title: copy.success,
+            title: this.isClaimMode ? "认领结果异常，请稍后确认" : "上车结果异常，请稍后确认",
             icon: "none"
           });
           return;
