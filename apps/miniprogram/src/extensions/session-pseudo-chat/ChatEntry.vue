@@ -1,9 +1,9 @@
 <template>
-  <view>
-    <t-button v-if="showChatEntry" class="chat-float-button" @tap="openChatModal">
-      <view class="chat-float-content">
-        <text class="chat-float-icon">聊</text>
-        <text class="chat-float-text">车友</text>
+  <view class="chat-entry">
+    <t-button v-if="showChatEntry" class="chat-entry-button" @tap="openChatModal">
+      <view class="chat-entry-content">
+        <text class="chat-entry-icon">聊</text>
+        <text class="chat-entry-text">打开车内聊天</text>
         <t-badge
           v-if="unreadCount > 0"
           class="chat-unread-badge"
@@ -109,6 +109,7 @@ import {
   isAuthorPrivateProjection,
   publicChatMessages
 } from "./api.js";
+import { isChatAccessDeniedError } from "../../utils/p1Safety.js";
 
 export default {
   props: {
@@ -131,7 +132,8 @@ export default {
       lastSeenMessageId: "",
       localUserId: this.currentUserId || "",
       focusOpened: false,
-      messageTimer: null
+      messageTimer: null,
+      chatPollingDenied: false
     };
   },
   computed: {
@@ -199,6 +201,7 @@ export default {
       this.unreadCount = 0;
       this.lastSeenMessageId = "";
       this.focusOpened = false;
+      this.chatPollingDenied = false;
     },
     openFocusedChatOnce() {
       if (!this.focusChatOnLoad || this.focusOpened || !this.sessionId) {
@@ -212,7 +215,7 @@ export default {
         return;
       }
       const loaded = await this.loadChat();
-      if (loaded) {
+      if (loaded || !this.chatPollingDenied) {
         this.messageTimer = setInterval(this.pollMessages, 3000);
       }
     },
@@ -236,17 +239,23 @@ export default {
         this.updateUnreadCount(nextMessages);
         this.messages = nextMessages;
         this.canChat = true;
+        this.chatPollingDenied = false;
         this.messageStatusText = "";
         return true;
       } catch (error) {
-        this.canChat = false;
-        this.chatModalOpen = false;
-        this.unreadCount = 0;
-        this.lastSeenMessageId = "";
-        this.draftMessage = "";
-        this.stopMessagePolling();
-        if (!options.silent) {
+        if (isChatAccessDeniedError(error)) {
+          this.canChat = false;
+          this.chatPollingDenied = true;
+          this.chatModalOpen = false;
+          this.unreadCount = 0;
+          this.lastSeenMessageId = "";
+          this.stopMessagePolling();
           this.messageStatusText = this.messageErrorText(error);
+        } else {
+          this.chatPollingDenied = false;
+          this.messageStatusText = options.silent
+            ? "聊天刷新失败，正在重试。"
+            : this.messageErrorText(error);
         }
         return false;
       }
@@ -447,52 +456,59 @@ export default {
   color: #64748b;
 }
 
-.chat-float-button {
-  position: fixed;
-  right: 24rpx;
-  bottom: 220rpx;
-  z-index: 20;
+.chat-entry {
+  margin-bottom: 24rpx;
+}
+
+.chat-entry-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-direction: column;
-  width: 104rpx;
-  height: 104rpx;
-  min-width: 104rpx;
-  padding: 0;
-  border-radius: 52rpx;
-  background: #1f6f5b;
-  color: #ffffff;
-  box-shadow: 0 18rpx 42rpx rgba(31, 111, 91, 0.34);
-  line-height: 1;
+  width: 100%;
+  height: 88rpx;
+  min-width: 0;
+  padding: 0 28rpx;
+  border: 1rpx solid #ded8ca;
+  border-radius: 14rpx;
+  background: #fffefb;
+  color: #193d35;
+  box-shadow: 0 12rpx 28rpx rgba(31, 111, 91, 0.08);
+  box-sizing: border-box;
 }
 
-.chat-float-content {
+.chat-entry-content {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-direction: column;
+  gap: 14rpx;
   width: 100%;
   height: 100%;
-  min-width: 0;
 }
 
-.chat-float-icon {
-  font-size: 34rpx;
+.chat-entry-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44rpx;
+  height: 44rpx;
+  border-radius: 22rpx;
+  background: #1f6f5b;
+  color: #ffffff;
+  font-size: 24rpx;
   font-weight: 700;
+  line-height: 44rpx;
 }
 
-.chat-float-text {
-  margin-top: 6rpx;
-  font-size: 20rpx;
+.chat-entry-text {
+  font-size: 28rpx;
   font-weight: 600;
 }
 
 .chat-unread-badge {
   position: absolute;
-  top: -8rpx;
-  right: -8rpx;
+  top: 8rpx;
+  right: 8rpx;
   min-width: 34rpx;
   height: 34rpx;
   padding: 0 8rpx;

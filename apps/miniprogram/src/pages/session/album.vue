@@ -190,7 +190,20 @@
       </view>
     </view>
 
-    <view v-if="!focusedPublicMediaUnavailable && filteredPhotos.length === 0" class="section empty-section">
+    <view v-if="albumPresentation === 'loading'" class="section empty-section">
+      <view class="empty-title">正在加载相册</view>
+      <view class="empty-text">正在读取照片和可见范围，请稍候。</view>
+    </view>
+
+    <view v-else-if="albumPresentation === 'error'" class="section empty-section">
+      <view class="empty-title">相册暂时无法加载</view>
+      <view class="empty-text">{{ statusText || "请检查网络后重试。" }}</view>
+      <t-button class="button empty-upload-button" @tap="retryAlbumLoad">
+        重新加载
+      </t-button>
+    </view>
+
+    <view v-else-if="!focusedPublicMediaUnavailable && albumPresentation === 'empty'" class="section empty-section">
       <t-empty class="empty-state" :description="`还没有你的照片。${emptyText}`" />
       <t-button
         v-if="canUpload && !timelineMode"
@@ -743,6 +756,7 @@ import {
   recruitmentSharePayload,
   createAlbumShareEntryAuthority
 } from "../../utils/albumShareEntry";
+import { albumListPresentation } from "../../utils/p1Safety.js";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
 import {
@@ -835,6 +849,7 @@ export default {
       roleFilterPickerVisible: false,
       statusText: "",
       loadingAlbum: false,
+      albumLoadFailed: false,
       skipNextAlbumRefreshOnShow: false,
       albumScrollTop: 0,
       topActionsFloating: false,
@@ -1186,6 +1201,13 @@ export default {
         Boolean(this.deletingPhotoId)
       );
     },
+    albumPresentation() {
+      return albumListPresentation({
+        loading: this.loadingAlbum,
+        failed: this.albumLoadFailed,
+        count: this.filteredPhotos.length
+      });
+    },
     operationText() {
       if (this.loadingAlbum) {
         return "正在加载相册...";
@@ -1237,6 +1259,7 @@ export default {
     });
     if (!auth?.user) {
       this.statusText = "登录后可继续查看相册。";
+      this.albumLoadFailed = true;
       return;
     }
     this.currentUserId = auth.user.id || "";
@@ -2138,6 +2161,7 @@ export default {
         return;
       }
       this.loadingAlbum = true;
+      this.albumLoadFailed = false;
       const listRequest = this.beginAlbumListRequest();
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album` });
@@ -2159,6 +2183,7 @@ export default {
         this.albumSession = this.albumSessionSummary(data);
         this.hiddenCount = Number(data.hidden_count || 0);
         this.canUpload = Boolean(data.can_upload);
+        this.albumLoadFailed = false;
         this.statusText = "";
         this.refreshWaterfall();
         if (this.canUpload) {
@@ -2191,6 +2216,7 @@ export default {
         } else {
           this.statusText = "相册加载失败，请稍后重试。";
         }
+        this.albumLoadFailed = true;
         this.applyAlbumNavigationTitle();
         this.albumMediaRefresh?.schedule();
       } finally {
@@ -2209,9 +2235,11 @@ export default {
         this.statusText = this.singleMediaShareRequested
           ? "该内容已不可查看"
           : "分享相册链接缺少访问凭证。";
+        this.albumLoadFailed = true;
         return;
       }
       this.loadingAlbum = true;
+      this.albumLoadFailed = false;
       this.publicAlbumSnapshotLoaded = false;
       this.resetPublicSharePagination();
       this.resetAlbumShareCovers();
@@ -2254,6 +2282,7 @@ export default {
           : null;
         this.publicShareHasMore = Boolean(this.publicShareNextCursor);
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+        this.albumLoadFailed = false;
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.statusText = "";
         this.publicAlbumSnapshotLoaded = true;
@@ -2294,6 +2323,7 @@ export default {
           error?.statusCode === 403
             ? "分享相册已过期或不可访问。"
             : "分享相册加载失败，请稍后重试。";
+        this.albumLoadFailed = true;
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
       } finally {
@@ -2358,6 +2388,13 @@ export default {
           this.publicShareLoadingMore = false;
         }
       }
+    },
+    retryAlbumLoad() {
+      if (this.timelineMode) {
+        this.loadPublicAlbum();
+        return;
+      }
+      this.loadAlbum();
     },
     normalizeAlbumMediaUrl(path) {
       if (!path) {
