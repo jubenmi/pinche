@@ -123,9 +123,7 @@
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
             :disabled="albumBusy"
-            :open-type="recruitInviteToken ? 'share' : ''"
-            data-album-share="recruit"
-            @tap="handleRecruitShareTap"
+            @tap="openClaimShare"
           >
             <view class="album-command-content">
               <t-image
@@ -133,7 +131,7 @@
                 src="/static/icons/album-recruit.svg"
                 mode="aspectFit"
               />
-              <text class="album-command-label">招募</text>
+              <text class="album-command-label">邀请认领</text>
             </view>
           </t-button>
           <t-button
@@ -4792,6 +4790,12 @@ export default {
       }
       this.prepareRecruitInvite();
       showToast({ title: "正在准备招募分享，请稍后再点", icon: "none" });
+    },
+    openClaimShare() {
+      if (this.timelineMode || this.albumBusy || !this.sessionId) {
+        return;
+      }
+      uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}&entry=album` });
     },
     toggleSelectionMode() {
       if (this.timelineMode || this.albumBusy) {
