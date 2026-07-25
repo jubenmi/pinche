@@ -373,6 +373,64 @@ test("controller schedules once, 30 seconds before the earliest valid expiry", (
   assert.deepEqual(timers.cleared, [1]);
 });
 
+test("controller bounds expired and far-future normal schedules to platform timer limits", () => {
+  const nowMs = Date.parse("2026-07-26T00:00:00.000Z");
+  const delayFor = (expiresAt) => {
+    const timers = fakeTimers();
+    const controller = createPublicAlbumMediaStateController({
+      readCards: () => [{ id: 1, media_url_expires_at: expiresAt }],
+      refreshCards: async () => null,
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
+      now: () => nowMs,
+    });
+    controller.schedule();
+    return timers.scheduled[0].delay;
+  };
+
+  assert.deepEqual([
+    delayFor("2026-07-25T23:59:59.000Z"),
+    delayFor(new Date(nowMs + 2_147_483_647 + 60_000).toISOString()),
+  ], [
+    1_000,
+    2_147_483_647,
+  ]);
+});
+
+test("consecutive successful timer refreshes cannot create a zero-delay storm", async () => {
+  const timers = fakeTimers();
+  const nowMs = Date.parse("2026-07-26T00:00:00.000Z");
+  let calls = 0;
+  const controller = createPublicAlbumMediaStateController({
+    readCards: () => [{
+      id: 1,
+      media_url_expires_at: "2026-07-26T00:00:10.000Z",
+    }],
+    refreshCards: async () => {
+      calls += 1;
+      return null;
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    now: () => nowMs,
+  });
+
+  controller.schedule();
+  assert.equal(timers.scheduled[0].delay, 1_000);
+  timers.fire(timers.scheduled[0].id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  assert.equal(timers.scheduled[1].delay, 1_000);
+  assert.equal(timers.active.size, 1);
+
+  timers.fire(timers.scheduled[1].id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 2);
+  assert.equal(timers.scheduled[2].delay, 1_000);
+  assert.equal(timers.active.size, 1);
+  controller.dispose();
+});
+
 test("controller refresh is single-flight and schedules from freshly read cards", async () => {
   const response = deferred();
   const timers = fakeTimers();

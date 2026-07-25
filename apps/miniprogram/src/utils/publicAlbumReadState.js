@@ -193,11 +193,17 @@ export function createPublicAlbumMediaStateController({
   const installTimer = (delay) => {
     cancel();
     const version = timerVersion;
+    const boundedDelay = typeof delay === "number" && Number.isFinite(delay)
+      ? Math.min(
+          MAX_PUBLIC_ALBUM_MEDIA_RETRY_DELAY_MS,
+          Math.max(MIN_PUBLIC_ALBUM_MEDIA_RETRY_DELAY_MS, delay),
+        )
+      : DEFAULT_PUBLIC_ALBUM_MEDIA_RETRY_DELAY_MS;
     timer = setTimer(() => {
       if (disposed || version !== timerVersion) return;
       timer = null;
       void refresh().catch(() => {});
-    }, delay);
+    }, boundedDelay);
   };
 
   const schedule = () => {
