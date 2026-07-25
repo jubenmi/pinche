@@ -775,7 +775,10 @@ import {
 } from "../../utils/albumSingleMediaShare";
 import {
   mergePublicAlbumSharePages,
-  publicAlbumSharePageUrl
+  publicAlbumSharePageUrl,
+  reloadPublicAlbumSharePrefix,
+  replacePublicAlbumMediaRows,
+  samePublicAlbumMediaSequence
 } from "../../utils/albumPublicSharePagination";
 
 function albumMediaCachePath(photoId, variant = "preview") {
@@ -2058,6 +2061,30 @@ export default {
     isCurrentAlbumListRequest(listRequest) {
       return this.albumListRequestAuthority.isCurrent(listRequest);
     },
+    async reloadLoadedPublicAlbumPrefix(listRequest) {
+      return reloadPublicAlbumSharePrefix({
+        pageCount: Math.max(1, this.publicShareLoadedPageCount),
+        loadPage: async ({ cursor }) => {
+          const url = cursor
+            ? publicAlbumSharePageUrl({
+                sessionId: this.sessionId,
+                token: this.albumShareToken,
+                cursor
+              })
+            : `/api/sessions/${this.sessionId}/album/public-share${queryString({
+                token: this.albumShareToken
+              })}`;
+          if (!url) throw new Error("Invalid public album refresh URL");
+          const response = await request({ url, suppressMaintenance: true });
+          if (!this.isCurrentAlbumListRequest(listRequest)) return null;
+          const data = dataOf(response) || {};
+          return {
+            ...data,
+            photos: (data.photos || []).map((photo) => this.normalizePhotoMedia(photo))
+          };
+        }
+      });
+    },
     initializeAlbumMediaRefreshController() {
       this.albumMediaRefresh?.dispose();
       this.albumMediaRefresh = createAlbumMediaRefreshController({
@@ -2066,13 +2093,19 @@ export default {
           const beforeMedia = memberDefaultAlbumShareMediaFingerprint(this.photos);
           const nextMedia = memberDefaultAlbumShareMediaFingerprint(next.photos);
           const nextPhotos = (next.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+          const publicSequenceUnchanged = this.timelineMode
+            && samePublicAlbumMediaSequence(this.photos, nextPhotos);
           if (!this.timelineMode && beforeMedia !== nextMedia) {
             this.invalidateDefaultAlbumShare({ hideMenus: true });
           }
           this.mediaLoadSerial += 1;
           this.photos = nextPhotos;
           this.pruneUnpublishedAlbumMediaState(this.photos);
-          this.refreshWaterfall();
+          if (publicSequenceUnchanged) {
+            this.updatePublicAlbumWaterfallRows(nextPhotos);
+          } else {
+            this.refreshWaterfall();
+          }
           if (!this.timelineMode && beforeMedia !== nextMedia) {
             this.primeAlbumShareEntries();
           }
@@ -2080,18 +2113,23 @@ export default {
         reloadAlbum: async () => {
           const listRequest = this.beginAlbumListRequest();
           try {
-            const response = await request({
-              url: this.timelineMode
-                ? `/api/sessions/${this.sessionId}/album/public-share${queryString({
-                    token: this.albumShareToken
-                  })}`
-                : `/api/sessions/${this.sessionId}/album`,
-              suppressMaintenance: true
-            });
+            let response = null;
+            let publicRefresh = null;
+            if (this.timelineMode) {
+              publicRefresh = await this.reloadLoadedPublicAlbumPrefix(listRequest);
+              if (publicRefresh === null) return null;
+            } else {
+              response = await request({
+                url: `/api/sessions/${this.sessionId}/album`,
+                suppressMaintenance: true
+              });
+            }
             if (!this.isCurrentAlbumListRequest(listRequest)) {
               return null;
             }
-            const data = dataOf(response) || {};
+            const data = this.timelineMode
+              ? publicRefresh.firstPage
+              : dataOf(response) || {};
             if (this.timelineMode) {
               if (!this.isCurrentAlbumListRequest(listRequest)) {
                 return null;
@@ -2105,10 +2143,9 @@ export default {
                 photos: Number(data.photo_count || 0),
                 videos: Number(data.video_count || 0)
               };
-              this.publicShareNextCursor = data.has_more === true && data.next_cursor
-                ? String(data.next_cursor)
-                : null;
-              this.publicShareHasMore = Boolean(this.publicShareNextCursor);
+              this.publicShareNextCursor = publicRefresh.nextCursor;
+              this.publicShareHasMore = publicRefresh.hasMore;
+              this.publicShareLoadedPageCount = publicRefresh.loadedPageCount;
               this.publicShareLoadingMore = false;
               this.publicShareLoadMoreError = "";
               this.showShareMenus();
@@ -2116,7 +2153,9 @@ export default {
             }
             reportAlbumMediaEvent("media_refresh_success", { sessionId: Number(this.sessionId) });
             return {
-              photos: (data.photos || []).map((photo) => this.normalizePhotoMedia(photo)),
+              photos: this.timelineMode
+                ? publicRefresh.photos
+                : (data.photos || []).map((photo) => this.normalizePhotoMedia(photo)),
               isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
             };
           } catch (error) {
@@ -3255,6 +3294,18 @@ export default {
         .map((photo) => ({ ...photo }));
       if (appended.length === 0) return;
       this.waterfallPhotos = [...this.waterfallPhotos, ...appended];
+    },
+    updatePublicAlbumWaterfallRows(nextPhotos = []) {
+      this.waterfallList1 = replacePublicAlbumMediaRows(
+        this.waterfallList1,
+        nextPhotos
+      );
+      this.waterfallList2 = replacePublicAlbumMediaRows(
+        this.waterfallList2,
+        nextPhotos
+      );
+      this.waterfallPhotos = nextPhotos.map((photo) => ({ ...photo }));
+      this.$nextTick(() => this.observeVisiblePhotos());
     },
     refreshWaterfall() {
       const waterfallRender = this.albumWaterfallRenderAuthority.begin();

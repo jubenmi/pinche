@@ -164,6 +164,33 @@ test("public-share refresh distinguishes field updates from media-set changes", 
   );
 });
 
+test("public background refresh keeps the waterfall mounted for the same media sequence", () => {
+  const controller = sourceBlock(
+    albumSource,
+    "initializeAlbumMediaRefreshController() {",
+    "async loadAlbum() {"
+  );
+  const writer = sourceBlock(
+    controller,
+    "writeAlbum: (next) => {",
+    "reloadAlbum: async () => {"
+  );
+
+  assert.match(writer, /samePublicAlbumMediaSequence\(this\.photos, nextPhotos\)/);
+  assert.match(
+    writer,
+    /if\s*\(\s*publicSequenceUnchanged\s*\)\s*\{\s*this\.updatePublicAlbumWaterfallRows\(nextPhotos\);\s*\}\s*else\s*\{\s*this\.refreshWaterfall\(\);\s*\}/
+  );
+  assert.match(controller, /this\.reloadLoadedPublicAlbumPrefix\(listRequest\)/);
+  assert.match(
+    controller,
+    /this\.publicShareLoadedPageCount\s*=\s*publicRefresh\.loadedPageCount/
+  );
+  assert.match(controller, /this\.publicShareLoadingMore\s*=\s*false/);
+  assert.match(albumSource, /reloadPublicAlbumSharePrefix\(\{/);
+  assert.match(albumSource, /replacePublicAlbumMediaRows/);
+});
+
 test("album page declares guarded public-share continuation loading", () => {
   assert.match(albumSource, /onReachBottom\(\)/);
   assert.match(albumSource, /async loadMorePublicAlbum\(\)/);
