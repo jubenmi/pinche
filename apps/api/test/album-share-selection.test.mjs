@@ -39,6 +39,7 @@ function tagRow(photoId) {
 
 function shareConnection(photoRows, options = {}) {
   const shares = [];
+  const shareItems = [];
   const untaggedIds = new Set((options.untaggedIds || []).map(Number));
   const session = { id: 10, organizer_user_id: 100, status: "completed" };
   const seat = {
@@ -52,6 +53,7 @@ function shareConnection(photoRows, options = {}) {
   };
   return {
     shares,
+    shareItems,
     async query(sql, values = []) {
       if (sql.includes("FROM sessions session")) return [[session]];
       if (sql.includes("FROM session_seats seat") && sql.includes("JOIN users account")) {
@@ -86,6 +88,16 @@ function shareConnection(photoRows, options = {}) {
         };
         shares.push(share);
         return [{ insertId: share.id }];
+      }
+      if (sql.includes("INSERT INTO session_album_public_share_items")) {
+        shareItems.push({ share_id: values[0], ordinal: values[1], media_id: values[2] });
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [shareItems
+          .filter((item) => Number(item.share_id) === Number(values[0]))
+          .sort((left, right) => left.ordinal - right.ordinal)
+          .map(({ ordinal, media_id }) => ({ ordinal, media_id }))];
       }
       if (sql.includes("SELECT * FROM session_album_public_shares WHERE id = ?")) {
         return [[shares.find((share) => Number(share.id) === Number(values[0]))].filter(Boolean)];

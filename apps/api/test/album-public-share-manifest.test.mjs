@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+
+import { config } from "../src/config/env.js";
+
+import {
+  assertManifestMatchesLegacySnapshot,
+  decodePublicShareOrdinalCursor,
+  encodePublicShareOrdinalCursor,
+  loadPublicShareItems,
+  readPublicShareItemPage,
+  writePublicShareItems,
+} from "../src/modules/core/public-album-share-manifest.js";
 
 const migrationUrl = new URL(
   "../migrations/0035_album_tag_public_share_read_model.sql",
@@ -13,6 +25,16 @@ const migrationHistoryUrl = new URL(
 
 async function migrationSql() {
   return readFile(migrationUrl, "utf8").catch(() => "");
+}
+
+function legacyOffsetCursor(shareId, offset) {
+  const payload = Buffer.from(JSON.stringify({ share_id: shareId, offset }))
+    .toString("base64url");
+  const signature = crypto
+    .createHmac("sha256", config.sessionSecret)
+    .update(`album-share-page:${payload}`)
+    .digest("base64url");
+  return `${payload}.${signature}`;
 }
 
 function shareItemTable(sql) {
@@ -114,4 +136,169 @@ test("migration filename history appends migration 0035", async () => {
     "0034_schema_migration_checksums.sql",
     "0035_album_tag_public_share_read_model.sql",
   ]);
+});
+
+test("writePublicShareItems validates the complete manifest before issuing ordered inserts", async () => {
+  const queries = [];
+  const connection = {
+    async query(sql, values) {
+      queries.push({ sql, values });
+      return [{ affectedRows: 1 }];
+    },
+  };
+
+  await writePublicShareItems(connection, 41, [9, 4, 7]);
+  assert.deepEqual(queries.map(({ values }) => values), [
+    [41, 0, 9],
+    [41, 1, 4],
+    [41, 2, 7],
+  ]);
+  assert(queries.every(({ sql }) => sql.includes("session_album_public_share_items")));
+
+  for (const mediaIds of [[], [1, 1], [0], [-1], [1.5], ["1"], [Number.MAX_SAFE_INTEGER + 1]]) {
+    const before = queries.length;
+    await assert.rejects(
+      () => writePublicShareItems(connection, 41, mediaIds),
+      (error) => error?.statusCode === 400,
+    );
+    assert.equal(queries.length, before, `invalid manifest ${JSON.stringify(mediaIds)} reached SQL`);
+  }
+});
+
+test("loadPublicShareItems preserves stable ordinal order and rejects malformed database rows", async () => {
+  const connection = {
+    async query(sql, values) {
+      assert.match(sql, /WHERE share_id = \?\s+ORDER BY ordinal/);
+      assert.deepEqual(values, [41]);
+      return [[
+        { ordinal: 0, media_id: 9 },
+        { ordinal: 2, media_id: 4 },
+        { ordinal: 7, media_id: 8 },
+      ]];
+    },
+  };
+
+  assert.deepEqual(await loadPublicShareItems(connection, 41), [
+    { ordinal: 0, media_id: 9 },
+    { ordinal: 2, media_id: 4 },
+    { ordinal: 7, media_id: 8 },
+  ]);
+
+  await assert.rejects(
+    () => loadPublicShareItems({
+      async query() {
+        return [[{ ordinal: 0, media_id: "9" }]];
+      },
+    }, 41),
+    (error) => error?.statusCode === 403,
+  );
+});
+
+test("legacy JSON and normalized items must contain the exact same strict ID sequence", () => {
+  const items = [
+    { ordinal: 0, media_id: 4 },
+    { ordinal: 1, media_id: 2 },
+    { ordinal: 2, media_id: 9 },
+  ];
+
+  assert.doesNotThrow(() => assertManifestMatchesLegacySnapshot(items, "[4,2,9]"));
+  for (const legacy of [
+    "[4,9,2]",
+    "[4,2]",
+    "[4,2,9,9]",
+    "[4,\"2\",9]",
+    "[4,2.5,9]",
+    "[4,0,9]",
+    "not-json",
+  ]) {
+    assert.throws(
+      () => assertManifestMatchesLegacySnapshot(items, legacy),
+      (error) => error?.statusCode === 403,
+      legacy,
+    );
+  }
+  assert.throws(
+    () => assertManifestMatchesLegacySnapshot([
+      { ordinal: 0, media_id: 4 },
+      { ordinal: 2, media_id: 2 },
+      { ordinal: 3, media_id: 9 },
+    ], [4, 2, 9]),
+    (error) => error?.statusCode === 403,
+  );
+});
+
+test("ordinal cursors are signed, share-bound, tamper-proof, and range-checked", () => {
+  const cursor = encodePublicShareOrdinalCursor(41, 7);
+  assert.match(cursor, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.equal(
+    decodePublicShareOrdinalCursor(cursor, 41, { maxOrdinal: 9 }),
+    7,
+  );
+  const payload = JSON.parse(
+    Buffer.from(cursor.split(".")[0], "base64url").toString("utf8"),
+  );
+  assert.deepEqual(payload, { share_id: 41, after_ordinal: 7 });
+  assert.throws(
+    () => decodePublicShareOrdinalCursor(cursor, 42, { maxOrdinal: 9 }),
+    (error) => error?.statusCode === 400,
+  );
+  assert.throws(
+    () => decodePublicShareOrdinalCursor(`${cursor.slice(0, -1)}x`, 41, { maxOrdinal: 9 }),
+    (error) => error?.statusCode === 400,
+  );
+  assert.throws(
+    () => decodePublicShareOrdinalCursor(cursor, 41, { maxOrdinal: 6 }),
+    (error) => error?.statusCode === 400,
+  );
+});
+
+test("legacy offset cursors map to the same share ordinal only within the live manifest", () => {
+  assert.equal(
+    decodePublicShareOrdinalCursor(legacyOffsetCursor(41, 3), 41, {
+      maxOrdinal: 8,
+      manifestLength: 9,
+    }),
+    2,
+  );
+  for (const [cursor, shareId] of [
+    [legacyOffsetCursor(41, 0), 41],
+    [legacyOffsetCursor(41, 9), 41],
+    [legacyOffsetCursor(41, 3), 42],
+  ]) {
+    assert.throws(
+      () => decodePublicShareOrdinalCursor(cursor, shareId, {
+        maxOrdinal: 8,
+        manifestLength: 9,
+      }),
+      (error) => error?.statusCode === 400,
+    );
+  }
+});
+
+test("readPublicShareItemPage scans after an ordinal with a bounded SQL limit", async () => {
+  const connection = {
+    async query(sql, values) {
+      assert.match(sql, /ordinal > \?/);
+      assert.match(sql, /ORDER BY ordinal/);
+      assert.match(sql, /LIMIT \?/);
+      assert.deepEqual(values, [41, 2, 3]);
+      return [[
+        { ordinal: 5, media_id: 8 },
+        { ordinal: 6, media_id: 3 },
+        { ordinal: 9, media_id: 7 },
+      ]];
+    },
+  };
+
+  assert.deepEqual(
+    await readPublicShareItemPage(connection, 41, { afterOrdinal: 2, limit: 3 }),
+    {
+      items: [
+        { ordinal: 5, media_id: 8 },
+        { ordinal: 6, media_id: 3 },
+        { ordinal: 9, media_id: 7 },
+      ],
+      lastScannedOrdinal: 9,
+    },
+  );
 });

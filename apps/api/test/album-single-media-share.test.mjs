@@ -6,6 +6,8 @@ import test from "node:test";
 
 import {
   createOrReuseSessionAlbumPublicShare,
+  getPublicSessionAlbumPhotoForMedia,
+  getPublicSessionAlbumVideoCoverForMedia,
   getPublicSessionAlbumVideoForPlayback,
   publicShareSnapshotDigest,
   selectPublicShareMedia
@@ -186,6 +188,7 @@ test("public media response exposes label strings without raw tag metadata", () 
 
 function focusedShareConnection(photoRows, tagRows) {
   const shares = [];
+  const shareItems = [];
   const session = { id: 10, organizer_user_id: 100 };
   const seat = {
     id: 1000,
@@ -199,6 +202,7 @@ function focusedShareConnection(photoRows, tagRows) {
 
   return {
     shares,
+    shareItems,
     async query(sql, values = []) {
       if (sql.includes("FROM sessions session")) return [[session]];
       if (sql.includes("FROM session_seats seat") && sql.includes("JOIN users account")) {
@@ -227,6 +231,20 @@ function focusedShareConnection(photoRows, tagRows) {
         };
         shares.push(share);
         return [{ insertId: share.id }];
+      }
+      if (sql.includes("INSERT INTO session_album_public_share_items")) {
+        shareItems.push({
+          share_id: values[0],
+          ordinal: values[1],
+          media_id: values[2]
+        });
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [shareItems
+          .filter((item) => Number(item.share_id) === Number(values[0]))
+          .sort((left, right) => left.ordinal - right.ordinal)
+          .map(({ ordinal, media_id }) => ({ ordinal, media_id }))];
       }
       if (sql.includes("SELECT * FROM session_album_public_shares WHERE id = ?")) {
         return [[shares.find((share) => Number(share.id) === Number(values[0]))].filter(Boolean)];
@@ -332,8 +350,35 @@ test("createOrReuseSessionAlbumPublicShare persists and reuses an eligible focus
   assert.equal(first.focus_media_id, 1);
   assert.deepEqual(first.media_ids, [1, 2]);
   assert.equal(connection.shares.length, 1);
+  assert.deepEqual(connection.shareItems, [
+    { share_id: 1, ordinal: 0, media_id: 1 },
+    { share_id: 1, ordinal: 1, media_id: 2 }
+  ]);
   assert.equal(second.share_id, first.share_id);
   assert.equal(second.focus_media_id, 1);
+});
+
+test("createOrReuseSessionAlbumPublicShare fails closed before reusing a mismatched manifest", async () => {
+  const photos = [
+    eligibleMedia(1, { created_at: "2026-07-19T00:00:01.000Z" }),
+    eligibleMedia(2, { created_at: "2026-07-19T00:00:02.000Z" })
+  ];
+  const connection = focusedShareConnection(
+    photos,
+    photos.map((photo) => ({ photo_id: photo.id, ...sharerSeatTag() }))
+  );
+  const options = {
+    withTransaction: async (work) => work(connection)
+  };
+  await createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, options);
+  [connection.shareItems[0].media_id, connection.shareItems[1].media_id] =
+    [connection.shareItems[1].media_id, connection.shareItems[0].media_id];
+
+  await assert.rejects(
+    () => createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, options),
+    (error) => error?.statusCode === 403
+  );
+  assert.equal(connection.shares.length, 1);
 });
 
 test("createOrReuseSessionAlbumPublicShare persists a safe three-image Canvas cover snapshot", async () => {
@@ -500,6 +545,7 @@ function publicVideoPlaybackConnection(media, options = {}) {
   });
   const tags = options.tags || [{ photo_id: 77, ...sharerSeatTag() }];
   const privacy = options.privacy || [];
+  const manifestIds = options.manifestIds || share.media_ids;
   return {
     async query(sql, values = []) {
       if (sql.includes("SELECT * FROM session_album_photos WHERE id = ?")) {
@@ -507,6 +553,9 @@ function publicVideoPlaybackConnection(media, options = {}) {
       }
       if (sql.includes("FROM session_album_public_shares")) {
         return [options.revoked ? [] : [share]];
+      }
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [manifestIds.map((mediaId, ordinal) => ({ ordinal, media_id: mediaId }))];
       }
       if (sql.includes("FROM sessions session")) {
         return [[{ id: 10, status: "completed" }]];
@@ -587,6 +636,51 @@ test("getPublicSessionAlbumVideoForPlayback fails closed for disallowed public p
       undefined,
       name
     );
+  }
+});
+
+test("all public image and video byte authorizers use normalized manifest membership", async () => {
+  const photo = eligibleMedia(77, {
+    photo_url: "/uploads/session-album/display/public-77.jpg"
+  });
+  const video = eligibleMedia(77, {
+    media_type: "video",
+    display_url: "/uploads/session-album/videos/display/public-77.mp4",
+    cover_url: "/uploads/session-album/videos/cover/public-77.jpg"
+  });
+  // The compatibility JSON still names the requested media. The normalized
+  // manifest does not, so every byte path must fail closed before serving it.
+  const options = { mediaIds: [77], manifestIds: [78] };
+
+  await assert.rejects(
+    () => getPublicSessionAlbumPhotoForMedia(publicVideoClaims, 77, {
+      withConnection: async (work) => work(publicVideoPlaybackConnection(photo, options))
+    }),
+    (error) => error?.statusCode === 403
+  );
+  await assert.rejects(
+    () => getPublicSessionAlbumVideoCoverForMedia(publicVideoClaims, 77, {
+      withConnection: async (work) => work(publicVideoPlaybackConnection(video, options))
+    }),
+    (error) => error?.statusCode === 403
+  );
+  await assert.rejects(
+    () => getPublicSessionAlbumVideoForPlayback(publicVideoClaims, 77, {
+      withConnection: async (work) => work(publicVideoPlaybackConnection(video, options))
+    }),
+    (error) => error?.statusCode === 403
+  );
+
+  for (const functionName of [
+    "getPublicSessionAlbumPhotoForMedia",
+    "getPublicSessionAlbumVideoCoverForMedia",
+    "getPublicSessionAlbumVideoForPlayback"
+  ]) {
+    const start = serviceSource.indexOf(`export async function ${functionName}`);
+    const end = serviceSource.indexOf("\nexport async function ", start + 1);
+    const source = serviceSource.slice(start, end < 0 ? undefined : end);
+    assert.match(source, /manifestIds\.has\(id\)/, functionName);
+    assert.doesNotMatch(source, /share\.media_ids/, functionName);
   }
 });
 
