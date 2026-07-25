@@ -173,15 +173,24 @@ export function singleMediaShareReadyPayload(entry, fallbackTitle = "") {
   return Object.freeze(imageUrl ? { ...payload, imageUrl } : payload);
 }
 
-export function publicAlbumMediaCaption(photo, shareSubjectLabel = "") {
-  if (photo?.media_type === "video") {
-    return "打开小程序查看视频";
+export function normalizePublicAlbumTagLabels(value) {
+  const labels = [];
+  const seen = new Set();
+  for (const item of Array.isArray(value) ? value : []) {
+    if (typeof item !== "string") continue;
+    const label = item.trim();
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
   }
-  const subject = String(shareSubjectLabel || "").trim();
-  if (photo?.public_category === "share_subject" && subject) {
-    return `包含 ${subject}`;
-  }
-  return "其他";
+  return labels;
+}
+
+export function publicAlbumMediaCaption(photo) {
+  const labels = normalizePublicAlbumTagLabels(photo?.public_tag_labels);
+  if (labels.length === 0) return "待标注";
+  const mediaLabel = photo?.media_type === "video" ? "视频" : "照片";
+  return `${mediaLabel}里：${labels.join("、")}`;
 }
 
 export function singleMediaShareFailClosedPayload() {

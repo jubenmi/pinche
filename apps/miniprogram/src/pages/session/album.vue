@@ -3491,7 +3491,7 @@ export default {
       return "短视频";
     },
     publicMediaCaption(photo) {
-      return publicAlbumMediaCaption(photo, this.shareSubjectLabel);
+      return publicAlbumMediaCaption(photo);
     },
     formatVideoDuration(seconds) {
       const totalSeconds = Math.max(0, Math.round(Number(seconds || 0)));

@@ -21,35 +21,53 @@ import {
 } from "../src/utils/albumSingleMediaShare.js";
 import * as albumSingleMediaShare from "../src/utils/albumSingleMediaShare.js";
 
-test("public album cards show each safe media category instead of repeating the sharer role", () => {
+test("public album captions use normalized tag labels for images and videos", () => {
   assert.equal(typeof albumSingleMediaShare.publicAlbumMediaCaption, "function");
   assert.equal(
-    albumSingleMediaShare.publicAlbumMediaCaption(
-      { media_type: "image", public_category: "share_subject" },
-      "叶辰"
-    ),
-    "包含 叶辰"
+    albumSingleMediaShare.publicAlbumMediaCaption({
+      media_type: "image",
+      public_tag_labels: ["标签A", "标签B"]
+    }),
+    "照片里：标签A、标签B"
+  );
+  assert.equal(
+    albumSingleMediaShare.publicAlbumMediaCaption({
+      media_type: "video",
+      public_tag_labels: ["标签A", "标签B"]
+    }),
+    "视频里：标签A、标签B"
+  );
+});
+
+test("public album captions discard invalid labels and never use legacy categories", () => {
+  assert.equal(typeof albumSingleMediaShare.normalizePublicAlbumTagLabels, "function");
+  const dirtyLabels = [" 标签A ", "", " ", null, 7, {}, "标签A", "标签B"];
+  assert.equal(
+    JSON.stringify(albumSingleMediaShare.normalizePublicAlbumTagLabels(dirtyLabels)),
+    JSON.stringify(["标签A", "标签B"])
   );
   assert.equal(
     albumSingleMediaShare.publicAlbumMediaCaption(
-      { media_type: "image", public_category: "other" },
+      { media_type: "image", public_tag_labels: dirtyLabels },
       "叶辰"
     ),
-    "其他"
+    "照片里：标签A、标签B"
+  );
+  assert.equal(albumSingleMediaShare.publicAlbumMediaCaption({}, "叶辰"), "待标注");
+  assert.equal(albumSingleMediaShare.publicAlbumMediaCaption({ public_tag_labels: "标签A" }, "叶辰"), "待标注");
+  assert.equal(
+    albumSingleMediaShare.publicAlbumMediaCaption(
+      { public_tag_labels: [], public_category: "share_subject" },
+      "叶辰"
+    ),
+    "待标注"
   );
   assert.equal(
     albumSingleMediaShare.publicAlbumMediaCaption(
-      { media_type: "image" },
+      { public_tag_labels: [" ", 7], public_category: "other" },
       "叶辰"
     ),
-    "其他"
-  );
-  assert.equal(
-    albumSingleMediaShare.publicAlbumMediaCaption(
-      { media_type: "video", public_category: "other" },
-      "叶辰"
-    ),
-    "打开小程序查看视频"
+    "待标注"
   );
 });
 
