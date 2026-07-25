@@ -18,11 +18,12 @@
   - [x] 3.3 将成员相册、公开资格、封面资格和标签更新切换到新表。
   - [x] 3.4 删除生产代码对旧标签表、持久化 label 和工作人员账号标签的读写。
 
-- [ ] 4. 实现规范化 PublicShareManifest
-  - [ ] 4.1 先写清单创建、历史顺序、mismatch、ordinal cursor 和动态失效填页测试。
-  - [ ] 4.2 新增 `public-album-share-manifest.js`，实现 items 写入、加载、成员集和 ordinal 分页。
-  - [ ] 4.3 新分享同事务写兼容 JSON 与 items；历史 token 通过回填 items 继续有效。
-  - [ ] 4.4 将图片、视频封面、视频地址和视频字节授权切换到 manifest items。
+- [x] 4. 实现规范化 PublicShareManifest
+  - 验证：规格审查通过；固定 500 行批量写入后质量复审无 Critical/Important。Task 4 聚焦测试 52/52、D54 57/57、API syntax 105 files 及 diff check 通过。
+  - [x] 4.1 先写清单创建、历史顺序、mismatch、ordinal cursor 和动态失效填页测试。
+  - [x] 4.2 新增 `public-album-share-manifest.js`，实现 items 写入、加载、成员集和 ordinal 分页。
+  - [x] 4.3 新分享同事务写兼容 JSON 与 items；历史 token 通过回填 items 继续有效。
+  - [x] 4.4 将图片、视频封面、视频地址和视频字节授权切换到 manifest items。
 
 - [ ] 5. 实现 PublicMediaState 接口
   - [ ] 5.1 先写 ID 规范化、批次上限、清单外拒绝、撤回和安全 DTO 失败测试。
