@@ -131,6 +131,7 @@ import {
   listDiscoverableSessions,
   listPublicUpcomingSessions,
   listPublicSessionAlbumShare,
+  readPublicSessionAlbumMediaState,
   listSessionAlbum,
   listSessionAlbumPeople,
   listSessionNpcRoles,
@@ -171,6 +172,10 @@ import {
   insertFinalizedSessionAlbumImage,
   serializeSessionAlbumImage
 } from "./modules/core/service.js";
+import {
+  emitPublicMediaStateTelemetry,
+  normalizePublicMediaStateIds
+} from "./modules/core/public-album-media-state.js";
 import { isAlbumImageKind } from "./modules/album-image/constants.js";
 import { sessionRescheduleResponse } from "./modules/core/session-reschedule.js";
 import {
@@ -3505,6 +3510,103 @@ export function attachPublicSessionAlbumMediaUrls(
   });
 }
 
+function publicSessionAlbumMediaStatePatch(media) {
+  const base = {
+    id: Number(media.id),
+    session_id: Number(media.session_id),
+    media_type: media.media_type === "video" ? "video" : "image",
+    processing_status: media.media_type === "video"
+      ? String(media.processing_status || "")
+      : "ready",
+    moderation_status: String(media.moderation_status || ""),
+    created_at: media.created_at,
+    tags: [],
+    public_category: media.public_category === "share_subject"
+      ? "share_subject"
+      : "other",
+    public_tag_labels: Array.isArray(media.public_tag_labels)
+      ? [...media.public_tag_labels]
+      : []
+  };
+  if (base.media_type === "video") {
+    return {
+      ...base,
+      has_cover: media.has_cover === true,
+      duration_seconds: media.duration_seconds == null
+        ? null
+        : Number(media.duration_seconds),
+      video_width: media.video_width == null ? null : Number(media.video_width),
+      video_height: media.video_height == null ? null : Number(media.video_height),
+      video_content_type: media.video_content_type || "video/mp4"
+    };
+  }
+  return {
+    ...base,
+    image_width: media.image_width == null ? null : Number(media.image_width),
+    image_height: media.image_height == null ? null : Number(media.image_height),
+    image_content_type: media.image_content_type || "image/jpeg"
+  };
+}
+
+export function attachPublicSessionAlbumMediaStateUrls(
+  state,
+  claims,
+  albumShareToken,
+  options = {}
+) {
+  const nowSeconds = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const expiresAt = new Date(
+    (nowSeconds + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS) * 1000
+  ).toISOString();
+  const resolved = albumImageUrlOptions({
+    ...options,
+    directMediaUrls: false,
+    nowSeconds
+  });
+  const patches = (Array.isArray(state?.patches) ? state.patches : []).map((media) => {
+    const publicMedia = publicSessionAlbumMediaStatePatch(media);
+    if (publicMedia.media_type === "video") {
+      const approved = isModerationPublished(publicMedia.moderation_status);
+      const ready = publicMedia.processing_status === "ready";
+      return {
+        ...publicMedia,
+        cover_url: approved && ready && publicMedia.has_cover
+          ? sessionAlbumPublicVideoCoverPath(publicMedia.id, claims, albumShareToken)
+          : "",
+        video_url: approved && ready
+          ? sessionAlbumPublicVideoFilePath(publicMedia.id, claims, albumShareToken)
+          : "",
+        media_url_expires_at: approved && ready ? expiresAt : null
+      };
+    }
+    const approved = isModerationPublished(publicMedia.moderation_status);
+    const preview = approved
+      ? sessionAlbumPublicMediaPath(publicMedia.id, claims, albumShareToken, "preview")
+      : undefined;
+    const thumbnail = approved
+      ? sessionAlbumPublicMediaPath(publicMedia.id, claims, albumShareToken, "thumbnail")
+      : undefined;
+    const attached = attachAlbumImageUrls(
+      publicMedia,
+      { preview, thumbnail },
+      resolved
+    );
+    return {
+      ...attached,
+      media_url_expires_at: approved ? expiresAt : null
+    };
+  });
+  return assertPublicResponseSafe({
+    patches,
+    unavailable_ids: Array.isArray(state?.unavailable_ids)
+      ? [...state.unavailable_ids]
+      : []
+  }, {
+    routeKind: "session_public_share",
+    emit: options.emitPublicLeak
+  });
+}
+
 async function sessionAlbumThumbnailBuffer(file) {
   return sharp(file, { failOn: "none" })
     .rotate()
@@ -5968,6 +6070,81 @@ export async function legacyRoute(context) {
       ok: true,
       data: await revokeMySessionAlbumPublicShares(user, sessionAlbumPublicSharesId)
     });
+    return;
+  }
+
+  const publicSessionAlbumMediaStateId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/album\/public-share\/media-state$/
+  );
+  if (request.method === "POST" && publicSessionAlbumMediaStateId) {
+    const startedAt = Date.now();
+    const routeSessionId = Number(publicSessionAlbumMediaStateId);
+    const albumShareToken = url.searchParams.get("token") || "";
+    const publicMediaState = options.publicMediaState || {};
+    const emitRouteTelemetry = (fields) => {
+      try {
+        if (typeof publicMediaState.emit === "function") {
+          publicMediaState.emit(fields);
+        } else {
+          emitPublicMediaStateTelemetry(fields);
+        }
+      } catch {
+        // Observability must not change public media-state authorization or output.
+      }
+    };
+    let claims = null;
+    let requestedIds = null;
+    let safeState;
+    try {
+      const verifiedClaims = (
+        publicMediaState.verifyShareToken || verifySessionAlbumShareToken
+      )(albumShareToken);
+      if (
+        verifiedClaims.version !== 2 ||
+        !Number.isSafeInteger(verifiedClaims.sessionId) ||
+        verifiedClaims.sessionId <= 0 ||
+        !Number.isSafeInteger(verifiedClaims.shareId) ||
+        verifiedClaims.shareId <= 0
+      ) {
+        throw forbidden("album share token is invalid");
+      }
+      claims = verifiedClaims;
+      if (claims.sessionId !== routeSessionId) {
+        throw forbidden("album share token is invalid");
+      }
+      const bodyMediaIds = body && typeof body === "object" && !Array.isArray(body)
+        ? body.media_ids
+        : undefined;
+      requestedIds = normalizePublicMediaStateIds(bodyMediaIds);
+      const state = await (
+        publicMediaState.read || readPublicSessionAlbumMediaState
+      )(claims, requestedIds);
+      safeState = assertPublicResponseSafe(
+        attachPublicSessionAlbumMediaStateUrls(state, claims, albumShareToken),
+        { routeKind: "session_public_share" }
+      );
+    } catch (error) {
+      emitRouteTelemetry({
+        sessionId: routeSessionId,
+        shareId: Number(claims?.shareId) || 0,
+        requestedCount: requestedIds?.length || 0,
+        patchCount: 0,
+        unavailableCount: 0,
+        durationMs: Math.max(0, Date.now() - startedAt)
+      });
+      throw error;
+    }
+    const telemetryFields = {
+      sessionId: routeSessionId,
+      shareId: Number(claims.shareId),
+      requestedCount: requestedIds.length,
+      patchCount: safeState.patches.length,
+      unavailableCount: safeState.unavailable_ids.length,
+      durationMs: Math.max(0, Date.now() - startedAt)
+    };
+    emitRouteTelemetry(telemetryFields);
+    jsonResponse(response, 200, { ok: true, data: safeState });
     return;
   }
 

@@ -95,6 +95,7 @@ import {
   readPublicShareItemPage,
   writePublicShareItems
 } from "./public-album-share-manifest.js";
+import { readPublicAlbumMediaState } from "./public-album-media-state.js";
 
 export { normalizeSessionReviewAlbumPhotoIds } from "./session-review.js";
 
@@ -7062,6 +7063,98 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
   });
 }
 
+async function readVisiblePublicShareMedia(
+  connection,
+  claims,
+  candidateIds = null,
+  share = null
+) {
+  const normalizedClaims = normalizeAlbumShareClaims(claims);
+  const snapshotClause = candidateIds
+    ? `AND photo.id IN (${candidateIds.map(() => "?").join(", ")})`
+    : "";
+  const [photoRows] = await connection.query(
+    `
+      SELECT photo.*
+      FROM session_album_photos photo
+      WHERE photo.session_id = ?
+        AND photo.status = 'active'
+        AND photo.moderation_status IN ('approved', 'approved_legacy')
+        ${snapshotClause}
+      ORDER BY photo.created_at ASC, photo.id ASC
+    `,
+    [normalizedClaims.sessionId, ...(candidateIds || [])]
+  );
+  const {
+    tagReadContext,
+    privacyByUser
+  } = await resolveAlbumTagContext(
+    connection,
+    normalizedClaims.sessionId,
+    photoRows
+  );
+  const photoById = new Map(photoRows.map((photo) => [Number(photo.id), photo]));
+  const orderedRows = candidateIds
+    ? candidateIds.map((id) => photoById.get(Number(id))).filter(Boolean)
+    : photoRows;
+  const implicitUntaggedByMediaId = implicitUntaggedByMediaIdForShare(share);
+  const visiblePhotos = [];
+  for (const photo of orderedRows) {
+    const tags = albumTagReadForMedia(tagReadContext, photo.id)?.tags || [];
+    if (albumMediaType(photo) === "video" && albumMediaProcessingStatus(photo) !== "ready") {
+      continue;
+    }
+    if (
+      !isAlbumPhotoVisibleInPublicShare(
+        photo,
+        tagReadContext,
+        privacyByUser,
+        normalizedClaims,
+        { implicitUntaggedByMediaId }
+      )
+    ) {
+      continue;
+    }
+    visiblePhotos.push(publicAlbumMediaResponse(photo, tags, normalizedClaims));
+  }
+  return visiblePhotos;
+}
+
+export async function readPublicSessionAlbumMediaState(
+  claims,
+  mediaIds,
+  options = {}
+) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("options must be an object");
+  }
+  if (
+    options.withDatabaseConnection !== undefined &&
+    typeof options.withDatabaseConnection !== "function"
+  ) {
+    throw new TypeError("withDatabaseConnection must be a function");
+  }
+  const runWithDatabaseConnection =
+    options.withDatabaseConnection || withDatabaseConnection;
+  return runWithDatabaseConnection((connection) => readPublicAlbumMediaState({
+    connection,
+    claims,
+    mediaIds,
+    loadShare: loadSessionAlbumPublicShareWithConnection,
+    readVisibleMedia: (
+      currentConnection,
+      currentClaims,
+      requestedIds,
+      loadedShare
+    ) => readVisiblePublicShareMedia(
+      currentConnection,
+      currentClaims,
+      requestedIds,
+      loadedShare.share
+    )
+  }));
+}
+
 export async function listPublicSessionAlbumShare(claims, options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("options must be an object");
@@ -7117,58 +7210,13 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
           }
         )
       : -1;
-    const implicitUntaggedByMediaId = implicitUntaggedByMediaIdForShare(
-      snapshotContext?.share
-    );
-    const readVisiblePhotos = async (candidateIds = null) => {
-      const snapshotClause = candidateIds
-        ? `AND photo.id IN (${candidateIds.map(() => "?").join(", ")})`
-        : "";
-      const [photoRows] = await connection.query(
-        `
-          SELECT photo.*
-          FROM session_album_photos photo
-          WHERE photo.session_id = ?
-            AND photo.status = 'active'
-            AND photo.moderation_status IN ('approved', 'approved_legacy')
-            ${snapshotClause}
-          ORDER BY photo.created_at ASC, photo.id ASC
-        `,
-        [normalizedClaims.sessionId, ...(candidateIds || [])]
-      );
-      const {
-        tagReadContext,
-        privacyByUser
-      } = await resolveAlbumTagContext(
+    const readVisiblePhotos = (candidateIds = null) =>
+      readVisiblePublicShareMedia(
         connection,
-        normalizedClaims.sessionId,
-        photoRows
+        normalizedClaims,
+        candidateIds,
+        snapshotContext?.share
       );
-      const photoById = new Map(photoRows.map((photo) => [Number(photo.id), photo]));
-      const orderedRows = candidateIds
-        ? candidateIds.map((id) => photoById.get(Number(id))).filter(Boolean)
-        : photoRows;
-      const visiblePhotos = [];
-      for (const photo of orderedRows) {
-        const tags = albumTagReadForMedia(tagReadContext, photo.id)?.tags || [];
-        if (albumMediaType(photo) === "video" && albumMediaProcessingStatus(photo) !== "ready") {
-          continue;
-        }
-        if (
-          !isAlbumPhotoVisibleInPublicShare(
-            photo,
-            tagReadContext,
-            privacyByUser,
-            normalizedClaims,
-            { implicitUntaggedByMediaId }
-          )
-        ) {
-          continue;
-        }
-        visiblePhotos.push(publicAlbumMediaResponse(photo, tags, normalizedClaims));
-      }
-      return visiblePhotos;
-    };
 
     const readCoverMedia = async () => {
       const candidateIds = (snapshotContext?.share.cover_media_ids || [])
