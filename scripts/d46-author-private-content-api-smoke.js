@@ -1288,14 +1288,8 @@ async function cleanupFixture(database, fixture) {
         [sessionId]
       );
       await database.query(
-        "DELETE FROM session_album_photo_tags WHERE photo_id IN (SELECT id FROM session_album_photos WHERE session_id = ?)",
+        "DELETE FROM session_album_media_tags WHERE media_id IN (SELECT id FROM session_album_photos WHERE session_id = ?)",
         [sessionId]
-      );
-      await database.query(
-        `DELETE FROM session_album_photo_tags
-         WHERE seat_id IN (SELECT id FROM session_seats WHERE session_id = ?)
-            OR session_npc_role_id IN (SELECT id FROM session_npc_roles WHERE session_id = ?)`,
-        [sessionId, sessionId]
       );
       await database.query("DELETE FROM session_album_upload_intents WHERE session_id = ?", [sessionId]);
       await database.query("DELETE FROM session_album_photos WHERE session_id = ?", [sessionId]);

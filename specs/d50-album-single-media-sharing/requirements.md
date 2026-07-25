@@ -12,6 +12,10 @@ D50 允许同车成员在相册全屏打开某张图片或某段 ready 视频时
 
 本期不直接发送原图或视频文件，不创建第二套公开权限模型，也不把单项页扩展成互动或报名页面。
 
+### D57 后续权威契约
+
+D57 supersedes D50 对 JSON `media_ids` 的运行时成员判断：单项分享 token、图片、视频 URL 与每次 `GET|HEAD` 字节读取都必须通过 `session_album_public_share_items` 验证目标媒体属于该分享。`focusMediaId` 仍只控制展示；媒体状态变化通过公开 media-state 响应复核并 patch 当前项，不扩大授权。
+
 ## 2. 当前实现与 D50 差距
 
 | 能力 | 当前实现 | D50 要求 |

@@ -7,6 +7,7 @@ const paths = Object.freeze({
   server: "apps/api/src/legacy-app.js",
   albumPage: "apps/miniprogram/src/pages/session/album.vue",
   paginationHelper: "apps/miniprogram/src/utils/albumPublicSharePagination.js",
+  publicReadState: "apps/miniprogram/src/utils/publicAlbumReadState.js",
   apiTest: "apps/api/test/album-public-share-pagination.test.mjs",
   miniTest: "apps/miniprogram/test/albumPublicSharePagination.test.mjs",
   packageJson: "package.json"
@@ -33,6 +34,7 @@ const service = read(paths.service);
 const server = read(paths.server);
 const albumPage = read(paths.albumPage);
 const helper = read(paths.paginationHelper);
+const publicReadState = read(paths.publicReadState);
 const apiTest = read(paths.apiTest);
 const miniTest = read(paths.miniTest);
 const packageJson = JSON.parse(read(paths.packageJson));
@@ -59,11 +61,16 @@ for (const required of [
   "loadMorePublicAlbum()",
   "publicShareNextCursor",
   "publicShareHasMore",
-  "publicShareLoadingMore",
-  "继续加载失败，可重试"
+  "publicShareLoadingMore"
 ]) {
   assert(albumPage.includes(required), `D54 mini-program pagination is missing ${required}`);
 }
+assert(
+  publicReadState.includes('event.type === "NEXT_PAGE"')
+    && publicReadState.includes('event.status === "failure"')
+    && publicReadState.includes('pageError: "继续加载失败，可重试。"'),
+  "D54 reducer must own the retryable continuation error without forcing a page reload"
+);
 assert(
   helper.includes("export function publicAlbumSharePageUrl")
     && helper.includes("export function mergePublicAlbumSharePages"),

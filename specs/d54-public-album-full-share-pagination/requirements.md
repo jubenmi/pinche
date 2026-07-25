@@ -6,6 +6,10 @@
 
 本需求取代 D48/D52 中“默认或自定义公开分享最多 30 项”的静态照片数量限制；公开视频继续最多 3 项，且不参与静态封面。
 
+### D57 后续权威契约
+
+D57 supersedes D54 的 JSON offset/prefix 重读实现：公开正文成员和 ordinal 顺序以 `session_album_public_share_items` 为运行时权威；翻页只追加 `NEXT_PAGE`，媒体动态状态由 media-state 接口返回并以 `MEDIA_PATCH` 原位更新已加载卡片。加载更多或复核状态都不得清空首屏、重读已加载前缀或滚回页面顶部。
+
 ## 2. Requirement 1：完整静态照片快照
 
 **User Story：** 作为分享者，我希望分享“全部照片”时，31 张以上的合规照片也能被接收者看到。

@@ -6,6 +6,10 @@ D52 复用 D48 的固定公开快照和 D50 的单图 `focusMediaId`。未标注
 
 服务端统一负责候选资格、排序、快照摘要、动态复核和自定义范围校验；小程序负责成员页入口、分享预览、可选多选调整和原生微信分享状态。
 
+### D57 后续权威契约
+
+D57 supersedes D52 的 JSON 运行时成员来源，但完整保留“隐式资格”。`session_album_public_share_items` 以 `media_id`、`tag_version` 和 `implicit_untagged` 承载规范化条目；每次公开读取仍需同时满足本人上传、图片、当前无 canonical 标签、上传者隐私允许及版本完全匹配。历史 `implicit_untagged_media` JSON 只用于旧分享回填与摘要兼容，不能成为运行时授权来源。
+
 ## 2. 数据模型
 
 新增迁移 `apps/api/migrations/0033_album_untagged_share_preview.sql`：

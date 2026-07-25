@@ -189,14 +189,18 @@ assertOrdered(
   publicLoad,
   [
     "this.publicAlbumSnapshotLoaded = false;",
-    "this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));",
+    "const normalizedPhotos = (data.photos || [])",
+    'type: "INITIAL_PAGE",',
+    "this.refreshWaterfall();",
+    "await this.publicAlbumMediaStateRefresh?.refresh().catch(() => null);",
+    "!this.isCurrentPublicAlbumRequest(publicRequest)",
     "const focusedSnapshot = focusedPublicSnapshotProjection(this.photos, this.focusMediaId);",
     "this.previewPhotos = focusedSnapshot.photos.map((photo) => this.viewerPhotoWithCachedMedia(photo));",
     "this.previewCurrentIndex = 0;",
     "this.previewInitialIndex = 0;",
     "this.previewOverlayVisible = true;"
   ],
-  "D50 focused public mode must commit the snapshot then open exactly the focused item"
+  "D50 focused public mode must commit INITIAL_PAGE, patch media state behind the current-request guard, then open exactly the focused item"
 );
 assert(
   publicLoad.includes(
@@ -241,8 +245,14 @@ assert(
 );
 assertOrdered(
   showFullAlbum,
-  ["this.focusedPublicMode = false;", "this.previewVideoUrlRequests = {};", "this.refreshWaterfall();"],
-  "D50 full-album CTA must deactivate focused state and clear the video request projection"
+  [
+    "this.focusedPublicMode = false;",
+    "this.previewOverlayVisible = false;",
+    "this.previewPhotos = [];",
+    "this.previewVideoUrlRequests = {};",
+    "this.resetPreviewVideoViewerState();"
+  ],
+  "D50 full-album CTA must reveal the already-loaded reducer cards and clear focused viewer state"
 );
 
 const shareCardPreparation = methodBlock(albumPage, "prepareSingleMediaShareCardImage", "prepareSingleMediaShare");

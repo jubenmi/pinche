@@ -2,9 +2,13 @@
 
 ## 1. 架构结论
 
-D54 将“正文快照范围”“封面分析候选范围”和“最终画布格数”明确分离：`media_ids` 保存完整公开正文范围，`cover_media_ids` 保存其安全子集中的最多 30 项，仅供封面实际图片分析；渲染器在其中筛选、去重并最终输出 1～9 张。公开页通过签名游标逐页读取 `media_ids`，每个数据库媒体查询最多处理 30 个 ID。
+D54 将“正文快照范围”“封面分析候选范围”和“最终画布格数”明确分离：正文保存完整公开范围，`cover_media_ids` 保存其安全子集中的最多 30 项，仅供封面实际图片分析；渲染器在其中筛选、去重并最终输出 1～9 张。
 
-不新增数据库字段或迁移。`media_ids`、`cover_media_ids` 和 `implicit_untagged_media` 继续是同一分享快照的一部分，摘要继续绑定它们；旧快照保留原 JSON、摘要和 token 兼容语义。
+D54 原始版本未新增数据库字段或迁移。旧快照仍保留原 JSON、摘要和 token 兼容语义。
+
+### D57 后续权威契约
+
+D57 supersedes 本文下方以 `media_ids` offset 切片和前缀重读作为运行时实现的历史描述。新写入和回填后的正文成员、ordinal 顺序、隐式资格和标签版本统一由 `session_album_public_share_items` 承载；JSON 只用于兼容与完整性校验。下一页按 ordinal 追加；公开 media-state 批量复核已加载 ID，并以 `MEDIA_PATCH` 原位更新，不重读前缀、不清空瀑布流，也不改变当前滚动位置。
 
 ## 2. 服务端
 
@@ -14,22 +18,22 @@ D54 将“正文快照范围”“封面分析候选范围”和“最终画布�
 
 - 移除 `normalizePublicShareSelectedMediaIds` 的 30 项静态照片上限。
 - `selectPublicShareMedia` 默认范围不再在第 30 项停止；保留 `ready` 视频最多 3 项。
-- `normalizePublicShareSnapshotIds` 在未明确传入 `max` 时不施加媒体数量上限；`cover_media_ids` 显式使用 `PUBLIC_SHARE_COVER_CANDIDATE_LIMIT = 30`，而不是画布的 9 格上限。
-- `normalizeImplicitUntaggedMedia` 跟随正文快照，不再独立限制为 30 项。
-- `publicShareSnapshotDigest`、行规范化和创建快照对正文 ID 使用无上限规范化；封面分析候选仍验证为正文子集且最多 30 项。
+- `normalizePublicShareSnapshotIds` 与 `normalizeImplicitUntaggedMedia` 继续校验兼容 JSON，但不再提供运行时成员授权。
+- `publicShareSnapshotDigest` 继续覆盖兼容 JSON，保证旧 token 与历史快照的完整性核对不变。
+- 新分享把全部正文媒体按稳定顺序写入 `session_album_public_share_items`；封面分析候选仍验证为正文子集并受独立上限约束。
 
-`createOrReuseSessionAlbumPublicShare` 将 `selectedMedia` 的静态照片范围完整写入 `media_ids`。封面继续调用 `selectPublicShareCoverMedia(selectedMedia, ...)`，先从完整安全候选集合保留最多 30 项。随后封面路由读取这 30 项，`selectAlbumShareImages` 先处理清晰度、曝光、重复图和质量下限，最后才截到最多 9 项；因此重复的前九项不会阻止后续优质候选补位。
+`createOrReuseSessionAlbumPublicShare` 将 `selectedMedia` 的完整范围写入 normalized items，并同步兼容 JSON 用于摘要核对。封面继续调用 `selectPublicShareCoverMedia(selectedMedia, ...)`，从完整安全候选集合选出独立的有界候选；最终画布仍不得超过 9 张。
 
 ### 2.2 签名游标
 
 在 service 模块新增纯函数：
 
 ```js
-encodePublicSharePageCursor(shareId, offset)
-decodePublicSharePageCursor(cursor, shareId)
+encodePublicShareOrdinalCursor(shareId, afterOrdinal)
+decodePublicShareOrdinalCursor(cursor, shareId)
 ```
 
-游标载荷为 `{ share_id, offset }` 的 base64url JSON，并以 `config.sessionSecret` 做 HMAC-SHA256 签名。解析时使用 `timingSafeEqual`，要求 share ID 完全匹配、offset 为非负安全整数；错误统一为 `badRequest("Invalid album share cursor")`。
+新游标载荷为 `{ share_id, after_ordinal }` 的 base64url JSON，并以 `config.sessionSecret` 做 HMAC-SHA256 签名。解析时使用 `timingSafeEqual`，要求 share ID 完全匹配、ordinal 为非负安全整数；错误统一为 `badRequest("Invalid album share cursor")`。历史 `{ share_id, offset }` 游标只在能安全映射到现有 manifest 范围时兼容读取，响应只签发 ordinal 游标。
 
 公共页大小常量为 30。`listPublicSessionAlbumShare(claims, { cursor, limit })` 对外只接受 1～30 的 `limit`，默认 30；token 对应旧版非快照分享时维持原有单页读取行为。
 
@@ -37,13 +41,13 @@ decodePublicSharePageCursor(cursor, shareId)
 
 对 v2 分享 token：
 
-1. 读取并规范化分享快照，解析游标得到 `offset`。
-2. 从 `share.media_ids` 以 offset 开始分段切出不超过当前缺口的 ID；每次查询最多 30 个 ID。
+1. 读取分享并解析游标得到 manifest `ordinal`。
+2. 从 `session_album_public_share_items` 以 ordinal 查询不超过当前缺口的条目；每次查询最多 30 项。
 3. 对每段执行现有审核、状态、标签、隐私、标签版本和视频 ready 复核。
-4. 按快照 ID 的顺序追加通过复核的 DTO；若某些项失效，继续取下一段直到填满页面或快照结束。
-5. 下一个游标记录扫描后的 offset，而非返回条数，避免失效项造成重复或跳项。
+4. 按 manifest ordinal 追加通过复核的 DTO；若某些项失效，继续向后扫描直到填满页面或 manifest 结束。
+5. 下一个游标记录最后扫描的 ordinal，而非返回条数，避免失效项造成重复或跳项。
 
-新创建快照的 `media_ids` 在保存前以 `created_at ASC, id ASC` 排列，保证跨页时间顺序。旧快照最多 30 项，仍按既有请求内时间顺序响应，不改变历史链接的首屏效果。
+新创建分享的 items 在保存前以 `created_at ASC, id ASC` 分配 ordinal，保证跨页时间顺序。旧快照先回填 items，仍不改变历史链接的首屏效果。
 
 响应新增：
 
@@ -65,7 +69,7 @@ decodePublicSharePageCursor(cursor, shareId)
 
 ## 3. 小程序
 
-`apps/miniprogram/src/utils/albumPublicSharePagination.js` 负责构造带 token/cursor 的分页 URL、按媒体 ID 合并并返回本次新增项、规范化后续游标、比较媒体 ID 序列，以及通过注入的 `loadPage` 回调重读已经加载的公开页前缀。它不直接导入网络层或 Vue 状态，保持可独立单元测试。
+`apps/miniprogram/src/utils/albumPublicSharePagination.js` 只负责构造带 token/cursor 的分页 URL及按媒体 ID 去重追加。`publicAlbumReadState.js` 持有 `INITIAL_PAGE`、`NEXT_PAGE` 与 `MEDIA_PATCH` reducer 状态；media-state refresh 只 patch 已加载项，不通过 `loadPage` 重读前缀。两者都不直接导入网络层或 Vue 状态，保持可独立单元测试。
 
 `album.vue` 在公开分享模式新增：
 
@@ -80,9 +84,9 @@ decodePublicSharePageCursor(cursor, shareId)
 ## 4. 安全与兼容
 
 - 游标只包含签名后的快照位置，不能作为媒体授权凭证；实际读取仍需要有效 token，并在 service 中绑定分享 ID。
-- 分页 SQL 仅接收本页快照 ID，避免把长 JSON 快照展开为无限占位符。
-- 所有逐媒体读取路径不改变，继续从完整快照判断 ID 是否属于该分享。
-- 旧 30 项快照不迁移、不扩容、不重新计算摘要。
+- 分页 SQL 仅按 share ID 与 ordinal 查询本页 manifest items。
+- 所有逐媒体读取路径继续从 `session_album_public_share_items` 判断 ID 是否属于该分享。
+- 旧 30 项 JSON 不改写、不扩容、不重新计算摘要；迁移只回填等序 normalized items，并要求两者严格一致。
 
 ## 5. 测试策略
 

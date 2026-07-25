@@ -142,8 +142,20 @@ check(
   "active token must install its own representative image"
 );
 check(
-  (album.match(/this\.prepareAlbumShareTimelineImage\(data\)/g) || []).length >= 2,
-  "public initial load and refresh must install their current representative image"
+  (album.match(/this\.prepareAlbumShareTimelineImage\(data\)/g) || []).length === 1,
+  "public initial load must install exactly one representative image"
+);
+const publicMediaStateRefresh = between(
+  album,
+  "async refreshLoadedPublicAlbumMedia() {",
+  "retryAlbumLoad() {",
+  "public media-state refresh"
+);
+check(
+  publicMediaStateRefresh.includes('type: "MEDIA_PATCH"')
+    && !publicMediaStateRefresh.includes("prepareAlbumShareTimelineImage")
+    && !publicMediaStateRefresh.includes("selectAlbumShareTimelineImage"),
+  "media-state refresh must patch loaded cards without rebuilding the representative image"
 );
 
 const coverTest = read("apps/miniprogram/test/albumShareCover.test.mjs");

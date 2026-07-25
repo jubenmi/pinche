@@ -899,8 +899,6 @@ export default {
     publicShareLoadingMore() {
       return this.publicAlbumRead.pageLoading;
     },
-    // D54 static-gate compatibility; remove/update in Task8. Retry copy contract:
-    // “继续加载失败，可重试。” publicAlbumRead owns when it is visible.
     publicShareLoadMoreError() {
       return this.publicAlbumRead.pageError;
     },

@@ -2325,7 +2325,8 @@ if (!fs.existsSync(pagesJsonPath)) {
     "albumTagSection",
     "albumTagCard",
     "handleAlbumTagTap",
-    'role_gender: seat.role_gender || "unlimited"',
+    'person.kind === "role"',
+    'person.kind === "npc_role"',
     '<RoleSeatBoard'
   ]) {
     if (!albumSource.includes(requiredAlbumRoleSeatBoardText)) {
@@ -2549,10 +2550,20 @@ if (!fs.existsSync(pagesJsonPath)) {
     "tagPersonTitle",
     "tagPersonSubtitle",
     "note: this.tagPersonSubtitle(person)",
-    "account_name: accountName"
+    "return String(person?.label"
   ]) {
     if (!albumSource.includes(requiredAlbumBulkTagText)) {
       fail(`Album page must support bulk tagging: ${requiredAlbumBulkTagText}`);
+    }
+  }
+  for (const forbiddenAlbumTagAccountText of [
+    "account_name",
+    "account_nickname",
+    "player_name",
+    "staff_name"
+  ]) {
+    if (albumSource.includes(forbiddenAlbumTagAccountText)) {
+      fail(`Album canonical tag UI must not project account identity: ${forbiddenAlbumTagAccountText}`);
     }
   }
   const albumFloatingToolbarStyle =
@@ -3048,7 +3059,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "timelineMode",
     "albumShareToken",
     "loadPublicAlbum",
-    "localAlbumShareSubject",
+    "shareSubjectLabel",
     "/album/public-share",
     "/album/share-token",
     'source: "wechat_share"',
@@ -3090,8 +3101,17 @@ if (!fs.existsSync(pagesJsonPath)) {
     "albumMediaRefresh?.refresh",
     "Album onShow must consume photo-preview return before refreshing the member album"
   );
-  if ((albumOnShowSource.match(/albumMediaRefresh\?\.refresh\(\)/g) || []).length < 2) {
-    fail("Album onShow must consume photo-preview return before refreshing the public album");
+  assertBefore(
+    albumOnShowSource,
+    "consumePreviewReturnRefreshSkip",
+    "publicAlbumMediaStateRefresh?.refresh",
+    "Album onShow must consume photo-preview return before patching public media state"
+  );
+  if (
+    !albumOnShowSource.includes("publicAlbumMediaStateRefresh?.refresh") ||
+    !albumOnShowSource.includes("albumMediaRefresh?.refresh")
+  ) {
+    fail("Album onShow must keep separate public media-state and member album refresh paths");
   }
   const albumPageConfig = pages.find((page) => page.path === "pages/session/album") || {};
   const albumUsingComponents = albumPageConfig.style?.usingComponents || {};
@@ -3697,8 +3717,13 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (albumSource.includes("data.cover_url") || albumSource.includes("data.timeline_cover_url")) {
     fail("Album page must not consume deleted server-composite cover URLs");
   }
-  if ((albumSource.match(/this\.prepareAlbumShareTimelineImage\(data\)/g) || []).length < 2) {
-    fail("Album initial public load and public refresh must select the timeline image");
+  const publicMediaStateRefreshSource = methodBody(albumSource, "refreshLoadedPublicAlbumMedia");
+  if (
+    (albumSource.match(/this\.prepareAlbumShareTimelineImage\(data\)/g) || []).length !== 1 ||
+    !publicMediaStateRefreshSource.includes('type: "MEDIA_PATCH"') ||
+    publicMediaStateRefreshSource.includes("prepareAlbumShareTimelineImage")
+  ) {
+    fail("Album initial public load must select one timeline image while media-state refresh patches cards only");
   }
   const invalidateAlbumShareStateSource = methodBody(albumSource, "invalidateAlbumShareState");
   const handleAlbumAuthChangeSource = methodBody(albumSource, "handleAlbumAuthChange");
