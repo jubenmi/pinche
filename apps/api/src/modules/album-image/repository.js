@@ -227,7 +227,7 @@ export async function completeMediaCleanup(
   );
   if (!jobs[0] || Number(jobs[0].media_id) !== Number(mediaId)) return false;
   if (mediaRows[0]) {
-    await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [mediaId]);
+    await connection.query("DELETE FROM session_album_media_tags WHERE media_id = ?", [mediaId]);
     await connection.query("DELETE FROM session_album_photos WHERE id = ? AND status = 'deleting'", [mediaId]);
   }
   const [result] = await connection.query(

@@ -3,6 +3,10 @@ import {
   SESSION_ALBUM_VIDEO_HARDENING_MIGRATION,
 } from "../modules/album-video/migration.js";
 import {
+  ALBUM_TAG_PUBLIC_SHARE_READ_MODEL_MIGRATION,
+  prepareAlbumTagMigration,
+} from "../modules/core/album-tags-migration.js";
+import {
   CONTENT_MODERATION_MIGRATIONS,
   prepareContentModerationMigration,
 } from "../modules/content-moderation/migration.js";
@@ -54,6 +58,11 @@ export const defaultMigrationPreparers = Object.freeze([
     id: "schema-migration-checksums",
     filenames: new Set([SCHEMA_MIGRATION_CHECKSUMS_MIGRATION]),
     prepare: prepareSchemaMigrationChecksums,
+  }),
+  Object.freeze({
+    id: "album-tags",
+    filenames: new Set([ALBUM_TAG_PUBLIC_SHARE_READ_MODEL_MIGRATION]),
+    prepare: prepareAlbumTagMigration,
   }),
   Object.freeze({
     id: "album-video",

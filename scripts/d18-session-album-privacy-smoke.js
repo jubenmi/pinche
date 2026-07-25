@@ -518,20 +518,22 @@ async function main() {
   );
   const peopleKeys = (people.data.people || []).map((person) => person.key);
   for (const expectedKey of [
-    ...seats.map((seat) => `seat:${seat.id}`),
-    "dm:session",
-    "npc:session",
-    "other:session"
+    ...seats.map((seat) => `role:${seat.id}`),
+    "other"
   ]) {
     assert(peopleKeys.includes(expectedKey), `album people should include ${expectedKey}`);
   }
   assert(
-    peopleKeys.includes(`session-npc:${fixedNpcRole.id}`),
+    peopleKeys.includes(`npc-role:${fixedNpcRole.id}`),
     "fixed NPC role should appear in album people"
   );
   assert(
-    peopleKeys.includes(`session-npc:${extraNpcRole.id}`),
+    peopleKeys.includes(`npc-role:${extraNpcRole.id}`),
     "extra NPC role should appear in album people"
+  );
+  assert(
+    !(people.data.people || []).some((person) => person.account_name || person.user_id),
+    "album tag options must not expose player or staff accounts"
   );
 
   await request(
@@ -585,21 +587,23 @@ async function main() {
     `/api/session-album/photos/${photoId}/tags`,
     {
       tagKeys: [
-        `seat:${seatA.id}`,
-        "dm:session",
-        "npc:session",
-        `session-npc:${extraNpcRole.id}`
+        `role:${seatA.id}`,
+        `npc-role:${extraNpcRole.id}`
       ]
     },
     owner.token
   );
-  const taggedKeys = (tagged.data.tags || []).map((tag) => tag.key);
-  for (const expectedKey of ["dm:session", "npc:session"]) {
-    assert(taggedKeys.includes(expectedKey), `album tags should save ${expectedKey}`);
-  }
   assert(
-    taggedKeys.includes(`session-npc:${extraNpcRole.id}`),
-    "album tags should save session NPC role"
+    (tagged.data.tags || []).some(
+      (tag) => tag.kind === "role" && Number(tag.ref_id) === Number(seatA.id)
+    ),
+    "album tags should save the canonical role reference"
+  );
+  assert(
+    (tagged.data.tags || []).some(
+      (tag) => tag.kind === "npc_role" && Number(tag.ref_id) === Number(extraNpcRole.id)
+    ),
+    "album tags should save the canonical NPC role reference"
   );
 
   const playerTaggedAlbum = await request(
@@ -698,11 +702,15 @@ async function main() {
   const otherTagged = await request(
     "PUT",
     `/api/session-album/photos/${otherTaggedPhotoId}/tags`,
-    { tagKeys: ["other:session"] },
+    { tagKeys: ["other"] },
     owner.token
   );
-  const otherTaggedKeys = (otherTagged.data.tags || []).map((tag) => tag.key);
-  assert(otherTaggedKeys.includes("other:session"), "album tags should save other:session");
+  assert(
+    (otherTagged.data.tags || []).some(
+      (tag) => tag.kind === "other" && tag.ref_id === null && tag.label === "其他"
+    ),
+    "album tags should save canonical other"
+  );
 
   const npcOnlyPhoto = await request(
     "POST",
@@ -715,22 +723,22 @@ async function main() {
   await request(
     "PUT",
     `/api/session-album/photos/${npcOnlyPhotoId}/tags`,
-    { tagKeys: [`session-npc:${extraNpcRole.id}`] },
+    { tagKeys: [`npc-role:${extraNpcRole.id}`] },
     owner.token
   );
 
-  const legacyNpcOnlyPhoto = await request(
+  const unboundNpcOnlyPhoto = await request(
     "POST",
     `/api/sessions/${session.id}/album/photos`,
-    { photoUrl: await uploadAlbumPhoto(session.id, owner.token, "legacy-npc-only") },
+    { photoUrl: await uploadAlbumPhoto(session.id, owner.token, "unbound-npc-only") },
     owner.token,
     201
   );
-  const legacyNpcOnlyPhotoId = legacyNpcOnlyPhoto.data.id;
+  const unboundNpcOnlyPhotoId = unboundNpcOnlyPhoto.data.id;
   await request(
     "PUT",
-    `/api/session-album/photos/${legacyNpcOnlyPhotoId}/tags`,
-    { tagKeys: ["npc:session"] },
+    `/api/session-album/photos/${unboundNpcOnlyPhotoId}/tags`,
+    { tagKeys: [`npc-role:${fixedNpcRole.id}`] },
     owner.token
   );
 
@@ -771,8 +779,8 @@ async function main() {
     "npc-only same-session member should open media"
   );
   assert(
-    hasPhoto(otherMemberSpecialAlbum, legacyNpcOnlyPhotoId),
-    "legacy NPC-only photo should be visible to unrelated same-session members"
+    hasPhoto(otherMemberSpecialAlbum, unboundNpcOnlyPhotoId),
+    "unbound NPC role photo should be visible to unrelated same-session members"
   );
 
   await request(
@@ -792,8 +800,8 @@ async function main() {
     "bound NPC role privacy should hide npc-only photo from unrelated same-session members"
   );
   assert(
-    hasPhoto(otherMemberNpcPrivacyAlbum, legacyNpcOnlyPhotoId),
-    "unbound legacy NPC-only photo should stay visible to unrelated same-session members"
+    hasPhoto(otherMemberNpcPrivacyAlbum, unboundNpcOnlyPhotoId),
+    "unbound NPC role photo should stay visible to unrelated same-session members"
   );
 
   const npcStaffSpecialAlbum = await request(

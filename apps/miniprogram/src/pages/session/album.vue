@@ -640,13 +640,6 @@
             @tap="togglePerson(person.key)"
           >
             <text>{{ tagPersonTitle(person) }}</text>
-            <text
-              v-if="person.tag_type === 'session_npc_role'"
-              class="npc-gender-mark"
-              :class="npcRoleGenderClass(person.role_gender)"
-            >
-              {{ npcRoleGenderText(person.role_gender) }}
-            </text>
             <text>×</text>
           </t-tag>
           <t-empty
@@ -738,7 +731,6 @@ import {
   contentModerationErrorText,
   contentModerationStatusText
 } from "../../utils/contentModeration";
-import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import {
   albumShareFriendPayload,
   albumShareLocalImagePath,
@@ -777,6 +769,13 @@ import {
   mergePublicAlbumSharePages,
   publicAlbumSharePageUrl
 } from "../../utils/albumPublicSharePagination";
+import {
+  createPublicAlbumMediaStateController,
+  createPublicAlbumReadState,
+  isCurrentPublicAlbumGeneration,
+  publicAlbumMediaStateBatches,
+  reducePublicAlbumReadState
+} from "../../utils/publicAlbumReadState";
 
 function albumMediaCachePath(photoId, variant = "preview") {
   const root =
@@ -827,10 +826,8 @@ export default {
       focusedPublicMediaUnavailable: false,
       focusMediaId: null,
       publicAlbumSnapshotLoaded: false,
-      publicShareNextCursor: null,
-      publicShareHasMore: false,
-      publicShareLoadingMore: false,
-      publicShareLoadMoreError: "",
+      publicAlbumRead: createPublicAlbumReadState(),
+      publicAlbumMediaStateRefresh: null,
       shareSubject: null,
       shareOwner: null,
       shareTimelineCoverUrl: "",
@@ -893,6 +890,18 @@ export default {
     };
   },
   computed: {
+    publicShareNextCursor() {
+      return this.publicAlbumRead.nextCursor;
+    },
+    publicShareHasMore() {
+      return Boolean(this.publicAlbumRead.nextCursor);
+    },
+    publicShareLoadingMore() {
+      return this.publicAlbumRead.pageLoading;
+    },
+    publicShareLoadMoreError() {
+      return this.publicAlbumRead.pageError;
+    },
     tagSheetVisible() {
       return !this.timelineMode && Boolean(this.tagSheetPhoto);
     },
@@ -1029,27 +1038,24 @@ export default {
       return this.normalizeAlbumMediaUrl(this.shareOwner?.avatar_url || "");
     },
     publicShareCountText() {
+      const totalCount = Number(this.shareCounts.total || 0);
       const photoCount = Number(this.shareCounts.photos || 0);
       const videoCount = Number(this.shareCounts.videos || 0);
+      if (totalCount > photoCount + videoCount) return `${totalCount} 项内容`;
       if (videoCount > 0) return `${photoCount} 张照片 · ${videoCount} 段视频`;
-      return `${photoCount || Number(this.shareCounts.total || 0)} 张照片`;
+      return `${photoCount || totalCount} 张照片`;
     },
     currentAlbumRoleName() {
-      const userId = Number(this.currentUserId || 0);
-      if (!userId) {
-        return "";
-      }
-      const matchingPeople = this.people.filter(
-        (person) => Number(person?.user_id || 0) === userId
+      return (
+        this.activeAlbumShareSubjectLabel ||
+        String(
+          this.defaultAlbumShareSubject?.role_name ||
+          this.defaultAlbumShareSubject?.seat_name ||
+          this.defaultAlbumShareSubject?.label ||
+          ""
+        ).trim() ||
+        this.albumRoleNameFromMineTags()
       );
-      const person =
-        matchingPeople.find(
-          (item) => item.tag_type === "seat" && Number(item.seat_id || 0) > 0
-        ) ||
-        matchingPeople.find((item) => item.tag_type === "session_npc_role") ||
-        matchingPeople.find((item) => ["dm", "npc"].includes(item.tag_type)) ||
-        matchingPeople[0];
-      return person ? this.tagPersonTitle(person) : this.albumRoleNameFromMineTags();
     },
     albumIntro() {
       if (this.timelineMode) {
@@ -1154,22 +1160,18 @@ export default {
         this.taggablePhotos.some((photo) => Number(photo.id) === Number(photoId))
       );
     },
-    seatPeople() {
-      return this.people.filter((person) => person.tag_type === "seat");
-    },
-    npcPeople() {
-      return this.people.filter((person) => ["dm", "npc"].includes(person.tag_type));
+    rolePeople() {
+      return this.people.filter((person) => person.kind === "role");
     },
     npcRolePeople() {
-      return this.people.filter((person) => person.tag_type === "session_npc_role");
+      return this.people.filter((person) => person.kind === "npc_role");
     },
     otherPeople() {
-      return this.people.filter((person) => person.tag_type === "other");
+      return this.people.filter((person) => person.kind === "other");
     },
     albumTagSections() {
       return [
-        this.albumTagSection("seat", "车友", this.seatPeople),
-        this.albumTagSection("staff", "DM / NPC工作人员", this.npcPeople),
+        this.albumTagSection("role", "角色", this.rolePeople),
         this.albumTagSection("npcRole", "NPC角色", this.npcRolePeople),
         this.albumTagSection("other", "其他", this.otherPeople)
       ].filter((section) => section.items.length);
@@ -1272,7 +1274,7 @@ export default {
         return;
       }
       if (this.sessionId && this.albumShareToken) {
-        await this.albumMediaRefresh?.refresh();
+        await this.publicAlbumMediaStateRefresh?.refresh();
       }
       return;
     }
@@ -1292,13 +1294,16 @@ export default {
   onHide() {
     if (!this.timelineMode) {
       this.invalidateDefaultAlbumShare();
+      this.clearAuthorPrivateAlbumState();
+      this.resetAlbumShareCovers();
     }
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
-    this.resetAlbumShareCovers();
-    this.clearAuthorPrivateAlbumState();
   },
   onUnload() {
+    if (this.timelineMode) {
+      this.commitPublicAlbumEvent({ type: "UNLOAD" });
+    }
     if (!this.timelineMode) {
       this.invalidateDefaultAlbumShare();
     }
@@ -1308,9 +1313,10 @@ export default {
     this.resetAlbumShareCovers();
     if (!this.timelineMode) {
       this.invalidateAlbumShareState();
+      this.clearAuthorPrivateAlbumState();
     }
-    this.clearAuthorPrivateAlbumState();
     this.unobserveAlbumAuthChanges();
+    this.publicAlbumMediaStateRefresh?.dispose();
     this.albumMediaRefresh?.dispose();
     this.disconnectPhotoObservers();
   },
@@ -1444,15 +1450,20 @@ export default {
         thumbnailUrlResolver: (url) => this.normalizeAlbumMediaUrl(url)
       });
     },
-    prepareAlbumShareTimelineImage(data) {
-      if (!this.albumShareToken) {
-        this.applyAlbumShareTimelineImage("");
-        return "";
-      }
+    async prepareAlbumShareTimelineImage(data) {
+      const publicRequest = {
+        generation: this.publicAlbumRead.generation,
+        sessionId: this.sessionId,
+        token: this.albumShareToken
+      };
+      if (!this.isCurrentPublicAlbumRequest(publicRequest)) return "";
       const imageUrl = this.selectAlbumShareTimelineImage(data);
-      this.applyAlbumShareTimelineImage(imageUrl);
+      const preparedUrl = await this.prepareShareCoverUrl(imageUrl).catch(() => "");
+      if (!this.isCurrentPublicAlbumRequest(publicRequest)) return "";
+      const localCoverUrl = albumShareLocalImagePath(preparedUrl);
+      this.applyAlbumShareTimelineImage(localCoverUrl);
       this.showShareMenus();
-      return imageUrl;
+      return localCoverUrl;
     },
 
     resetAlbumShareCovers() {
@@ -1466,7 +1477,6 @@ export default {
       this.shareCounts = { total: 0, photos: 0, videos: 0 };
       this.albumSession = null;
       this.publicAlbumSnapshotLoaded = false;
-      this.resetPublicSharePagination();
       this.resetAlbumShareCovers();
       this.showShareMenus();
     },
@@ -1537,17 +1547,19 @@ export default {
       });
     },
     publicAlbumShareTimelinePayload() {
+      const localCoverUrl = albumShareLocalImagePath(this.shareTimelineCoverUrl);
       if (
         !this.timelineMode ||
         !this.albumShareToken ||
-        !this.shareTimelineCoverPrepared
+        !this.shareTimelineCoverPrepared ||
+        !localCoverUrl
       ) {
         return null;
       }
       return albumShareTimelinePayload({
         title: this.albumTimelineTitle(),
         query: this.albumTimelineQuery(this.albumShareToken),
-        imageUrl: this.shareTimelineCoverUrl
+        imageUrl: localCoverUrl
       });
     },
     activeAlbumShareTimelinePayload() {
@@ -1612,7 +1624,7 @@ export default {
       this.activeAlbumShareCount = Number(data.visible_count || 0);
       this.activeAlbumShareTimelineCoverUrl = "";
       this.activeAlbumShareTimelineCoverPrepared = false;
-      this.activeAlbumShareSubject = data.share_subject || this.localAlbumShareSubject();
+      this.activeAlbumShareSubject = data.share_subject || null;
       this.activeAlbumShareOwner = data.share_owner || null;
       this.activeAlbumShareCounts = {
         total: this.activeAlbumShareCount,
@@ -1625,7 +1637,7 @@ export default {
       this.defaultAlbumShareToken = token;
       this.defaultAlbumShareTimelineCoverUrl = "";
       this.defaultAlbumShareTimelineCoverPrepared = false;
-      this.defaultAlbumShareSubject = data.share_subject || this.localAlbumShareSubject();
+      this.defaultAlbumShareSubject = data.share_subject || null;
       this.defaultAlbumShareCounts = {
         total: Number(data.visible_count || 0),
         photos: Number(data.photo_count || 0),
@@ -1761,7 +1773,6 @@ export default {
       this.previewInitialIndex = 0;
       this.previewVideoUrlRequests = {};
       this.resetPreviewVideoViewerState();
-      this.refreshWaterfall();
     },
     albumTimelineQuery(albumShareToken = this.activeAlbumShareToken) {
       return queryString({
@@ -1837,83 +1848,32 @@ export default {
         this.albumScrollTop > 180
       );
     },
-    localAlbumShareSubject() {
-      const userId = Number(this.currentUserId || 0);
-      if (!userId) {
-        return null;
+    albumTagKey(tag) {
+      const refId = Number(tag?.ref_id);
+      if (tag?.kind === "role" && Number.isSafeInteger(refId) && refId > 0) {
+        return `role:${refId}`;
       }
-      const seat = this.people.find(
-        (person) =>
-          person.tag_type === "seat" &&
-          Number(person.user_id || 0) === userId &&
-          Number(person.seat_id || 0) > 0
-      );
-      if (!seat) {
-        return null;
+      if (tag?.kind === "npc_role" && Number.isSafeInteger(refId) && refId > 0) {
+        return `npc-role:${refId}`;
       }
-      return {
-        type: "seat",
-        seat_id: Number(seat.seat_id),
-        role_name: seat.role_name || "",
-        seat_name: seat.seat_name || "",
-        label: seat.role_name || seat.seat_name || seat.label || "车友"
-      };
-    },
-    inferredSeatRoleName(person) {
-      return String(person?.note || "")
-        .split(" · ")
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .slice(-1)[0] || "";
+      return tag?.kind === "other" ? "other" : "";
     },
     tagPersonTitle(person) {
-      if (person?.tag_type !== "seat") {
-        return person?.label || this.tagTypeLabel(person?.tag_type);
-      }
-      return person.role_name || this.inferredSeatRoleName(person) || person.label || "车友";
+      return String(person?.label || this.tagTypeLabel(person?.kind)).trim();
     },
     tagTypeLabel(value) {
       const labels = {
-        seat: "车友",
-        dm: "DM",
-        npc: "NPC",
-        session_npc_role: "NPC角色",
+        role: "角色",
+        npc_role: "NPC角色",
         other: "其他"
       };
-      return labels[value] || "成员";
+      return labels[value] || "角色";
     },
     tagPersonSubtitle(person) {
-      if (!person) {
-        return "";
-      }
-      const title = this.tagPersonTitle(person);
-      if (person.tag_type === "seat") {
-        const accountName = String(person.account_name || person.account_nickname || "").trim();
-        if (accountName && accountName !== title) {
-          return accountName;
-        }
-        const legacyLabel = String(person.label || "").trim();
-        return legacyLabel && legacyLabel !== title ? legacyLabel : "";
-      }
-      if (person.tag_type === "session_npc_role") {
-        const accountName = String(person.account_name || person.bound_user_name || "").trim();
-        if (accountName && accountName !== title) {
-          return accountName;
-        }
-        const legacyBinding = String(person.note || "").split("绑定：")[1]?.split(" · ")[0]?.trim() || "";
-        return legacyBinding && legacyBinding !== title ? legacyBinding : "";
-      }
-      const subtitle = String(person.account_name || person.note || "").trim();
-      return subtitle && subtitle !== person.label ? subtitle : "";
+      return "";
     },
     roleFilterOptionLabel(person) {
-      const title = this.tagPersonTitle(person);
-      const subtitle = this.tagPersonSubtitle(person);
-      const genderText =
-        person?.tag_type === "session_npc_role"
-          ? ` ${this.npcRoleGenderText(person.role_gender)}`
-          : "";
-      return subtitle ? `${title}${genderText} / ${subtitle}` : `${title}${genderText}`;
+      return this.tagPersonTitle(person);
     },
     albumRoleNameFromMineTags() {
       const roleCounts = new Map();
@@ -1922,12 +1882,15 @@ export default {
           continue;
         }
         for (const tag of photo.tags || []) {
-          if (tag.tag_type === "seat") {
+          if (tag.kind === "role") {
             const label = String(tag.label || "").trim();
             if (!label) {
               continue;
             }
-            const key = tag.key || (tag.seat_id ? `seat:${tag.seat_id}` : label);
+            const key = this.albumTagKey(tag);
+            if (!key) {
+              continue;
+            }
             const current = roleCounts.get(key) || { label, count: 0 };
             roleCounts.set(key, {
               label: current.label || label,
@@ -1940,12 +1903,6 @@ export default {
       return (
         [...roleCounts.values()].sort((left, right) => right.count - left.count)[0]?.label || ""
       );
-    },
-    npcRoleGenderText(roleGender) {
-      return roleGenderSymbol(roleGender) || "不限";
-    },
-    npcRoleGenderClass(roleGender) {
-      return normalizeRoleGender(roleGender);
     },
     albumTagSection(key, title, people) {
       return {
@@ -1962,12 +1919,6 @@ export default {
         raw: person,
         name: this.tagPersonTitle(person),
         note: this.tagPersonSubtitle(person),
-        roleGender: person.role_gender || person.roleGender || person.gender || "unlimited",
-        genderSymbol:
-          person.tag_type === "session_npc_role"
-            ? this.npcRoleGenderText(person.role_gender)
-            : "",
-        showGenderSymbol: person.tag_type === "session_npc_role",
         selected,
         checked: selected,
         stateKind: selected ? "mine" : "available",
@@ -1984,9 +1935,7 @@ export default {
         scopedPhotos = scopedPhotos.filter((photo) => photo.is_mine);
       }
       if (filterValue === "withMe") {
-        scopedPhotos = scopedPhotos.filter((photo) =>
-          photo.tags.some((tag) => Number(tag.user_id) === Number(this.currentUserId))
-        );
+        scopedPhotos = scopedPhotos.filter((photo) => photo.is_tagged_with_me === true);
       }
       if (filterValue === "untagged") {
         scopedPhotos = scopedPhotos.filter((photo) => photo.tags.length === 0);
@@ -2024,7 +1973,7 @@ export default {
       return this.photoMatchesRole(photo, this.selectedRoleFilter);
     },
     photoMatchesRole(photo, roleKey) {
-      return (photo.tags || []).some((tag) => tag.key === roleKey);
+      return (photo.tags || []).some((tag) => this.albumTagKey(tag) === roleKey);
     },
     openRoleFilterPicker() {
       if (this.albumBusy || this.albumRoleFilterOptions.length <= 1) {
@@ -2057,8 +2006,30 @@ export default {
     isCurrentAlbumListRequest(listRequest) {
       return this.albumListRequestAuthority.isCurrent(listRequest);
     },
+    commitPublicAlbumEvent(event) {
+      this.publicAlbumRead = reducePublicAlbumReadState(this.publicAlbumRead, event);
+      this.photos = this.publicAlbumRead.cards;
+    },
+    isCurrentPublicAlbumRequest({ generation, sessionId, token } = {}) {
+      return (
+        this.timelineMode &&
+        String(this.sessionId) === String(sessionId) &&
+        this.albumShareToken === token &&
+        isCurrentPublicAlbumGeneration(this.publicAlbumRead, generation)
+      );
+    },
     initializeAlbumMediaRefreshController() {
       this.albumMediaRefresh?.dispose();
+      this.publicAlbumMediaStateRefresh?.dispose();
+      this.albumMediaRefresh = null;
+      this.publicAlbumMediaStateRefresh = null;
+      if (this.timelineMode) {
+        this.publicAlbumMediaStateRefresh = createPublicAlbumMediaStateController({
+          readCards: () => this.publicAlbumRead.cards,
+          refreshCards: () => this.refreshLoadedPublicAlbumMedia()
+        });
+        return;
+      }
       this.albumMediaRefresh = createAlbumMediaRefreshController({
         readAlbum: () => ({ photos: this.photos }),
         writeAlbum: (next) => {
@@ -2080,39 +2051,13 @@ export default {
           const listRequest = this.beginAlbumListRequest();
           try {
             const response = await request({
-              url: this.timelineMode
-                ? `/api/sessions/${this.sessionId}/album/public-share${queryString({
-                    token: this.albumShareToken
-                  })}`
-                : `/api/sessions/${this.sessionId}/album`,
+              url: `/api/sessions/${this.sessionId}/album`,
               suppressMaintenance: true
             });
             if (!this.isCurrentAlbumListRequest(listRequest)) {
               return null;
             }
             const data = dataOf(response) || {};
-            if (this.timelineMode) {
-              if (!this.isCurrentAlbumListRequest(listRequest)) {
-                return null;
-              }
-              this.albumSession = this.albumSessionSummary(data);
-              this.shareSubject = data.share_subject || this.shareSubject;
-              this.shareOwner = data.share_owner || this.shareOwner;
-              this.prepareAlbumShareTimelineImage(data);
-              this.shareCounts = {
-                total: Number(data.visible_count || 0),
-                photos: Number(data.photo_count || 0),
-                videos: Number(data.video_count || 0)
-              };
-              this.publicShareNextCursor = data.has_more === true && data.next_cursor
-                ? String(data.next_cursor)
-                : null;
-              this.publicShareHasMore = Boolean(this.publicShareNextCursor);
-              this.publicShareLoadingMore = false;
-              this.publicShareLoadMoreError = "";
-              this.showShareMenus();
-              this.applyAlbumNavigationTitle();
-            }
             reportAlbumMediaEvent("media_refresh_success", { sessionId: Number(this.sessionId) });
             return {
               photos: (data.photos || []).map((photo) => this.normalizePhotoMedia(photo)),
@@ -2205,6 +2150,29 @@ export default {
         this.loadingAlbum = false;
       }
     },
+    invalidatePublicAlbumAccess() {
+      const unavailableIds = this.publicAlbumRead.cards
+        .map((card) => Number(card.id))
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
+      this.publicAlbumMediaStateRefresh?.dispose();
+      this.publicAlbumMediaStateRefresh = null;
+      this.albumShareToken = "";
+      this.publicAlbumSnapshotLoaded = false;
+      this.albumLoadFailed = true;
+      this.loadingAlbum = false;
+      this.albumSession = null;
+      this.shareSubject = null;
+      this.shareOwner = null;
+      this.shareCounts = { total: 0, photos: 0, videos: 0 };
+      this.mediaLoadSerial += 1;
+      this.commitPublicAlbumEvent({ type: "UNLOAD" });
+      this.pruneUnpublishedAlbumMediaState(this.photos);
+      this.applyPublicAlbumMediaPatchToWaterfall([], unavailableIds);
+      this.resetAlbumShareCovers();
+      this.showShareMenus();
+      this.statusText = "分享已失效或无权查看。";
+      this.applyAlbumNavigationTitle();
+    },
     redirectUnavailablePublicAlbumHome() {
       uni.reLaunch({ url: "/pages/index/index" });
     },
@@ -2213,29 +2181,30 @@ export default {
         return;
       }
       if (!hasPublicAlbumAccessCredentials(this.sessionId, this.albumShareToken)) {
+        this.invalidatePublicAlbumAccess();
         this.redirectUnavailablePublicAlbumHome();
         return;
       }
       this.loadingAlbum = true;
       this.albumLoadFailed = false;
       this.publicAlbumSnapshotLoaded = false;
-      this.resetPublicSharePagination();
       this.resetAlbumShareCovers();
       this.showShareMenus();
-      const listRequest = this.beginAlbumListRequest();
+      const publicRequest = {
+        generation: this.publicAlbumRead.generation,
+        sessionId: this.sessionId,
+        token: this.albumShareToken
+      };
       try {
         const response = await request({
-          url: `/api/sessions/${this.sessionId}/album/public-share${queryString({
-            token: this.albumShareToken
+          url: `/api/sessions/${publicRequest.sessionId}/album/public-share${queryString({
+            token: publicRequest.token
           })}`
         });
-        if (!this.isCurrentAlbumListRequest(listRequest)) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
         const data = dataOf(response) || {};
-        if (!this.isCurrentAlbumListRequest(listRequest)) {
-          return;
-        }
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
         this.visiblePhotoMediaRequests = {};
@@ -2249,17 +2218,19 @@ export default {
         this.albumSession = this.albumSessionSummary(data);
         this.shareSubject = data.share_subject || this.shareSubject;
         this.shareOwner = data.share_owner || this.shareOwner;
-        this.prepareAlbumShareTimelineImage(data);
+        const shareTimelineCoverPromise = this.prepareAlbumShareTimelineImage(data);
         this.shareCounts = {
           total: Number(data.visible_count || 0),
           photos: Number(data.photo_count || 0),
           videos: Number(data.video_count || 0)
         };
-        this.publicShareNextCursor = data.has_more === true && data.next_cursor
-          ? String(data.next_cursor)
-          : null;
-        this.publicShareHasMore = Boolean(this.publicShareNextCursor);
-        this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+        const normalizedPhotos = (data.photos || [])
+          .map((photo) => this.normalizePhotoMedia(photo));
+        this.commitPublicAlbumEvent({
+          type: "INITIAL_PAGE",
+          cards: normalizedPhotos,
+          nextCursor: data.has_more === true ? data.next_cursor : null
+        });
         this.albumLoadFailed = false;
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.statusText = "";
@@ -2267,7 +2238,14 @@ export default {
         this.showShareMenus();
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
-        this.albumMediaRefresh?.schedule();
+        await this.publicAlbumMediaStateRefresh?.refresh().catch(() => null);
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
+          return;
+        }
+        await shareTimelineCoverPromise;
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
+          return;
+        }
         if (this.singleMediaShareRequested) {
           const focusedSnapshot = focusedPublicSnapshotProjection(this.photos, this.focusMediaId);
           if (!this.focusedPublicMode || focusedSnapshot.unavailable) {
@@ -2285,15 +2263,20 @@ export default {
           this.ensurePreviewMediaAround(0);
         }
       } catch (error) {
-        if (!this.isCurrentAlbumListRequest(listRequest)) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
-        if (isUnavailablePublicAlbumError(error)) {
+        if (isUnavailablePublicAlbumError(error) || error?.statusCode === 401) {
+          this.invalidatePublicAlbumAccess();
           this.redirectUnavailablePublicAlbumHome();
           return;
         }
         this.mediaLoadSerial += 1;
-        this.photos = [];
+        this.commitPublicAlbumEvent({
+          type: "INITIAL_PAGE",
+          cards: [],
+          nextCursor: null
+        });
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.albumSession = null;
         this.canUpload = false;
@@ -2306,14 +2289,10 @@ export default {
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
       } finally {
-        this.loadingAlbum = false;
+        if (this.isCurrentPublicAlbumRequest(publicRequest)) {
+          this.loadingAlbum = false;
+        }
       }
-    },
-    resetPublicSharePagination() {
-      this.publicShareNextCursor = null;
-      this.publicShareHasMore = false;
-      this.publicShareLoadingMore = false;
-      this.publicShareLoadMoreError = "";
     },
     async loadMorePublicAlbum() {
       const cursor = this.publicShareNextCursor;
@@ -2334,38 +2313,116 @@ export default {
         cursor
       });
       if (!url) {
-        this.resetPublicSharePagination();
+        this.commitPublicAlbumEvent({ type: "NEXT_PAGE", status: "failure" });
         return;
       }
-      const listRequest = this.beginAlbumListRequest();
-      this.publicShareLoadingMore = true;
-      this.publicShareLoadMoreError = "";
+      const publicRequest = {
+        generation: this.publicAlbumRead.generation,
+        sessionId: this.sessionId,
+        token: this.albumShareToken
+      };
+      this.commitPublicAlbumEvent({ type: "NEXT_PAGE", status: "start" });
       try {
         const response = await request({ url, suppressMaintenance: true });
-        if (!this.isCurrentAlbumListRequest(listRequest)) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
         const data = dataOf(response) || {};
+        const normalizedPhotos = (data.photos || [])
+          .map((photo) => this.normalizePhotoMedia(photo));
         const merged = mergePublicAlbumSharePages(
-          this.photos,
-          (data.photos || []).map((photo) => this.normalizePhotoMedia(photo)),
+          this.publicAlbumRead.cards,
+          normalizedPhotos,
           data
         );
         this.mediaLoadSerial += 1;
-        this.photos = merged.photos;
+        this.commitPublicAlbumEvent({
+          type: "NEXT_PAGE",
+          status: "success",
+          cards: merged.appendedPhotos,
+          nextCursor: merged.nextCursor
+        });
         this.pruneUnpublishedAlbumMediaState(this.photos);
-        this.publicShareNextCursor = merged.nextCursor;
-        this.publicShareHasMore = merged.hasMore;
-        this.refreshWaterfall();
+        this.appendPublicAlbumWaterfallPhotos(merged.appendedPhotos);
+        this.publicAlbumMediaStateRefresh?.schedule();
       } catch (error) {
-        if (!this.isCurrentAlbumListRequest(listRequest)) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
-        this.publicShareLoadMoreError = "继续加载失败，可重试。";
-      } finally {
-        if (this.isCurrentAlbumListRequest(listRequest)) {
-          this.publicShareLoadingMore = false;
+        if (isUnavailablePublicAlbumError(error) || error?.statusCode === 401) {
+          this.invalidatePublicAlbumAccess();
+          this.redirectUnavailablePublicAlbumHome();
+          return;
         }
+        this.commitPublicAlbumEvent({ type: "NEXT_PAGE", status: "failure" });
+      }
+    },
+    async refreshLoadedPublicAlbumMedia() {
+      if (!hasPublicAlbumAccessCredentials(this.sessionId, this.albumShareToken)) {
+        return null;
+      }
+      const publicRequest = {
+        generation: this.publicAlbumRead.generation,
+        sessionId: this.sessionId,
+        token: this.albumShareToken
+      };
+      const requestedBatches = publicAlbumMediaStateBatches(
+        this.publicAlbumRead.cards.map((card) => card.id)
+      );
+      const batches = requestedBatches.length > 0 ? requestedBatches : [[]];
+      try {
+        const results = await Promise.all(batches.map(async (batch) => {
+          const response = await request({
+            method: "POST",
+            url: `/api/sessions/${publicRequest.sessionId}/album/public-share/media-state${queryString({
+              token: publicRequest.token
+            })}`,
+            data: { media_ids: batch },
+            suppressMaintenance: true
+          });
+          return dataOf(response) || {};
+        }));
+        if (
+          !this.isCurrentPublicAlbumRequest(publicRequest) ||
+          !isCurrentPublicAlbumGeneration(this.publicAlbumRead, publicRequest.generation)
+        ) {
+          return null;
+        }
+        const patches = results
+          .flatMap((result) => Array.isArray(result.patches) ? result.patches : [])
+          .map((photo) => this.normalizePhotoMedia(photo));
+        const unavailableIds = results.flatMap((result) => (
+          Array.isArray(result.unavailable_ids) ? result.unavailable_ids : []
+        ));
+        this.mediaLoadSerial += 1;
+        this.commitPublicAlbumEvent({
+          type: "MEDIA_PATCH",
+          patches,
+          unavailableIds
+        });
+        this.pruneUnpublishedAlbumMediaState(this.photos);
+        this.applyPublicAlbumMediaPatchToWaterfall(
+          this.publicAlbumRead.cards,
+          unavailableIds
+        );
+        reportAlbumMediaEvent("media_refresh_success", {
+          sessionId: Number(publicRequest.sessionId)
+        });
+        return this.publicAlbumRead.cards;
+      } catch (error) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
+          return null;
+        }
+        reportAlbumMediaEvent("media_refresh_failure", {
+          sessionId: Number(publicRequest.sessionId),
+          errorCode: error?.code || "MEDIA_REFRESH_FAILED"
+        });
+        if (isUnavailablePublicAlbumError(error) || error?.statusCode === 401) {
+          this.invalidatePublicAlbumAccess();
+          this.redirectUnavailablePublicAlbumHome();
+          return null;
+        }
+        throw error;
       }
     },
     retryAlbumLoad() {
@@ -2581,10 +2638,14 @@ export default {
       this.refreshWaterfall();
     },
     refreshAlbumMediaUrlsForPreview() {
-      if (!this.sessionId || !this.albumMediaRefresh) {
+      if (!this.sessionId) {
         return Promise.resolve(false);
       }
-      return this.albumMediaRefresh.refresh().then(() => true).catch(() => false);
+      const mediaRefresh = this.timelineMode
+        ? this.publicAlbumMediaStateRefresh
+        : this.albumMediaRefresh;
+      if (!mediaRefresh) return Promise.resolve(false);
+      return mediaRefresh.refresh().then(() => true).catch(() => false);
     },
     async downloadAlbumImage(photo, variant = "preview", options = {}) {
       let targetPhoto = this.latestPreviewPhoto(photo);
@@ -2900,40 +2961,18 @@ export default {
         });
       });
     },
-    async preparePhotoMedia() {
-      const serial = this.mediaLoadSerial + 1;
-      this.mediaLoadSerial = serial;
-      const photos = this.photos || [];
-      const hydrated = await Promise.all(
-        photos.map(async (photo) => {
-          if (!this.isCurrentPreviewableAlbumMedia(photo)) {
-            return { ...photo, display_url: "" };
-          }
-          try {
-            const displayUrl = await this.downloadAlbumImage(photo);
-            if (!this.isCurrentPreviewableAlbumMedia(photo)) {
-              return { ...photo, display_url: "" };
-            }
-            return {
-              ...photo,
-              display_url: displayUrl
-            };
-          } catch (error) {
-            return {
-              ...photo,
-              display_url: ""
-            };
-          }
-        })
-      );
-      if (serial === this.mediaLoadSerial) {
-        this.photos = hydrated.map((photo) => this.normalizePhotoMedia(photo));
-        this.pruneUnpublishedAlbumMediaState(this.photos);
-      }
-    },
     updatePhotoDisplayUrl(photoId, displayUrl) {
       const currentPhoto = this.photos.find((photo) => Number(photo.id) === Number(photoId));
       if (!this.isPreviewableAlbumMedia(currentPhoto)) {
+        return;
+      }
+      if (this.timelineMode) {
+        this.commitPublicAlbumEvent({
+          type: "MEDIA_PATCH",
+          patches: [{ id: Number(currentPhoto.id), display_url: displayUrl }],
+          unavailableIds: []
+        });
+        this.applyPublicAlbumMediaPatchToWaterfall(this.publicAlbumRead.cards);
         return;
       }
       this.photos = this.photos.map((photo) =>
@@ -3245,6 +3284,23 @@ export default {
         this.photoObservers = observers;
       });
     },
+    appendPublicAlbumWaterfallPhotos(photos = []) {
+      const appended = (Array.isArray(photos) ? photos : [])
+        .map((photo) => ({ ...photo }));
+      if (appended.length === 0) return;
+      this.waterfallPhotos = [...this.waterfallPhotos, ...appended];
+    },
+    applyPublicAlbumMediaPatchToWaterfall(cards = [], unavailableIds = []) {
+      const unavailable = new Set(unavailableIds.map(Number));
+      const byId = new Map(cards.map((card) => [Number(card.id), card]));
+      const patchRows = (rows) => rows
+        .filter((row) => !unavailable.has(Number(row.id)))
+        .map((row) => byId.get(Number(row.id)) || row);
+      this.waterfallPhotos = patchRows(this.waterfallPhotos);
+      this.waterfallList1 = patchRows(this.waterfallList1);
+      this.waterfallList2 = patchRows(this.waterfallList2);
+      this.$nextTick(() => this.observeVisiblePhotos());
+    },
     refreshWaterfall() {
       const waterfallRender = this.albumWaterfallRenderAuthority.begin();
       this.disconnectPhotoObservers();
@@ -3332,77 +3388,61 @@ export default {
     sessionDetailPeople(session) {
       const people = [];
       for (const seat of session.seats || []) {
-        const accountName =
-          seat.confirmed_user_name ||
-          seat.user_nickname ||
-          seat.user_open_id ||
-          "";
+        if (!["confirmed", "locked"].includes(seat.status)) {
+          continue;
+        }
+        const refId = Number(seat.id);
+        const label = String(seat.role_name || "").trim() ||
+          String(seat.name || "").trim();
+        if (!label || !Number.isSafeInteger(refId) || refId <= 0) {
+          continue;
+        }
         people.push({
-          key: `seat:${seat.id}`,
-          tag_type: "seat",
-          seat_id: seat.id,
-          user_id: seat.confirmed_user_id || null,
-          label: seat.role_name || seat.name || "车友",
-          note: accountName,
-          role_gender: seat.role_gender || "unlimited",
-          role_name: seat.role_name || "",
-          seat_name: seat.name || "",
-          account_name: accountName
+          key: `role:${refId}`,
+          kind: "role",
+          ref_id: refId,
+          label
         });
       }
 
-      if (session.dm_user_id || session.dm_name_snapshot) {
+      for (const role of session.session_npc_roles || []) {
+        if (role.status !== "active") {
+          continue;
+        }
+        const refId = Number(role.id);
+        const label = String(role.name || "").trim();
+        if (!label || !Number.isSafeInteger(refId) || refId <= 0) {
+          continue;
+        }
         people.push({
-          key: "dm:session",
-          tag_type: "dm",
-          seat_id: null,
-          user_id: session.dm_user_id || null,
-          label: session.dm_name_snapshot || "DM",
-          note: "DM"
-        });
-      }
-      if (session.npc_user_id || session.npc_name_snapshot) {
-        people.push({
-          key: "npc:session",
-          tag_type: "npc",
-          seat_id: null,
-          user_id: session.npc_user_id || null,
-          label: session.npc_name_snapshot || "NPC",
-          note: "NPC"
+          key: `npc-role:${refId}`,
+          kind: "npc_role",
+          ref_id: refId,
+          label
         });
       }
 
       people.push({
-        key: "other:session",
-        tag_type: "other",
-        seat_id: null,
-        user_id: null,
-        label: "其他",
-        note: "风景/主线外照片"
+        key: "other",
+        kind: "other",
+        ref_id: null,
+        label: "其他"
       });
-
-      for (const role of session.session_npc_roles || []) {
-        const accountName = role.bound_user_name || "";
-        people.push({
-          key: `session-npc:${role.id}`,
-          tag_type: "session_npc_role",
-          seat_id: null,
-          session_npc_role_id: role.id,
-          user_id: role.bound_user_id || null,
-          label: role.name || "NPC角色",
-          role_gender: role.role_gender || "unlimited",
-          note: accountName,
-          account_name: accountName
-        });
-      }
 
       return people;
     },
     mergePeople(people) {
       const peopleByKey = new Map();
       for (const person of people) {
-        if (person?.key && !peopleByKey.has(person.key)) {
-          peopleByKey.set(person.key, person);
+        const key = this.albumTagKey(person);
+        const label = String(person?.label || "").trim();
+        if (key && label && !peopleByKey.has(key)) {
+          peopleByKey.set(key, {
+            key,
+            kind: person.kind,
+            ref_id: person.kind === "other" ? null : Number(person.ref_id),
+            label
+          });
         }
       }
       return [...peopleByKey.values()];
@@ -3491,7 +3531,7 @@ export default {
       return "短视频";
     },
     publicMediaCaption(photo) {
-      return publicAlbumMediaCaption(photo, this.shareSubjectLabel);
+      return publicAlbumMediaCaption(photo);
     },
     formatVideoDuration(seconds) {
       const totalSeconds = Math.max(0, Math.round(Number(seconds || 0)));
@@ -4521,7 +4561,9 @@ export default {
         return;
       }
       this.tagSheetPhoto = photo;
-      this.selectedTagKeys = (photo.tags || []).map((tag) => tag.key);
+      this.selectedTagKeys = (photo.tags || [])
+        .map((tag) => this.albumTagKey(tag))
+        .filter(Boolean);
     },
     openDownloadSelectionMode() {
       if (this.timelineMode || this.albumBusy) {

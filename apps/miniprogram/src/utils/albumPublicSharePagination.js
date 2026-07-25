@@ -23,16 +23,18 @@ export function publicAlbumSharePageUrl({ sessionId, token, cursor } = {}) {
 
 export function mergePublicAlbumSharePages(current = [], incoming = [], page = {}) {
   const photos = [];
+  const appendedPhotos = [];
   const seen = new Set();
-  for (const photo of [...(Array.isArray(current) ? current : []), ...(Array.isArray(incoming) ? incoming : [])]) {
-    if (!validMedia(photo) || seen.has(Number(photo.id))) continue;
+  const append = (photo, incomingPhoto) => {
+    if (!validMedia(photo) || seen.has(Number(photo.id))) return;
     seen.add(Number(photo.id));
     photos.push(photo);
-  }
-  const nextCursor = page?.has_more === true ? nonEmptyText(page?.next_cursor) : null;
-  return {
-    photos,
-    nextCursor,
-    hasMore: Boolean(nextCursor)
+    if (incomingPhoto) appendedPhotos.push(photo);
   };
+  for (const photo of Array.isArray(current) ? current : []) append(photo, false);
+  for (const photo of Array.isArray(incoming) ? incoming : []) append(photo, true);
+  const nextCursor = page?.has_more === true
+    ? nonEmptyText(page?.next_cursor)
+    : null;
+  return { photos, appendedPhotos, nextCursor, hasMore: Boolean(nextCursor) };
 }

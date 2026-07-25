@@ -193,6 +193,12 @@ async function createPublishedSession(admin, owner, label, joinPolicy) {
       startAt: startAt(-1),
       joinPolicy,
       npcNameSnapshot: `D23指定NPC-${suffix}-${label}`,
+      extraNpcRoles: [
+        {
+          name: `D23本场NPC-${suffix}-${label}`,
+          description: "D23 canonical NPC role tag fixture"
+        }
+      ],
       depositAmount: 5000,
       note: "D23 smoke session"
     },
@@ -293,6 +299,16 @@ async function main() {
   );
 
   const direct = await createPublishedSession(admin, owner, "direct", "direct");
+  const directNpcRoles = await request(
+    "GET",
+    `/api/sessions/${direct.session.id}/npc-roles`,
+    undefined,
+    owner.token
+  );
+  const directNpcRole = (directNpcRoles.data.npc_roles || []).find(
+    (role) => role.source === "session"
+  );
+  assert(directNpcRole, "direct session should expose a canonical NPC role tag option");
   const joined = await request(
     "POST",
     `/api/session-seats/${direct.seats[0].id}/claim`,
@@ -305,19 +321,19 @@ async function main() {
     direct.session.id,
     directPlayer,
     "public-own",
-    [`seat:${direct.seats[0].id}`]
+    [`role:${direct.seats[0].id}`]
   );
   const publicScenePhoto = await createTaggedPhoto(
     direct.session.id,
     directPlayer,
     "public-scene",
-    ["other:session"]
+    ["other"]
   );
   const hiddenOtherSeatPhoto = await createTaggedPhoto(
     direct.session.id,
     owner,
     "other-seat",
-    [`seat:${direct.seats[1].id}`]
+    [`role:${direct.seats[1].id}`]
   );
   const hiddenUntaggedPhoto = await createTaggedPhoto(
     direct.session.id,
@@ -329,13 +345,13 @@ async function main() {
     direct.session.id,
     owner,
     "other-only",
-    ["other:session"]
+    ["other"]
   );
   const hiddenNpcOnlyPhoto = await createTaggedPhoto(
     direct.session.id,
     owner,
     "npc-only",
-    ["npc:session"]
+    [`npc-role:${directNpcRole.id}`]
   );
 
   const shareTokenPayload = await request(
@@ -399,7 +415,7 @@ async function main() {
     direct.session.id,
     directPlayer,
     "late-public",
-    [`seat:${direct.seats[0].id}`]
+    [`role:${direct.seats[0].id}`]
   );
 
   const publicAlbum = await request(

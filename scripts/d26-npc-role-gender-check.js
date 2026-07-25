@@ -107,12 +107,25 @@ for (const token of [
 }
 
 const miniAlbum = read("apps/miniprogram/src/pages/session/album.vue");
-for (const token of [
+for (const removedAlbumTagGenderToken of [
   "role_gender: role.role_gender || \"unlimited\"",
   "showGenderSymbol: person.tag_type === \"session_npc_role\"",
   "npcRoleGenderText(person.role_gender"
 ]) {
-  assert(miniAlbum.includes(token), `mini album must include ${token}`);
+  assert(
+    !miniAlbum.includes(removedAlbumTagGenderToken),
+    `D57 canonical album tag DTO must not restore NPC gender projection: ${removedAlbumTagGenderToken}`
+  );
+}
+for (const canonicalAlbumTagToken of [
+  'person.kind === "npc_role"',
+  'kind: "npc_role"',
+  "label"
+]) {
+  assert(
+    miniAlbum.includes(canonicalAlbumTagToken),
+    `mini album must use the D57 canonical NPC role label: ${canonicalAlbumTagToken}`
+  );
 }
 
 const adminAlbum = read("apps/admin-web/src/components/SessionAlbumWorkspace.vue");

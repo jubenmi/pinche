@@ -40,17 +40,24 @@ function photo(id, overrides = {}) {
 function sharerSeatTag(photoId) {
   return {
     id: photoId,
-    photo_id: photoId,
-    tag_type: "seat",
+    media_id: photoId,
+    kind: "role",
     seat_id: 1000,
-    user_id: 100,
-    seat_user_id: 100,
+    session_npc_role_id: null,
+    canonical_label: "Sharer",
+    privacy_user_id: 100,
     sort_order: 0
   };
 }
 
+function albumTagRows(sql, values, fixtures) {
+  const requestedIds = new Set(values.slice(1).map(Number));
+  return fixtures.filter((tag) => requestedIds.has(Number(tag.media_id)));
+}
+
 function shareCreationConnection(photos) {
   const shares = [];
+  const shareItems = [];
   const seat = {
     id: 1000,
     name: "Sharer",
@@ -62,6 +69,7 @@ function shareCreationConnection(photos) {
   };
   return {
     shares,
+    shareItems,
     async query(sql, values = []) {
       if (sql.includes("FROM sessions session")) {
         return [[{ id: 10, status: "completed", organizer_user_id: 100 }]];
@@ -70,8 +78,9 @@ function shareCreationConnection(photos) {
         return [[seat]];
       }
       if (sql.includes("FROM session_album_photos photo")) return [photos];
-      if (sql.includes("FROM session_album_photo_tags")) {
-        return [values.map((photoId) => sharerSeatTag(Number(photoId)))];
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        const fixtures = photos.map((entry) => sharerSeatTag(entry.id));
+        return [albumTagRows(sql, values, fixtures)];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {
@@ -91,6 +100,22 @@ function shareCreationConnection(photos) {
           revoked_at: null
         });
         return [{ insertId: shares.length }];
+      }
+      if (sql.includes("INSERT INTO session_album_public_share_items")) {
+        for (let index = 0; index < values.length; index += 3) {
+          shareItems.push({
+            share_id: values[index],
+            ordinal: values[index + 1],
+            media_id: values[index + 2]
+          });
+        }
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [shareItems
+          .filter((item) => Number(item.share_id) === Number(values[0]))
+          .sort((left, right) => left.ordinal - right.ordinal)
+          .map(({ ordinal, media_id }) => ({ ordinal, media_id }))];
       }
       if (sql.includes("SELECT * FROM session_album_public_shares WHERE id = ?")) {
         return [[shares.find((share) => Number(share.id) === Number(values[0]))]];
@@ -152,19 +177,41 @@ function legacyShareRecipeConnection() {
     sharerSeatTag(3),
     {
       id: 30,
-      photo_id: 3,
-      tag_type: "seat",
+      media_id: 3,
+      kind: "role",
       seat_id: 2000,
-      user_id: 200,
-      seat_user_id: 200,
+      session_npc_role_id: null,
+      canonical_label: "Other role",
+      privacy_user_id: 200,
       sort_order: 1
     },
-    { id: 20, photo_id: 2, tag_type: "other", seat_id: null, user_id: null, sort_order: 0 },
+    {
+      id: 20,
+      media_id: 2,
+      kind: "other",
+      seat_id: null,
+      session_npc_role_id: null,
+      canonical_label: null,
+      privacy_user_id: null,
+      sort_order: 0
+    },
     sharerSeatTag(1)
   ];
   const connection = {
     async query(sql, values = []) {
       if (sql.includes("FROM session_album_public_shares")) return [[share]];
+      if (sql.includes("FROM session_album_public_share_items")) {
+        const items = legacyCoverMediaIds.map((mediaId, ordinal) => ({
+          ordinal,
+          media_id: mediaId
+        }));
+        if (sql.includes("ordinal > ?")) {
+          return [items
+            .filter((item) => item.ordinal > values[1])
+            .slice(0, values[2])];
+        }
+        return [items];
+      }
       if (sql.includes("FROM sessions session")) {
         return [[{
           id: 10,
@@ -185,8 +232,8 @@ function legacyShareRecipeConnection() {
           status: "confirmed"
         }]];
       }
-      if (sql.includes("FROM session_album_photo_tags")) {
-        return [tags.filter((tag) => values.map(Number).includes(Number(tag.photo_id)))];
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        return [albumTagRows(sql, values, tags)];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_photos photo")) {

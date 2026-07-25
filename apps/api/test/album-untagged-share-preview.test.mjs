@@ -73,13 +73,16 @@ function publicUntaggedPhotoConnection(photo, snapshotTagVersion) {
         return [[photo]];
       }
       if (sql.includes("FROM session_album_public_shares")) return [[share]];
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [[{ ordinal: 0, media_id: Number(photo.id) }]];
+      }
       if (sql.includes("FROM sessions session")) {
         return [[{ id: 10, status: "completed" }]];
       }
       if (sql.includes("FROM session_seats") && sql.includes("confirmed_user_id")) {
         return [[{ id: 1000, confirmed_user_id: 100, status: "confirmed" }]];
       }
-      if (sql.includes("FROM session_album_photo_tags")) return [[]];
+      if (sql.includes("FROM session_album_media_tags tag")) return [[]];
       if (sql.includes("FROM session_album_privacy")) return [[]];
       throw new Error(`Unexpected public untagged photo query: ${sql}`);
     }
@@ -88,6 +91,7 @@ function publicUntaggedPhotoConnection(photo, snapshotTagVersion) {
 
 function untaggedShareConnection(photoRows) {
   const shares = [];
+  const shareItems = [];
   const seat = {
     id: 1000,
     name: "Sharer",
@@ -99,6 +103,7 @@ function untaggedShareConnection(photoRows) {
   };
   return {
     shares,
+    shareItems,
     async query(sql, values = []) {
       if (sql.includes("FROM sessions session")) {
         return [[{ id: 10, organizer_user_id: 100 }]];
@@ -107,7 +112,7 @@ function untaggedShareConnection(photoRows) {
         return [[seat]];
       }
       if (sql.includes("FROM session_album_photos photo")) return [photoRows];
-      if (sql.includes("FROM session_album_photo_tags tag")) return [[]];
+      if (sql.includes("FROM session_album_media_tags tag")) return [[]];
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {
         return [[shares.find((share) => share.snapshot_digest === values[3])].filter(Boolean)];
@@ -128,6 +133,22 @@ function untaggedShareConnection(photoRows) {
         shares.push(share);
         return [{ insertId: share.id }];
       }
+      if (sql.includes("INSERT INTO session_album_public_share_items")) {
+        for (let index = 0; index < values.length; index += 3) {
+          shareItems.push({
+            share_id: values[index],
+            ordinal: values[index + 1],
+            media_id: values[index + 2]
+          });
+        }
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [shareItems
+          .filter((item) => Number(item.share_id) === Number(values[0]))
+          .sort((left, right) => left.ordinal - right.ordinal)
+          .map(({ ordinal, media_id }) => ({ ordinal, media_id }))];
+      }
       if (sql.includes("SELECT * FROM session_album_public_shares WHERE id = ?")) {
         return [[shares.find((share) => Number(share.id) === Number(values[0]))].filter(Boolean)];
       }
@@ -146,10 +167,23 @@ function privacy(entries) {
 
 function sharerSeatTag() {
   return {
-    tag_type: "seat",
-    seat_id: 1000,
-    user_id: 100,
-    seat_user_id: 100
+    kind: "role",
+    ref_id: 1000,
+    label: "Sharer"
+  };
+}
+
+function tagReadContext(tagsByMediaId) {
+  return {
+    tagsByMediaId,
+    privacySubjectsByMediaId: new Map(
+      [...tagsByMediaId].map(([mediaId, tags]) => [
+        mediaId,
+        tags.some((tag) => tag.kind === "role" && Number(tag.ref_id) === 1000)
+          ? [100]
+          : [],
+      ]),
+    ),
   };
 }
 
@@ -211,7 +245,7 @@ test("implicit untagged entries are normalized as a bounded media subset", () =>
 
 test("owned untagged images require the explicit share option", () => {
   const owned = media(9);
-  const tags = new Map([[9, []]]);
+  const tags = tagReadContext(new Map([[9, []]]));
   const privacyByUser = privacy([[100]]);
 
   assert.deepEqual(
@@ -237,7 +271,7 @@ test("other users, videos and uploader privacy veto stay excluded when untagged"
     assert.deepEqual(
       selectPublicShareMedia(
         [candidate],
-        new Map([[candidate.id, []]]),
+        tagReadContext(new Map([[candidate.id, []]])),
         privacyByUser,
         claims,
         { allowOwnedUntaggedImages: true }
@@ -251,7 +285,7 @@ test("owned untagged images rank after tagged groups but a focused target is see
   const tagged = media(20, { created_at: "2026-07-20T00:00:00.000Z" });
   const untagged = media(21, { created_at: "2026-07-22T00:00:00.000Z" });
   const candidates = [untagged, tagged];
-  const tags = new Map([[20, [sharerSeatTag()]], [21, []]]);
+  const tags = tagReadContext(new Map([[20, [sharerSeatTag()]], [21, []]]));
   const privacyByUser = privacy([[100]]);
 
   assert.deepEqual(
@@ -302,28 +336,28 @@ test("snapshot-local untagged visibility requires an exact current tag version",
 
   assert.equal(isAlbumPhotoVisibleInPublicShare(
     photo,
-    [],
+    tagReadContext(new Map([[40, []]])),
     privacyByUser,
     claims,
     { implicitUntaggedByMediaId: new Map([[40, 8]]) }
   ), true);
   assert.equal(isAlbumPhotoVisibleInPublicShare(
     photo,
-    [],
+    tagReadContext(new Map([[40, []]])),
     privacyByUser,
     claims,
     { implicitUntaggedByMediaId: new Map([[40, 7]]) }
   ), false);
   assert.equal(isAlbumPhotoVisibleInPublicShare(
     photo,
-    [],
+    tagReadContext(new Map([[40, []]])),
     privacyByUser,
     claims,
     { implicitUntaggedByMediaId: new Map() }
   ), false);
   assert.equal(isAlbumPhotoVisibleInPublicShare(
     photo,
-    [sharerSeatTag()],
+    tagReadContext(new Map([[40, [sharerSeatTag()]]])),
     privacyByUser,
     claims,
     { implicitUntaggedByMediaId: new Map([[40, 7]]) }
@@ -335,7 +369,7 @@ test("implicit untagged media is never eligible as a public share cover", () => 
   assert.deepEqual(
     selectPublicShareCoverMedia(
       [photo],
-      new Map([[41, []]]),
+      tagReadContext(new Map([[41, []]])),
       privacy([[100]]),
       claims
     ),
@@ -383,7 +417,9 @@ test("public image bytes are reauthorized against the snapshot tag version", asy
 
 test("custom selection returns only exact eligible IDs and never refills", () => {
   const candidates = [media(50), media(51), media(52)];
-  const tags = new Map(candidates.map((item) => [item.id, [sharerSeatTag()]]));
+  const tags = tagReadContext(
+    new Map(candidates.map((item) => [item.id, [sharerSeatTag()]])),
+  );
   const selected = selectPublicShareMedia(
     candidates,
     tags,
@@ -407,7 +443,9 @@ test("custom selection rejects invalid shape, focus conflicts and video overflow
   const videos = Array.from({ length: 4 }, (_, index) => media(60 + index, {
     media_type: "video"
   }));
-  const videoTags = new Map(videos.map((item) => [item.id, [sharerSeatTag()]]));
+  const videoTags = tagReadContext(
+    new Map(videos.map((item) => [item.id, [sharerSeatTag()]])),
+  );
   assert.throws(
     () => selectPublicShareMedia(videos, videoTags, privacy([[100]]), claims, {
       selectedMediaIds: videos.map((item) => item.id)

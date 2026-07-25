@@ -13,6 +13,10 @@ const AUTHOR_PRIVATE_MEDIA_STATUSES = new Set([
   "rejected"
 ]);
 
+const DEFAULT_ALBUM_MEDIA_RETRY_DELAY_MS = 30_000;
+const MIN_ALBUM_MEDIA_RETRY_DELAY_MS = 1_000;
+const MAX_ALBUM_MEDIA_RETRY_DELAY_MS = 2_147_483_647;
+
 function samePositiveUserId(left, right) {
   const leftId = Number(left);
   const rightId = Number(right);
@@ -184,41 +188,71 @@ export function createAlbumMediaRefreshController({
   reloadAlbum,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  now = Date.now
+  now = Date.now,
+  retryDelayMs = DEFAULT_ALBUM_MEDIA_RETRY_DELAY_MS
 }) {
   const flight = createSingleFlight();
+  const normalizedRetryDelay = typeof retryDelayMs === "number" && Number.isFinite(retryDelayMs)
+    ? Math.min(
+        MAX_ALBUM_MEDIA_RETRY_DELAY_MS,
+        Math.max(MIN_ALBUM_MEDIA_RETRY_DELAY_MS, retryDelayMs)
+      )
+    : DEFAULT_ALBUM_MEDIA_RETRY_DELAY_MS;
+  let disposed = false;
   let timer = null;
   const cancelTimer = () => {
     if (timer !== null) clearTimer(timer);
     timer = null;
   };
   const schedule = () => {
+    if (disposed) return;
     cancelTimer();
     const expiries = (readAlbum()?.photos || [])
       .map((photo) => Date.parse(photo.media_url_expires_at || ""))
       .filter(Number.isFinite);
     if (expiries.length === 0) return;
     const delay = Math.max(0, Math.min(...expiries) - now() - 30_000);
-    timer = setTimer(() => { void refresh(); }, delay);
+    timer = setTimer(() => { void refresh().catch(() => {}); }, delay);
   };
-  const refresh = () => flight.run(async () => {
-    const refreshed = await reloadAlbum();
-    if (
-      refreshed === null ||
-      (typeof refreshed?.isCurrent === "function" && !refreshed.isCurrent())
-    ) {
-      schedule();
-      return readAlbum();
-    }
-    writeAlbum(mergeAlbumMediaUrls(readAlbum(), refreshed));
-    schedule();
-    return readAlbum();
-  });
+  const scheduleRetry = () => {
+    if (disposed) return;
+    cancelTimer();
+    timer = setTimer(
+      () => { void refresh().catch(() => {}); },
+      normalizedRetryDelay
+    );
+  };
+  const refresh = () => {
+    if (disposed) return Promise.resolve(readAlbum());
+    return flight.run(async () => {
+      try {
+        const refreshed = await reloadAlbum();
+        if (disposed) return readAlbum();
+        if (
+          refreshed === null ||
+          (typeof refreshed?.isCurrent === "function" && !refreshed.isCurrent())
+        ) {
+          schedule();
+          return readAlbum();
+        }
+        writeAlbum(mergeAlbumMediaUrls(readAlbum(), refreshed));
+        schedule();
+        return readAlbum();
+      } catch (error) {
+        if (!disposed) scheduleRetry();
+        throw error;
+      }
+    });
+  };
   const checkNow = () => {
     const expiredSoon = (readAlbum()?.photos || []).some((photo) =>
       shouldRefreshAlbumMedia(photo.media_url_expires_at, { nowMs: now() })
     );
     return expiredSoon ? refresh() : (schedule(), Promise.resolve(readAlbum()));
   };
-  return { refresh, schedule, checkNow, dispose: cancelTimer };
+  const dispose = () => {
+    disposed = true;
+    cancelTimer();
+  };
+  return { refresh, schedule, checkNow, dispose };
 }

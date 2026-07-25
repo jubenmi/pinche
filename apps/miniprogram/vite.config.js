@@ -51,8 +51,8 @@ const tdesignComponentFoldersToCopy = [
   "textarea",
   "toast"
 ];
+const tdesignIdeMetadataPath = ".wechatide.ib.json";
 const tdesignRuntimePathsToCopy = [
-  ".wechatide.ib.json",
   "index.js",
   "mixins/transition.js",
   "mixins/using-config.js",
@@ -102,7 +102,7 @@ function firstExistingPath(paths) {
   return paths.find((candidatePath) => fs.existsSync(candidatePath));
 }
 
-export default defineConfig({
+export default defineConfig(({ command, mode }) => ({
   define: {
     __PINCHE_BUILD_TIME__: JSON.stringify(buildTime)
   },
@@ -116,17 +116,21 @@ export default defineConfig({
         }
       }
     }),
-    copyTdesignMiniprogramNpmPlugin(),
+    copyTdesignMiniprogramNpmPlugin({
+      excludeIdeMetadata: command === "build" && mode === "production"
+    }),
     stripDcloudPreloadAssetPlugin(),
-    compileTdesignMiniprogramRuntimePlugin()
+    compileTdesignMiniprogramRuntimePlugin({
+      excludeIdeMetadata: command === "build" && mode === "production"
+    })
   ]
-});
+}));
 
 function isNativeTdesignComponent(tag) {
   return nativeTdesignTags.has(tag);
 }
 
-function copyTdesignMiniprogramNpmPlugin() {
+function copyTdesignMiniprogramNpmPlugin({ excludeIdeMetadata = false } = {}) {
   return {
     name: "pinche:copy-tdesign-miniprogram-npm",
     buildStart() {
@@ -142,11 +146,27 @@ function copyTdesignMiniprogramNpmPlugin() {
       copyTdesignComponentNpmPackage(
         path.join(outputOptions.dir, "wxcomponents", tdesignPackageName)
       );
+      const outputTdesignRoot = path.join(
+        outputOptions.dir,
+        "wxcomponents",
+        tdesignPackageName
+      );
+      if (excludeIdeMetadata) {
+        fs.rmSync(
+          path.join(outputTdesignRoot, tdesignIdeMetadataPath),
+          { force: true }
+        );
+      } else {
+        copyPath(
+          path.join(tdesignPackageDistRoot, tdesignIdeMetadataPath),
+          path.join(outputTdesignRoot, tdesignIdeMetadataPath)
+        );
+      }
     }
   };
 }
 
-function compileTdesignMiniprogramRuntimePlugin() {
+function compileTdesignMiniprogramRuntimePlugin({ excludeIdeMetadata = false } = {}) {
   let tdesignOutputRoot = "";
 
   return {
@@ -160,6 +180,9 @@ function compileTdesignMiniprogramRuntimePlugin() {
     },
     async closeBundle() {
       await compileTdesignModulesForWechatRuntime(tdesignOutputRoot);
+      if (excludeIdeMetadata && tdesignOutputRoot) {
+        fs.rmSync(path.join(tdesignOutputRoot, tdesignIdeMetadataPath), { force: true });
+      }
     }
   };
 }
