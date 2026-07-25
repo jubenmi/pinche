@@ -829,6 +829,7 @@ export default {
       publicAlbumSnapshotLoaded: false,
       publicShareNextCursor: null,
       publicShareHasMore: false,
+      publicShareLoadedPageCount: 0,
       publicShareLoadingMore: false,
       publicShareLoadMoreError: "",
       shareSubject: null,
@@ -2259,6 +2260,7 @@ export default {
           ? String(data.next_cursor)
           : null;
         this.publicShareHasMore = Boolean(this.publicShareNextCursor);
+        this.publicShareLoadedPageCount = 1;
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.albumLoadFailed = false;
         this.pruneUnpublishedAlbumMediaState(this.photos);
@@ -2312,6 +2314,7 @@ export default {
     resetPublicSharePagination() {
       this.publicShareNextCursor = null;
       this.publicShareHasMore = false;
+      this.publicShareLoadedPageCount = 0;
       this.publicShareLoadingMore = false;
       this.publicShareLoadMoreError = "";
     },
@@ -2356,7 +2359,9 @@ export default {
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.publicShareNextCursor = merged.nextCursor;
         this.publicShareHasMore = merged.hasMore;
-        this.refreshWaterfall();
+        this.publicShareLoadedPageCount += 1;
+        this.appendPublicAlbumWaterfallPhotos(merged.appendedPhotos);
+        this.albumMediaRefresh?.schedule();
       } catch (error) {
         if (!this.isCurrentAlbumListRequest(listRequest)) {
           return;
@@ -3244,6 +3249,12 @@ export default {
         }
         this.photoObservers = observers;
       });
+    },
+    appendPublicAlbumWaterfallPhotos(photos = []) {
+      const appended = (Array.isArray(photos) ? photos : [])
+        .map((photo) => ({ ...photo }));
+      if (appended.length === 0) return;
+      this.waterfallPhotos = [...this.waterfallPhotos, ...appended];
     },
     refreshWaterfall() {
       const waterfallRender = this.albumWaterfallRenderAuthority.begin();

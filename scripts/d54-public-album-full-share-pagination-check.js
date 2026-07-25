@@ -69,6 +69,30 @@ assert(
     && helper.includes("export function mergePublicAlbumSharePages"),
   "D54 pagination helper must remain independently testable"
 );
+const loadMorePublicAlbum = between(
+  albumPage,
+  "async loadMorePublicAlbum() {",
+  "retryAlbumLoad() {",
+  "public pagination append path"
+);
+assert(
+  helper.includes("appendedPhotos")
+    && loadMorePublicAlbum.includes(
+      "this.appendPublicAlbumWaterfallPhotos(merged.appendedPhotos)"
+    ),
+  "D54 continuation loading must append only newly merged media"
+);
+for (const forbidden of [
+  "this.refreshWaterfall()",
+  ".clear()",
+  "waterfallPhotos = []",
+  "pageScrollTo"
+]) {
+  assert(
+    !loadMorePublicAlbum.includes(forbidden),
+    `D54 continuation loading must not use destructive scroll recovery: ${forbidden}`
+  );
+}
 assert(
   apiTest.includes("100") && apiTest.includes("next_cursor") && apiTest.includes("Invalid album share cursor"),
   "D54 API pagination tests must keep long-snapshot and cursor coverage"
