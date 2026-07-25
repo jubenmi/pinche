@@ -70,6 +70,24 @@ test("album loading, failure and true empty states are distinct", async () => {
   );
 });
 
+test("public album access requires both session and share token", async () => {
+  const safety = await optionalImport("../src/utils/p1Safety.js");
+  assert.equal(typeof safety.hasPublicAlbumAccessCredentials, "function");
+  assert.equal(safety.hasPublicAlbumAccessCredentials("12", "share-token"), true);
+  assert.equal(safety.hasPublicAlbumAccessCredentials("", "share-token"), false);
+  assert.equal(safety.hasPublicAlbumAccessCredentials("12", ""), false);
+  assert.equal(safety.hasPublicAlbumAccessCredentials(null, null), false);
+});
+
+test("only forbidden public album responses are unrecoverable", async () => {
+  const safety = await optionalImport("../src/utils/p1Safety.js");
+  assert.equal(typeof safety.isUnavailablePublicAlbumError, "function");
+  assert.equal(safety.isUnavailablePublicAlbumError({ statusCode: 403 }), true);
+  assert.equal(safety.isUnavailablePublicAlbumError({ statusCode: 500 }), false);
+  assert.equal(safety.isUnavailablePublicAlbumError({ statusCode: 0 }), false);
+  assert.equal(safety.isUnavailablePublicAlbumError(null), false);
+});
+
 test("NPC bindings do not count as other onboard players", async () => {
   const membership = await optionalImport("../src/utils/sessionMembership.js");
   assert.equal(typeof membership.otherOnboardSeatMemberCount, "function");

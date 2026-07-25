@@ -188,7 +188,6 @@ const publicLoad = methodBlock(albumPage, "loadPublicAlbum", "normalizeAlbumMedi
 assertOrdered(
   publicLoad,
   [
-    "this.singleMediaShareRequested",
     "this.publicAlbumSnapshotLoaded = false;",
     "this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));",
     "const focusedSnapshot = focusedPublicSnapshotProjection(this.photos, this.focusMediaId);",
@@ -200,9 +199,11 @@ assertOrdered(
   "D50 focused public mode must commit the snapshot then open exactly the focused item"
 );
 assert(
-  publicLoad.includes("this.focusedPublicMediaUnavailable = this.singleMediaShareRequested;") &&
-    publicLoad.includes('? "该内容已不可查看"'),
-  "D50 tokenless focused routes must close without loading a public or member snapshot"
+  publicLoad.includes(
+    "!hasPublicAlbumAccessCredentials(this.sessionId, this.albumShareToken)"
+  ) &&
+    publicLoad.includes("this.redirectUnavailablePublicAlbumHome();"),
+  "D50 tokenless focused routes must return home without loading a public or member snapshot"
 );
 const onLoad = methodBlock(albumPage, "onLoad", "onShow");
 assertOrdered(

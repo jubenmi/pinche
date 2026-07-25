@@ -753,7 +753,11 @@ import {
   memberDefaultAlbumShareState,
   createAlbumShareEntryAuthority
 } from "../../utils/albumShareEntry";
-import { albumListPresentation } from "../../utils/p1Safety.js";
+import {
+  albumListPresentation,
+  hasPublicAlbumAccessCredentials,
+  isUnavailablePublicAlbumError
+} from "../../utils/p1Safety.js";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
 import {
@@ -2201,19 +2205,15 @@ export default {
         this.loadingAlbum = false;
       }
     },
+    redirectUnavailablePublicAlbumHome() {
+      uni.reLaunch({ url: "/pages/index/index" });
+    },
     async loadPublicAlbum() {
       if (this.loadingAlbum) {
         return;
       }
-      if (!this.sessionId || !this.albumShareToken) {
-        this.publicAlbumSnapshotLoaded = false;
-        this.resetPublicSharePagination();
-        this.focusedPublicMode = false;
-        this.focusedPublicMediaUnavailable = this.singleMediaShareRequested;
-        this.statusText = this.singleMediaShareRequested
-          ? "该内容已不可查看"
-          : "分享相册链接缺少访问凭证。";
-        this.albumLoadFailed = true;
+      if (!hasPublicAlbumAccessCredentials(this.sessionId, this.albumShareToken)) {
+        this.redirectUnavailablePublicAlbumHome();
         return;
       }
       this.loadingAlbum = true;
@@ -2288,6 +2288,10 @@ export default {
         if (!this.isCurrentAlbumListRequest(listRequest)) {
           return;
         }
+        if (isUnavailablePublicAlbumError(error)) {
+          this.redirectUnavailablePublicAlbumHome();
+          return;
+        }
         this.mediaLoadSerial += 1;
         this.photos = [];
         this.pruneUnpublishedAlbumMediaState(this.photos);
@@ -2297,10 +2301,7 @@ export default {
         this.publicAlbumSnapshotLoaded = false;
         this.focusedPublicMediaUnavailable = false;
         this.showShareMenus();
-        this.statusText =
-          error?.statusCode === 403
-            ? "分享相册已过期或不可访问。"
-            : "分享相册加载失败，请稍后重试。";
+        this.statusText = "分享相册加载失败，请稍后重试。";
         this.albumLoadFailed = true;
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
