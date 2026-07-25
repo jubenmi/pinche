@@ -170,6 +170,7 @@ function mediaStateConnection(options = {}) {
 
 test("normalizePublicMediaStateIds is strict, stable, deduplicated, and bounded after dedupe", () => {
   assert.equal(PUBLIC_MEDIA_STATE_BATCH_LIMIT, 100);
+  assert.deepEqual(normalizePublicMediaStateIds([]), []);
   assert.deepEqual(normalizePublicMediaStateIds([3, 1, 3]), [3, 1]);
   const oneHundred = Array.from({ length: 100 }, (_, index) => index + 1);
   assert.deepEqual(normalizePublicMediaStateIds([...oneHundred, 100]), oneHundred);
@@ -179,7 +180,6 @@ test("normalizePublicMediaStateIds is strict, stable, deduplicated, and bounded 
   );
   for (const value of [
     null,
-    [],
     "1",
     ["1"],
     [0],
@@ -189,6 +189,28 @@ test("normalizePublicMediaStateIds is strict, stable, deduplicated, and bounded 
   ]) {
     assert.throws(() => normalizePublicMediaStateIds(value), /media_ids/i);
   }
+});
+
+test("empty media-state validates the share but performs no visibility read", async () => {
+  let shareReads = 0;
+  let visibilityReads = 0;
+  const result = await readPublicAlbumMediaState({
+    connection: {},
+    claims,
+    mediaIds: [],
+    loadShare: async () => {
+      shareReads += 1;
+      return { items: [{ ordinal: 0, media_id: 1 }] };
+    },
+    readVisibleMedia: async () => {
+      visibilityReads += 1;
+      return [];
+    },
+  });
+
+  assert.deepEqual(result, { patches: [], unavailable_ids: [] });
+  assert.equal(shareReads, 1);
+  assert.equal(visibilityReads, 0);
 });
 
 test("readPublicAlbumMediaState rejects manifest outsiders before visibility reads", async () => {
@@ -257,11 +279,25 @@ test("service authorizes items first and returns current role, NPC, and other la
   assert.deepEqual(renamed.patches[0].public_tag_labels, ["顾清河"]);
 });
 
+test("service accepts an empty authorization probe without visibility SQL", async () => {
+  const fixture = mediaStateConnection();
+  const result = await readPublicSessionAlbumMediaState(claims, [], {
+    withDatabaseConnection: async (work) => work(fixture.connection),
+  });
+
+  assert.deepEqual(result, { patches: [], unavailable_ids: [] });
+  assert.deepEqual(fixture.queryKinds, ["share", "items", "session", "seat"]);
+  assert.equal(
+    fixture.queryKinds.some((kind) => kind.startsWith("visibility:")),
+    false,
+  );
+});
+
 test("service rejects outsider, revoked, and expired shares without visibility SQL", async () => {
   for (const testCase of [
     { fixture: mediaStateConnection(), mediaIds: [9] },
-    { fixture: mediaStateConnection({ revoked: true }), mediaIds: [1] },
-    { fixture: mediaStateConnection({ expired: true }), mediaIds: [1] },
+    { fixture: mediaStateConnection({ revoked: true }), mediaIds: [] },
+    { fixture: mediaStateConnection({ expired: true }), mediaIds: [] },
   ]) {
     await assert.rejects(
       () => readPublicSessionAlbumMediaState(claims, testCase.mediaIds, {
@@ -413,6 +449,9 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
         if (mediaIds.includes(9)) {
           throw forbidden("Album share media is unavailable");
         }
+        if (mediaIds.length === 0) {
+          return { patches: [], unavailable_ids: [] };
+        }
         return {
           patches: [{
             ...media(1),
@@ -457,6 +496,29 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
       "unavailableCount",
     ]);
 
+    const empty = await fetch(
+      `http://127.0.0.1:${port}/api/sessions/10/album/public-share/media-state?token=album-token`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ media_ids: [] }),
+      },
+    );
+    assert.equal(empty.status, 200);
+    assert.deepEqual(await empty.json(), {
+      ok: true,
+      data: { patches: [], unavailable_ids: [] },
+    });
+    assert.deepEqual(reads[1], { claims, mediaIds: [] });
+    assert.deepEqual(telemetry[1], {
+      sessionId: 10,
+      shareId: 50,
+      requestedCount: 0,
+      patchCount: 0,
+      unavailableCount: 0,
+      durationMs: telemetry[1].durationMs,
+    });
+
     const wrongSession = await fetch(
       `http://127.0.0.1:${port}/api/sessions/11/album/public-share/media-state?token=album-token`,
       {
@@ -466,7 +528,7 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
       },
     );
     assert.equal(wrongSession.status, 403);
-    assert.equal(reads.length, 1);
+    assert.equal(reads.length, 2);
 
     const unavailable = await fetch(
       `http://127.0.0.1:${port}/api/sessions/10/album/public-share/media-state?token=album-token`,
@@ -477,16 +539,16 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
       },
     );
     assert.equal(unavailable.status, 403);
-    assert.equal(reads.length, 2);
-    assert.equal(telemetry.length, 3);
-    assert.deepEqual(telemetry.slice(1), [
+    assert.equal(reads.length, 3);
+    assert.equal(telemetry.length, 4);
+    assert.deepEqual(telemetry.slice(2), [
       {
         sessionId: 11,
         shareId: 50,
         requestedCount: 0,
         patchCount: 0,
         unavailableCount: 0,
-        durationMs: telemetry[1].durationMs,
+        durationMs: telemetry[2].durationMs,
       },
       {
         sessionId: 10,
@@ -494,7 +556,7 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
         requestedCount: 1,
         patchCount: 0,
         unavailableCount: 0,
-        durationMs: telemetry[2].durationMs,
+        durationMs: telemetry[3].durationMs,
       },
     ]);
 
@@ -507,14 +569,14 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
       },
     );
     assert.equal(nullBody.status, 400);
-    assert.equal(reads.length, 2);
-    assert.deepEqual(telemetry[3], {
+    assert.equal(reads.length, 3);
+    assert.deepEqual(telemetry[4], {
       sessionId: 10,
       shareId: 50,
       requestedCount: 0,
       patchCount: 0,
       unavailableCount: 0,
-      durationMs: telemetry[3].durationMs,
+      durationMs: telemetry[4].durationMs,
     });
   } finally {
     await new Promise((resolve) => app.close(resolve));

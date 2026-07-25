@@ -398,6 +398,57 @@ test("onShow forces a server refresh so a revoked cached video is pruned", async
   assert.match(source, /pruneUnpublishedAlbumMediaState\(this\.photos\)/);
 });
 
+test("preview URL refresh uses the mode-specific controller without rereading public pages", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../src/pages/session/album.vue", import.meta.url), "utf8")
+  );
+  const previewRefreshBlock = source.slice(
+    source.indexOf("refreshAlbumMediaUrlsForPreview()"),
+    source.indexOf("async downloadAlbumImage", source.indexOf("refreshAlbumMediaUrlsForPreview()"))
+  );
+
+  assert.match(previewRefreshBlock, /this\.timelineMode/);
+  assert.match(previewRefreshBlock, /this\.publicAlbumMediaStateRefresh/);
+  assert.match(previewRefreshBlock, /this\.albumMediaRefresh/);
+  assert.doesNotMatch(
+    previewRefreshBlock,
+    /public-share\?|loadPublicAlbum|loadAlbum|reload|refreshWaterfall/
+  );
+});
+
+test("an empty public album still probes revocation on show and clears safe share state", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../src/pages/session/album.vue", import.meta.url), "utf8")
+  );
+  const onShowBlock = source.slice(
+    source.indexOf("async onShow()"),
+    source.indexOf("onHide()", source.indexOf("async onShow()"))
+  );
+  const refreshBlock = source.slice(
+    source.indexOf("async refreshLoadedPublicAlbumMedia()"),
+    source.indexOf("retryAlbumLoad()")
+  );
+  const invalidationBlock = source.slice(
+    source.indexOf("invalidatePublicAlbumAccess()"),
+    source.indexOf("redirectUnavailablePublicAlbumHome()")
+  );
+
+  assert.match(onShowBlock, /await this\.publicAlbumMediaStateRefresh\?\.refresh\(\)/);
+  assert.match(refreshBlock, /requestedBatches\.length > 0\s*\?\s*requestedBatches\s*:\s*\[\[\]\]/);
+  assert.match(refreshBlock, /data:\s*\{\s*media_ids:\s*batch\s*\}/);
+  assert.match(refreshBlock, /isUnavailablePublicAlbumError\(error\)/);
+  for (const pattern of [
+    /this\.albumShareToken\s*=\s*""/,
+    /this\.albumSession\s*=\s*null/,
+    /this\.shareSubject\s*=\s*null/,
+    /this\.shareOwner\s*=\s*null/,
+    /this\.resetAlbumShareCovers\(\)/,
+    /this\.showShareMenus\(\)/
+  ]) {
+    assert.match(invalidationBlock, pattern);
+  }
+});
+
 function deferred() {
   let resolve;
   let reject;

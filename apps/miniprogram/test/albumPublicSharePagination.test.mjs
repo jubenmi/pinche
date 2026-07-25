@@ -94,6 +94,19 @@ test("public-share continuation appends without rebuilding mounted cards", () =>
 
   assert.match(loadPublicAlbum, /type:\s*"INITIAL_PAGE"/);
   assert.match(loadPublicAlbum, /this\.refreshWaterfall\(\)/);
+  assert.match(
+    loadPublicAlbum,
+    /await this\.publicAlbumMediaStateRefresh\?\.refresh\(\)\.catch\(\(\)\s*=>\s*null\)/
+  );
+  assert.ok(
+    loadPublicAlbum.indexOf("this.refreshWaterfall()") <
+      loadPublicAlbum.indexOf("await this.publicAlbumMediaStateRefresh?.refresh()")
+  );
+  assert.ok(
+    loadPublicAlbum.indexOf("await this.publicAlbumMediaStateRefresh?.refresh()") <
+      loadPublicAlbum.indexOf("if (this.singleMediaShareRequested)")
+  );
+  assert.match(loadPublicAlbum, /this\.isCurrentPublicAlbumRequest\(publicRequest\)/);
   assert.match(loadMorePublicAlbum, /type:\s*"NEXT_PAGE",\s*status:\s*"start"/);
   assert.match(loadMorePublicAlbum, /type:\s*"NEXT_PAGE",\s*status:\s*"success"/);
   assert.match(loadMorePublicAlbum, /type:\s*"NEXT_PAGE",\s*status:\s*"failure"/);
@@ -136,6 +149,8 @@ test("public media-state batches commit atomically and patch mounted rows once",
   );
 
   assert.match(refresh, /publicAlbumMediaStateBatches\(/);
+  assert.match(refresh, /requestedBatches\.length > 0\s*\?\s*requestedBatches\s*:\s*\[\[\]\]/);
+  assert.doesNotMatch(refresh, /if \(batches\.length === 0\) return null/);
   assert.match(refresh, /await Promise\.all\(/);
   assert.match(refresh, /method:\s*"POST"/);
   assert.match(refresh, /\/album\/public-share\/media-state/);

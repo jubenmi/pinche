@@ -136,10 +136,12 @@ test("representative image state follows share lifecycle without temporary rende
 
   const onHideBlock = sourceBlock("onHide() {", "onUnload() {");
   const onUnloadBlock = sourceBlock("onUnload() {", "onPageScroll(event) {");
-  for (const lifecycleBlock of [onHideBlock, onUnloadBlock]) {
-    assert.match(lifecycleBlock, /resetAlbumShareCovers/);
-    assert.doesNotMatch(lifecycleBlock, /Canvas|canvas/);
-  }
+  assert.match(onUnloadBlock, /resetAlbumShareCovers/);
+  assert.doesNotMatch(onUnloadBlock, /Canvas|canvas/);
+  const publicHideTail = onHideBlock.slice(onHideBlock.indexOf("this.cancelSelectionMode"));
+  assert.doesNotMatch(publicHideTail, /resetAlbumShareCovers/);
+  assert.match(onHideBlock, /if \(!this\.timelineMode\)[\s\S]*resetAlbumShareCovers/);
+  assert.doesNotMatch(onHideBlock, /Canvas|canvas/);
 
   const refreshBlock = sourceBlock(
     "initializeAlbumMediaRefreshController() {",
@@ -190,6 +192,23 @@ test("public album initial load is not invalidated by the first onShow refresh",
   assert.doesNotMatch(timelineBlock, /albumMediaRefresh/);
 });
 
+test("timeline hide and show preserve the prepared public share payload", () => {
+  const onHideBlock = sourceBlock("onHide() {", "onUnload() {");
+  const onShowBlock = sourceBlock("async onShow()", "onHide()");
+  const payloadBlock = sourceBlock(
+    "publicAlbumShareTimelinePayload() {",
+    "activeAlbumShareTimelinePayload() {"
+  );
+
+  assert.doesNotMatch(
+    onHideBlock.slice(onHideBlock.indexOf("this.cancelSelectionMode")),
+    /resetAlbumShareCovers|shareTimelineCoverUrl\s*=|shareTimelineCoverPrepared\s*=/
+  );
+  assert.doesNotMatch(onShowBlock, /resetAlbumShareCovers/);
+  assert.match(payloadBlock, /this\.shareTimelineCoverPrepared/);
+  assert.match(payloadBlock, /imageUrl:\s*this\.shareTimelineCoverUrl/);
+});
+
 test("public shared albums keep cursor pagination, retry state, and bottom loading", () => {
   assert.match(albumPageSource, /publicShareNextCursor/);
   assert.match(albumPageSource, /publicShareLoadingMore/);
@@ -228,6 +247,11 @@ test("public invalid access clears credentials and mounted capabilities before l
 
   assert.match(invalidationBlock, /this\.albumShareToken\s*=\s*""/);
   assert.match(invalidationBlock, /type:\s*"UNLOAD"/);
+  assert.match(invalidationBlock, /this\.albumSession\s*=\s*null/);
+  assert.match(invalidationBlock, /this\.shareSubject\s*=\s*null/);
+  assert.match(invalidationBlock, /this\.shareOwner\s*=\s*null/);
+  assert.match(invalidationBlock, /this\.resetAlbumShareCovers\(\)/);
+  assert.match(invalidationBlock, /this\.showShareMenus\(\)/);
   assert.match(invalidationBlock, /this\.applyPublicAlbumMediaPatchToWaterfall\(\[\], unavailableIds\)/);
   assert.match(invalidationBlock, /this\.publicAlbumMediaStateRefresh\?\.dispose\(\)/);
   for (const requestBlock of [loadBlock, moreBlock, mediaStateBlock]) {

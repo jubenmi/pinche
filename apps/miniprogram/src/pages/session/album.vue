@@ -1295,10 +1295,10 @@ export default {
     if (!this.timelineMode) {
       this.invalidateDefaultAlbumShare();
       this.clearAuthorPrivateAlbumState();
+      this.resetAlbumShareCovers();
     }
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
-    this.resetAlbumShareCovers();
   },
   onUnload() {
     if (this.timelineMode) {
@@ -2163,6 +2163,7 @@ export default {
       this.pruneUnpublishedAlbumMediaState(this.photos);
       this.applyPublicAlbumMediaPatchToWaterfall([], unavailableIds);
       this.resetAlbumShareCovers();
+      this.showShareMenus();
       this.statusText = "分享已失效或无权查看。";
       this.applyAlbumNavigationTitle();
     },
@@ -2241,7 +2242,13 @@ export default {
         this.showShareMenus();
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
-        this.publicAlbumMediaStateRefresh?.schedule();
+        await this.publicAlbumMediaStateRefresh?.refresh().catch(() => null);
+        if (
+          !this.isCurrentAlbumListRequest(listRequest) ||
+          !this.isCurrentPublicAlbumRequest(publicRequest)
+        ) {
+          return;
+        }
         if (this.singleMediaShareRequested) {
           const focusedSnapshot = focusedPublicSnapshotProjection(this.photos, this.focusMediaId);
           if (!this.focusedPublicMode || focusedSnapshot.unavailable) {
@@ -2375,10 +2382,10 @@ export default {
         sessionId: this.sessionId,
         token: this.albumShareToken
       };
-      const batches = publicAlbumMediaStateBatches(
+      const requestedBatches = publicAlbumMediaStateBatches(
         this.publicAlbumRead.cards.map((card) => card.id)
       );
-      if (batches.length === 0) return null;
+      const batches = requestedBatches.length > 0 ? requestedBatches : [[]];
       try {
         const results = await Promise.all(batches.map(async (batch) => {
           const response = await request({
@@ -2647,10 +2654,14 @@ export default {
       this.refreshWaterfall();
     },
     refreshAlbumMediaUrlsForPreview() {
-      if (!this.sessionId || !this.albumMediaRefresh) {
+      if (!this.sessionId) {
         return Promise.resolve(false);
       }
-      return this.albumMediaRefresh.refresh().then(() => true).catch(() => false);
+      const mediaRefresh = this.timelineMode
+        ? this.publicAlbumMediaStateRefresh
+        : this.albumMediaRefresh;
+      if (!mediaRefresh) return Promise.resolve(false);
+      return mediaRefresh.refresh().then(() => true).catch(() => false);
     },
     async downloadAlbumImage(photo, variant = "preview", options = {}) {
       let targetPhoto = this.latestPreviewPhoto(photo);
