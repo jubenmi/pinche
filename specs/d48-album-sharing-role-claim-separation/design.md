@@ -294,7 +294,7 @@ DELETE /api/sessions/:id/album/public-shares
 }
 ```
 
-`albumMediaResponse(..., { publicShare: true })` 在 D48 必须把 `tags` 固定为空数组，并继续移除上传者、对象 Key、ETag、作者私有字段和内部 URL。精确 `start_at` 不再出现在公开 DTO；服务端返回北京时间 `played_on`。公开页不需要原始标签，只使用 `share_subject` 生成统一说明。
+`albumMediaResponse(..., { publicShare: true })` 在 D48 必须把 `tags` 固定为空数组，并继续移除上传者、对象 Key、ETag、作者私有字段、标签关联字段和内部 URL；后续规格允许它为已经通过公开资格复核的媒体单独投影展示用标签文字数组。精确 `start_at` 不再出现在公开 DTO；服务端返回北京时间 `played_on`。标签文字只用于展示，不参与客户端授权。
 
 ## 5. 小程序设计
 

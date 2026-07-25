@@ -65,14 +65,14 @@ decodePublicSharePageCursor(cursor, shareId)
 
 ## 3. 小程序
 
-新增 `apps/miniprogram/src/utils/albumPublicSharePagination.js`，只处理三件事：构造带 token/cursor 的分页 URL、按媒体 ID 合并页面、规范化后续游标状态。它不包含网络或 Vue 状态，便于单元测试。
+`apps/miniprogram/src/utils/albumPublicSharePagination.js` 负责构造带 token/cursor 的分页 URL、按媒体 ID 合并并返回本次新增项、规范化后续游标、比较媒体 ID 序列，以及通过注入的 `loadPage` 回调重读已经加载的公开页前缀。它不直接导入网络层或 Vue 状态，保持可独立单元测试。
 
 `album.vue` 在公开分享模式新增：
 
 - `publicShareNextCursor`、`publicShareHasMore`、`publicShareLoadingMore`、`publicShareLoadMoreError`；
 - 首次 `loadPublicAlbum` 清空分页状态并加载首屏；
 - `onReachBottom` 调用 `loadMorePublicAlbum`；
-- 成功时使用 helper 去重追加并刷新瀑布流；失败仅设置局部错误；
+- 成功时使用 helper 按 ID 去重合并，只把 `appendedPhotos` 增量追加到瀑布流，不清空或重建首屏卡片；
 - token、页面刷新、卸载和请求序列变化时清空游标并拒绝过期响应。
 
 封面预热和分享菜单仍只使用 share token 与内部 `cover_media_ids` 候选，不依赖正文是否加载到最后一页；对外返回的是生成后的单张封面图，不暴露这些候选 ID。
