@@ -1450,15 +1450,20 @@ export default {
         thumbnailUrlResolver: (url) => this.normalizeAlbumMediaUrl(url)
       });
     },
-    prepareAlbumShareTimelineImage(data) {
-      if (!this.albumShareToken) {
-        this.applyAlbumShareTimelineImage("");
-        return "";
-      }
+    async prepareAlbumShareTimelineImage(data) {
+      const publicRequest = {
+        generation: this.publicAlbumRead.generation,
+        sessionId: this.sessionId,
+        token: this.albumShareToken
+      };
+      if (!this.isCurrentPublicAlbumRequest(publicRequest)) return "";
       const imageUrl = this.selectAlbumShareTimelineImage(data);
-      this.applyAlbumShareTimelineImage(imageUrl);
+      const preparedUrl = await this.prepareShareCoverUrl(imageUrl).catch(() => "");
+      if (!this.isCurrentPublicAlbumRequest(publicRequest)) return "";
+      const localCoverUrl = albumShareLocalImagePath(preparedUrl);
+      this.applyAlbumShareTimelineImage(localCoverUrl);
       this.showShareMenus();
-      return imageUrl;
+      return localCoverUrl;
     },
 
     resetAlbumShareCovers() {
@@ -1542,17 +1547,19 @@ export default {
       });
     },
     publicAlbumShareTimelinePayload() {
+      const localCoverUrl = albumShareLocalImagePath(this.shareTimelineCoverUrl);
       if (
         !this.timelineMode ||
         !this.albumShareToken ||
-        !this.shareTimelineCoverPrepared
+        !this.shareTimelineCoverPrepared ||
+        !localCoverUrl
       ) {
         return null;
       }
       return albumShareTimelinePayload({
         title: this.albumTimelineTitle(),
         query: this.albumTimelineQuery(this.albumShareToken),
-        imageUrl: this.shareTimelineCoverUrl
+        imageUrl: localCoverUrl
       });
     },
     activeAlbumShareTimelinePayload() {
@@ -2222,7 +2229,7 @@ export default {
         this.albumSession = this.albumSessionSummary(data);
         this.shareSubject = data.share_subject || this.shareSubject;
         this.shareOwner = data.share_owner || this.shareOwner;
-        this.prepareAlbumShareTimelineImage(data);
+        const shareTimelineCoverPromise = this.prepareAlbumShareTimelineImage(data);
         this.shareCounts = {
           total: Number(data.visible_count || 0),
           photos: Number(data.photo_count || 0),
@@ -2243,6 +2250,13 @@ export default {
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
         await this.publicAlbumMediaStateRefresh?.refresh().catch(() => null);
+        if (
+          !this.isCurrentAlbumListRequest(listRequest) ||
+          !this.isCurrentPublicAlbumRequest(publicRequest)
+        ) {
+          return;
+        }
+        await shareTimelineCoverPromise;
         if (
           !this.isCurrentAlbumListRequest(listRequest) ||
           !this.isCurrentPublicAlbumRequest(publicRequest)
