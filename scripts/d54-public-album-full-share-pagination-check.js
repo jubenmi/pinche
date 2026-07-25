@@ -75,12 +75,24 @@ const loadMorePublicAlbum = between(
   "retryAlbumLoad() {",
   "public pagination append path"
 );
+const appendPublicAlbumWaterfallPhotos = between(
+  albumPage,
+  "appendPublicAlbumWaterfallPhotos(photos = []) {",
+  "refreshWaterfall() {",
+  "public waterfall append helper"
+);
 assert(
   helper.includes("appendedPhotos")
-    && loadMorePublicAlbum.includes(
-      "this.appendPublicAlbumWaterfallPhotos(merged.appendedPhotos)"
+    && /this\.appendPublicAlbumWaterfallPhotos\s*\(\s*merged\.appendedPhotos\s*\)/s.test(
+      loadMorePublicAlbum
     ),
   "D54 continuation loading must append only newly merged media"
+);
+assert(
+  /this\.waterfallPhotos\s*=\s*\[\s*\.\.\.this\.waterfallPhotos\s*,\s*\.\.\.appended\s*\]/s.test(
+    appendPublicAlbumWaterfallPhotos
+  ),
+  "D54 public waterfall append helper must grow the existing model tail"
 );
 for (const forbidden of [
   "this.refreshWaterfall()",
@@ -88,10 +100,15 @@ for (const forbidden of [
   "waterfallPhotos = []",
   "pageScrollTo"
 ]) {
-  assert(
-    !loadMorePublicAlbum.includes(forbidden),
-    `D54 continuation loading must not use destructive scroll recovery: ${forbidden}`
-  );
+  for (const [name, block] of [
+    ["continuation loading", loadMorePublicAlbum],
+    ["waterfall append helper", appendPublicAlbumWaterfallPhotos]
+  ]) {
+    assert(
+      !block.includes(forbidden),
+      `D54 ${name} must not use destructive scroll recovery: ${forbidden}`
+    );
+  }
 }
 assert(
   apiTest.includes("100") && apiTest.includes("next_cursor") && apiTest.includes("Invalid album share cursor"),

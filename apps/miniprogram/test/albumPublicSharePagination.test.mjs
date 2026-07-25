@@ -69,6 +69,11 @@ test("public-share continuation appends without rebuilding mounted cards", () =>
     "async loadMorePublicAlbum() {",
     "retryAlbumLoad() {"
   );
+  const appendPublicAlbumWaterfallPhotos = sourceBlock(
+    albumSource,
+    "appendPublicAlbumWaterfallPhotos(photos = []) {",
+    "refreshWaterfall() {"
+  );
 
   assert.match(albumSource, /publicShareLoadedPageCount: 0/);
   assert.match(loadPublicAlbum, /this\.publicShareLoadedPageCount = 1/);
@@ -76,6 +81,10 @@ test("public-share continuation appends without rebuilding mounted cards", () =>
   assert.match(loadMorePublicAlbum, /this\.appendPublicAlbumWaterfallPhotos\(merged\.appendedPhotos\)/);
   assert.match(loadMorePublicAlbum, /this\.publicShareLoadedPageCount \+= 1/);
   assert.match(loadMorePublicAlbum, /this\.albumMediaRefresh\?\.schedule\(\)/);
+  assert.match(
+    appendPublicAlbumWaterfallPhotos,
+    /this\.waterfallPhotos\s*=\s*\[\s*\.\.\.this\.waterfallPhotos\s*,\s*\.\.\.appended\s*\]/
+  );
   for (const forbidden of [
     "this.refreshWaterfall()",
     ".clear()",
@@ -83,5 +92,6 @@ test("public-share continuation appends without rebuilding mounted cards", () =>
     "pageScrollTo"
   ]) {
     assert.equal(loadMorePublicAlbum.includes(forbidden), false, forbidden);
+    assert.equal(appendPublicAlbumWaterfallPhotos.includes(forbidden), false, forbidden);
   }
 });
