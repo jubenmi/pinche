@@ -294,6 +294,10 @@ Content-Type: application/json
 4. 对可见媒体生成完整安全公开 DTO 并附加短期 URL。
 5. 对清单内但当前不可见的媒体只返回 ID。
 
+图片、缩略图、视频封面和视频文件能力与 DTO 的 `media_url_expires_at`
+共用同一个绝对到期值：`min(share claims.exp, now + 600 seconds)`。
+公开 patch 使用显式字段白名单，不从数据库媒体行扩散账号或存储字段。
+
 客户端超过 100 个已加载媒体时按稳定 ID 顺序分批请求；任一批失败则本轮整体不提交部分结果，随后有界重试。
 
 ## 7. 客户端状态与渲染

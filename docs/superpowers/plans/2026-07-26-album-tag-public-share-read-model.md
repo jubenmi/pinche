@@ -726,13 +726,16 @@ export function normalizePublicMediaStateIds(values) {
   const ids = [];
   const seen = new Set();
   for (const value of values) {
-    const id = Number(value);
-    if (!Number.isSafeInteger(id) || id <= 0) {
+    if (
+      typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value <= 0
+    ) {
       throw badRequest("media_ids contains an invalid id");
     }
-    if (seen.has(id)) continue;
-    seen.add(id);
-    ids.push(id);
+    if (seen.has(value)) continue;
+    seen.add(value);
+    ids.push(value);
   }
   if (ids.length > PUBLIC_MEDIA_STATE_BATCH_LIMIT) {
     throw badRequest("media_ids must contain at most 100 ids");

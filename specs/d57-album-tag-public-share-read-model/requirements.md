@@ -98,7 +98,7 @@ D57 取代 D48/D54 中依赖 `session_album_photo_tags.label` 的公开展示标
 1. WHEN 清单分页、媒体状态刷新或清单成员校验失败 THEN 服务 SHALL 记录不含 token、昵称、`open_id` 和内部 URL 的结构化事件。
 2. WHEN 分享 token 无效、过期或撤回 THEN 页面 SHALL 清空媒体访问凭证并进入分享失效状态。
 3. WHEN 单个媒体失效 THEN 页面 SHALL 只移除该媒体卡片，不触发全量相册刷新。
-4. WHEN 媒体状态请求包含非法、重复、越界或过多 ID THEN 服务 SHALL 返回客户端错误。
+4. WHEN 媒体状态请求包含重复 ID THEN 服务 SHALL 去重并保留首次出现顺序；WHEN 请求包含非 number 正整数、越界或去重后超过 100 个 ID THEN 服务 SHALL 返回客户端错误。
 5. WHEN 迁移后的规范化清单与兼容 JSON 不一致 THEN 服务 SHALL 关闭式失败并记录审计事件。
 
 ## 10. 验收

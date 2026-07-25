@@ -25,11 +25,12 @@
   - [x] 4.3 新分享同事务写兼容 JSON 与 items；历史 token 通过回填 items 继续有效。
   - [x] 4.4 将图片、视频封面、视频地址和视频字节授权切换到 manifest items。
 
-- [ ] 5. 实现 PublicMediaState 接口
-  - [ ] 5.1 先写 ID 规范化、批次上限、清单外拒绝、撤回和安全 DTO 失败测试。
-  - [ ] 5.2 新增 `public-album-media-state.js`，复用当前公开资格和标签 resolver。
-  - [ ] 5.3 增加 `POST .../media-state` 路由并附加短期图片/视频 URL。
-  - [ ] 5.4 增加不含敏感字段的结构化事件与失败关闭测试。
+- [x] 5. 实现 PublicMediaState 接口
+  - 验证：规格审查通过；修复公开字段白名单、空 body 和 capability 真实有效期后，质量复审无 Critical/Important。Task 5/Manifest/分页/单媒体复验 58/58。
+  - [x] 5.1 先写 ID 规范化、批次上限、清单外拒绝、撤回和安全 DTO 失败测试。
+  - [x] 5.2 新增 `public-album-media-state.js`，复用当前公开资格和标签 resolver。
+  - [x] 5.3 增加 `POST .../media-state` 路由并附加短期图片/视频 URL。
+  - [x] 5.4 增加不含敏感字段的结构化事件与失败关闭测试。
 
 - [ ] 6. 实现客户端四事件状态模型
   - [ ] 6.1 先写 reducer、并发排列、批次、失败原子性和 generation 失败测试。
