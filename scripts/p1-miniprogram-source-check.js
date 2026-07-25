@@ -47,6 +47,33 @@ assert.match(album, /albumLoadFailed/);
 assert.match(album, /retryAlbumLoad/);
 assert.match(album, /albumListPresentation/);
 
+const publicAlbumRedirect = album.slice(
+  album.indexOf("redirectUnavailablePublicAlbumHome()"),
+  album.indexOf("async loadPublicAlbum()")
+);
+const publicAlbumLoadStart = album.indexOf("async loadPublicAlbum()");
+const publicAlbumLoad = album.slice(
+  publicAlbumLoadStart,
+  album.indexOf("    resetPublicSharePagination() {", publicAlbumLoadStart)
+);
+
+assert.match(
+  publicAlbumRedirect,
+  /uni\.reLaunch\(\{\s*url:\s*"\/pages\/index\/index"\s*\}\)/
+);
+assert.match(
+  publicAlbumLoad,
+  /!hasPublicAlbumAccessCredentials\(this\.sessionId,\s*this\.albumShareToken\)[\s\S]*this\.redirectUnavailablePublicAlbumHome\(\);[\s\S]*return;/
+);
+assert.match(
+  publicAlbumLoad,
+  /isUnavailablePublicAlbumError\(error\)[\s\S]*this\.redirectUnavailablePublicAlbumHome\(\);[\s\S]*return;/
+);
+assert.match(
+  publicAlbumLoad,
+  /this\.statusText = "分享相册加载失败，请稍后重试。";[\s\S]*this\.albumLoadFailed = true;/
+);
+
 assert.match(manage, /otherOnboardSeatMemberCount\(this\.session\)/);
 
 console.log("P1 mini program source contracts passed.");
