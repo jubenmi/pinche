@@ -87,7 +87,7 @@ export async function reloadPublicAlbumSharePrefix({
       cursor: loadedPageCount === 0 ? null : nextCursor
     });
     if (page === null) return null;
-    if (!page || typeof page !== "object") {
+    if (!page || typeof page !== "object" || Array.isArray(page)) {
       throw new Error("Invalid public album refresh page");
     }
     if (firstPage === null) firstPage = page;

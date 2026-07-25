@@ -56,7 +56,7 @@ test("public-share refresh reloads the currently loaded prefix and keeps the las
       visible_count: 5
     }],
     ["cursor-2", {
-      photos: [{ id: 3 }, { id: 4 }],
+      photos: [{ id: 2 }, { id: 3 }, { id: 4 }],
       next_cursor: "cursor-3",
       has_more: true
     }]
@@ -79,6 +79,26 @@ test("public-share refresh reloads the currently loaded prefix and keeps the las
   assert.equal(refreshed.loadedPageCount, 2);
 });
 
+test("public-share refresh stops after a first page without continuation", async () => {
+  let loadCount = 0;
+  const refreshed = await pagination.reloadPublicAlbumSharePrefix({
+    pageCount: 3,
+    loadPage: async () => {
+      loadCount += 1;
+      return {
+        photos: [{ id: 1 }, { id: 2 }],
+        next_cursor: "ignored",
+        has_more: false
+      };
+    }
+  });
+
+  assert.equal(loadCount, 1);
+  assert.equal(refreshed.loadedPageCount, 1);
+  assert.equal(refreshed.hasMore, false);
+  assert.equal(refreshed.nextCursor, null);
+});
+
 test("public-share refresh discards a stale partial prefix", async () => {
   assert.equal(typeof pagination?.reloadPublicAlbumSharePrefix, "function");
   const refreshed = await pagination.reloadPublicAlbumSharePrefix({
@@ -95,6 +115,15 @@ test("public-share refresh discards a stale partial prefix", async () => {
   });
 
   assert.equal(refreshed, null);
+});
+
+test("public-share refresh rejects array pages", async () => {
+  await assert.rejects(
+    pagination.reloadPublicAlbumSharePrefix({
+      loadPage: async () => []
+    }),
+    /Invalid public album refresh page/
+  );
 });
 
 test("public-share refresh distinguishes field updates from media-set changes", () => {
@@ -120,6 +149,12 @@ test("public-share refresh distinguishes field updates from media-set changes", 
     pagination.samePublicAlbumMediaSequence([{ id: 1 }, { id: 2 }], [{ id: 1 }]),
     false
   );
+  const unmatchedRow = { id: 3, preview_display_url: "unchanged" };
+  const unmatchedResult = pagination.replacePublicAlbumMediaRows(
+    [unmatchedRow],
+    refreshedPhotos
+  );
+  assert.strictEqual(unmatchedResult[0], unmatchedRow);
   assert.deepEqual(
     pagination.replacePublicAlbumMediaRows(
       [{ id: 2, preview_display_url: "old" }],
