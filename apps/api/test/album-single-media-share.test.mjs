@@ -81,18 +81,75 @@ test("public media category distinguishes the shared role from safe other conten
   );
 });
 
-test("public media response exposes only the safe category and keeps raw tags private", () => {
+test("public tag labels trim, discard invalid values, and deduplicate in source order", () => {
+  assert.equal(typeof coreService.publicAlbumTagLabels, "function");
+  assert.deepEqual(
+    coreService.publicAlbumTagLabels([
+      { label: " 沈清商 " },
+      { label: "阿离" },
+      { label: "沈清商" },
+      { label: "  " },
+      { label: 7 },
+      null
+    ]),
+    ["沈清商", "阿离"]
+  );
+});
+
+test("public media response exposes label strings without raw tag metadata", () => {
   assert.equal(typeof coreService.publicAlbumMediaResponse, "function");
-  const otherTag = { tag_type: "other", user_id: null, label: "内部标签" };
+  const rawTags = [
+    {
+      id: 9001,
+      key: "seat:private-canary",
+      tag_type: "seat",
+      seat_id: 1000,
+      session_npc_role_id: 9002,
+      user_id: 100,
+      seat_user_id: 100,
+      label: "沈清商",
+      account_name: "ACCOUNT_CANARY",
+      note: "NOTE_CANARY"
+    },
+    {
+      id: 9003,
+      key: "session-npc:private-canary",
+      tag_type: "session_npc_role",
+      session_npc_role_id: 9004,
+      user_id: null,
+      label: "阿离"
+    }
+  ];
   const response = coreService.publicAlbumMediaResponse(
     eligibleMedia(41),
-    [otherTag],
+    rawTags,
     claims
   );
 
-  assert.equal(response.public_category, "other");
+  assert.equal(response.public_category, "share_subject");
   assert.deepEqual(response.tags, []);
-  assert.equal(JSON.stringify(response).includes(otherTag.label), false);
+  assert.deepEqual(response.public_tag_labels, ["沈清商", "阿离"]);
+  assert.deepEqual(
+    coreService.publicAlbumMediaResponse(eligibleMedia(42), [], claims).public_tag_labels,
+    []
+  );
+
+  const serialized = JSON.stringify(response);
+  for (const key of [
+    "key",
+    "label",
+    "tag_type",
+    "seat_id",
+    "session_npc_role_id",
+    "user_id",
+    "seat_user_id",
+    "account_name",
+    "note"
+  ]) {
+    assert.equal(serialized.includes(`\"${key}\"`), false);
+  }
+  assert.equal(serialized.includes("ACCOUNT_CANARY"), false);
+  assert.equal(serialized.includes("NOTE_CANARY"), false);
 });
 
 function focusedShareConnection(photoRows, tagRows) {

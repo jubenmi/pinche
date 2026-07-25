@@ -825,7 +825,11 @@ function albumMediaResponse(media, tags = [], options = {}) {
     created_at: media.created_at,
     tags: options.publicShare ? [] : tags,
     ...(options.publicShare
-      ? { public_category: options.publicCategory === "share_subject" ? "share_subject" : "other" }
+      ? {
+          public_category:
+            options.publicCategory === "share_subject" ? "share_subject" : "other",
+          public_tag_labels: publicAlbumTagLabels(tags)
+        }
       : {})
   };
 
@@ -2244,6 +2248,19 @@ export function isAlbumPhotoVisibleInPublicShare(
     }
   }
   return true;
+}
+
+export function publicAlbumTagLabels(tags) {
+  const labels = [];
+  const seen = new Set();
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    if (typeof tag?.label !== "string") continue;
+    const label = tag.label.trim();
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  return labels;
 }
 
 export function publicAlbumMediaCategory(tags, claims) {
