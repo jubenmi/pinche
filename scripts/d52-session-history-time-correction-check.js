@@ -14,7 +14,7 @@ const database = read("apps/api/src/db/mysql.js");
 const correctionHelper = read("apps/api/src/modules/core/session-time-correction.js");
 const rescheduleHelper = read("apps/api/src/modules/core/session-reschedule.js");
 const service = read("apps/api/src/modules/core/service.js");
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 const miniCorrectionHelper = read("apps/miniprogram/src/utils/sessionTimeCorrection.js");
 const managePage = read("apps/miniprogram/src/pages/session/manage.vue");
 const apiPackage = JSON.parse(read("apps/api/package.json"));
@@ -66,7 +66,7 @@ assertIncludes(
   "root package must expose the D52 verification command"
 );
 assertIncludes(
-  rootPackage.scripts.check || "",
+  rootPackage.scripts["test:contracts"] || "",
   "npm run session-time-correction:verify",
   "root check must include D52 verification"
 );

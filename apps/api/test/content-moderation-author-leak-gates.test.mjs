@@ -171,7 +171,7 @@ test("D46 counts and public media paths remain approved-only", async () => {
 test("D46 public discovery, calendar, review, unread, tag and notification paths do not read projections", async () => {
   const [core, server, talkClient] = await Promise.all([
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../../../packages/talk/miniprogram/ChatEntry.vue", import.meta.url), "utf8")
   ]);
   for (const name of [

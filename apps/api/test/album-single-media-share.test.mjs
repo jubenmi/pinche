@@ -20,7 +20,7 @@ import {
 
 const [serviceSource, serverSource] = await Promise.all([
   readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
-  readFile(new URL("../src/server.js", import.meta.url), "utf8")
+  readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8")
 ]);
 
 const claims = { sessionId: 10, sharerUserId: 100, seatId: 1000 };

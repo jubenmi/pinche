@@ -22,7 +22,7 @@ const service = readFileSync(
   "utf8"
 );
 const server = readFileSync(
-  new URL("../apps/api/src/server.js", import.meta.url),
+  new URL("../apps/api/src/legacy-app.js", import.meta.url),
   "utf8"
 );
 const env = readFileSync(new URL("../apps/api/src/config/env.js", import.meta.url), "utf8");
@@ -162,7 +162,9 @@ assertIncludes(managePage, '`/api/sessions/${this.sessionId}/reschedule`');
 assertIncludes(managePage, "this.showRescheduleConfirmation(validation.startAt)");
 assertIncludes(managePage, "this.rescheduleSession(startAt, memberCount > 0)");
 assertIncludes(managePage, "notification_delivery");
-assertIncludes(managePage, 'role.status === "active"');
+assertIncludes(managePage, "otherOnboardSeatMemberCount(this.session)");
+assertIncludes(miniMembershipHelper, "export function otherOnboardSeatMemberCount");
+assertIncludes(miniMembershipHelper, '["confirmed", "locked"].includes(seat.status)');
 assertIncludes(managePage, "await this.ensureManageActionLogin()");
 assertIncludes(managePage, "if (rescheduleConfirmationRequired(error))");
 assertIncludes(managePage, "await this.reload()");
@@ -269,7 +271,7 @@ for (const command of [
     `session-reschedule verification must include command: ${command}`
   );
 }
-assertIncludes(packageJson.scripts.check, "npm run session-reschedule:verify");
+assertIncludes(packageJson.scripts["test:contracts"], "npm run session-reschedule:verify");
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(

@@ -122,7 +122,7 @@ function sourceBlock(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
-test("album toolbar uses an icon-only privacy control and ordered native recruit share", async () => {
+test("album toolbar uses an icon-only privacy control and ordered unified claim entry", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
@@ -160,71 +160,45 @@ test("album toolbar uses an icon-only privacy control and ordered native recruit
   assert.ok(shareIndex < downloadIndex);
   assert.ok(downloadIndex < recruitIndex);
   assert.ok(recruitIndex < tagIndex);
-  assert.match(recruitButton, /data-album-share="recruit"/);
-  assert.match(recruitButton, /:open-type="recruitInviteToken \? 'share' : ''"/);
-  assert.match(recruitButton, /@tap="handleRecruitShareTap"/);
+  assert.match(recruitButton, /@tap="openClaimShare"/);
+  assert.match(recruitButton, />邀请认领</);
+  assert.doesNotMatch(recruitButton, /open-type|data-album-share/);
   assert.doesNotMatch(source, /openRecruitment/);
-  assert.doesNotMatch(source, /navigateTo\(\{ url: `\/pages\/session\/share/);
+  assert.match(
+    source,
+    /uni\.navigateTo\(\{ url: `\/pages\/session\/share\?id=\$\{this\.sessionId\}&entry=album` \}\)/
+  );
 });
 
-test("album page prewarms recruit authority and fail-closes recruit app-message sharing", async () => {
+test("album page delegates claim invitations to the unified share page", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
   );
-  assert.match(
+  const openClaimShare = sourceBlock(
     source,
-    /import\s+\{[\s\S]*albumShareAppMessageIntent[\s\S]*recruitmentSharePayload[\s\S]*createAlbumShareEntryAuthority[\s\S]*\}\s+from "\.\.\/\.\.\/utils\/albumShareEntry";/
-  );
-  assert.match(source, /recruitInviteToken:\s*""/);
-  assert.match(source, /recruitInviteGeneration:\s*0/);
-  assert.match(source, /recruitInvitePromise:\s*null/);
-
-  const loadAlbum = sourceBlock(source, "async loadAlbum() {", "async loadPublicAlbum() {");
-  assert.match(loadAlbum, /this\.primeAlbumShareEntries\(\)/);
-  const prepareRecruit = sourceBlock(
-    source,
-    "prepareRecruitInvite() {",
-    "handleRecruitShareTap() {"
-  );
-  assert.match(prepareRecruit, /url:\s*`\/api\/sessions\/\$\{this\.sessionId\}\/join-invite-token`/);
-  assert.match(prepareRecruit, /method:\s*"POST"/);
-  assert.match(prepareRecruit, /data:\s*\{\s*\}/);
-  assert.match(prepareRecruit, /this\.isCurrentRecruitInviteRequest\(requestContext\)/);
-  assert.doesNotMatch(prepareRecruit, /albumBusy|albumShareReadyVisible|statusText/);
-
-  const recruitTap = sourceBlock(
-    source,
-    "handleRecruitShareTap() {",
+    "openClaimShare() {",
     "toggleSelectionMode() {"
   );
-  assert.match(recruitTap, /this\.prepareRecruitInvite\(\)/);
-  assert.match(recruitTap, /正在准备招募分享，请稍后再点/);
-  assert.doesNotMatch(recruitTap, /navigateTo/);
-
-  const appMessage = sourceBlock(source, "onShareAppMessage(options) {", "watch: {");
-  assert.ok(
-    appMessage.indexOf("albumShareAppMessageIntent(options") <
-      appMessage.indexOf("if (intent.kind")
+  assert.match(
+    openClaimShare,
+    /if \(this\.timelineMode \|\| this\.albumBusy \|\| !this\.sessionId\)/
   );
-  const recruitBranch = sourceBlock(
-    appMessage,
-    "if (intent.kind === ALBUM_SHARE_INTENT.RECRUIT)",
-    "if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE)"
+  assert.match(
+    openClaimShare,
+    /uni\.navigateTo\(\{ url: `\/pages\/session\/share\?id=\$\{this\.sessionId\}&entry=album` \}\)/
   );
-  assert.match(recruitBranch, /inviteToken:\s*this\.recruitInviteToken/);
-  assert.match(recruitBranch, /recruitmentSharePayload/);
-  assert.match(recruitBranch, /singleMediaShareFailClosedPayload\(\)/);
-  assert.doesNotMatch(recruitBranch, /activeAlbumShare|albumShareToken|singleMediaShareAuthority/);
+  assert.doesNotMatch(source, /recruitInviteToken|prepareRecruitInvite|handleRecruitShareTap/);
+  assert.doesNotMatch(source, /recruitmentSharePayload/);
 });
 
-test("member onShow silently reprimes a missing recruit token before the preview refresh shortcut", async () => {
+test("member onShow silently reprimes the default album share before the refresh shortcut", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
   );
   const onShow = sourceBlock(source, "async onShow() {", "onHide() {");
-  const prewarm = "if (this.sessionId && this.currentUserId && (!this.defaultAlbumShareToken || !this.recruitInviteToken))";
+  const prewarm = "if (this.sessionId && this.currentUserId && !this.defaultAlbumShareToken)";
   const prewarmIndex = onShow.indexOf(prewarm);
   const skipRefreshIndex = onShow.indexOf("if (skipRefresh && !accountChanged)");
 
@@ -234,7 +208,7 @@ test("member onShow silently reprimes a missing recruit token before the preview
   assert.doesNotMatch(onShow, /await this\.primeAlbumShareEntries\(\)/);
 });
 
-test("recruit share titles include script, store, and Beijing-formatted start time", async () => {
+test("album share titles include script, store, and Beijing-formatted start time", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
@@ -244,13 +218,6 @@ test("recruit share titles include script, store, and Beijing-formatted start ti
     "albumShareSessionTitle() {",
     "defaultAlbumShareSubjectLabel() {"
   );
-  const appMessage = sourceBlock(source, "onShareAppMessage(options) {", "watch: {");
-  const recruitBranch = sourceBlock(
-    appMessage,
-    "if (intent.kind === ALBUM_SHARE_INTENT.RECRUIT)",
-    "if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE)"
-  );
-
   assert.match(
     source,
     /import\s+\{[\s\S]*formatBeijingDateTime[\s\S]*\}\s+from "@pinche\/shared";/
@@ -259,7 +226,6 @@ test("recruit share titles include script, store, and Beijing-formatted start ti
     sessionTitle,
     /return `\$\{this\.albumScriptName \|\| "剧本待定"\}｜\$\{this\.albumStoreName \|\| "店家待定"\}｜\$\{formatBeijingDateTime\(this\.albumSession\?\.start_at, "时间待定"\)\}`/
   );
-  assert.match(recruitBranch, /title:\s*this\.albumShareSessionTitle\(\)/);
 });
 
 test("member default all-photo sharing has its own silent state, authority, and request", async () => {
@@ -276,7 +242,7 @@ test("member default all-photo sharing has its own silent state, authority, and 
   const prepareDefault = sourceBlock(
     source,
     "prepareDefaultAlbumShare() {",
-    "handleRecruitShareTap() {"
+    "openClaimShare() {"
   );
 
   for (const field of [
@@ -292,7 +258,6 @@ test("member default all-photo sharing has its own silent state, authority, and 
     assert.match(source, new RegExp(`${field}:`));
   }
   assert.match(loadAlbum, /this\.primeAlbumShareEntries\(\)/);
-  assert.match(primeEntries, /this\.prepareRecruitInvite\(\)/);
   assert.match(primeEntries, /this\.prepareDefaultAlbumShare\(\)/);
   assert.match(
     prepareDefault,
@@ -433,7 +398,7 @@ test("member lifecycle invalidates share entries without Canvas cleanup", async 
 
   for (const lifecycle of [onHide, onUnload]) {
     assert.match(lifecycle, /this\.invalidateDefaultAlbumShare\(\)/);
-    assert.match(lifecycle, /this\.invalidateRecruitInviteShare\(\)/);
+    assert.doesNotMatch(lifecycle, /invalidateRecruitInviteShare/);
     assert.doesNotMatch(lifecycle, /Canvas|canvas/);
   }
 });
@@ -456,10 +421,10 @@ test("member entry authority closes on identity, semantic load, and permission f
   );
 
   assert.match(authChange, /this\.invalidateDefaultAlbumShare\(\)/);
-  assert.match(authChange, /this\.invalidateRecruitInviteShare\(\)/);
+  assert.doesNotMatch(authChange, /invalidateRecruitInviteShare/);
   assert.match(loadAlbum, /this\.invalidateDefaultAlbumShare\(\{ hideMenus: true \}\)/);
   assert.match(permissionFailure, /this\.invalidateDefaultAlbumShare\(\{ hideMenus: true \}\)/);
-  assert.match(permissionFailure, /this\.invalidateRecruitInviteShare\(\)/);
+  assert.doesNotMatch(permissionFailure, /invalidateRecruitInviteShare/);
 });
 
 test("member refresh authorization failure invalidates entry state before emptying photos", async () => {
@@ -484,20 +449,20 @@ test("member refresh authorization failure invalidates entry state before emptyi
   );
 
   assert.match(memberInvalidation, /this\.invalidateDefaultAlbumShare\(\{ hideMenus: true \}\)/);
-  assert.match(memberInvalidation, /this\.invalidateRecruitInviteShare\(\)/);
+  assert.doesNotMatch(memberInvalidation, /invalidateRecruitInviteShare/);
   assert.ok(
     authorizationFailure.indexOf("this.invalidateDefaultAlbumShare({ hideMenus: true })") <
       authorizationFailure.indexOf("photos: []")
   );
 });
 
-test("member onShow silently reprimes both missing entry states before skipping refresh", async () => {
+test("member onShow silently reprimes the missing default entry before skipping refresh", async () => {
   const source = await readFile(
     new URL("../src/pages/session/album.vue", import.meta.url),
     "utf8"
   );
   const onShow = sourceBlock(source, "async onShow() {", "onHide() {");
-  const prewarm = "if (this.sessionId && this.currentUserId && (!this.defaultAlbumShareToken || !this.recruitInviteToken))";
+  const prewarm = "if (this.sessionId && this.currentUserId && !this.defaultAlbumShareToken)";
   const prewarmIndex = onShow.indexOf(prewarm);
   const skipRefreshIndex = onShow.indexOf("if (skipRefresh && !accountChanged)");
 
@@ -527,7 +492,7 @@ test("entry prewarm stays local and ignores display-only member and public updat
   const prepareDefault = sourceBlock(
     source,
     "prepareDefaultAlbumShare() {",
-    "handleRecruitShareTap() {"
+    "openClaimShare() {"
   );
 
   for (const displayOnlyPath of [watch, scroll, publicPagination, refreshUrls]) {

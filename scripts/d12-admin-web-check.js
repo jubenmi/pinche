@@ -47,11 +47,11 @@ assert(rootPackage.workspaces.includes("apps/admin-web"), "admin-web workspace s
 assert(rootPackage.scripts["dev:admin-web"], "dev:admin-web script should exist");
 assert(rootPackage.scripts["build:admin-web"], "build:admin-web script should exist");
 assert(
-  rootPackage.scripts.check.includes("scripts/d12-admin-web-check.js"),
+  rootPackage.scripts["test:contracts"].includes("scripts/d12-admin-web-check.js"),
   "root check should run d12 check"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(server.includes("/api/admin/web-login/tickets"), "server should expose admin web login routes");
 assert(server.includes("deleteStore"), "server should retain store hard delete route");
 assert(server.includes("deleteScript"), "server should retain script hard delete route");

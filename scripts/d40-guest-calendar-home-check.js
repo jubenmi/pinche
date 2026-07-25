@@ -44,7 +44,7 @@ const home = read("apps/miniprogram/src/pages/index/index.vue");
 const calendar = read("apps/miniprogram/src/components/SessionCalendar.vue");
 const detail = read("apps/miniprogram/src/pages/session/detail.vue");
 const share = read("apps/miniprogram/src/pages/session/share.vue");
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 const service = read("apps/api/src/modules/core/service.js");
 
 assert(
@@ -202,7 +202,7 @@ assert(
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("node scripts/d40-guest-calendar-home-check.js"),
+  packageJson.scripts["test:contracts"].includes("node scripts/d40-guest-calendar-home-check.js"),
   "npm run check must include the D40 guest-calendar check"
 );
 

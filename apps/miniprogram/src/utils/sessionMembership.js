@@ -15,6 +15,25 @@ function sameUser(left, right) {
   return Boolean(leftId) && leftId === rightId;
 }
 
+export function otherOnboardSeatMemberCount(session = {}) {
+  const organizerId = normalizeUserId(session.organizer_user_id);
+  const userIds = new Set();
+  for (const seat of session.seats || []) {
+    const userId = normalizeUserId(seat.confirmed_user_id);
+    if (
+      ["confirmed", "locked"].includes(seat.status) &&
+      userId &&
+      userId !== organizerId
+    ) {
+      userIds.add(userId);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(session, "seats")) {
+    return userIds.size;
+  }
+  return Number(session.other_onboard_member_count || 0);
+}
+
 export function shouldRequestRescheduleSubscription(
   wasConfirmedMember,
   joinResult,

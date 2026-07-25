@@ -168,7 +168,10 @@ export function createProductionTextProposalHandlers(dependencies = {}) {
           { forUpdate: true }
         )
       );
-      return dependencies.createSessionWithConnection(connection, actor, payload.body);
+      return dependencies.createSessionWithConnection(connection, actor, {
+        ...payload.body,
+        idempotencyKey: proposal.idempotency_key
+      });
     },
 
     async update_session(connection, { actor, job, proposal, payload }) {

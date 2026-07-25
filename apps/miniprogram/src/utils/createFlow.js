@@ -1,5 +1,14 @@
 export const CREATE_FLOW_KEY = "pinche_create_flow";
 
+export function createSessionCreationKey(now = Date.now(), random = Math.random()) {
+  const timePart = Math.max(0, Number(now) || 0).toString(36);
+  const randomPart = Math.abs(Number(random) || 0)
+    .toString(36)
+    .replace(/^0\./, "")
+    .slice(0, 20);
+  return `session-${timePart}-${randomPart || "0"}`.slice(0, 128);
+}
+
 export function readCreateFlow() {
   try {
     return uni.getStorageSync(CREATE_FLOW_KEY) || {};

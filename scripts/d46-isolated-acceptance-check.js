@@ -88,7 +88,8 @@ function assertNoServiceProperty(serviceName, serviceBlock, propertyName) {
 }
 
 const runtimeGuard = readRequired("apps/api/src/modules/content-moderation/d46-isolated-smoke.js");
-const server = readRequired("apps/api/src/server.js");
+const server = readRequired("apps/api/src/legacy-app.js");
+const entrypoint = readRequired("apps/api/src/server.js");
 const apiEnv = readRequired("apps/api/src/config/env.js");
 const compose = readRequired("docker-compose.d46-smoke.yml");
 const launcher = readRequired("scripts/d46-api-smoke-server.mjs");
@@ -231,8 +232,8 @@ assert.match(server, /\/api\/testing\/d46-smoke-target/, "server must expose onl
 assert.match(server, /d46IsolatedSmokeRuntimeEnabled/, "target probe must use the strict D46 runtime gate");
 assert.match(server, /allowLocalD46Preview:\s*d46IsolatedSmokeRuntimeEnabled\s*===\s*true/, "local image fallback must be strict-D46 only");
 assert.match(
-  server,
-  /const listenOptions\s*=\s*d46IsolatedSmokeRuntimeEnabled\s*\?\s*\{\s*port:\s*config\.port,\s*host:\s*["']127\.0\.0\.1["']\s*\}\s*:\s*\{\s*port:\s*config\.port\s*\}/,
+  entrypoint,
+  /process\.env\.D46_SMOKE_ISOLATED\s*===\s*["']1["'][\s\S]*host:\s*["']127\.0\.0\.1["']/,
   "direct D46 startup must bind only loopback"
 );
 
@@ -446,7 +447,16 @@ assert.equal(
   "node scripts/d46-author-private-content-api-smoke.js",
   "package.json must reserve the D46 HTTP acceptance command"
 );
-assert.doesNotMatch(packageJson.scripts?.precheck || "", /d46:acceptance/, "root precheck must not run acceptance writes");
-assert.doesNotMatch(packageJson.scripts?.check || "", /d46:acceptance/, "root check must not run acceptance writes");
+const localCheckCommands = [
+  packageJson.scripts?.["check:fast"],
+  packageJson.scripts?.["test:unit"],
+  packageJson.scripts?.["test:contracts"],
+  packageJson.scripts?.check,
+].filter(Boolean).join("\n");
+assert.doesNotMatch(
+  localCheckCommands,
+  /d46:acceptance/,
+  "local check layers must not run D46 acceptance writes",
+);
 
 console.log("D46 isolated acceptance static contract passed.");

@@ -167,10 +167,15 @@ page {
 
 .bottom-action {
   position: fixed;
-  right: 30rpx;
-  bottom: 42rpx;
-  left: 30rpx;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 5;
+  padding: 18rpx 30rpx calc(18rpx + env(safe-area-inset-bottom));
+  border-top: 1rpx solid rgba(222, 215, 202, 0.9);
+  background: rgba(255, 255, 252, 0.98);
+  box-shadow: 0 -12rpx 30rpx rgba(15, 31, 27, 0.08);
+  box-sizing: border-box;
 }
 
 .action-grid {

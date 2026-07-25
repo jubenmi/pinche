@@ -4,7 +4,7 @@ import test from "node:test";
 
 test("API declares the shared workspace package imported by its production server", async () => {
   const [serverSource, packageJson] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8")
   ]);
   const apiPackage = JSON.parse(packageJson);

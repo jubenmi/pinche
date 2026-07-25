@@ -15,7 +15,7 @@ function assert(condition, message) {
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d14-profile-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d14-profile-check.js"),
   "root check should run d14 profile check"
 );
 
@@ -34,7 +34,7 @@ assert(
   "gender updater must delegate to profile updater"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(server.includes("AVATAR_UPLOAD_MAX_BYTES"), "server must define avatar upload limit");
 assert(server.includes("parseMultipartAvatarUpload"), "server must parse multipart avatar upload");
 assert(server.includes("parseRawAvatarUpload"), "server must parse raw avatar image upload");

@@ -39,7 +39,7 @@ for (const token of [
   assert(service.includes(token), `service must include ${token}`);
 }
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 for (const token of [
   "listSessionNpcRoles",
   "createSessionNpcRole",
@@ -121,6 +121,6 @@ for (const token of [
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d19-npc-role-tags-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d19-npc-role-tags-check.js"),
   "root check should run d19 npc role tag check"
 );

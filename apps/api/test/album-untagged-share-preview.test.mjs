@@ -17,7 +17,7 @@ const serviceSource = await readFile(
   "utf8"
 );
 const serverSource = await readFile(
-  new URL("../src/server.js", import.meta.url),
+  new URL("../src/legacy-app.js", import.meta.url),
   "utf8"
 );
 

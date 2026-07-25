@@ -34,7 +34,7 @@ test("production configuration and runtime contain no legacy Tencent text/image 
     read("apps/api/src/config/env.js"),
     read("apps/api/src/modules/content-moderation/tencent-video-client.js"),
     read("apps/api/src/modules/content-moderation/service.js"),
-    read("apps/api/src/server.js"),
+    read("apps/api/src/legacy-app.js"),
     read("apps/api/src/jobs/content-moderation-retry.js")
   ].join("\n");
   for (const legacy of [

@@ -471,7 +471,16 @@ test("D46 all ten text actions execute the real service/boundary/applicator life
       const approvedResult = await approved.service.moderateTextMutation(approvedInput);
       const approvedEntity = approved.state.formalEntities.get(entityKey(action, testCase));
       assert.equal(approvedEntity.id, approvedResult.id, `${action}:approved:formal-write`);
-      assert.deepEqual(approvedEntity.body, approvedInput.payload.body, `${action}:approved:canonical-body`);
+      assert.deepEqual(
+        approvedEntity.body,
+        action === "create_session"
+          ? {
+              ...approvedInput.payload.body,
+              idempotencyKey: `${action}:approved`
+            }
+          : approvedInput.payload.body,
+        `${action}:approved:canonical-body`
+      );
       assert.equal(await visibleDraft(approved.reader, action, testCase), null);
       assert.equal(resolveAuthorVisibility({
         viewerUserId: OTHER_USER_ID,

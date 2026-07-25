@@ -101,7 +101,7 @@ test("D46 contract locks author-only visibility without weakening public moderat
     rootPackage.scripts["d46:check"],
     "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js && node scripts/d46-author-private-content-check.js"
   );
-  assert.match(rootPackage.scripts.precheck, /npm run d46\:check/);
+  assert.match(rootPackage.scripts["test:unit"], /npm run d46\:check/);
   for (const token of [
     "0030_author_private_content_visibility.sql",
     "author-visibility.js",

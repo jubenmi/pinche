@@ -352,7 +352,7 @@ test("D46 draft lookup joins the exact author-owned proposal and job under one r
 });
 
 test("D46 server exposes only exact authenticated DELETE cancellation before business routes", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const route = server.indexOf("author-drafts", server.indexOf("async function route"));
   const business = server.indexOf('url.pathname === "/api/uploads/cos-intent"');
   assert.notEqual(route, -1);

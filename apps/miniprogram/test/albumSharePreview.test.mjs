@@ -20,7 +20,7 @@ test("member page exposes the four compact actions and removes the preview step"
     ["openShareSelectionMode", "分享", "album-share.svg"],
     ["openDownloadSelectionMode", "下载", "album-download.svg"],
     ["openTagSelectionMode", "标注", "album-tag-white.svg"],
-    ["handleRecruitShareTap", "招募", "album-recruit.svg"]
+    ["openClaimShare", "邀请认领", "album-recruit.svg"]
   ]) {
     assert.match(albumPageSource, new RegExp(`@tap="${handler}"`));
     assert.match(albumPageSource, new RegExp(`>${label}<`));

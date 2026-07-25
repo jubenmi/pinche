@@ -4,7 +4,7 @@ import test from "node:test";
 
 import * as service from "../src/modules/core/service.js";
 
-const serverSource = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+const serverSource = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
 
 const shareClaims = {
   version: 2,

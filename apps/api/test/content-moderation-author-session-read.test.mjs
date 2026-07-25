@@ -77,7 +77,7 @@ test("D46 my-session creation draft never becomes a formal session", () => {
 
 test("D46 server wires author session projections only into authenticated owner/member reads", async () => {
   const [server, core] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8")
   ]);
   for (const functionName of ["getSessionForViewer", "listMySessions", "listSessionNpcRoles"]) {

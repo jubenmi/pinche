@@ -166,7 +166,7 @@ for (const token of [
   assert(service.includes(token), `D48 must explicitly replace the D23 dynamic share boundary: ${token}`);
 }
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 for (const token of [
   "signSessionAlbumShareToken",
   "verifySessionAlbumShareToken",

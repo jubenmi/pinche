@@ -93,7 +93,7 @@ assert(
 for (const shareJoinToken of [
   "/api/session-seats/${seatId}/claim",
   'url: "/api/signups"',
-  "await this.claimSeat(targetRole)"
+  "await this.claimSeat(targetRole, activityGeneration)"
 ]) {
   assert(
     share.includes(shareJoinToken),
@@ -103,7 +103,7 @@ for (const shareJoinToken of [
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("node scripts/d39-city-preview-readonly-check.js"),
+  packageJson.scripts["test:contracts"].includes("node scripts/d39-city-preview-readonly-check.js"),
   "npm run check should include the D39 read-only check"
 );
 

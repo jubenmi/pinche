@@ -192,7 +192,7 @@ test("the D46 static moderation checker passes and is wired into root check", as
   });
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.match(packageJson.scripts.precheck, /d46:check/);
+  assert.match(packageJson.scripts["test:unit"], /npm run d46:check/);
   assert.equal(
     packageJson.scripts["d46:check"],
     "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js && node scripts/d46-author-private-content-check.js"

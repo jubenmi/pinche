@@ -94,7 +94,7 @@ for (const token of [
   assert(albumPeopleSource.includes(token), `album people should separate role labels from account names: ${token}`);
 }
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 for (const token of [
   "SESSION_ALBUM_DISPLAY_JPG_RULE",
   "imageMogr2/auto-orient/thumbnail/2048x2048>/format/jpg/quality/85/strip",
@@ -338,11 +338,11 @@ for (const token of [
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d18-session-album-privacy-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d18-session-album-privacy-check.js"),
   "root check should run d18 session album privacy check"
 );
 assert(
-  packageJson.scripts.check.includes("node --check scripts/d18-session-album-privacy-smoke.js"),
+  packageJson.scripts["test:contracts"].includes("node --check scripts/d18-session-album-privacy-smoke.js"),
   "root check should syntax-check d18 album smoke"
 );
 assert(

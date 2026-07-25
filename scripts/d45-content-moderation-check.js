@@ -37,7 +37,7 @@ const [
   text("apps/api/src/modules/album-image/upload-service.js"),
   text("apps/api/src/modules/core/service.js"),
   text("packages/shared/src/albumMedia.js"),
-  text("apps/api/src/server.js"),
+  text("apps/api/src/legacy-app.js"),
   text("docker-compose.prod.example.yml"),
   text("docs/runbooks/hybrid-content-moderation-release.md"),
   text(".env.production.example")
@@ -261,7 +261,10 @@ assert.match(runbook, /-e D45_PREFLIGHT_CONFIRMATION/);
 
 for (const command of ["d45:unit", "d45:check", "d45:smoke"]) {
   assert.equal(typeof rootPackage.scripts[command], "string", `missing root command: ${command}`);
-  assert.match(rootPackage.scripts.precheck, new RegExp(`npm run ${command.replace(/:/g, "\\:")}`));
+  assert.match(
+    rootPackage.scripts["test:unit"],
+    new RegExp(`npm run ${command.replace(/:/g, "\\:")}`),
+  );
 }
 
 console.log("D45 content moderation static checks passed");

@@ -12,7 +12,7 @@ import {
   sanitizeCosDirectUploadHeaders,
   serveUploadedSessionAlbumVideoFile,
   validateAlbumVideoCosUploadHeaders
-} from "../apps/api/src/server.js";
+} from "../apps/api/src/legacy-app.js";
 import {
   inspectSessionAlbumVideoObject
 } from "../apps/api/src/modules/album-video/media.js";
@@ -46,7 +46,7 @@ function check(name, run) {
 }
 
 check("admin video upload wiring has no business byte cap and keeps admin authorization", async () => {
-  const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../apps/api/src/legacy-app.js", import.meta.url), "utf8");
   const intentStart = server.indexOf('if (kind === "adminSessionAlbumVideo") {');
   const intentEnd = server.indexOf("\n\n  const sourceExtension", intentStart);
   const adminVideoIntent = server.slice(intentStart, intentEnd);
@@ -123,7 +123,7 @@ class MemoryResponse extends Writable {
 }
 
 check("video create route wires an inspector before the service create call", async () => {
-  const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../apps/api/src/legacy-app.js", import.meta.url), "utf8");
   const start = server.indexOf("const adminSessionAlbumVideosId");
   const end = server.indexOf("const sessionAlbumPhotoId", start);
   const route = server.slice(start, end);
@@ -594,7 +594,7 @@ check("COS video HEAD stays on the authenticated API URL before GET playback", a
 });
 
 check("production video fallback is streamed and immutable", async () => {
-  const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../apps/api/src/legacy-app.js", import.meta.url), "utf8");
   assert.match(server, /headers:\s*\{\s*"x-cos-forbid-overwrite":\s*"true"\s*\}/);
   const fallback = server.slice(
     server.indexOf("async function saveUploadedSessionAlbumVideo"),
@@ -611,7 +611,7 @@ check("production video fallback is streamed and immutable", async () => {
 });
 
 check("server never emits local snapshot URLs", async () => {
-  const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../apps/api/src/legacy-app.js", import.meta.url), "utf8");
   const snapshots = server.slice(
     server.indexOf("function signedAlbumVideoSnapshotUrl"),
     server.indexOf("function stripAlbumVideoInternalFields")

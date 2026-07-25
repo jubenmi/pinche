@@ -85,10 +85,10 @@ mustInclude("apps/api/src/modules/extensions/registry.js", "sessionExtensions");
 mustInclude("apps/api/src/modules/extensions/registry.js", "routeExtensions");
 mustInclude("apps/api/src/modules/extensions/registry.js", "runSessionExtensionHook");
 mustInclude("apps/api/src/modules/extensions/session-pseudo-chat/index.js", "@jubenmi/talk/api");
-mustInclude("apps/api/src/server.js", "routeExtensions");
+mustInclude("apps/api/src/legacy-app.js", "routeExtensions");
 
 for (const routeText of ["/claim", "/kick", "/cancel"]) {
-  mustInclude("apps/api/src/server.js", routeText);
+  mustInclude("apps/api/src/legacy-app.js", routeText);
 }
 
 for (const detailExtensionText of [

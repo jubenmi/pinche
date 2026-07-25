@@ -169,16 +169,16 @@ test("organizer session media counts include only published active media without
 test("unapproved direct media reads retain a 404 response while emitting a safe denial metric", async () => {
   const [service, server] = await Promise.all([
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/server.js", import.meta.url), "utf8")
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8")
   ]);
   assert.match(service, /function moderationUnpublishedNotFound\(subjectType\)/);
   for (const subjectType of ["album_image", "album_video"]) {
     assert.equal(service.includes(`moderationUnpublishedNotFound("${subjectType}")`), true);
   }
-  assert.match(server, /error\?\.contentModerationDenied === true/);
+  assert.match(server, /if \(error\?\.contentModerationDenied !== true\) return;/);
   assert.match(server, /emitContentModerationEvent\("moderation_access_denied"/);
-  const denialStart = server.indexOf("error?.contentModerationDenied === true");
-  const denialBody = server.slice(denialStart, denialStart + 600);
+  const denialStart = server.indexOf("export function recordLegacyRouteError");
+  const denialBody = server.slice(denialStart, denialStart + 800);
   assert.doesNotMatch(denialBody, /photo_url|object_key|signedUrl|signature|token/);
 });
 

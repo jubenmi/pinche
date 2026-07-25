@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("server delegates every administrator moderation route through the authenticated DTO boundary", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   assert.match(server, /createAdminModerationApi/);
   assert.match(server, /const adminModerationApi = createAdminModerationApi/);
   assert.match(server, /listJobs:\s*\(filters\)\s*=>\s*withDatabaseConnection/);
@@ -16,7 +16,7 @@ test("server delegates every administrator moderation route through the authenti
 });
 
 test("server never exposes a moderation storage key through its ordinary media endpoints", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const routeStart = server.indexOf("const adminModerationRoute = await adminModerationApi");
   const routeEnd = server.indexOf('if (request.method === "POST" && url.pathname === "/api/uploads/cos-intent")', routeStart);
   const route = server.slice(routeStart, routeEnd);

@@ -230,7 +230,7 @@ assert(
   "rejectSignup must handle NPC role signups without touching seat status"
 );
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(
   server.includes("claimSessionNpcRole") &&
     server.includes("sessionNpcRoleClaimId") &&
@@ -297,7 +297,7 @@ for (const token of [
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d24-npc-self-join-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d24-npc-self-join-check.js"),
   "root check should run d24 npc self join check"
 );
 

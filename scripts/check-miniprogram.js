@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 const root = process.cwd();
-const apiServerPath = path.join(root, "apps/api/src/server.js");
+const require = createRequire(import.meta.url);
+const apiServerPath = path.join(root, "apps/api/src/legacy-app.js");
 const miniprogramRoot = path.join(root, "apps/miniprogram");
 const srcRoot = path.join(miniprogramRoot, "src");
 const pagesJsonPath = path.join(srcRoot, "pages.json");
@@ -25,6 +27,7 @@ const devArtifactGuardPath = path.join(root, "scripts/miniprogram-dev-artifacts.
 const devArtifactTestPath = path.join(root, "scripts/miniprogram-dev-artifacts.test.mjs");
 const d35AdminCatalogCheckPath = path.join(root, "scripts/d35-miniprogram-admin-catalog-check.js");
 const albumImageViewerPath = path.join(srcRoot, "components", "AlbumImageViewer.vue");
+const sessionShareHelperPath = path.join(srcRoot, "utils", "sessionShare.js");
 const productionApiBaseUrl = "https://api.pinche.jubenmi.com";
 const productionWechatAppId = "wx2675a606d3bd242c";
 const requireBuiltWxml = process.argv.includes("--require-built-wxml");
@@ -35,7 +38,10 @@ const localMediaPattern = /\.(?:png|jpe?g|gif|webp|mp3|m4a|aac|wav|mp4|mov)$/i;
 const localFontPattern = /\.(?:ttf|otf|woff2?|eot)$/i;
 const brandFontPath = "static/fonts/pinche-brand.ttf";
 const tdesignPackageName = "tdesign-miniprogram";
-const tdesignDistPath = path.join(root, "node_modules", tdesignPackageName, "miniprogram_dist");
+const tdesignDistPath = path.join(
+  path.dirname(require.resolve(`${tdesignPackageName}/package.json`)),
+  "miniprogram_dist"
+);
 const tdesignWxcomponentsPath = path.join(srcRoot, "wxcomponents", tdesignPackageName);
 const tdesignDirectComponentNames = [
   "action-sheet",
@@ -242,12 +248,14 @@ function assertNoTdesignAvatarImageTags(files) {
   }
 }
 
-function isAllowedNativeAvatarPrimitiveTag(tag, tagSource) {
+function isAllowedNativeAvatarPrimitiveTag(tag, tagSource, file) {
   const classMatch = tagSource.match(/\bclass\s*=\s*["']([^"']+)["']/);
   if (!classMatch) {
     return false;
   }
   const className = classMatch[1];
+  const isUnifiedSharePage =
+    file === path.join(srcRoot, "pages", "session", "share.vue");
   if (tag === "image") {
     return (
       /\bavatar\b/.test(className) ||
@@ -270,6 +278,24 @@ function isAllowedNativeAvatarPrimitiveTag(tag, tagSource) {
         /album-share-ready-button/.test(className) &&
         /\bopen-type\s*=\s*["']share["']/.test(tagSource) &&
         /\bdata-album-share\s*=\s*["']active["']/.test(tagSource)
+      ) ||
+      (
+        isUnifiedSharePage &&
+        /\bwechat-action\b/.test(className) &&
+        (
+          (
+            /\bopen-type\s*=\s*["']share["']/.test(tagSource) &&
+            /@tap\s*=\s*["']persistFlow["']/.test(tagSource)
+          ) ||
+          /@tap\s*=\s*["'](?:retryPrepareInvite|retryLifecycleRefresh)["']/.test(
+            tagSource
+          )
+        )
+      ) ||
+      (
+        isUnifiedSharePage &&
+        /\bsession-load-retry\b/.test(className) &&
+        /@tap\s*=\s*["']retryLoadSession["']/.test(tagSource)
       )
     );
   }
@@ -286,7 +312,7 @@ function assertNoNativeTdesignPrimitiveTags(files) {
     for (const tag of tdesignNativePrimitiveTags) {
       const pattern = new RegExp(`<\\s*${tag}(?=[\\s>/])[^>]*>`, "g");
       for (const match of source.matchAll(pattern)) {
-        if (isAllowedNativeAvatarPrimitiveTag(tag, match[0])) {
+        if (isAllowedNativeAvatarPrimitiveTag(tag, match[0], file)) {
           continue;
         }
         failures.push(`${relativePath(file)} still uses native <${tag}>`);
@@ -1358,6 +1384,9 @@ if (!fs.existsSync(pagesJsonPath)) {
   const shareSource = fs.existsSync(firstFlowFiles["share step"])
     ? fs.readFileSync(firstFlowFiles["share step"], "utf8")
     : "";
+  const sessionShareHelperSource = fs.existsSync(sessionShareHelperPath)
+    ? fs.readFileSync(sessionShareHelperPath, "utf8")
+    : "";
   const shareLightIconPath = path.join(srcRoot, "static/icons/share-light.svg");
   const shareLightIconSource = fs.existsSync(shareLightIconPath)
     ? fs.readFileSync(shareLightIconPath, "utf8")
@@ -1374,7 +1403,6 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   for (const requiredWechatShareStyle of [
     'src="/static/icons/share-light.svg"',
-    'custom-style="height: 88rpx; min-height: 88rpx; border-color: #1a5d4d; background: linear-gradient(145deg, #1a5d4d 0%, #2b765f 100%); color: #ffffff;',
     'width="48rpx"',
     'height="48rpx"',
     'custom-style="width: 48rpx; height: 48rpx; opacity: 0.82;"',
@@ -1440,8 +1468,24 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (shareButtonCount !== 1) {
     fail(`Share page must keep a single share button, found ${shareButtonCount}`);
   }
-  if (!shareSource.includes("分享给好友或群聊")) {
-    fail("Share page must use one combined friend/group share button");
+  if (
+    !/<button\b[^>]*\bopen-type=["']share["'][^>]*>/.test(shareSource) ||
+    /<t-button\b[^>]*\bopen-type=["']share["']/.test(shareSource)
+  ) {
+    fail("Share page unified friend/group action must be a native open-type=share button");
+  }
+  const unifiedShareButtonSource =
+    shareSource.match(/<button\b[^>]*\bopen-type=["']share["'][^>]*>/)?.[0] || "";
+  if (
+    !/\bv-else-if=["']shareReady["']/.test(unifiedShareButtonSource) ||
+    !shareSource.includes("<text>{{ shareButtonText }}</text>") ||
+    !/<view\b[^>]*\bv-else\b[^>]*\bwechat-action-preparing\b[^>]*>/.test(shareSource) ||
+    !sessionShareHelperSource.includes("buttonText: '分享拼车邀请'") ||
+    !sessionShareHelperSource.includes("buttonText: '分享给玩家认领'")
+  ) {
+    fail(
+      "Share page must hide the native action until ready and then present the server-selected join/claim copy"
+    );
   }
   for (const requiredShareSeatAvatarText of [
     "confirmedUserAvatarUrl: seat.confirmed_user_avatar_url || \"\"",
@@ -1519,36 +1563,58 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!shareSource.includes('menus: ["shareAppMessage"]')) {
     fail("Role invitation share menu must enable friend/group sharing only");
   }
-  if (!shareAppMessageSource.includes('/static/art/ticket-landscape.jpg')) {
-    fail("Role invitation friend/group share must use the fixed safe ticket cover");
+  if (
+    !shareAppMessageSource.includes("buildSessionSharePayload({") ||
+    !sessionShareHelperSource.includes("imageUrl: '/static/art/ticket-landscape.jpg'") ||
+    !sessionShareHelperSource.includes("imageUrl: '/static/art/photo-claim-share.jpg'")
+  ) {
+    fail("Role invitation friend/group share must use the fixed join/claim covers through the share helper");
   }
   if (
-    !shareSource.includes("邀请好友认领角色") ||
-    !shareSource.includes("发送给好友或群聊") ||
+    !shareSource.includes("pageIntro") ||
+    !sessionShareHelperSource.includes("邀请玩家加入本局") ||
+    !sessionShareHelperSource.includes("邀请本局玩家认领照片") ||
     !shareSource.includes("join-invite-token")
   ) {
-    fail("Role invitation page must explain friend/group role claiming and keep its invite token");
+    fail("Role invitation page must explain server-selected join/claim sharing and keep its invite token");
   }
   for (const requiredFinalShareText of ["claimSeat", "/api/signups", "loadPublishedSession"]) {
     if (!shareSource.includes(requiredFinalShareText)) {
       fail(`Share page must be the final role-selection page: ${requiredFinalShareText}`);
     }
   }
-  for (const requiredAlbumEntryText of [
-    "entry",
-    "isAlbumEntry",
-    "redirectAlbumMemberIfNeeded",
+  for (const requiredUnifiedLifecycleText of [
+    "resolveSessionShareMode(this.session)",
+    "openAlbumAfterClaim",
+    "wasConfirmedMember",
     "/pages/session/album?id=",
     "join_policy",
     "/api/session-seats/${seatId}/claim",
     "join_result",
     "已提交申请，等待车头审核"
   ]) {
-    if (!shareSource.includes(requiredAlbumEntryText)) {
-      fail(`Share page must support D23 album-entry join flow: ${requiredAlbumEntryText}`);
+    if (!shareSource.includes(requiredUnifiedLifecycleText)) {
+      fail(`Share page must support unified server-lifecycle sharing: ${requiredUnifiedLifecycleText}`);
     }
   }
+  if (
+    !sessionShareHelperSource.includes("typeof session?.has_started === 'boolean'") ||
+    !sessionShareHelperSource.includes("return session.has_started ? 'claim' : 'join'")
+  ) {
+    fail("Share page mode must be driven by the authoritative server lifecycle boolean");
+  }
+  const openAlbumAfterClaimSource = methodBody(shareSource, "openAlbumAfterClaim");
+  const shareOnLoadLifecycleSource = methodBody(shareSource, "onLoad");
   const claimSeatSource = methodBody(shareSource, "claimSeat");
+  if (
+    !openAlbumAfterClaimSource.includes("wasConfirmedMember") ||
+    !openAlbumAfterClaimSource.includes("!this.isClaimMode") ||
+    !openAlbumAfterClaimSource.includes("uni.redirectTo({") ||
+    shareOnLoadLifecycleSource.includes("openAlbumAfterClaim") ||
+    !claimSeatSource.includes("this.openAlbumAfterClaim(")
+  ) {
+    fail("Share sender must stay on the unified page and album navigation must happen only after a new claim");
+  }
   if (!claimSeatSource.includes('this.session.join_policy === "direct"')) {
     fail("Share page album entry must branch direct join by session.join_policy");
   }
@@ -1636,7 +1702,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "async confirmRole(role = null, options = {})",
     "const targetRole = role || this.pendingRole",
     "const revealPending = options.revealPending !== false",
-    "await this.claimSeat(targetRole)"
+    "await this.claimSeat(targetRole, activityGeneration)"
   ]) {
     if (!shareSource.includes(requiredSilentSwitchText)) {
       fail(`Share role switching must hide intermediate selection state: ${requiredSilentSwitchText}`);
@@ -1736,7 +1802,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "createPublishedSession",
     'time: "14:00"',
     "/api/sessions",
-    "/chat/pin"
+    "idempotencyKey: this.creationIdempotencyKey"
   ]) {
     if (!setupSource.includes(requiredSetupText)) {
       fail(`Setup step must collect and persist start time plus pinned chat info: ${requiredSetupText}`);
@@ -1806,21 +1872,15 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   assertBefore(
     createPublishedSessionSource,
-    "ensureLoggedIn",
     "this.busyAction = true",
-    "Setup publish button must not mark busy before login"
+    "ensureLoggedIn",
+    "Setup publish button must guard duplicate login and publish attempts"
   );
   assertBefore(
     createPublishedSessionSource,
     "ensureLoggedIn",
     "request",
     "Setup publish button must request login before publishing"
-  );
-  assertBefore(
-    createPublishedSessionSource,
-    "requirePhone: true",
-    "this.busyAction = true",
-    "Setup publish button must require phone before marking busy"
   );
   assertBefore(
     createPublishedSessionSource,
@@ -2815,20 +2875,26 @@ if (!fs.existsSync(pagesJsonPath)) {
     "角色",
     "openShareSelectionMode",
     "openDownloadSelectionMode",
-    "openTagSelectionMode"
+    "openTagSelectionMode",
+    "openClaimShare"
   ]) {
     if (!albumSource.includes(requiredAlbumActionGroupText)) {
       fail(`Album page must group header actions by user task: ${requiredAlbumActionGroupText}`);
     }
   }
   if (
-    !albumSource.includes(':open-type="recruitInviteToken ? \'share\' : \'\'"') ||
-    !albumSource.includes('data-album-share="recruit"') ||
-    !albumSource.includes('@tap="handleRecruitShareTap"') ||
+    !albumSource.includes('@tap="openClaimShare"') ||
+    !albumSource.includes(">邀请认领</") ||
+    !methodBody(albumSource, "openClaimShare").includes(
+      "url: `/pages/session/share?id=${this.sessionId}&entry=album`"
+    ) ||
+    albumSource.includes("recruitInviteToken") ||
+    albumSource.includes('data-album-share="recruit"') ||
+    albumSource.includes("handleRecruitShareTap") ||
     albumSource.includes("openRecruitment") ||
-    /navigateTo\s*\([\s\S]{0,240}\/pages\/session\/share/.test(albumSource)
+    methodBody(albumSource, "openClaimShare").includes("openType")
   ) {
-    fail("Album recruitment action must use the token-gated native share entry without legacy invitation navigation");
+    fail("Album claim action must enter the unified session share page without the retired recruit token flow");
   }
   for (const forbiddenAlbumActionGroupText of [
     "album-action-group-title",
@@ -2881,11 +2947,20 @@ if (!fs.existsSync(pagesJsonPath)) {
     ">分享</text>",
     ">下载</text>",
     ">标注</text>",
-    ">招募</text>"
+    ">邀请认领</text>"
   ]) {
     if (!albumSource.includes(requiredFourActionText)) {
       fail(`Album toolbar must render the D53 four-action row: ${requiredFourActionText}`);
     }
+  }
+  const openClaimShareSource = methodBody(albumSource, "openClaimShare");
+  if (
+    !openClaimShareSource.includes("this.timelineMode || this.albumBusy || !this.sessionId") ||
+    !openClaimShareSource.includes(
+      'uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}&entry=album` });'
+    )
+  ) {
+    fail("Album claim action must navigate to the invitation page with entry=album");
   }
   for (const requiredSelectionToolbarText of [
     "分享全部（{{ shareSelectableMedia.length }}）",
@@ -3962,8 +4037,29 @@ if (!fs.existsSync(pagesJsonPath)) {
 
   for (const [label, file] of Object.entries(firstFlowFiles)) {
     const source = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-    if (/<button[^>]*@tap=/.test(source)) {
-      fail(`${label} buttons should use @click for consistent UniApp button handling`);
+    for (const buttonMatch of source.matchAll(/<button\b[^>]*@tap\s*=\s*["'][^"']+["'][^>]*>/g)) {
+      const buttonSource = buttonMatch[0];
+      const allowedShareNativeTap =
+        label === "share step" &&
+        (
+          (
+            /\bwechat-action\b/.test(buttonSource) &&
+            (
+              /@tap\s*=\s*["']persistFlow["']/.test(buttonSource) ||
+              /@tap\s*=\s*["'](?:retryPrepareInvite|retryLifecycleRefresh)["']/.test(
+                buttonSource
+              )
+            )
+          ) ||
+          (
+            /\bsession-load-retry\b/.test(buttonSource) &&
+            /@tap\s*=\s*["']retryLoadSession["']/.test(buttonSource)
+          )
+        );
+      if (!allowedShareNativeTap) {
+        fail(`${label} buttons should use @click for consistent UniApp button handling`);
+        break;
+      }
     }
     for (const localButtonRule of [
       ".search-button {",
@@ -4049,7 +4145,7 @@ if (
 ) {
   fail("Root package must expose the miniprogram dev artifact freshness tests");
 }
-if (!rootPackageJson.scripts?.check?.includes("npm run test:miniprogram-dev-artifacts")) {
+if (!rootPackageJson.scripts?.["test:contracts"]?.includes("npm run test:miniprogram-dev-artifacts")) {
   fail("Root check must run the miniprogram dev artifact freshness tests");
 }
 if (
@@ -4058,7 +4154,7 @@ if (
 ) {
   fail("Root package must expose the TDesign WeChat runtime compatibility test");
 }
-if (!rootPackageJson.scripts?.check?.includes("npm run test:miniprogram-tdesign-runtime")) {
+if (!rootPackageJson.scripts?.["test:contracts"]?.includes("npm run test:miniprogram-tdesign-runtime")) {
   fail("Root check must run the TDesign WeChat runtime compatibility test");
 }
 

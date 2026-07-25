@@ -9,7 +9,7 @@ import {
   sourceSection
 } from "./d46-content-moderation-check-lib.js";
 
-const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
+const server = await readFile(new URL("../apps/api/src/legacy-app.js", import.meta.url), "utf8");
 const directCosAuthorization = sourceSection(
   server,
   "async function authorizeCosDirectUpload({ body, user })",

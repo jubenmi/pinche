@@ -35,7 +35,7 @@ const textBoundaries = read("apps/api/src/modules/content-moderation/text-bounda
 assert(textBoundaries.includes("900"), "moderated review text must use the 900-character limit");
 assert(textBoundaries.includes("albumPhotoIds"), "moderation boundary must preserve albumPhotoIds");
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(
   server.includes("publicSessionReviewId") && server.includes("getPublicSessionReview"),
   "server must expose a public single-review route"

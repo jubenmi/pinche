@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import { executeAlbumCosUpload } from "../packages/shared/src/albumMedia.js";
-import { attachSessionAlbumMediaUrls } from "../apps/api/src/server.js";
+import { attachSessionAlbumMediaUrls } from "../apps/api/src/legacy-app.js";
 import { createAlbumMediaRefreshController } from "../apps/miniprogram/src/utils/albumMediaUrls.js";
 
 const scope = process.argv.find((argument) => argument.startsWith("--scope="))?.split("=")[1] || "all";
@@ -48,7 +48,7 @@ if (["all", "operations"].includes(scope)) {
 if (scope === "all") {
   const [server, uploadService, miniAlbum, adminWorkspace, sharedProtocol, miniAdapter, adminAdapter] =
     await Promise.all([
-      text("apps/api/src/server.js"),
+      text("apps/api/src/legacy-app.js"),
       text("apps/api/src/modules/album-image/upload-service.js"),
       text("apps/miniprogram/src/pages/session/album.vue"),
       text("apps/admin-web/src/components/SessionAlbumWorkspace.vue"),

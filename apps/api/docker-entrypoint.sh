@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-if [ "${1:-}" = "node" ] && [ "${2:-}" = "src/server.js" ]; then
+if [ "${RUN_MIGRATIONS_ON_START:-false}" = "true" ]; then
   echo "Running database migrations before starting API..."
   npm run migrate
 fi

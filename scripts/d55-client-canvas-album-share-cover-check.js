@@ -122,7 +122,7 @@ check(
 const defaultPreparation = between(
   album,
   "prepareDefaultAlbumShare() {",
-  "handleRecruitShareTap() {",
+  "openClaimShare() {",
   "default preparation"
 );
 const activePreparation = between(
@@ -157,7 +157,7 @@ for (const testName of [
   check(coverTest.includes(testName), `focused tests must cover: ${testName}`);
 }
 
-const api = read("apps/api/src/server.js");
+const api = read("apps/api/src/legacy-app.js");
 check(api.includes("cover_recipe"), "server must retain the public-safe cover recipe");
 
 const packageJson = JSON.parse(read("package.json"));

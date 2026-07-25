@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
 
 test("authenticated status and finalize routes are wired before generic album routes", () => {
   const statusRoute = server.indexOf("albumUploadStatusId");
