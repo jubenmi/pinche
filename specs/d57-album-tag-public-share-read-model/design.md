@@ -370,6 +370,7 @@ reducer 对输入不做原地修改并冻结测试快照。
 
 - single-flight `refresh`
 - 依据最早 `media_url_expires_at - 30s` 排期
+- 正常与重试 timer 都夹在 `1000..2147483647ms`
 - 失败后 30s 有界重试
 - `dispose` 后不写入、不重排期
 
@@ -393,7 +394,7 @@ reducer 对输入不做原地修改并冻结测试快照。
 ## 9. 安全与可观察性
 
 - media-state ID 不得作为授权凭证；token 和 manifest membership 必须同时有效。
-- 批次最多 100 项，重复、非法和越界 ID 返回 400。
+- 服务端批次最多 100 个去重 ID；重复项保留首次顺序，非 number 正整数、越界或去重后过多返回 400。
 - `assertPublicResponseSafe` 继续应用于分页和 media-state 响应。
 - 结构化事件：
   - `public_share_manifest_page`

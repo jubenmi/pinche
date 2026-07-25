@@ -897,8 +897,8 @@ export function createPublicAlbumReadState(generation = 0) {
 }
 
 export function publicAlbumMediaStateBatches(mediaIds, limit = 100) {
-  const ids = [...new Set(mediaIds.map(Number).filter(
-    (id) => Number.isSafeInteger(id) && id > 0
+  const ids = [...new Set(mediaIds.filter(
+    (id) => typeof id === "number" && Number.isSafeInteger(id) && id > 0
   ))];
   const batches = [];
   for (let index = 0; index < ids.length; index += limit) {
@@ -995,7 +995,10 @@ export function createPublicAlbumMediaStateController({
       .map((card) => Date.parse(card.media_url_expires_at || ""))
       .filter(Number.isFinite);
     if (expiries.length === 0) return;
-    const delay = Math.max(0, Math.min(...expiries) - now() - 30_000);
+    const delay = Math.min(
+      2_147_483_647,
+      Math.max(1_000, Math.min(...expiries) - now() - 30_000)
+    );
     timer = setTimer(() => { void refresh().catch(() => {}); }, delay);
   };
   const scheduleRetry = () => {

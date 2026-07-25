@@ -33,8 +33,9 @@
   - [x] 5.4 增加不含敏感字段的结构化事件与失败关闭测试。
 
 - [ ] 6. 实现客户端四事件状态模型
-  - [ ] 6.1 先写 reducer、并发排列、批次、失败原子性和 generation 失败测试。
-  - [ ] 6.2 新增 `publicAlbumReadState.js` 和公开媒体状态 timer controller。
+  - 进度：纯 reducer、稳定分批、generation 与单飞 controller 已通过规格/质量审查；正在接入页面并验证只追加/按 ID patch。
+  - [x] 6.1 先写 reducer、并发排列、批次、失败原子性和 generation 失败测试。
+  - [x] 6.2 新增 `publicAlbumReadState.js` 和公开媒体状态 timer controller。
   - [ ] 6.3 将首屏、下一页、媒体 patch 和 unload 接入 `album.vue`。
   - [ ] 6.4 按 ID 更新/移除瀑布流卡片，保证除首屏外不做全量 rebuild。
 
