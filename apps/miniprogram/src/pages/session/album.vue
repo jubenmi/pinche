@@ -123,9 +123,7 @@
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
             :disabled="albumBusy"
-            :open-type="recruitInviteToken ? 'share' : ''"
-            data-album-share="recruit"
-            @tap="handleRecruitShareTap"
+            @tap="openClaimShare"
           >
             <view class="album-command-content">
               <t-image
@@ -133,7 +131,7 @@
                 src="/static/icons/album-recruit.svg"
                 mode="aspectFit"
               />
-              <text class="album-command-label">招募</text>
+              <text class="album-command-label">邀请认领</text>
             </view>
           </t-button>
           <t-button
@@ -190,7 +188,20 @@
       </view>
     </view>
 
-    <view v-if="!focusedPublicMediaUnavailable && filteredPhotos.length === 0" class="section empty-section">
+    <view v-if="albumPresentation === 'loading'" class="section empty-section">
+      <view class="empty-title">正在加载相册</view>
+      <view class="empty-text">正在读取照片和可见范围，请稍候。</view>
+    </view>
+
+    <view v-else-if="albumPresentation === 'error'" class="section empty-section">
+      <view class="empty-title">相册暂时无法加载</view>
+      <view class="empty-text">{{ statusText || "请检查网络后重试。" }}</view>
+      <t-button class="button empty-upload-button" @tap="retryAlbumLoad">
+        重新加载
+      </t-button>
+    </view>
+
+    <view v-else-if="!focusedPublicMediaUnavailable && albumPresentation === 'empty'" class="section empty-section">
       <t-empty class="empty-state" :description="`还没有你的照片。${emptyText}`" />
       <t-button
         v-if="canUpload && !timelineMode"
@@ -740,9 +751,9 @@ import {
   albumShareAppMessageIntent,
   memberDefaultAlbumShareMediaFingerprint,
   memberDefaultAlbumShareState,
-  recruitmentSharePayload,
   createAlbumShareEntryAuthority
 } from "../../utils/albumShareEntry";
+import { albumListPresentation } from "../../utils/p1Safety.js";
 import { showWechatShareMenus } from "../../utils/share";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
 import {
@@ -807,10 +818,6 @@ export default {
       albumShareRequestVersion: 0,
       albumSharePreparing: false,
       albumShareReadyVisible: false,
-      recruitInviteToken: "",
-      recruitInviteGeneration: 0,
-      recruitInvitePromise: null,
-      recruitInviteAuthority: createAlbumShareEntryAuthority(),
       singleMediaShareRequested: false,
       focusedPublicMode: false,
       focusedPublicMediaUnavailable: false,
@@ -835,6 +842,7 @@ export default {
       roleFilterPickerVisible: false,
       statusText: "",
       loadingAlbum: false,
+      albumLoadFailed: false,
       skipNextAlbumRefreshOnShow: false,
       albumScrollTop: 0,
       topActionsFloating: false,
@@ -1186,6 +1194,13 @@ export default {
         Boolean(this.deletingPhotoId)
       );
     },
+    albumPresentation() {
+      return albumListPresentation({
+        loading: this.loadingAlbum,
+        failed: this.albumLoadFailed,
+        count: this.filteredPhotos.length
+      });
+    },
     operationText() {
       if (this.loadingAlbum) {
         return "正在加载相册...";
@@ -1237,6 +1252,7 @@ export default {
     });
     if (!auth?.user) {
       this.statusText = "登录后可继续查看相册。";
+      this.albumLoadFailed = true;
       return;
     }
     this.currentUserId = auth.user.id || "";
@@ -1258,7 +1274,7 @@ export default {
     }
     const auth = getCurrentUser();
     const accountChanged = this.handleAlbumAuthChange(auth);
-    if (this.sessionId && this.currentUserId && (!this.defaultAlbumShareToken || !this.recruitInviteToken)) {
+    if (this.sessionId && this.currentUserId && !this.defaultAlbumShareToken) {
       this.primeAlbumShareEntries();
     }
     const skipRefresh = this.consumePreviewReturnRefreshSkip();
@@ -1272,7 +1288,6 @@ export default {
   onHide() {
     if (!this.timelineMode) {
       this.invalidateDefaultAlbumShare();
-      this.invalidateRecruitInviteShare();
     }
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
@@ -1282,7 +1297,6 @@ export default {
   onUnload() {
     if (!this.timelineMode) {
       this.invalidateDefaultAlbumShare();
-      this.invalidateRecruitInviteShare();
     }
     this.resetSingleMediaShareState();
     this.cancelSelectionMode({ force: true });
@@ -1309,15 +1323,6 @@ export default {
     const intent = albumShareAppMessageIntent(options, {
       timelineMode: this.timelineMode
     });
-    if (intent.kind === ALBUM_SHARE_INTENT.RECRUIT) {
-      return (
-        recruitmentSharePayload({
-          sessionId: this.sessionId,
-          inviteToken: this.recruitInviteToken,
-          title: this.albumShareSessionTitle()
-        }) || singleMediaShareFailClosedPayload()
-      );
-    }
     if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE) {
       return this.activeAlbumSharePayload();
     }
@@ -1810,7 +1815,6 @@ export default {
       if (accountChanged) {
         this.invalidateDefaultAlbumShare();
         this.invalidateAlbumShareState();
-        this.invalidateRecruitInviteShare();
         this.resetSingleMediaShareState();
         this.cancelSelectionMode({ force: true });
         this.clearActiveAlbumShareState({ hideMenus: true });
@@ -2121,7 +2125,6 @@ export default {
             if (error?.statusCode === 401 || error?.statusCode === 403) {
               if (!this.timelineMode) {
                 this.invalidateDefaultAlbumShare({ hideMenus: true });
-                this.invalidateRecruitInviteShare();
               }
               return {
                 photos: [],
@@ -2138,6 +2141,7 @@ export default {
         return;
       }
       this.loadingAlbum = true;
+      this.albumLoadFailed = false;
       const listRequest = this.beginAlbumListRequest();
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album` });
@@ -2152,13 +2156,13 @@ export default {
         this.listThumbnailLoadedById = {};
         this.listThumbnailFailedById = {};
         this.mediaLoadSerial += 1;
-        this.invalidateRecruitInviteShare();
         this.invalidateDefaultAlbumShare({ hideMenus: true });
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.albumSession = this.albumSessionSummary(data);
         this.hiddenCount = Number(data.hidden_count || 0);
         this.canUpload = Boolean(data.can_upload);
+        this.albumLoadFailed = false;
         this.statusText = "";
         this.refreshWaterfall();
         if (this.canUpload) {
@@ -2180,7 +2184,6 @@ export default {
         }
         if (error?.statusCode === 401 || error?.statusCode === 403) {
           this.invalidateDefaultAlbumShare({ hideMenus: true });
-          this.invalidateRecruitInviteShare();
           this.mediaLoadSerial += 1;
           this.photos = [];
           this.pruneUnpublishedAlbumMediaState(this.photos);
@@ -2191,6 +2194,7 @@ export default {
         } else {
           this.statusText = "相册加载失败，请稍后重试。";
         }
+        this.albumLoadFailed = true;
         this.applyAlbumNavigationTitle();
         this.albumMediaRefresh?.schedule();
       } finally {
@@ -2209,9 +2213,11 @@ export default {
         this.statusText = this.singleMediaShareRequested
           ? "该内容已不可查看"
           : "分享相册链接缺少访问凭证。";
+        this.albumLoadFailed = true;
         return;
       }
       this.loadingAlbum = true;
+      this.albumLoadFailed = false;
       this.publicAlbumSnapshotLoaded = false;
       this.resetPublicSharePagination();
       this.resetAlbumShareCovers();
@@ -2254,6 +2260,7 @@ export default {
           : null;
         this.publicShareHasMore = Boolean(this.publicShareNextCursor);
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+        this.albumLoadFailed = false;
         this.pruneUnpublishedAlbumMediaState(this.photos);
         this.statusText = "";
         this.publicAlbumSnapshotLoaded = true;
@@ -2294,6 +2301,7 @@ export default {
           error?.statusCode === 403
             ? "分享相册已过期或不可访问。"
             : "分享相册加载失败，请稍后重试。";
+        this.albumLoadFailed = true;
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
       } finally {
@@ -2358,6 +2366,13 @@ export default {
           this.publicShareLoadingMore = false;
         }
       }
+    },
+    retryAlbumLoad() {
+      if (this.timelineMode) {
+        this.loadPublicAlbum();
+        return;
+      }
+      this.loadAlbum();
     },
     normalizeAlbumMediaUrl(path) {
       if (!path) {
@@ -4558,90 +4573,6 @@ export default {
       this.selectedPhotoIds = [];
       this.topActionsFloating = false;
     },
-    beginRecruitInviteRequest() {
-      const authorityRequest = this.recruitInviteAuthority.begin({
-        sessionId: this.sessionId,
-        userId: this.currentUserId,
-        mediaVersion: this.mediaLoadSerial
-      });
-      if (!authorityRequest) {
-        return null;
-      }
-      return {
-        authorityRequest,
-        sessionId: String(this.sessionId || ""),
-        userId: String(this.currentUserId || ""),
-        generation: this.recruitInviteGeneration
-      };
-    },
-    isCurrentRecruitInviteRequest(requestContext) {
-      return Boolean(
-        requestContext &&
-          !this.timelineMode &&
-          requestContext.sessionId === String(this.sessionId || "") &&
-          requestContext.userId === String(this.currentUserId || "") &&
-          requestContext.generation === this.recruitInviteGeneration &&
-          this.recruitInviteAuthority.isCurrent(requestContext.authorityRequest)
-      );
-    },
-    invalidateRecruitInviteShare() {
-      this.recruitInviteGeneration += 1;
-      this.recruitInviteToken = "";
-      this.recruitInvitePromise = null;
-      this.recruitInviteAuthority.invalidate();
-    },
-    prepareRecruitInvite() {
-      if (
-        this.timelineMode ||
-        !this.sessionId ||
-        !this.currentUserId
-      ) {
-        return Promise.resolve("");
-      }
-      const requestContext = this.beginRecruitInviteRequest();
-      if (!requestContext) {
-        return Promise.resolve("");
-      }
-      if (this.recruitInviteToken) {
-        return Promise.resolve(this.recruitInviteToken);
-      }
-      if (this.recruitInvitePromise) {
-        return this.recruitInvitePromise;
-      }
-
-      let requestPromise;
-      requestPromise = request({
-        url: `/api/sessions/${this.sessionId}/join-invite-token`,
-        method: "POST",
-        data: {}
-      })
-        .then((response) => {
-          if (!this.isCurrentRecruitInviteRequest(requestContext)) {
-            return "";
-          }
-          const token = typeof dataOf(response)?.token === "string"
-            ? dataOf(response).token.trim()
-            : "";
-          this.recruitInviteToken = token;
-          return token;
-        })
-        .catch(() => {
-          if (this.isCurrentRecruitInviteRequest(requestContext)) {
-            this.recruitInviteToken = "";
-          }
-          return "";
-        })
-        .finally(() => {
-          if (
-            this.isCurrentRecruitInviteRequest(requestContext) &&
-            this.recruitInvitePromise === requestPromise
-          ) {
-            this.recruitInvitePromise = null;
-          }
-        });
-      this.recruitInvitePromise = requestPromise;
-      return requestPromise;
-    },
     beginDefaultAlbumShareRequest() {
       const authorityRequest = this.defaultAlbumShareAuthority.begin({
         sessionId: this.sessionId,
@@ -4685,7 +4616,6 @@ export default {
       if (this.timelineMode || !this.sessionId || !this.currentUserId) {
         return;
       }
-      this.prepareRecruitInvite();
       if (this.shareSelectableMedia.length === 0) {
         this.invalidateDefaultAlbumShare({ hideMenus: true });
         return;
@@ -4749,12 +4679,11 @@ export default {
       this.defaultAlbumSharePromise = requestPromise;
       return requestPromise;
     },
-    handleRecruitShareTap() {
-      if (this.timelineMode || !this.sessionId || this.recruitInviteToken) {
+    openClaimShare() {
+      if (this.timelineMode || this.albumBusy || !this.sessionId) {
         return;
       }
-      this.prepareRecruitInvite();
-      showToast({ title: "正在准备招募分享，请稍后再点", icon: "none" });
+      uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}&entry=album` });
     },
     toggleSelectionMode() {
       if (this.timelineMode || this.albumBusy) {

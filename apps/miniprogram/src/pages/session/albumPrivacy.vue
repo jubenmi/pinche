@@ -13,6 +13,14 @@
         :visible="true"
         :content="statusText"
       />
+      <t-button
+        v-if="privacyRetryable && !privacyLoading"
+        class="retry-button"
+        variant="outline"
+        @tap="retryPrivacyLoad"
+      >
+        重新加载
+      </t-button>
     </view>
 
     <view class="section stop-share-section">
@@ -38,6 +46,7 @@
         <t-switch
           color="#1f7a68"
           :value="allowUploadedVisible"
+          :disabled="!privacyLoaded || privacyLoading || saving"
           @change="allowUploadedVisible = $event.detail.value"
         />
       </view>
@@ -50,6 +59,7 @@
         <t-switch
           color="#1f7a68"
           :value="allowTaggedVisible"
+          :disabled="!privacyLoaded || privacyLoading || saving"
           @change="allowTaggedVisible = $event.detail.value"
         />
       </view>
@@ -67,11 +77,11 @@
       <t-button
         class="button"
         theme="primary"
-        :class="{ disabled: saving }"
-        :disabled="saving"
+        :class="{ disabled: !canSavePrivacy }"
+        :disabled="!canSavePrivacy"
         @tap="savePrivacy"
       >
-        {{ saving ? "保存中..." : "保存设置" }}
+        {{ privacyLoading ? "正在加载..." : saving ? "保存中..." : "保存设置" }}
       </t-button>
     </view>
   </view>
@@ -81,6 +91,7 @@
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
+import { canSaveAlbumPrivacy } from "../../utils/p1Safety.js";
 import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 export default {
@@ -92,8 +103,20 @@ export default {
       allowTaggedVisible: true,
       statusText: "",
       saving: false,
-      revoking: false
+      revoking: false,
+      privacyLoading: false,
+      privacyLoaded: false,
+      privacyRetryable: false
     };
+  },
+  computed: {
+    canSavePrivacy() {
+      return canSaveAlbumPrivacy({
+        loaded: this.privacyLoaded,
+        saving: this.saving,
+        sessionId: this.sessionId
+      });
+    }
   },
   async onLoad(options) {
     this.sessionId = options.id || "";
@@ -108,6 +131,12 @@ export default {
   },
   methods: {
     async loadPrivacy() {
+      if (this.privacyLoading || !this.sessionId) {
+        return;
+      }
+      this.privacyLoading = true;
+      this.privacyLoaded = false;
+      this.privacyRetryable = false;
       try {
         const response = await request({
           url: `/api/sessions/${this.sessionId}/album/privacy`
@@ -115,17 +144,24 @@ export default {
         const privacy = dataOf(response) || {};
         this.allowUploadedVisible = privacy.allow_uploaded_visible !== false;
         this.allowTaggedVisible = privacy.allow_tagged_visible !== false;
+        this.privacyLoaded = true;
         this.statusText = "";
       } catch (error) {
         if (error?.statusCode === 403) {
           this.statusText = "只有发车后的同车成员可以设置相册隐私。";
         } else {
           this.statusText = "隐私设置加载失败，请稍后重试。";
+          this.privacyRetryable = true;
         }
+      } finally {
+        this.privacyLoading = false;
       }
     },
+    retryPrivacyLoad() {
+      this.loadPrivacy();
+    },
     async savePrivacy() {
-      if (this.saving || !this.sessionId) {
+      if (!this.canSavePrivacy) {
         return;
       }
       this.saving = true;
@@ -195,6 +231,10 @@ export default {
   color: #1f7a68;
   font-size: 24rpx;
   line-height: 1.5;
+}
+
+.retry-button {
+  margin-top: 16rpx;
 }
 
 .settings-section {

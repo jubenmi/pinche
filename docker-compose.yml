@@ -18,6 +18,7 @@ services:
       WECHAT_APP_ID: wx-placeholder
       WECHAT_APP_SECRET: ""
       SESSION_SECRET: local-docker-session-secret-change-before-production
+      RUN_MIGRATIONS_ON_START: "true"
       CONTACT_ENCRYPTION_KEY: local-docker-contact-key-change-before-prod
       BOOTSTRAP_ADMIN_OPENIDS: dev-admin-openid
     ports:

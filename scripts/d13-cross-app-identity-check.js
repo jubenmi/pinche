@@ -19,7 +19,7 @@ function assert(condition, message) {
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d13-cross-app-identity-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d13-cross-app-identity-check.js"),
   "root check should run d13 cross-app identity check"
 );
 

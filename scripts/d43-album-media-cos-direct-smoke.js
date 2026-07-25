@@ -6,7 +6,7 @@ import { ALBUM_IMAGE_DISPLAY_PROCESS } from "../apps/api/src/modules/album-image
 import { createAlbumImageUploadService } from "../apps/api/src/modules/album-image/upload-service.js";
 import { validateStoredAlbumImage } from "../apps/api/src/modules/album-image/validator.js";
 import { AppError } from "../apps/api/src/http/errors.js";
-import { attachSessionAlbumMediaUrls } from "../apps/api/src/server.js";
+import { attachSessionAlbumMediaUrls } from "../apps/api/src/legacy-app.js";
 
 const smokeDatabase = String(process.env.D43_SMOKE_DATABASE || "");
 if (smokeDatabase !== "pinche_d43_test") {

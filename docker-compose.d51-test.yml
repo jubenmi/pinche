@@ -1,0 +1,103 @@
+x-api-image: &api-image
+  image: pinche-d51-api:test
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+
+x-api-environment: &api-environment
+  NODE_ENV: test
+  PORT: 3018
+  APP_BASE_URL: http://api:3018
+  MYSQL_HOST: mysql
+  MYSQL_PORT: 3306
+  MYSQL_DATABASE: pinche_d51_test
+  MYSQL_USER: pinche_d51
+  MYSQL_PASSWORD: pinche_d51_password
+  SESSION_SECRET: d51-isolated-session-secret-do-not-use-outside-tests
+  WECHAT_MOCK_LOGIN: "true"
+  WECHAT_APP_ID: wx-d51-isolated
+  WECHAT_APP_SECRET: ""
+  REDIS_ENABLED: "true"
+  REDIS_URL: redis://redis:6379/15
+  COS_ENABLED: "false"
+  CONTENT_MODERATION_ENABLED: "false"
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: pinche_d51_root_password
+      MYSQL_DATABASE: pinche_d51_test
+      MYSQL_USER: pinche_d51
+      MYSQL_PASSWORD: pinche_d51_password
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -upinche_d51 -p$${MYSQL_PASSWORD} --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [d51]
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    networks: [d51]
+
+  migrate:
+    <<: *api-image
+    command: ["/bin/sh", "-c", "npm run migrate && npm run migrate"]
+    environment: *api-environment
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks: [d51]
+    restart: "no"
+
+  api:
+    <<: *api-image
+    environment: *api-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3018/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [d51]
+    restart: "no"
+
+  acceptance:
+    <<: *api-image
+    entrypoint: ["node"]
+    working_dir: /app
+    command: ["scripts/d51-integration-smoke.js"]
+    environment:
+      <<: *api-environment
+      D51_INTEGRATION_ISOLATED: "1"
+      D51_API_BASE_URL: http://api:3018
+    volumes:
+      - ./scripts/d51-integration-smoke.js:/app/scripts/d51-integration-smoke.js:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [d51]
+    restart: "no"
+
+networks:
+  d51:
+    internal: true

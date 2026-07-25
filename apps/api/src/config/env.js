@@ -180,6 +180,60 @@ export function assertDatabaseTargetLock(mysqlConfig, env = process.env) {
   }
 }
 
+const DEVELOPMENT_SESSION_SECRETS = new Set([
+  "local-development-session-secret-change-before-production",
+  "local-docker-session-secret-change-before-production",
+  "change-me",
+  "replace-me"
+]);
+
+export class RuntimeConfigError extends Error {
+  constructor(variables) {
+    const names = [...new Set(variables)].sort();
+    super(`RUNTIME_CONFIG_INVALID: ${names.join(", ")}`);
+    this.name = "RuntimeConfigError";
+    this.code = "RUNTIME_CONFIG_INVALID";
+    this.variables = names;
+  }
+}
+
+function usesHttps(value) {
+  try {
+    return new URL(String(value || "")).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function validateRuntimeConfig(runtimeConfig, env = process.env) {
+  if (String(runtimeConfig?.nodeEnv || "").toLowerCase() !== "production") {
+    return runtimeConfig;
+  }
+
+  const invalid = [];
+  if (String(env.WECHAT_MOCK_LOGIN || "").trim().toLowerCase() !== "false") {
+    invalid.push("WECHAT_MOCK_LOGIN");
+  }
+  const sessionSecret = String(runtimeConfig?.sessionSecret || "");
+  if (sessionSecret.length < 32 || DEVELOPMENT_SESSION_SECRETS.has(sessionSecret)) {
+    invalid.push("SESSION_SECRET");
+  }
+  if (!usesHttps(runtimeConfig?.appBaseUrl)) invalid.push("APP_BASE_URL");
+
+  const targetLock = stringValue(env, "DATABASE_TARGET_LOCK").toLowerCase();
+  const targetHost = stringValue(env, "DATABASE_TARGET_LOCK_HOST");
+  const actualHost = normalizedHost(runtimeConfig?.mysql?.host);
+  if (!new Set(["cloud", "online"]).has(targetLock)) invalid.push("DATABASE_TARGET_LOCK");
+  if (!targetHost || normalizedHost(targetHost) !== actualHost || isLocalMysqlHost(actualHost)) {
+    invalid.push("DATABASE_TARGET_LOCK_HOST");
+  }
+  if (runtimeConfig?.redis?.enabled !== true) invalid.push("REDIS_ENABLED");
+  if (!validRedisUrl(runtimeConfig?.redis?.url)) invalid.push("REDIS_URL");
+
+  if (invalid.length > 0) throw new RuntimeConfigError(invalid);
+  return runtimeConfig;
+}
+
 function moderationConfigurationError(message) {
   const error = new Error(message);
   error.code = "CONTENT_MODERATION_CONFIGURATION_ERROR";
@@ -574,14 +628,15 @@ const mysqlConfig = {
   password: process.env.MYSQL_PASSWORD || "pinche_dev_password"
 };
 
-assertDatabaseTargetLock(mysqlConfig);
+const nodeEnv = process.env.NODE_ENV || "development";
+if (nodeEnv !== "production") assertDatabaseTargetLock(mysqlConfig);
 const contentModerationConfig = buildContentModerationConfig();
 assertContentModerationConfig(contentModerationConfig, {
-  nodeEnv: process.env.NODE_ENV || "development"
+  nodeEnv
 });
 
-export const config = {
-  nodeEnv: process.env.NODE_ENV || "development",
+const runtimeConfig = {
+  nodeEnv,
   port: integerEnv("PORT", 3018),
   appBaseUrl: process.env.APP_BASE_URL || "http://localhost:3018",
   mysql: mysqlConfig,
@@ -632,15 +687,14 @@ export const config = {
   bootstrapAdminUnionids: listEnv("BOOTSTRAP_ADMIN_UNIONIDS")
 };
 
+export const config = validateRuntimeConfig(runtimeConfig);
+
 export function publicConfig() {
   return {
-    nodeEnv: config.nodeEnv,
-    port: config.port,
+    production: config.nodeEnv === "production",
     redisEnabled: config.redis.enabled,
     wechatMockLogin: config.wechat.mockLogin,
-    albumMedia: {
-      directMediaUrls: config.albumMedia.directMediaUrls,
-      directUploadRequired: config.albumMedia.directUploadRequired
-    }
+    albumDirectMediaUrls: config.albumMedia.directMediaUrls,
+    albumDirectUploadRequired: config.albumMedia.directUploadRequired
   };
 }

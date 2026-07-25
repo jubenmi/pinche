@@ -477,13 +477,13 @@ function variableDeclarator(node, name) {
   ).at(-1);
 }
 
-function templateLiteralNavigatesToRecruitment(node) {
+function templateLiteralNavigatesToAlbumClaimShare(node) {
   return findReachableNodes(node.body, (candidate) => {
     if (candidate.type !== "TemplateLiteral" || candidate.expressions.length !== 1) return false;
     const [prefix, suffix] = candidate.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw);
     return (
       prefix === "/pages/session/share?id=" &&
-      suffix === "" &&
+      suffix === "&entry=album" &&
       isThisMember(candidate.expressions[0], "sessionId")
     );
   }).length > 0;
@@ -511,7 +511,7 @@ const albumScript = albumSfc.descriptor.script.content;
 const albumProgram = parseModule(albumScript, "album script");
 const albumOptions = exportDefaultObject(albumProgram);
 const serviceProgram = parseModule(read("apps/api/src/modules/core/service.js"), "album service");
-const serverProgram = parseModule(read("apps/api/src/server.js"), "server");
+const serverProgram = parseModule(read("apps/api/src/legacy-app.js"), "legacy server");
 const packageJson = read("package.json");
 
 for (const token of ["scope: \"all\"", "mediaIds", "ALBUM_PUBLIC_SHARE_SELECTION_INVALID"]) {
@@ -525,7 +525,7 @@ const groupActions = actionGroup[0].children.filter((child) => child.type === 1)
 const expectedActions = [
   ["分享", "openShareSelectionMode"],
   ["下载", "openDownloadSelectionMode"],
-  ["招募", "handleRecruitShareTap"],
+  ["邀请认领", "openClaimShare"],
   ["标注", "openTagSelectionMode"]
 ];
 const actionIndices = expectedActions.map(([label, method]) => {
@@ -667,23 +667,14 @@ assert(
 read("apps/miniprogram/src/static/icons/album-share.svg");
 read("apps/miniprogram/src/static/icons/album-recruit.svg");
 assert(hasStaticClass(groupActions[actionIndices[3]], "tag-action"), "tag action must retain its green primary style");
-const recruitAction = groupActions[actionIndices[2]];
-const recruitOpenType = directive(recruitAction, "bind", "open-type");
-const recruitOpenTypeExpression = parseTemplateExpression(recruitOpenType?.exp, "recruit native share open-type");
-assert(
-  hasStaticAttribute(recruitAction, "data-album-share", "recruit") &&
-    recruitOpenTypeExpression?.type === "ConditionalExpression" &&
-    isIdentifier(recruitOpenTypeExpression.test, "recruitInviteToken") &&
-    literalValue(recruitOpenTypeExpression.consequent) === "share" &&
-    literalValue(recruitOpenTypeExpression.alternate) === "",
-  "recruitment must use its token-gated native share dataset rather than invitation navigation"
-);
 const albumMethods = objectValue(albumOptions, "methods", "album options");
 assert(!objectProperty(albumMethods, "openRecruitment"), "legacy recruitment navigation must be removed");
+const claimShareMethod = optionMethod(albumOptions, "methods", "openClaimShare", albumScript);
 assert(
-  !/navigateTo\s*\([\s\S]{0,240}\/pages\/session\/share/.test(albumScript),
-  "recruitment must not navigate to the invitation page before native sharing"
+  templateLiteralNavigatesToAlbumClaimShare(claimShareMethod.node),
+  "claim action must navigate to the invitation page with entry=album"
 );
+assert(containsAlbumEntryParameter(claimShareMethod.node), "claim navigation must pass entry=album");
 
 const shareScopeNormalizer = exportedFunction(serviceProgram, "normalizeSessionAlbumPublicShareScope", "public share scope normalizer");
 const specifiedCount = variableDeclarator(shareScopeNormalizer, "specifiedCount");
@@ -728,7 +719,7 @@ assert(
     ).length > 0,
   "share-token forwarding must copy only explicitly supplied scope fields"
 );
-const route = topLevelAsyncFunction(serverProgram, "route", "share-token route");
+const route = exportedFunction(serverProgram, "legacyRoute", "share-token route");
 const shareOptions = variableDeclarator(route, "shareOptions");
 assert(
   shareOptions?.init?.type === "CallExpression" &&

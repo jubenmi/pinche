@@ -51,7 +51,7 @@ test("D46 author delete and admin purge cancel moderation before durable cleanup
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/content-moderation/repository.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/content-moderation/admin-api.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/server.js", import.meta.url), "utf8")
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8")
   ]);
   const deletionStart = core.indexOf("export async function requestAlbumImageDeletion");
   const deletionEnd = core.indexOf("\nexport async function ", deletionStart + 1);

@@ -92,7 +92,7 @@ test("D46 review and talk reads are author-only while public review aggregation 
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
     readFile(new URL("../../../packages/talk/api/routes.js", import.meta.url), "utf8"),
     readFile(new URL("../../../packages/talk/api/service.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/server.js", import.meta.url), "utf8")
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8")
   ]);
   const myReviewStart = core.indexOf("export async function getMySessionReview");
   const myReviewEnd = core.indexOf("\nexport async function ", myReviewStart + 1);

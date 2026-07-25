@@ -52,7 +52,7 @@ test("public moderation outcomes preserve only stable codes and safe messages", 
 
 test("server routes all D45.5 text mutations through the shared WeChat moderation boundary", async () => {
   const [source, handlerSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
   ]);
 
@@ -78,7 +78,7 @@ test("server routes all D45.5 text mutations through the shared WeChat moderatio
 
 test("closed or unready text intake cannot fall back to a direct business write", async () => {
   const [source, talkRoutes] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../../../packages/talk/api/routes.js", import.meta.url), "utf8")
   ]);
   const start = source.indexOf("async function moderateCoveredText");
@@ -95,7 +95,7 @@ test("closed or unready text intake cannot fall back to a direct business write"
 });
 
 test("the text intake gate leaves profile-only updates outside the D45 text boundary", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const start = source.indexOf("async function moderateCoveredText");
   const end = source.indexOf("async function loadTextProposalActor", start);
   const moderate = source.slice(start, end);
@@ -108,7 +108,7 @@ test("the text intake gate leaves profile-only updates outside the D45 text boun
 });
 
 test("direct covered text locks settings and applies the business write on one transaction connection", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const start = source.indexOf("async function moderateCoveredText");
   const end = source.indexOf("async function loadTextProposalActor", start);
   const moderate = source.slice(start, end);
@@ -125,7 +125,7 @@ test("direct covered text locks settings and applies the business write on one t
 
 test("NPC-role proposal application locks its role and parent session before revalidating ownership", async () => {
   const [source, handlerSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
   ]);
   const helperStart = source.indexOf("async function currentNpcRoleTextBase");
@@ -146,7 +146,7 @@ test("NPC-role proposal application locks its role and parent session before rev
 });
 
 test("initial missing session, NPC, message, and pin targets keep normal not-found handling", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const slices = [
     ["async function currentSessionTextBase", "async function currentSessionCreateTextBase", /requireInitialTextModerationTarget\(session, "Session"\)/],
     ["async function currentNpcRoleTextBase", "async function currentReviewTextBase", /requireInitialTextModerationTarget\(role, "Session NPC role"\)/],
@@ -162,7 +162,7 @@ test("initial missing session, NPC, message, and pin targets keep normal not-fou
 });
 
 test("a cancelled session message is rejected during capture instead of after WeChat passes", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const start = source.indexOf("async function currentMessageTextBase");
   const end = source.indexOf("async function currentPinnedTextBase", start);
   const helper = source.slice(start, end);
@@ -189,7 +189,7 @@ test("profile proposals apply only the canonical nickname/avatar/gender patch", 
 
 test("each text moderation job uses an operation identity while retaining its real target in the proposal", async () => {
   const [source, handlerSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
   ]);
   const moderateStart = source.indexOf("async function moderateCoveredText");
@@ -232,7 +232,7 @@ test("an enabled moderation route cannot fall through to a second business write
   });
   assert.equal(businessWrites, 0);
 
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const moderateStart = source.indexOf("async function moderateCoveredText");
   const moderateEnd = source.indexOf("async function loadTextProposalActor", moderateStart);
   assert.match(
@@ -243,7 +243,7 @@ test("an enabled moderation route cannot fall through to a second business write
 });
 
 test("D46 server separates replacement control data and adapts only author-private outcomes to 202", async () => {
-  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   const start = source.indexOf("async function moderateCoveredText");
   const end = source.indexOf("async function loadTextProposalActor", start);
   const moderate = source.slice(start, end);

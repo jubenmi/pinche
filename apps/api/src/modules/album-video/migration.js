@@ -1,5 +1,3 @@
-import { prepareUserImageAssetsMigration } from "../user-image-assets/migration.js";
-
 export const SESSION_ALBUM_VIDEO_HARDENING_MIGRATION =
   "0022_session_album_video_hardening.sql";
 export const SESSION_ALBUM_VIDEO_SOURCE_INDEX =
@@ -385,11 +383,11 @@ async function reconcileModerationAdditiveColumn(connection, definition) {
   return { added: false };
 }
 
-async function reconcileContentModerationTextProposalResult(connection) {
+export async function reconcileContentModerationTextProposalResult(connection) {
   return reconcileModerationAdditiveColumn(connection, TEXT_PROPOSAL_APPLIED_RESULT_COLUMN);
 }
 
-async function reconcileContentModerationRetryExhaustion(connection) {
+export async function reconcileContentModerationRetryExhaustion(connection) {
   return reconcileModerationAdditiveColumn(connection, RETRY_EXHAUSTION_COLUMN);
 }
 
@@ -977,27 +975,7 @@ export async function reconcileContentModerationProviderAttempts(connection) {
   }
 }
 
-export async function prepareMigration(connection, filename) {
-  const userImageAssets = await prepareUserImageAssetsMigration(connection, filename);
-  if (userImageAssets) return userImageAssets;
-  if (filename === CONTENT_MODERATION_PROVIDER_ATTEMPTS_MIGRATION) {
-    await reconcileContentModerationProviderAttempts(connection);
-    return { skipStatements: true, reconciledContentModeration: true };
-  }
-  if (filename === CONTENT_MODERATION_TEXT_PROPOSAL_RESULT_MIGRATION) {
-    await reconcileContentModerationTextProposalResult(connection);
-    return { skipStatements: true, reconciledContentModeration: true };
-  }
-  if (filename === CONTENT_MODERATION_RETRY_EXHAUSTION_MIGRATION) {
-    await reconcileContentModerationRetryExhaustion(connection);
-    return { skipStatements: true, reconciledContentModeration: true };
-  }
-  if (filename === AUTHOR_PRIVATE_CONTENT_VISIBILITY_MIGRATION) {
-    return {
-      skipStatements: true,
-      ...(await reconcileAuthorPrivateContentVisibility(connection))
-    };
-  }
+export async function prepareAlbumVideoMigration(connection, filename) {
   if (filename !== SESSION_ALBUM_VIDEO_HARDENING_MIGRATION) {
     return { skipStatements: false };
   }

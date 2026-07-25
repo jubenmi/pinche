@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import test from "node:test";
 
@@ -10,15 +11,25 @@ function dispatch(app, body) {
     request.method = "POST";
     request.url = "/api/sessions/42/start-time-corrections";
     request.headers = { "content-type": "application/json" };
-    const response = {
+    const response = Object.assign(new EventEmitter(), {
       statusCode: 0,
+      headers: new Map(),
+      setHeader(name, value) {
+        this.headers.set(String(name).toLowerCase(), value);
+      },
+      getHeader(name) {
+        return this.headers.get(String(name).toLowerCase());
+      },
       writeHead(statusCode) {
         this.statusCode = statusCode;
+        this.headersSent = true;
       },
       end(payload = "") {
+        this.writableEnded = true;
+        this.emit("finish");
         resolve({ statusCode: this.statusCode, payload: JSON.parse(String(payload)) });
       }
-    };
+    });
     app.emit("request", request, response);
   });
 }

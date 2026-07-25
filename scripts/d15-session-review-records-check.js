@@ -32,7 +32,7 @@ assert(service.includes("MAX_SESSION_REVIEW_CONTENT_LENGTH = 900"), "service mus
 assert(service.includes("normalizeSessionReviewAlbumPhotoIds"), "service must validate session album photo ids");
 assert(service.includes("album_photo_ids"), "service must return referenced session album photo ids");
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(server.includes("sessionReviewUploadDir"), "server must define review upload directory");
 assert(server.includes("saveUploadedSessionReviewPhoto"), "server must save review photos");
 assert(server.includes("/uploads/session-reviews/"), "server must serve review photo uploads");

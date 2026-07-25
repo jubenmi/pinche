@@ -71,6 +71,6 @@ test("public-share attachment proxies filtered rows so privacy and revocation re
 });
 
 test("server exposes no arbitrary bulk image signing endpoint", async () => {
-  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
   assert.doesNotMatch(server, /bulk-sign|sign-image-ids|media\/sign/);
 });

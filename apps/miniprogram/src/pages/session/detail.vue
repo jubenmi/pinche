@@ -101,6 +101,19 @@
       @actiontap="handleDetailSeatAction"
     />
 
+    <template v-if="!isCityPreview && (!isGuestPreview || currentUserId)">
+      <ChatEntry
+        v-for="extension in sessionDetailExtensions"
+        :key="extension.id"
+        ref="sessionDetailExtensionRefs"
+        :session-id="sessionId"
+        :session="session"
+        :current-user-id="currentUserId"
+        :focus-chat-on-load="focusChatOnLoad"
+        :auth-tools="authTools"
+      />
+    </template>
+
     <view v-if="session.id" class="section">
       <view class="section-head">
         <view class="section-title">车友记录</view>
@@ -153,18 +166,6 @@
       </view>
     </view>
 
-    <template v-if="!isCityPreview && (!isGuestPreview || currentUserId)">
-      <ChatEntry
-        v-for="extension in sessionDetailExtensions"
-        :key="extension.id"
-        ref="sessionDetailExtensionRefs"
-        :session-id="sessionId"
-        :session="session"
-        :current-user-id="currentUserId"
-        :focus-chat-on-load="focusChatOnLoad"
-        :auth-tools="authTools"
-      />
-    </template>
   </view>
 </template>
 

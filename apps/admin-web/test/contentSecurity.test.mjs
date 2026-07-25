@@ -155,11 +155,11 @@ test("root check delegates admin web verification to the workspace check", async
     await readFile(new URL("../../../package.json", import.meta.url), "utf8")
   );
   assert.match(
-    rootPackage.scripts.check || "",
+    rootPackage.scripts["check:fast"] || "",
     /npm --workspace apps\/admin-web run check/
   );
   assert.doesNotMatch(
-    rootPackage.scripts.check || "",
+    rootPackage.scripts["check:fast"] || "",
     /npm --workspace apps\/admin-web run test:runtime-config/
   );
 });

@@ -53,7 +53,6 @@ const appMessage = between(
   "app-message handler"
 );
 for (const intent of [
-  "ALBUM_SHARE_INTENT.RECRUIT",
   "ALBUM_SHARE_INTENT.ACTIVE",
   "ALBUM_SHARE_INTENT.SINGLE",
   "ALBUM_SHARE_INTENT.DEFAULT_ALL",
@@ -61,6 +60,13 @@ for (const intent of [
 ]) {
   check(appMessage.includes(intent), `app-message handler must preserve ${intent}`);
 }
+check(
+  !appMessage.includes("ALBUM_SHARE_INTENT.RECRUIT") &&
+    !album.includes("recruitInviteToken") &&
+    album.includes("openClaimShare() {") &&
+    album.includes("/pages/session/share?id=${this.sessionId}&entry=album"),
+  "claim invitations must delegate to the unified share page without legacy recruit prewarming"
+);
 check(
   !between(
     cover,
@@ -110,7 +116,7 @@ check(
 const defaultPreparation = between(
   album,
   "prepareDefaultAlbumShare() {",
-  "handleRecruitShareTap() {",
+  "openClaimShare() {",
   "default entry"
 );
 check(

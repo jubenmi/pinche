@@ -75,7 +75,7 @@ const [
   migration31
 ] = await Promise.all([
   text("package.json"),
-  text("apps/api/src/server.js"),
+  text("apps/api/src/legacy-app.js"),
   text("apps/api/src/modules/core/service.js"),
   text("apps/api/src/modules/album-image/upload-service.js"),
   text("apps/api/src/modules/user-image-assets/service.js"),
@@ -105,7 +105,7 @@ assert.equal(
   packageJson.scripts["d46:check"],
   "node --test scripts/d46-content-moderation-check.test.mjs && node scripts/d46-content-moderation-check.js && node scripts/d46-author-private-content-check.js"
 );
-assert.match(packageJson.scripts.precheck, /npm run d46:check/);
+assert.match(packageJson.scripts["test:unit"], /npm run d46:check/);
 assert.match(migration30, /content_security_settings/);
 assert.match(migration31, /user_image_assets/);
 

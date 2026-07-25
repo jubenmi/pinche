@@ -63,6 +63,10 @@ import {
   normalizeSessionRescheduleStartAt
 } from "./session-reschedule.js";
 import { normalizeSessionTimeCorrectionStartAt } from "./session-time-correction.js";
+import {
+  normalizeSessionCreationIdempotencyKey,
+  replaySessionCreation
+} from "./session-creation-idempotency.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
 import {
   findOwnedUserImageAssetById,
@@ -3998,66 +4002,82 @@ export async function createEntityClaim(user, body) {
 
 export async function createSessionWithConnection(connection, user, body) {
   requireVerifiedPhone(user);
+  const creationIdempotencyKey = normalizeSessionCreationIdempotencyKey(body);
 
-  assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
-  assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
-
-  const store = await findById(connection, "stores", requireValue(body, "storeId"));
-  const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
-  assertCatalogUsableForSession(store, user, "Store");
-  assertCatalogUsableForSession(script, user, "Script");
-
-  await ensureRole(connection, user.user.id, "organizer");
-
-  const [result] = await connection.query(
-    `
-      INSERT INTO sessions
-        (
-          organizer_user_id, script_id, script_name_snapshot, store_id,
-          store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
-          npc_user_id, npc_name_snapshot, deposit_amount, visibility,
-          join_policy, join_phone_required, npc_join_enabled, note
-        )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    [
-      user.user.id,
-      script.id,
-      script.name,
-      store.id,
-      store.name,
-      requireValue(body, "startAt"),
-      body.dmUserId || null,
-      optionalText(body.dmNameSnapshot),
-      body.npcUserId || null,
-      optionalText(body.npcNameSnapshot),
-      intValue(body.depositAmount, 0),
-      normalizeSessionVisibility(body.visibility),
-      normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
-      normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
-      normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
-      optionalText(body.note)
-    ]
-  );
-
-  const session = await findById(connection, "sessions", result.insertId);
-  await cloneScriptNpcRolesForSession(connection, session.id, script.id);
-  await insertSessionNpcRoles(
+  return replaySessionCreation(
     connection,
-    session.id,
-    normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, { source: "session" }),
-    { source: "session" }
+    user.user.id,
+    creationIdempotencyKey,
+    async () => {
+      assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
+      assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
+
+      const store = await findById(connection, "stores", requireValue(body, "storeId"));
+      const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
+      assertCatalogUsableForSession(store, user, "Store");
+      assertCatalogUsableForSession(script, user, "Script");
+
+      await ensureRole(connection, user.user.id, "organizer");
+
+      const [result] = await connection.query(
+        `
+          INSERT INTO sessions
+            (
+              organizer_user_id, creation_idempotency_key, script_id,
+              script_name_snapshot, store_id, store_name_snapshot, start_at,
+              dm_user_id, dm_name_snapshot, npc_user_id, npc_name_snapshot,
+              deposit_amount, visibility, join_policy, join_phone_required,
+              npc_join_enabled, note
+            )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          user.user.id,
+          creationIdempotencyKey || null,
+          script.id,
+          script.name,
+          store.id,
+          store.name,
+          requireValue(body, "startAt"),
+          body.dmUserId || null,
+          optionalText(body.dmNameSnapshot),
+          body.npcUserId || null,
+          optionalText(body.npcNameSnapshot),
+          intValue(body.depositAmount, 0),
+          normalizeSessionVisibility(body.visibility),
+          normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+          normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
+          normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
+          optionalText(body.note)
+        ]
+      );
+
+      const session = await findById(connection, "sessions", result.insertId);
+      await cloneScriptNpcRolesForSession(connection, session.id, script.id);
+      await insertSessionNpcRoles(
+        connection,
+        session.id,
+        normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, { source: "session" }),
+        { source: "session" }
+      );
+      await runSessionExtensionHook("afterSessionCreated", {
+        connection,
+        session,
+        pinnedMessageText: body.pinnedMessageText
+      });
+      return session;
+    }
   );
-  await runSessionExtensionHook("afterSessionCreated", {
-    connection,
-    session,
-    pinnedMessageText: body.pinnedMessageText
-  });
-  return session;
 }
 
 export async function createSession(user, body) {
   return withTransaction((connection) => createSessionWithConnection(connection, user, body));
+}
+
+export function sessionHasStarted(session = {}, nowMs = Date.now()) {
+  const startAtMs = new Date(session?.start_at || "").getTime();
+  const normalizedNowMs = Number(nowMs);
+  return Number.isFinite(startAtMs) && Number.isFinite(normalizedNowMs) && startAtMs <= normalizedNowMs;
 }
 
 function publicSessionAvailable(session) {
@@ -4136,6 +4156,7 @@ async function memberSessionDetail(connection, session) {
     store_latitude: storeLocation?.latitude ?? null,
     store_longitude: storeLocation?.longitude ?? null,
     join_policy: safeSession.join_policy || "review_required",
+    has_started: sessionHasStarted(safeSession),
     join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
     npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
     active_album_photo_count: activeAlbumPhotoCount,
@@ -4176,6 +4197,7 @@ async function publicSessionPreview(connection, session, accessScope = "public_p
     store_latitude: storeLocation?.latitude ?? null,
     store_longitude: storeLocation?.longitude ?? null,
     join_policy: safeSession.join_policy || "review_required",
+    has_started: sessionHasStarted(safeSession),
     join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
     npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
     seats: seats.map(publicSeatResponse),
@@ -4232,18 +4254,45 @@ export async function getSessionForViewer(id, options = {}) {
   });
 }
 
-export async function assertSessionJoinInviteAllowed(user, sessionId) {
+export function assertSessionJoinInviteTokenAllowed(session = {}) {
+  if (String(session.status || "") === "cancelled") {
+    throw conflict("Cancelled sessions cannot create join invitation tokens");
+  }
+  return session;
+}
+
+export async function createSessionJoinInviteToken(
+  user,
+  sessionId,
+  createToken,
+  options = {}
+) {
   const id = positiveId(sessionId, "sessionId");
-  return withDatabaseConnection(async (connection) => {
-    const session = await findById(connection, "sessions", id);
-    if (!session) {
+  const runWithTransaction = options.withTransaction || withTransaction;
+  return runWithTransaction(async (connection) => {
+    const lockedSession = await findById(connection, "sessions", id, {
+      forUpdate: true
+    });
+    if (!lockedSession) {
       throw notFound("Session not found");
     }
-    if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
+    assertSessionJoinInviteTokenAllowed(lockedSession);
+    if (
+      !(await isSessionAlbumMember(connection, lockedSession, user.user.id))
+    ) {
       throw forbidden("Only session members can share a join invitation");
     }
-    return { session_id: id };
+    return createToken({
+      sessionId: id,
+      inviterUserId: Number(user.user.id)
+    });
   });
+}
+
+export async function assertSessionJoinInviteAllowed(user, sessionId) {
+  return createSessionJoinInviteToken(user, sessionId, ({ sessionId: id }) => ({
+    session_id: id
+  }));
 }
 
 export async function getSessionShareStats(sessionId) {

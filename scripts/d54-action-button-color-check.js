@@ -52,7 +52,7 @@ const requiredSourcePatterns = new Map([
     "apps/miniprogram/src/pages/session/albumPrivacy.vue",
     [
       { name: "save settings primary theme", pattern: /theme="primary"/ },
-      { name: "save settings disabled binding", pattern: /:disabled="saving"/ }
+      { name: "save settings disabled binding", pattern: /:disabled="!canSavePrivacy"/ }
     ]
   ],
   [

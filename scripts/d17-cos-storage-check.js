@@ -16,7 +16,7 @@ function read(file) {
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("scripts/d17-cos-storage-check.js"),
+  packageJson.scripts["test:contracts"].includes("scripts/d17-cos-storage-check.js"),
   "root check should run d17 COS storage check"
 );
 const miniprogramPackageJson = JSON.parse(read("apps/miniprogram/package.json"));
@@ -135,7 +135,7 @@ const cosStorage = read("apps/api/src/storage/cos.js");
 assert(cosStorage.includes("picOperations"), "COS storage must accept Pic-Operations");
 assert(cosStorage.includes('"pic-operations"'), "COS storage must send signed Pic-Operations header");
 
-const server = read("apps/api/src/server.js");
+const server = read("apps/api/src/legacy-app.js");
 assert(server.includes("putCosObject"), "server must upload avatar and review photo bytes to COS");
 assert(server.includes("getCosObject"), "server must serve uploaded files from COS when enabled");
 assert(server.includes("cosStorageEnabled(config.cos)"), "server must keep local upload fallback when COS is disabled");

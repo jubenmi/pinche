@@ -238,7 +238,7 @@ assertIncludes(
   "check-miniprogram should reference the D35 static check"
 );
 assert(
-  packageJson.scripts.check.includes("node scripts/d35-miniprogram-admin-catalog-check.js"),
+  packageJson.scripts["test:contracts"].includes("node scripts/d35-miniprogram-admin-catalog-check.js"),
   "npm run check should run D35 static check"
 );
 

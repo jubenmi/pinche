@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+      - publish
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: D51 required checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fast checks
+        run: npm run check:fast
+
+      - name: Unit tests
+        run: npm run test:unit
+        env:
+          MIGRATION_GOVERNANCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+
+      - name: Contract tests
+        run: npm run test:contracts
+
+      - name: MySQL 8.4 integration
+        run: npm run test:integration
+
+      - name: Build all deliverables
+        run: npm run build:all

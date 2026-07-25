@@ -157,6 +157,7 @@ import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { dataOf, ensureLoggedIn, request } from "../../utils/api";
 import { isAuthorPrivateText } from "../../utils/authorPrivateText";
 import {
+  createSessionCreationKey,
   readCreateFlow,
   roleOptionsFromFlow,
   selectedRolesFromFlow,
@@ -205,7 +206,8 @@ export default {
       npcJoinEnabled: true,
       cityVisible: true,
       statusText: "",
-      busyAction: false
+      busyAction: false,
+      creationIdempotencyKey: ""
     };
   },
   computed: {
@@ -244,6 +246,9 @@ export default {
     this.role = flow.role || null;
     this.roleOptions = roleOptionsFromFlow(flow);
     this.selectedRoles = selectedRolesFromFlow(flow);
+    this.creationIdempotencyKey =
+      String(flow.creationIdempotencyKey || "").trim() || createSessionCreationKey();
+    writeCreateFlow({ creationIdempotencyKey: this.creationIdempotencyKey });
     this.pinnedMessageText = flow.pinnedMessageText || "";
     this.joinPolicy = flow.joinPolicy === "direct" ? "direct" : "review_required";
     this.joinPhoneRequired =
@@ -322,27 +327,28 @@ export default {
       if (this.busyAction) {
         return;
       }
-      const auth = await ensureLoggedIn({
-        content: "登录后发布并分享你的剧本局。",
-        requirePhone: true,
-        phoneRequiredTitle: "授权手机号后发布",
-        phoneRequiredContent: "创建车前需要授权手机号，方便车局沟通和审核。"
-      });
-      if (!auth) {
-        this.statusText = "登录后可继续发布。";
-        return;
-      }
-      if (!this.canSubmit) {
-        return;
-      }
       this.busyAction = true;
       this.statusText = "";
-      const pinnedMessageText = this.effectivePinnedMessage;
       try {
+        const auth = await ensureLoggedIn({
+          content: "登录后发布并分享你的剧本局。",
+          requirePhone: true,
+          phoneRequiredTitle: "授权手机号后发布",
+          phoneRequiredContent: "创建车前需要授权手机号，方便车局沟通和审核。"
+        });
+        if (!auth) {
+          this.statusText = "登录后可继续发布。";
+          return;
+        }
+        if (!this.canSubmit) {
+          return;
+        }
+        const pinnedMessageText = this.effectivePinnedMessage;
         const sessionResponse = await request({
           url: "/api/sessions",
           method: "POST",
           data: {
+            idempotencyKey: this.creationIdempotencyKey,
             storeId: Number(this.store.id),
             scriptId: Number(this.script.id),
             startAt: this.startAt,
@@ -384,13 +390,6 @@ export default {
             }
           });
         }
-        await request({
-          url: `/api/sessions/${session.id}/chat/pin`,
-          method: "PATCH",
-          data: {
-            pinnedMessageText
-          }
-        });
         writeCreateFlow({
           store: this.store,
           script: this.script,

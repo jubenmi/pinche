@@ -263,6 +263,7 @@ import {
 } from "../../utils/sessionTimeCorrection";
 import { requestSignupCreatedSubscription } from "../../utils/subscribeMessages";
 import { showActionSheet, showModal, showToast } from "../../utils/tdesignFeedback";
+import { otherOnboardSeatMemberCount } from "../../utils/sessionMembership";
 
 function booleanSetting(value, fallback = true) {
   if (value === undefined || value === null || value === "") {
@@ -352,27 +353,7 @@ export default {
       return this.otherOnboardMemberCount > 0;
     },
     otherOnboardMemberCount() {
-      const organizerId = Number(this.session.organizer_user_id);
-      const userIds = new Set();
-      for (const seat of this.session.seats || []) {
-        const userId = Number(seat.confirmed_user_id);
-        if (["confirmed", "locked"].includes(seat.status) && userId && userId !== organizerId) {
-          userIds.add(userId);
-        }
-      }
-      for (const role of this.session.session_npc_roles || []) {
-        const userId = Number(role.bound_user_id);
-        if (role.status === "active" && userId && userId !== organizerId) {
-          userIds.add(userId);
-        }
-      }
-      if (
-        Object.prototype.hasOwnProperty.call(this.session, "seats") ||
-        Object.prototype.hasOwnProperty.call(this.session, "session_npc_roles")
-      ) {
-        return userIds.size;
-      }
-      return Number(this.session.other_onboard_member_count || 0);
+      return otherOnboardSeatMemberCount(this.session);
     },
     hasActiveAlbumPhotos() {
       return Number(this.session.active_album_photo_count || this.session.photo_count || 0) > 0;

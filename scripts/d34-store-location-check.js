@@ -227,11 +227,11 @@ for (const token of [
 
 const packageJson = JSON.parse(read("package.json"));
 assert(
-  packageJson.scripts.check.includes("node scripts/d34-store-location-check.js"),
+  packageJson.scripts["test:contracts"].includes("node scripts/d34-store-location-check.js"),
   "npm run check should run D34 static check"
 );
 assert(
-  packageJson.scripts.check.includes("node --check scripts/d34-store-location-smoke.js"),
+  packageJson.scripts["test:contracts"].includes("node --check scripts/d34-store-location-smoke.js"),
   "npm run check should syntax-check D34 smoke"
 );
 assert(

@@ -52,7 +52,7 @@ const checks = [
   },
   {
     label: "server exposes PATCH /api/users/me",
-    file: "apps/api/src/server.js",
+    file: "apps/api/src/legacy-app.js",
     test: (source) =>
       source.includes('request.method === "PATCH"') &&
       source.includes('url.pathname === "/api/users/me"')

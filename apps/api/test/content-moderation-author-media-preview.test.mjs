@@ -199,7 +199,7 @@ test("D46 image capability lasts at most 60 seconds and closes on row/version ch
 test("D46 server keeps author preview routes separate from approved public media routes", async () => {
   const [core, server] = await Promise.all([
     readFile(new URL("../src/modules/core/service.js", import.meta.url), "utf8"),
-    readFile(new URL("../src/server.js", import.meta.url), "utf8")
+    readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8")
   ]);
   assert.match(core, /getAuthorAlbumImagePreview/);
   assert.match(core, /getAuthorAlbumVideoPreview/);

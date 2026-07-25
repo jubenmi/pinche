@@ -1,6 +1,6 @@
 # 后端架构与部署设计
 
-更新日期：2026-06-11
+更新日期：2026-07-22
 
 本文定义MVP后端技术栈和部署方式。目标是让后端从第一天就能用 Docker 在本地、测试环境、生产环境保持一致运行。
 
@@ -182,3 +182,29 @@ GET /health/db
 - 数据库迁移可在容器环境执行。
 - 小程序体验版能通过HTTPS访问API。
 
+## 9. D51 实施前测试口径
+
+以下统计锁定于 D51 行为测试加入之前的 2026-07-22 基线，用于区分“已有回归很多”和“关键运行路径已经被真实集成验证”这两件事：
+
+| 口径 | 基线数量 | 能证明的范围 | 不能证明的范围 |
+|---|---:|---|---|
+| API `*.test.mjs` 文件 | 86 | 大量领域纯函数、fake repository、事务调用顺序和安全契约 | 不能自动等同于真实 MySQL 或真实 HTTP |
+| 小程序 `*.test.mjs` 文件 | 15 | 页面 helper、状态转换和请求组装 | 不能替代微信开发者工具 |
+| 管理端 `*.test.mjs` 文件 | 5 | runtime config、API helper 和相册媒体行为 | 不能替代浏览器工作流和视觉对比 |
+| talk 子模块 `*.test.mjs` 文件 | 3 | talk 服务、路由和小程序 helper | 当前仍依赖宿主相对路径，尚不能证明独立包边界 |
+| shared 包 `*.test.mjs` 文件 | 2 | 北京时间与相册媒体共享纯函数 | 不覆盖业务 I/O |
+| 根 `scripts/*.test.mjs` 文件 | 2 | 构建产物和静态检查器自身行为 | 不执行生产服务链路 |
+
+在上述测试中，基线只有 1 个 API 测试文件直接创建 `createApp`；共有 48 个测试文件通过读取源码或配置文本验证接线/禁令，这些统一视为 **contract/static** 证据。它们适合防止危险字符串、导入方向或构建接线被误改，但不能把 HTTP 状态码、真实事务、迁移锁或数据库兼容性称为端到端验证。
+
+基线没有在根 `npm run check` 或 GitHub Actions 中启动 MySQL 服务，因此强制执行的真实 MySQL integration suite 数量为 **0**。现有测试中出现 `mysql2`、`MYSQL_HOST` 或 `createServerConnection` 的文件使用配置断言、fake connection 或隔离安全门；现有 smoke 脚本也未形成 PR 必跑的空库迁移 + API HTTP + fixture cleanup 链路。
+
+D51 的证据分层定义如下：
+
+- **unit**：不依赖外部服务的函数、controller、service/repository fake 和事务协议测试。
+- **contract**：读取源码、配置、Compose 或构建产物的静态边界检查，明确不称为 E2E。
+- **HTTP runtime**：通过真实 `createApp` 监听回环端口并验证协议、状态码和响应体，但可使用 fake 依赖。
+- **MySQL integration**：MySQL 8.4 空库、真实迁移、真实 API 请求、代表性写读和 fixture 清理全部发生在隔离环境。
+- **manual acceptance**：微信开发者工具、管理后台浏览器和生产只读验证，单独记录环境与证据，不能被 Node 测试替代。
+
+D51.2 新增的 body/config/migration 测试最初保持 RED，且不接入原 `npm run check`；D51.3–D51.5 分别完成实现和测试分层后才进入聚合门禁。
