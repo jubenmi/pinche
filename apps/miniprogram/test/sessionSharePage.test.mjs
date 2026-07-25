@@ -350,16 +350,69 @@ test("an already-reached boundary refreshes lifecycle before minting a token", a
 
   assert.deepEqual(requestOrder, ["GET", "GET"]);
   assert.equal(scheduled.length, 2);
-  assert.equal(scheduled[1].delay, 1_000);
+  assert.equal(scheduled[1].delay, 2_000);
   assert.equal(vm.shareReady, false);
 
-  nowMs += 1_000;
+  nowMs += 2_000;
   const secondQueuedRefresh = scheduled[1].callback();
   await secondQueuedRefresh;
 
   assert.deepEqual(requestOrder, ["GET", "GET", "GET", "POST"]);
   assert.equal(vm.shareMode, "claim");
   assert.equal(vm.shareReady, true);
+});
+
+test("client-ahead boundary reconciliation stops after capped backoff refreshes", async () => {
+  let nowMs = globalThis.Date.parse("2026-07-24T12:00:00.000Z");
+  const scheduled = [];
+  let getCount = 0;
+  let postCount = 0;
+  const component = loadSharePageComponent({
+    request: async ({ method = "GET" }) => {
+      if (method === "POST") {
+        postCount += 1;
+        return { data: { token: "must-not-be-minted" } };
+      }
+      getCount += 1;
+      return {
+        data: sessionResponse({
+          has_started: false,
+          start_at: new globalThis.Date(nowMs - 60_000).toISOString()
+        })
+      };
+    },
+    setTimeout: (callback, delay) => {
+      scheduled.push({ callback, delay });
+      return scheduled.length;
+    },
+    clearTimeout() {},
+    Date: {
+      now: () => nowMs,
+      parse: globalThis.Date.parse
+    }
+  });
+  const vm = createSharePageVm(component, {
+    sessionId: "42",
+    currentUserId: "7"
+  });
+
+  await vm.refreshPublishedShareState();
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(scheduled.length, index + 1, "each capped retry should own one timer");
+    nowMs += scheduled[index].delay;
+    await scheduled[index].callback();
+  }
+
+  assert.deepEqual(
+    scheduled.map(({ delay }) => delay),
+    [1_000, 2_000, 4_000],
+    "clock-skew reconciliation should use capped exponential backoff"
+  );
+  assert.equal(getCount, 4, "the initial GET plus three skew retries are permitted");
+  assert.equal(postCount, 0, "a stale pre-start response must never authorize token minting");
+  assert.equal(vm.startBoundaryTimer, null, "the retry cap must leave no live timer");
+  await Promise.resolve();
+  assert.equal(getCount, 4, "no background refresh may continue after the cap");
 });
 
 test("public invite-preview NPC cards honor stripped bound and pending occupancy flags", () => {
@@ -526,6 +579,70 @@ test("top-right sharing appears for a loaded public preview with a valid route t
   assert.equal(vm.shareReady, true);
   assert.equal(shownMenus.length, 1);
   assert.deepEqual(hiddenMenus.at(-1), ["shareTimeline"]);
+});
+
+test("a stale hideShareMenu completion cannot re-enable sharing after readiness changes", () => {
+  const completions = [];
+  const shownMenus = [];
+  const component = loadSharePageComponent({
+    showWechatShareMenus: (options) => shownMenus.push(options),
+    uni: {
+      hideShareMenu: (options = {}) => {
+        if (typeof options.complete === "function") {
+          completions.push(options.complete);
+        }
+      },
+      setNavigationBarTitle() {}
+    }
+  });
+  const vm = createSharePageVm(component, {
+    sessionId: "42",
+    sessionLoaded: true,
+    session: sessionResponse({
+      has_started: true,
+      start_at: new Date(Date.now() - 1_000).toISOString()
+    }),
+    inviteToken: "first-token"
+  });
+
+  vm.showShareMenus();
+  assert.equal(completions.length, 1);
+
+  vm.inviteToken = "";
+  vm.showShareMenus();
+  vm.inviteToken = "replacement-token";
+  vm.showShareMenus();
+  assert.equal(completions.length, 2);
+
+  completions[0]();
+  assert.equal(
+    shownMenus.length,
+    0,
+    "an obsolete completion must remain invalid even after readiness returns"
+  );
+  completions[1]();
+  assert.equal(shownMenus.length, 1);
+});
+
+test("the native open-type share button is absent until shareReady is true", () => {
+  const source = fs.readFileSync(sharePagePath, "utf8");
+  const { descriptor, errors } = parseSfc(source, { filename: sharePagePath.pathname });
+  assert.deepEqual(errors, []);
+  const template = descriptor.template?.content || "";
+  const nativeShareButton =
+    template.match(/<button\b[^>]*\bopen-type=["']share["'][^>]*>/)?.[0] || "";
+
+  assert.match(
+    nativeShareButton,
+    /\bv-else-if=["']shareReady["']/,
+    "the native share surface must only be rendered in the ready branch"
+  );
+  assert.doesNotMatch(nativeShareButton, /:disabled=["']!shareReady["']/);
+  assert.match(
+    template,
+    /<view\b(?=[^>]*\bv-else\b)(?=[^>]*\bwechat-action-preparing\b)(?![^>]*\bopen-type=)[^>]*>[\s\S]*?分享准备中/,
+    "the not-ready branch must be a non-interactive preparation control"
+  );
 });
 
 test("cancelled sessions render a permanent unshareable state without preparing a token", async () => {

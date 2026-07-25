@@ -192,8 +192,12 @@ export function pagesUseSkylineRenderer(pagesJson) {
 
 export function sourceUsesSkylineRenderer(source = "") {
   return (
-    /(?:^|[,{;\s])renderer\s*[:=]\s*["'`]skyline["'`]/im.test(source) ||
-    /(?:^|[,{;\s])skylineRenderEnable\s*[:=]\s*true\b/im.test(source)
+    /(?:^|[,{;\s])(?:renderer|["'`]renderer["'`])\s*[:=]\s*["'`]skyline["'`]/im.test(
+      source
+    ) ||
+    /(?:^|[,{;\s])(?:skylineRenderEnable|["'`]skylineRenderEnable["'`])\s*[:=]\s*true\b/im.test(
+      source
+    )
   );
 }
 
@@ -219,8 +223,19 @@ export function skylineFileFailures(files = []) {
   return skylineFailures;
 }
 
-function relevantMiniprogramFiles(directory = miniprogramRoot) {
-  const ignoredDirectories = new Set(["node_modules", "dist", "unpackage", "test"]);
+export function relevantMiniprogramFiles(directory = miniprogramRoot) {
+  const ignoredDirectories = new Set([
+    "node_modules",
+    "dist",
+    "build",
+    "unpackage",
+    "test",
+    "tests",
+    "vendor",
+    "vendors",
+    "wxcomponents",
+    "uni_modules"
+  ]);
   const relevantExtensions = new Set([".json", ".js", ".mjs", ".cjs", ".ts", ".vue"]);
   const files = [];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -324,8 +339,11 @@ if (!/<button\b[^>]*\bopen-type=["']share["'][^>]*>/.test(shareSource)) {
 }
 const nativeShareButtonSource =
   shareSource.match(/<button\b[^>]*\bopen-type=["']share["'][^>]*>/)?.[0] || "";
-if (!nativeShareButtonSource.includes(':disabled="!shareReady"')) {
-  fail("Unified share button must stay disabled until shareReady is authoritative");
+if (
+  !/\bv-(?:if|else-if)=["']shareReady["']/.test(nativeShareButtonSource) ||
+  nativeShareButtonSource.includes(':disabled="!shareReady"')
+) {
+  fail("Unified share button must only render after shareReady is authoritative");
 }
 if (/<t-button\b[^>]*\bopen-type=["']share["']/.test(shareSource)) {
   fail("Unified share page must not use a TDesign open-type=share button");

@@ -64,7 +64,6 @@ import {
 import {
   assertAdminOwnSessionAlbumAllowed,
   assertSessionAlbumImageUploadAllowed,
-  assertSessionJoinInviteAllowed,
   assertSessionAlbumUploadAllowed,
   approveSignup,
   cancelSession,
@@ -82,6 +81,7 @@ import {
   createScript,
   createSeat,
   createSession,
+  createSessionJoinInviteToken,
   createSessionWithConnection,
   createSessionNpcRole,
   createSessionNpcRoleWithConnection,
@@ -5847,18 +5847,24 @@ async function route(request, response, options = {}) {
   );
   if (request.method === "POST" && sessionJoinInviteTokenId) {
     const user = await getAuthUser(request);
-    await assertSessionJoinInviteAllowed(user, sessionJoinInviteTokenId);
-    const exp = Math.floor(Date.now() / 1000) + SESSION_JOIN_INVITE_TOKEN_SECONDS;
+    const invite = await createSessionJoinInviteToken(
+      user,
+      sessionJoinInviteTokenId,
+      ({ sessionId, inviterUserId }) => {
+        const exp = Math.floor(Date.now() / 1000) + SESSION_JOIN_INVITE_TOKEN_SECONDS;
+        return {
+          token: signSessionJoinInviteToken({
+            sessionId,
+            inviterUserId,
+            exp
+          }),
+          expires_at: new Date(exp * 1000).toISOString()
+        };
+      }
+    );
     jsonResponse(response, 201, {
       ok: true,
-      data: {
-        token: signSessionJoinInviteToken({
-          sessionId: Number(sessionJoinInviteTokenId),
-          inviterUserId: Number(user.user.id),
-          exp
-        }),
-        expires_at: new Date(exp * 1000).toISOString()
-      }
+      data: invite
     });
     return;
   }

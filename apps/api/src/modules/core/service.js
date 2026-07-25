@@ -4261,9 +4261,15 @@ export function assertSessionJoinInviteTokenAllowed(session = {}) {
   return session;
 }
 
-export async function assertSessionJoinInviteAllowed(user, sessionId) {
+export async function createSessionJoinInviteToken(
+  user,
+  sessionId,
+  createToken,
+  options = {}
+) {
   const id = positiveId(sessionId, "sessionId");
-  return withDatabaseConnection(async (connection) => {
+  const runWithTransaction = options.withTransaction || withTransaction;
+  return runWithTransaction(async (connection) => {
     const session = await findById(connection, "sessions", id);
     if (!session) {
       throw notFound("Session not found");
@@ -4271,9 +4277,31 @@ export async function assertSessionJoinInviteAllowed(user, sessionId) {
     if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
       throw forbidden("Only session members can share a join invitation");
     }
-    assertSessionJoinInviteTokenAllowed(session);
-    return { session_id: id };
+    const lockedSession = await findById(connection, "sessions", id, {
+      forUpdate: true
+    });
+    if (!lockedSession) {
+      throw notFound("Session not found");
+    }
+    assertSessionJoinInviteTokenAllowed(lockedSession);
+    if (
+      !(await isSessionAlbumMember(connection, lockedSession, user.user.id, {
+        forUpdate: true
+      }))
+    ) {
+      throw forbidden("Only session members can share a join invitation");
+    }
+    return createToken({
+      sessionId: id,
+      inviterUserId: Number(user.user.id)
+    });
   });
+}
+
+export async function assertSessionJoinInviteAllowed(user, sessionId) {
+  return createSessionJoinInviteToken(user, sessionId, ({ sessionId: id }) => ({
+    session_id: id
+  }));
 }
 
 export async function getSessionShareStats(sessionId) {

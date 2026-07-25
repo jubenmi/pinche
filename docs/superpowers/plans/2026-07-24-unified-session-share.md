@@ -752,6 +752,7 @@ Expected: no whitespace errors; only intentional feature files and the user’s 
 - Create: `apps/miniprogram/test/sessionSharePage.test.mjs`
 - Modify: `scripts/d56-unified-session-share-check.js`
 - Modify: `scripts/d56-unified-session-share-check.test.mjs`
+- Modify: `scripts/check-miniprogram.js`
 - Modify: `package.json`
 
 - [x] **Step 1: Refresh the authoritative lifecycle on show and at the start boundary**
@@ -790,3 +791,47 @@ Expected: no whitespace errors; only intentional feature files and the user’s 
   Run focused D56 tests/checks, adjacent privacy/login/claim checks, the miniprogram build, and
   the full relevant repository verification. Confirm that no generated build output or Developer
   Tools configuration mutation is included before committing.
+
+### Task 8: Spec-review blocking fixes
+
+**Files:**
+
+- Modify: `apps/api/src/modules/core/service.js`
+- Modify: `apps/api/src/server.js`
+- Modify: `apps/api/test/session-share-lifecycle.test.mjs`
+- Modify: `apps/miniprogram/src/pages/session/share.vue`
+- Modify: `apps/miniprogram/test/sessionSharePage.test.mjs`
+- Modify: `scripts/d56-unified-session-share-check.js`
+- Modify: `scripts/d56-unified-session-share-check.test.mjs`
+
+- [x] **Step 1: Bound client-ahead lifecycle reconciliation**
+
+  Add fake-timer coverage proving that an authoritative pre-start response received after the
+  client boundary triggers only a capped number of backoff refreshes, with no lingering timer or
+  request loop after the cap.
+
+- [x] **Step 2: Make token authorization and signing atomic**
+
+  Add a service-level race regression where cancellation lands between the initial session read
+  and token signing. Re-authorize the locked session immediately before signing inside one
+  transaction, and invoke the signer before releasing that transaction.
+
+- [x] **Step 3: Invalidate delayed share-menu callbacks**
+
+  Add a delayed-`hideShareMenu.complete` regression and gate the callback by both a generation
+  token and current `shareReady` state so stale completions cannot re-enable sharing.
+
+- [x] **Step 4: Hide the native share button until ready**
+
+  Add a template regression requiring the `open-type="share"` button to render only when
+  `shareReady` is true, with a non-share preparation/error control in the other branch.
+
+- [x] **Step 5: Catch quoted Skyline keys and skip vendored trees**
+
+  Add source mutation coverage for quoted JavaScript keys and traversal coverage excluding
+  `src/wxcomponents`, `src/uni_modules`, build, test, and vendor directories.
+
+- [x] **Step 6: Verify and amend**
+
+  Run focused tests, the complete `npm run check`, diff/status/artifact checks, and amend the
+  feature commit only after all regressions pass.

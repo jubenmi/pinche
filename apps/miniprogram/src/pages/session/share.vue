@@ -92,10 +92,9 @@
         </view>
       </button>
       <button
-        v-else
+        v-else-if="shareReady"
         class="button wechat-action"
         open-type="share"
-        :disabled="!shareReady"
         @tap="persistFlow"
       >
         <view class="wechat-action-content">
@@ -107,9 +106,22 @@
             height="48rpx"
             custom-style="width: 48rpx; height: 48rpx; opacity: 0.82;"
           />
-          <text>{{ shareReady ? shareButtonText : "分享准备中…" }}</text>
+          <text>{{ shareButtonText }}</text>
         </view>
       </button>
+      <view v-else class="button wechat-action wechat-action-preparing">
+        <view class="wechat-action-content">
+          <t-image
+            class="button-icon"
+            src="/static/icons/share-light.svg"
+            mode="aspectFit"
+            width="48rpx"
+            height="48rpx"
+            custom-style="width: 48rpx; height: 48rpx; opacity: 0.82;"
+          />
+          <text>分享准备中…</text>
+        </view>
+      </view>
     </view>
   </view>
 </template>
@@ -158,6 +170,7 @@ import { showModal, showToast } from "../../utils/tdesignFeedback";
 
 const MAX_START_BOUNDARY_TIMER_MS = 2_147_000_000;
 const POST_BOUNDARY_RETRY_MS = 1_000;
+const MAX_POST_BOUNDARY_REFRESH_ATTEMPTS = 3;
 
 export default {
   components: { AuthIdentityBar, RoleSeatBoard, FeedbackHost },
@@ -181,6 +194,8 @@ export default {
       shareRefreshPromise: null,
       startBoundaryTimer: null,
       startBoundaryRefreshPending: false,
+      postBoundaryRefreshAttempts: 0,
+      shareMenuGeneration: 0,
       invitePreparing: false,
       invitePrepareError: false,
       navigatingAlbum: false,
@@ -547,6 +562,7 @@ export default {
       this.showShareMenus();
       return;
     }
+    this.postBoundaryRefreshAttempts = 0;
     return this.refreshPublishedShareState();
   },
   onHide() {
@@ -672,6 +688,7 @@ export default {
       this.confirmedCrossCastRoleKey = "";
     },
     hideShareMenus() {
+      this.shareMenuGeneration += 1;
       if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
         uni.hideShareMenu({
           menus: ["shareAppMessage", "shareTimeline"]
@@ -687,6 +704,7 @@ export default {
     scheduleStartBoundaryRefresh() {
       this.clearStartBoundaryRefresh();
       if (this.shareUnavailableText || this.session.has_started !== false) {
+        this.postBoundaryRefreshAttempts = 0;
         return;
       }
       const startAtMs = Date.parse(this.session.start_at);
@@ -694,10 +712,18 @@ export default {
         return;
       }
       const remainingMs = startAtMs - Date.now();
-      const delay =
-        remainingMs <= 0
-          ? POST_BOUNDARY_RETRY_MS
-          : Math.min(remainingMs, MAX_START_BOUNDARY_TIMER_MS);
+      let delay;
+      if (remainingMs <= 0) {
+        if (this.postBoundaryRefreshAttempts >= MAX_POST_BOUNDARY_REFRESH_ATTEMPTS) {
+          return;
+        }
+        delay =
+          POST_BOUNDARY_RETRY_MS * 2 ** this.postBoundaryRefreshAttempts;
+        this.postBoundaryRefreshAttempts += 1;
+      } else {
+        this.postBoundaryRefreshAttempts = 0;
+        delay = Math.min(remainingMs, MAX_START_BOUNDARY_TIMER_MS);
+      }
       this.startBoundaryTimer = setTimeout(() => {
         this.startBoundaryTimer = null;
         const currentStartAtMs = Date.parse(this.session.start_at);
@@ -992,6 +1018,7 @@ export default {
       if (!this.sessionId || this.sessionLoading) {
         return;
       }
+      this.postBoundaryRefreshAttempts = 0;
       await this.refreshPublishedShareState();
     },
     updateNavigationBarTitle() {
@@ -1447,7 +1474,12 @@ export default {
         this.hideShareMenus();
         return;
       }
+      const generation = this.shareMenuGeneration + 1;
+      this.shareMenuGeneration = generation;
       const showFriendShareMenu = () => {
+        if (generation !== this.shareMenuGeneration || !this.shareReady) {
+          return;
+        }
         showWechatShareMenus({
           withShareTicket: true,
           menus: ["shareAppMessage"]

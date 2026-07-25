@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -7,6 +10,7 @@ import {
   invitePreparationContractFailures,
   jpegDimensions,
   pagesUseSkylineRenderer,
+  relevantMiniprogramFiles,
   skylineFileFailures
 } from "./d56-unified-session-share-check.js";
 
@@ -310,6 +314,57 @@ test("project-wide Skyline guard catches renderer mutations in JSON and source c
     skylineFileFailures(sourceFlagMutation).join("\n"),
     /vite\.config\.js/
   );
+});
+
+test("project-wide Skyline guard catches quoted JavaScript renderer keys", () => {
+  const failures = skylineFileFailures([
+    {
+      path: "apps/miniprogram/vite.config.js",
+      source: `export default { "renderer": "skyline" };`
+    },
+    {
+      path: "apps/miniprogram/src/runtime.ts",
+      source: `const runtime = { 'skylineRenderEnable': true };`
+    }
+  ]);
+
+  assert.equal(failures.length, 2);
+  assert.match(failures.join("\n"), /vite\.config\.js/);
+  assert.match(failures.join("\n"), /runtime\.ts/);
+});
+
+test("project-wide Skyline traversal excludes generated, test, and vendored trees", () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "d56-skyline-files-"));
+  try {
+    const relativeFiles = [
+      "src/pages/session/share.vue",
+      "src/utils/share.js",
+      "src/wxcomponents/vendor/component.js",
+      "src/uni_modules/plugin/index.js",
+      "node_modules/package/index.js",
+      "dist/generated.js",
+      "build/generated.js",
+      "unpackage/generated.js",
+      "test/fixture.js",
+      "tests/fixture.js",
+      "vendor/library.js",
+      "vendors/library.js"
+    ];
+    for (const relativeFile of relativeFiles) {
+      const absoluteFile = path.join(fixtureRoot, relativeFile);
+      fs.mkdirSync(path.dirname(absoluteFile), { recursive: true });
+      fs.writeFileSync(absoluteFile, `export default {};`);
+    }
+
+    assert.deepEqual(
+      relevantMiniprogramFiles(fixtureRoot).map((filePath) =>
+        path.relative(fixtureRoot, filePath)
+      ),
+      ["src/pages/session/share.vue", "src/utils/share.js"]
+    );
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test("importing D56 helpers does not execute the repository integration check", () => {

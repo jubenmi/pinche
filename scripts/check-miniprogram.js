@@ -1467,12 +1467,18 @@ if (!fs.existsSync(pagesJsonPath)) {
   ) {
     fail("Share page unified friend/group action must be a native open-type=share button");
   }
+  const unifiedShareButtonSource =
+    shareSource.match(/<button\b[^>]*\bopen-type=["']share["'][^>]*>/)?.[0] || "";
   if (
-    !shareSource.includes("{{ shareReady ? shareButtonText") ||
+    !/\bv-else-if=["']shareReady["']/.test(unifiedShareButtonSource) ||
+    !shareSource.includes("<text>{{ shareButtonText }}</text>") ||
+    !/<view\b[^>]*\bv-else\b[^>]*\bwechat-action-preparing\b[^>]*>/.test(shareSource) ||
     !sessionShareHelperSource.includes("buttonText: '分享拼车邀请'") ||
     !sessionShareHelperSource.includes("buttonText: '分享给玩家认领'")
   ) {
-    fail("Share page must present the server-selected join/claim copy through one friend/group share action");
+    fail(
+      "Share page must hide the native action until ready and then present the server-selected join/claim copy"
+    );
   }
   for (const requiredShareSeatAvatarText of [
     "confirmedUserAvatarUrl: seat.confirmed_user_avatar_url || \"\"",
