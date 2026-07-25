@@ -31,31 +31,38 @@ test("home page enables static initial rendering in the uploaded build", async (
 
 test("home boot state renders before the business component block", async () => {
   const pageWxml = await readBuildOutput("pages/index/index.wxml");
-  const bootIndex = pageWxml.indexOf('class="home-boot-state');
-  const businessBlockIndex = pageWxml.indexOf("<block wx:if=", bootIndex);
+  const bootStart = pageWxml.indexOf('<view class="home-boot-state');
+  const firstBusinessIndex = pageWxml.indexOf("<block wx:if=");
 
-  assert.notEqual(
-    bootIndex,
-    -1,
-    'the uploaded home WXML must include class="home-boot-state"'
-  );
-  assert.notEqual(
-    businessBlockIndex,
-    -1,
-    "the uploaded home WXML must include a conditional business block after the boot state"
+  assert.ok(
+    bootStart >= 0,
+    'the uploaded home WXML must include a root <view class="home-boot-state">'
   );
   assert.ok(
-    bootIndex < businessBlockIndex,
+    firstBusinessIndex >= 0,
+    "the uploaded home WXML must include a conditional business block"
+  );
+  assert.ok(
+    bootStart < firstBusinessIndex,
     "the home boot state must appear strictly before the first business condition block"
   );
 
-  const bootFragment = pageWxml.slice(bootIndex, businessBlockIndex);
-  assert.match(bootFragment, /剧本迷·拼车/);
-  assert.match(bootFragment, /首页加载中/);
-  assert.doesNotMatch(
-    bootFragment,
-    /<(?:auth-identity-bar|session-calendar|feedback-host|t-[\w-]+)(?:\s|\/|>)/,
-    "the boot fragment must not depend on custom components"
+  const bootMarkup = pageWxml.slice(bootStart, firstBusinessIndex);
+  assert.match(bootMarkup, /剧本迷·拼车/);
+  assert.match(bootMarkup, /首页加载中/);
+
+  const nativeTags = new Set(["view", "text", "image"]);
+  const unsupportedTags = [
+    ...new Set(
+      [...bootMarkup.matchAll(/<\/?([a-z][\w-]*)\b[^>]*>/gi)]
+        .map((match) => match[1].toLowerCase())
+        .filter((tagName) => !nativeTags.has(tagName))
+    )
+  ].sort();
+  assert.deepEqual(
+    unsupportedTags,
+    [],
+    `the boot markup must use only native view/text/image tags; found: ${unsupportedTags.join(", ")}`
   );
 });
 
