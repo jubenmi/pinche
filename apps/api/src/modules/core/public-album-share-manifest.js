@@ -4,6 +4,7 @@ import { config } from "../../config/env.js";
 import { badRequest, forbidden } from "../../http/errors.js";
 
 const PUBLIC_SHARE_MANIFEST_PAGE_LIMIT = 30;
+const PUBLIC_SHARE_MANIFEST_WRITE_BATCH_SIZE = 500;
 
 function isPositiveSafeInteger(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -105,14 +106,28 @@ function invalidCursor() {
 export async function writePublicShareItems(connection, shareId, mediaIds) {
   const normalizedShareId = requestShareId(shareId);
   const normalizedMediaIds = normalizeWriteMediaIds(mediaIds);
-  for (const [ordinal, mediaId] of normalizedMediaIds.entries()) {
+  for (
+    let start = 0;
+    start < normalizedMediaIds.length;
+    start += PUBLIC_SHARE_MANIFEST_WRITE_BATCH_SIZE
+  ) {
+    const batch = normalizedMediaIds.slice(
+      start,
+      start + PUBLIC_SHARE_MANIFEST_WRITE_BATCH_SIZE,
+    );
+    const placeholders = batch.map(() => "(?, ?, ?)").join(", ");
+    const values = batch.flatMap((mediaId, index) => [
+      normalizedShareId,
+      start + index,
+      mediaId,
+    ]);
     await connection.query(
       `
         INSERT INTO session_album_public_share_items
           (share_id, ordinal, media_id)
-        VALUES (?, ?, ?)
+        VALUES ${placeholders}
       `,
-      [normalizedShareId, ordinal, mediaId],
+      values,
     );
   }
 }

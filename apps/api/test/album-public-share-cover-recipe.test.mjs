@@ -102,7 +102,13 @@ function shareCreationConnection(photos) {
         return [{ insertId: shares.length }];
       }
       if (sql.includes("INSERT INTO session_album_public_share_items")) {
-        shareItems.push({ share_id: values[0], ordinal: values[1], media_id: values[2] });
+        for (let index = 0; index < values.length; index += 3) {
+          shareItems.push({
+            share_id: values[index],
+            ordinal: values[index + 1],
+            media_id: values[index + 2]
+          });
+        }
         return [{ affectedRows: 1 }];
       }
       if (sql.includes("FROM session_album_public_share_items")) {

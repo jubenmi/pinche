@@ -148,20 +148,57 @@ test("writePublicShareItems validates the complete manifest before issuing order
   };
 
   await writePublicShareItems(connection, 41, [9, 4, 7]);
-  assert.deepEqual(queries.map(({ values }) => values), [
-    [41, 0, 9],
-    [41, 1, 4],
-    [41, 2, 7],
+  assert.equal(queries.length, 1);
+  assert.deepEqual(queries[0].values, [
+    41, 0, 9,
+    41, 1, 4,
+    41, 2, 7,
   ]);
   assert(queries.every(({ sql }) => sql.includes("session_album_public_share_items")));
 
-  for (const mediaIds of [[], [1, 1], [0], [-1], [1.5], ["1"], [Number.MAX_SAFE_INTEGER + 1]]) {
+  const lateDuplicate = Array.from({ length: 501 }, (_, index) => index + 1);
+  lateDuplicate[500] = 1;
+  for (const mediaIds of [
+    [],
+    [1, 1],
+    [0],
+    [-1],
+    [1.5],
+    ["1"],
+    [Number.MAX_SAFE_INTEGER + 1],
+    lateDuplicate,
+  ]) {
     const before = queries.length;
     await assert.rejects(
       () => writePublicShareItems(connection, 41, mediaIds),
       (error) => error?.statusCode === 400,
     );
     assert.equal(queries.length, before, `invalid manifest ${JSON.stringify(mediaIds)} reached SQL`);
+  }
+});
+
+test("writePublicShareItems uses fixed multi-row batches without changing ordinal order", async () => {
+  const queries = [];
+  const connection = {
+    async query(sql, values) {
+      queries.push({ sql, values });
+      return [{ affectedRows: values.length / 3 }];
+    },
+  };
+  const mediaIds = Array.from({ length: 1201 }, (_, index) => index + 10);
+
+  await writePublicShareItems(connection, 41, mediaIds);
+
+  assert.equal(queries.length, 3);
+  assert.deepEqual(queries.map(({ values }) => values.length), [1500, 1500, 603]);
+  assert.deepEqual(queries[0].values.slice(0, 6), [41, 0, 10, 41, 1, 11]);
+  assert.deepEqual(queries[1].values.slice(0, 3), [41, 500, 510]);
+  assert.deepEqual(queries[2].values.slice(-3), [41, 1200, 1210]);
+  for (const { sql, values } of queries) {
+    assert.equal(
+      (sql.match(/\(\?, \?, \?\)/g) || []).length,
+      values.length / 3,
+    );
   }
 });
 
