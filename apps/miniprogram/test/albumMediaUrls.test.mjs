@@ -95,18 +95,18 @@ test("timer schedules 30 seconds early, onShow checks suspended expiry, and disp
   assert.equal(cleared.includes(17), true);
 });
 
-test("public-share reload is supplied as a closure and remains single-flight", async () => {
+test("member album reload remains single-flight", async () => {
   const calls = [];
   let album = { photos: [] };
   const controller = createAlbumMediaRefreshController({
     readAlbum: () => album,
     writeAlbum: (next) => { album = next; },
-    reloadAlbum: async () => { calls.push("public-share-token"); return { photos: [] }; },
+    reloadAlbum: async () => { calls.push("member-album"); return { photos: [] }; },
     setTimer: () => 1,
     clearTimer: () => {}
   });
   await Promise.all([controller.refresh(), controller.refresh()]);
-  assert.deepEqual(calls, ["public-share-token"]);
+  assert.deepEqual(calls, ["member-album"]);
 });
 
 test("failed media refresh preserves album state and schedules a bounded retry", async () => {
@@ -315,6 +315,7 @@ test("album page uses one-step finalize, one auth retry, signed download, and li
   assert.match(source, /MEDIA_URL_EXPIRED/);
   assert.match(source, /photo\.download_url/);
   assert.match(source, /albumMediaRefresh\?\.dispose\(\)/);
+  assert.match(source, /publicAlbumMediaStateRefresh\?\.dispose\(\)/);
   assert.match(source, /shouldAttachApiAuthorization\(imageUrl, getApiBaseUrl\(\)\)/);
 });
 
@@ -391,6 +392,7 @@ test("onShow forces a server refresh so a revoked cached video is pruned", async
     source.indexOf("onUnload()", source.indexOf("async onShow()"))
   );
 
+  assert.match(onShowBlock, /await this\.publicAlbumMediaStateRefresh\?\.refresh\(\)/);
   assert.match(onShowBlock, /await this\.albumMediaRefresh\?\.refresh\(\)/);
   assert.doesNotMatch(onShowBlock, /checkNow/);
   assert.match(source, /pruneUnpublishedAlbumMediaState\(this\.photos\)/);
@@ -424,10 +426,10 @@ function applyLatestAlbumList(state, photos) {
   }
 }
 
-test("shared list authority drops late approved member and public responses", async () => {
+test("member list authority drops late approved responses", async () => {
   assert.equal(typeof albumMediaUrlHelpers.createAlbumListRequestAuthority, "function");
 
-  for (const mode of ["member", "public"]) {
+  for (const mode of ["member"]) {
     const authority = albumMediaUrlHelpers.createAlbumListRequestAuthority();
     const oldApproved = deferred();
     const newestResult = deferred();
@@ -469,7 +471,7 @@ test("shared list authority drops late approved member and public responses", as
   }
 });
 
-test("current member and public refresh access loss clears cached media", async () => {
+test("member refresh clears cached media while public access loss clears credentials", async () => {
   const source = await import("node:fs/promises").then(({ readFile }) =>
     readFile(new URL("../src/pages/session/album.vue", import.meta.url), "utf8")
   );
@@ -481,13 +483,19 @@ test("current member and public refresh access loss clears cached media", async 
     source.indexOf("async loadAlbum()"),
     source.indexOf("async loadPublicAlbum()")
   );
+  const publicInvalidationBlock = source.slice(
+    source.indexOf("invalidatePublicAlbumAccess()"),
+    source.indexOf("redirectUnavailablePublicAlbumHome()")
+  );
   assert.match(refreshBlock, /error\?\.statusCode === 401/);
   assert.match(refreshBlock, /error\?\.statusCode === 403/);
   assert.match(refreshBlock, /photos:\s*\[\]/);
   assert.match(memberBlock, /error\?\.statusCode === 401/);
   assert.match(memberBlock, /error\?\.statusCode === 403/);
+  assert.match(publicInvalidationBlock, /this\.albumShareToken\s*=\s*""/);
+  assert.match(publicInvalidationBlock, /this\.commitPublicAlbumEvent\(\{ type: "UNLOAD" \}\)/);
 
-  for (const mode of ["member", "public"]) {
+  for (const mode of ["member"]) {
     const authority = albumMediaUrlHelpers.createAlbumListRequestAuthority();
     const request = authority.begin();
     const state = {
@@ -515,7 +523,7 @@ test("current member and public refresh access loss clears cached media", async 
   }
 });
 
-test("album page shares list authority across direct and refresh reads", async () => {
+test("member reads share list authority while public reads use generation guards", async () => {
   const source = await import("node:fs/promises").then(({ readFile }) =>
     readFile(new URL("../src/pages/session/album.vue", import.meta.url), "utf8")
   );
@@ -537,10 +545,44 @@ test("album page shares list authority across direct and refresh reads", async (
     refreshBlock,
     /isCurrent:\s*\(\)\s*=>\s*this\.isCurrentAlbumListRequest\(listRequest\)/
   );
-  for (const block of [refreshBlock, memberBlock, publicBlock]) {
+  for (const block of [refreshBlock, memberBlock]) {
     assert.match(block, /this\.beginAlbumListRequest\(\)/);
     assert.match(block, /this\.isCurrentAlbumListRequest\(listRequest\)/);
   }
+  assert.match(publicBlock, /isCurrentPublicAlbumGeneration\(/);
+});
+
+test("public album unload invalidates generation and disposes only its media-state controller", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../src/pages/session/album.vue", import.meta.url), "utf8")
+  );
+  const unloadBlock = source.slice(
+    source.indexOf("onUnload()"),
+    source.indexOf("onPageScroll(event)")
+  );
+
+  assert.match(unloadBlock, /if \(this\.timelineMode\)/);
+  assert.match(unloadBlock, /this\.commitPublicAlbumEvent\(\{ type: "UNLOAD" \}\)/);
+  assert.match(unloadBlock, /this\.publicAlbumMediaStateRefresh\?\.dispose\(\)/);
+  assert.match(unloadBlock, /this\.albumMediaRefresh\?\.dispose\(\)/);
+});
+
+test("member share invalidation does not call the removed public pagination reset", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../src/pages/session/album.vue", import.meta.url), "utf8")
+  );
+  const invalidationBlock = source.slice(
+    source.indexOf("invalidateAlbumShareState()"),
+    source.indexOf("applyAlbumShareTimelineImage(imageUrl)")
+  );
+  const unloadBlock = source.slice(
+    source.indexOf("onUnload()"),
+    source.indexOf("onPageScroll(event)")
+  );
+
+  assert.match(unloadBlock, /this\.invalidateAlbumShareState\(\)/);
+  assert.doesNotMatch(invalidationBlock, /resetPublicSharePagination/);
+  assert.doesNotMatch(source, /resetPublicSharePagination/);
 });
 
 test("waterfall drops delayed snapshots and replaces delayed event rows with canonical media", async () => {

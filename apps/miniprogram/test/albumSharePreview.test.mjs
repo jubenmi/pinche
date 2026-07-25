@@ -120,7 +120,7 @@ test("public timeline sharing selects a representative image from the current re
   assert.match(prepareBlock, /this\.applyAlbumShareTimelineImage\(/);
   assert.doesNotMatch(prepareBlock, /Canvas|canvas|static\/art/);
 
-  const loadBlock = sourceBlock("async loadPublicAlbum() {", "resetPublicSharePagination() {");
+  const loadBlock = sourceBlock("async loadPublicAlbum() {", "async loadMorePublicAlbum() {");
   assert.match(loadBlock, /this\.prepareAlbumShareTimelineImage\(data\)/);
 
   const moreBlock = sourceBlock("async loadMorePublicAlbum() {", "normalizeAlbumMediaUrl(path)");
@@ -146,7 +146,7 @@ test("representative image state follows share lifecycle without temporary rende
     "async loadAlbum() {"
   );
   assert.doesNotMatch(refreshBlock, /resetAlbumShareCovers\(\)/);
-  assert.match(refreshBlock, /this\.prepareAlbumShareTimelineImage\(data\)/);
+  assert.doesNotMatch(refreshBlock, /prepareAlbumShareTimelineImage|publicRefresh/);
 });
 
 test("native share CTA appears only after the active snapshot is ready", () => {
@@ -185,8 +185,9 @@ test("public album initial load is not invalidated by the first onShow refresh",
   assert.match(timelineBlock, /if \(this\.loadingAlbum\) \{\s*return;\s*\}/);
   assert.ok(
     timelineBlock.indexOf("if (this.loadingAlbum)") <
-      timelineBlock.indexOf("await this.albumMediaRefresh?.refresh()")
+      timelineBlock.indexOf("await this.publicAlbumMediaStateRefresh?.refresh()")
   );
+  assert.doesNotMatch(timelineBlock, /albumMediaRefresh/);
 });
 
 test("public shared albums keep cursor pagination, retry state, and bottom loading", () => {
@@ -204,10 +205,35 @@ test("public shared albums keep cursor pagination, retry state, and bottom loadi
     "normalizeAlbumMediaUrl(path)"
   );
   assert.match(loadMoreBlock, /publicAlbumSharePageUrl\(\{/);
+  assert.match(loadMoreBlock, /type:\s*"NEXT_PAGE",\s*status:\s*"start"/);
+  assert.match(loadMoreBlock, /type:\s*"NEXT_PAGE",\s*status:\s*"success"/);
+  assert.match(loadMoreBlock, /type:\s*"NEXT_PAGE",\s*status:\s*"failure"/);
   assert.match(loadMoreBlock, /mergePublicAlbumSharePages\(/);
-  assert.match(loadMoreBlock, /this\.publicShareNextCursor = merged\.nextCursor/);
-  assert.match(loadMoreBlock, /this\.publicShareHasMore = merged\.hasMore/);
-  assert.match(loadMoreBlock, /this\.publicShareLoadMoreError = "继续加载失败，可重试。"/);
+});
+
+test("public invalid access clears credentials and mounted capabilities before leaving", () => {
+  const invalidationBlock = sourceBlock(
+    "invalidatePublicAlbumAccess() {",
+    "redirectUnavailablePublicAlbumHome() {"
+  );
+  const loadBlock = sourceBlock("async loadPublicAlbum() {", "async loadMorePublicAlbum() {");
+  const moreBlock = sourceBlock(
+    "async loadMorePublicAlbum() {",
+    "async refreshLoadedPublicAlbumMedia() {"
+  );
+  const mediaStateBlock = sourceBlock(
+    "async refreshLoadedPublicAlbumMedia() {",
+    "retryAlbumLoad() {"
+  );
+
+  assert.match(invalidationBlock, /this\.albumShareToken\s*=\s*""/);
+  assert.match(invalidationBlock, /type:\s*"UNLOAD"/);
+  assert.match(invalidationBlock, /this\.applyPublicAlbumMediaPatchToWaterfall\(\[\], unavailableIds\)/);
+  assert.match(invalidationBlock, /this\.publicAlbumMediaStateRefresh\?\.dispose\(\)/);
+  for (const requestBlock of [loadBlock, moreBlock, mediaStateBlock]) {
+    assert.match(requestBlock, /isUnavailablePublicAlbumError\(error\)/);
+    assert.match(requestBlock, /this\.invalidatePublicAlbumAccess\(\)/);
+  }
 });
 
 test("single-image sharing explicitly allows an owned untagged image and explains exposure", () => {

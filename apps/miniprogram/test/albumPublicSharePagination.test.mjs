@@ -46,153 +46,26 @@ test("public-share pagination appends unique media and only retains a valid cont
   );
 });
 
-test("public-share refresh reloads the currently loaded prefix and keeps the last cursor", async () => {
-  assert.equal(typeof pagination?.reloadPublicAlbumSharePrefix, "function");
-  const pages = new Map([
-    [null, {
-      photos: [{ id: 1 }, { id: 2 }],
-      next_cursor: "cursor-2",
-      has_more: true,
-      visible_count: 5
-    }],
-    ["cursor-2", {
-      photos: [{ id: 2 }, { id: 3 }, { id: 4 }],
-      next_cursor: "cursor-3",
-      has_more: true
-    }]
-  ]);
-  const cursors = [];
-
-  const refreshed = await pagination.reloadPublicAlbumSharePrefix({
-    pageCount: 2,
-    loadPage: async ({ cursor }) => {
-      cursors.push(cursor);
-      return pages.get(cursor);
-    }
-  });
-
-  assert.deepEqual(cursors, [null, "cursor-2"]);
-  assert.equal(refreshed.firstPage.visible_count, 5);
-  assert.deepEqual(refreshed.photos.map(({ id }) => id), [1, 2, 3, 4]);
-  assert.equal(refreshed.nextCursor, "cursor-3");
-  assert.equal(refreshed.hasMore, true);
-  assert.equal(refreshed.loadedPageCount, 2);
+test("public paging utility has no prefix-reload or row-replacement authority", () => {
+  assert.equal(pagination?.reloadPublicAlbumSharePrefix, undefined);
+  assert.equal(pagination?.samePublicAlbumMediaSequence, undefined);
+  assert.equal(pagination?.replacePublicAlbumMediaRows, undefined);
 });
 
-test("public-share refresh stops after a first page without continuation", async () => {
-  let loadCount = 0;
-  const refreshed = await pagination.reloadPublicAlbumSharePrefix({
-    pageCount: 3,
-    loadPage: async () => {
-      loadCount += 1;
-      return {
-        photos: [{ id: 1 }, { id: 2 }],
-        next_cursor: "ignored",
-        has_more: false
-      };
-    }
-  });
-
-  assert.equal(loadCount, 1);
-  assert.equal(refreshed.loadedPageCount, 1);
-  assert.equal(refreshed.hasMore, false);
-  assert.equal(refreshed.nextCursor, null);
-});
-
-test("public-share refresh discards a stale partial prefix", async () => {
-  assert.equal(typeof pagination?.reloadPublicAlbumSharePrefix, "function");
-  const refreshed = await pagination.reloadPublicAlbumSharePrefix({
-    pageCount: 2,
-    loadPage: async ({ pageIndex }) => (
-      pageIndex === 0
-        ? {
-          photos: [{ id: 1 }, { id: 2 }],
-          next_cursor: "cursor-2",
-          has_more: true
-        }
-        : null
-    )
-  });
-
-  assert.equal(refreshed, null);
-});
-
-test("public-share refresh rejects array pages", async () => {
-  await assert.rejects(
-    pagination.reloadPublicAlbumSharePrefix({
-      loadPage: async () => []
-    }),
-    /Invalid public album refresh page/
-  );
-});
-
-test("public-share refresh distinguishes field updates from media-set changes", () => {
-  assert.equal(typeof pagination?.samePublicAlbumMediaSequence, "function");
-  assert.equal(typeof pagination?.replacePublicAlbumMediaRows, "function");
-  const refreshedPhotos = [
-    { id: 1, preview_display_url: "new-1" },
-    { id: 2, preview_display_url: "new-2" }
-  ];
-
-  assert.equal(
-    pagination.samePublicAlbumMediaSequence(
-      [{ id: 1 }, { id: 2 }],
-      [{ id: "1" }, { id: 2, preview_display_url: "new" }]
-    ),
-    true
-  );
-  assert.equal(
-    pagination.samePublicAlbumMediaSequence([{ id: 1 }, { id: 2 }], [{ id: 2 }, { id: 1 }]),
-    false
-  );
-  assert.equal(
-    pagination.samePublicAlbumMediaSequence([{ id: 1 }, { id: 2 }], [{ id: 1 }]),
-    false
-  );
-  const unmatchedRow = { id: 3, preview_display_url: "unchanged" };
-  const unmatchedResult = pagination.replacePublicAlbumMediaRows(
-    [unmatchedRow],
-    refreshedPhotos
-  );
-  assert.strictEqual(unmatchedResult[0], unmatchedRow);
-  assert.deepEqual(
-    pagination.replacePublicAlbumMediaRows(
-      [{ id: 2, preview_display_url: "old" }],
-      refreshedPhotos
-    ),
-    [refreshedPhotos[1]]
-  );
-});
-
-test("public background refresh keeps the waterfall mounted for the same media sequence", () => {
+test("public media refresh is independent from the member full-album controller", () => {
   const controller = sourceBlock(
     albumSource,
     "initializeAlbumMediaRefreshController() {",
     "async loadAlbum() {"
   );
-  const writer = sourceBlock(
-    controller,
-    "writeAlbum: (next) => {",
-    "reloadAlbum: async () => {"
-  );
 
-  assert.match(writer, /samePublicAlbumMediaSequence\(this\.photos, nextPhotos\)/);
-  assert.match(
-    writer,
-    /if\s*\(\s*publicSequenceUnchanged\s*\)\s*\{\s*this\.updatePublicAlbumWaterfallRows\(nextPhotos\);\s*\}\s*else\s*\{\s*this\.refreshWaterfall\(\);\s*\}/
-  );
-  assert.match(controller, /this\.reloadLoadedPublicAlbumPrefix\(listRequest\)/);
-  assert.match(
-    controller,
-    /this\.publicShareLoadedPageCount\s*=\s*publicRefresh\.loadedPageCount/
-  );
-  assert.match(controller, /this\.publicShareLoadingMore\s*=\s*false/);
-  assert.match(
-    controller,
-    /finally\s*\{\s*if\s*\(\s*this\.timelineMode\s*&&\s*this\.isCurrentAlbumListRequest\(listRequest\)\s*\)\s*\{\s*this\.publicShareLoadingMore\s*=\s*false;\s*\}\s*\}/
-  );
-  assert.match(albumSource, /reloadPublicAlbumSharePrefix\(\{/);
-  assert.match(albumSource, /replacePublicAlbumMediaRows/);
+  assert.match(controller, /if \(this\.timelineMode\)/);
+  assert.match(controller, /createPublicAlbumMediaStateController\(\{/);
+  assert.match(controller, /refreshCards:\s*\(\)\s*=>\s*this\.refreshLoadedPublicAlbumMedia\(\)/);
+  assert.match(controller, /createAlbumMediaRefreshController\(\{/);
+  assert.doesNotMatch(controller, /reloadLoadedPublicAlbumPrefix|reloadPublicAlbumSharePrefix/);
+  assert.doesNotMatch(controller, /samePublicAlbumMediaSequence|publicShareLoadedPageCount/);
+  assert.doesNotMatch(controller, /this\.timelineMode\s*\?/);
 });
 
 test("album page declares guarded public-share continuation loading", () => {
@@ -206,33 +79,30 @@ test("public-share continuation appends without rebuilding mounted cards", () =>
   const loadPublicAlbum = sourceBlock(
     albumSource,
     "async loadPublicAlbum() {",
-    "resetPublicSharePagination() {"
-  );
-  const resetPublicSharePagination = sourceBlock(
-    albumSource,
-    "resetPublicSharePagination() {",
     "async loadMorePublicAlbum() {"
   );
   const loadMorePublicAlbum = sourceBlock(
     albumSource,
     "async loadMorePublicAlbum() {",
-    "retryAlbumLoad() {"
+    "async refreshLoadedPublicAlbumMedia() {"
   );
   const appendPublicAlbumWaterfallPhotos = sourceBlock(
     albumSource,
     "appendPublicAlbumWaterfallPhotos(photos = []) {",
-    "refreshWaterfall() {"
+    "applyPublicAlbumMediaPatchToWaterfall(cards = [], unavailableIds = []) {"
   );
 
-  assert.match(albumSource, /publicShareLoadedPageCount: 0/);
-  assert.match(loadPublicAlbum, /this\.publicShareLoadedPageCount = 1/);
-  assert.match(resetPublicSharePagination, /this\.publicShareLoadedPageCount = 0/);
+  assert.match(loadPublicAlbum, /type:\s*"INITIAL_PAGE"/);
+  assert.match(loadPublicAlbum, /this\.refreshWaterfall\(\)/);
+  assert.match(loadMorePublicAlbum, /type:\s*"NEXT_PAGE",\s*status:\s*"start"/);
+  assert.match(loadMorePublicAlbum, /type:\s*"NEXT_PAGE",\s*status:\s*"success"/);
+  assert.match(loadMorePublicAlbum, /type:\s*"NEXT_PAGE",\s*status:\s*"failure"/);
+  assert.match(loadMorePublicAlbum, /mergePublicAlbumSharePages\(/);
   assert.match(
     loadMorePublicAlbum,
     /this\.appendPublicAlbumWaterfallPhotos\s*\(\s*merged\.appendedPhotos\s*\)/
   );
-  assert.match(loadMorePublicAlbum, /this\.publicShareLoadedPageCount \+= 1/);
-  assert.match(loadMorePublicAlbum, /this\.albumMediaRefresh\?\.schedule\(\)/);
+  assert.match(loadMorePublicAlbum, /this\.publicAlbumMediaStateRefresh\?\.schedule\(\)/);
   assert.match(
     appendPublicAlbumWaterfallPhotos,
     /this\.waterfallPhotos\s*=\s*\[\s*\.\.\.this\.waterfallPhotos\s*,\s*\.\.\.appended\s*\]/
@@ -250,5 +120,47 @@ test("public-share continuation appends without rebuilding mounted cards", () =>
     for (const [operationName, pattern] of forbiddenOperations) {
       assert.doesNotMatch(block, pattern, `${blockName}: ${operationName}`);
     }
+  }
+});
+
+test("public media-state batches commit atomically and patch mounted rows once", () => {
+  const refresh = sourceBlock(
+    albumSource,
+    "async refreshLoadedPublicAlbumMedia() {",
+    "retryAlbumLoad() {"
+  );
+  const patch = sourceBlock(
+    albumSource,
+    "applyPublicAlbumMediaPatchToWaterfall(cards = [], unavailableIds = []) {",
+    "refreshWaterfall() {"
+  );
+
+  assert.match(refresh, /publicAlbumMediaStateBatches\(/);
+  assert.match(refresh, /await Promise\.all\(/);
+  assert.match(refresh, /method:\s*"POST"/);
+  assert.match(refresh, /\/album\/public-share\/media-state/);
+  assert.match(refresh, /data:\s*\{\s*media_ids:\s*batch\s*\}/);
+  assert.match(refresh, /isCurrentPublicAlbumGeneration\(/);
+  assert.match(refresh, /type:\s*"MEDIA_PATCH"/);
+  assert.equal((refresh.match(/type:\s*"MEDIA_PATCH"/g) || []).length, 1);
+  assert.match(refresh, /this\.applyPublicAlbumMediaPatchToWaterfall\(/);
+
+  for (const rows of ["waterfallPhotos", "waterfallList1", "waterfallList2"]) {
+    assert.match(patch, new RegExp(`this\\.${rows}\\s*=\\s*patchRows\\(this\\.${rows}\\)`));
+  }
+  assert.match(patch, /\.filter\(\(row\)\s*=>\s*!unavailable\.has\(Number\(row\.id\)\)\)/);
+  assert.match(patch, /byId\.get\(Number\(row\.id\)\) \|\| row/);
+  assert.doesNotMatch(patch, /refreshWaterfall|\.clear\s*\(|waterfallPhotos\s*=\s*\[\s*\]/);
+});
+
+test("D57 public production source has no prefix reload or scroll compensation", () => {
+  for (const forbidden of [
+    "reloadLoadedPublicAlbumPrefix",
+    "reloadPublicAlbumSharePrefix",
+    "publicShareLoadedPageCount",
+    "samePublicAlbumMediaSequence",
+    "pageScrollTo"
+  ]) {
+    assert.doesNotMatch(albumSource, new RegExp(forbidden));
   }
 });
