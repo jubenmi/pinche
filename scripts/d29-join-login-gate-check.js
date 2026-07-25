@@ -107,7 +107,9 @@ assert(
     ensureSeatSelectionLoginBody.includes("wasLoggedIn") &&
     ensureSeatSelectionLoginBody.includes("refreshAfterFreshLogin") &&
     ensureSeatSelectionLoginBody.includes("!wasLoggedIn") &&
-    ensureSeatSelectionLoginBody.includes("loadPublishedSession(this.sessionId)") &&
+    ensureSeatSelectionLoginBody.includes(
+      "this.sessionId,\n            activityGeneration"
+    ) &&
     ensureSeatSelectionLoginBody.includes("return auth"),
   "Share login guard must refresh session state after a fresh login and then continue the selected join action"
 );
@@ -128,7 +130,7 @@ for (const forbiddenLoginNavigation of [
 }
 assertBefore(
   ensureSeatSelectionLoginBody,
-  "await this.loadPublishedSession(this.sessionId)",
+  "await this.loadPublishedSession(",
   "return auth",
   "Fresh-login session reload must finish before the original selected action continues"
 );
@@ -176,25 +178,37 @@ assert(
   "Post-claim album navigation must remain owned by openAlbumAfterClaim"
 );
 assert(
-  joinedSeatSuccessBody.includes("this.openAlbumAfterClaim(wasConfirmedMember)") &&
-    (claimSeatBody.match(/this\.openAlbumAfterClaim\(wasConfirmedMember\)/g) || []).length === 1,
+  /this\.openAlbumAfterClaim\(\s*wasConfirmedMember,\s*activityGeneration\s*\)/.test(
+    joinedSeatSuccessBody
+  ) &&
+    (
+      claimSeatBody.match(
+        /this\.openAlbumAfterClaim\(\s*wasConfirmedMember,\s*activityGeneration\s*\)/g
+      ) || []
+    ).length === 1,
   "Seat claim may open the album only from the explicit joined success branch"
 );
 assertBefore(
   claimSeatBody,
-  "await this.loadPublishedSession(this.sessionId)",
-  "this.openAlbumAfterClaim(wasConfirmedMember)",
+  "await this.loadPublishedSession(",
+  "this.openAlbumAfterClaim(",
   "Seat claim must reload successful server state before post-claim album navigation"
 );
 assert(
-  joinedNpcSuccessBody.includes("this.openAlbumAfterClaim(wasConfirmedMember)") &&
-    (chooseNpcRoleBody.match(/this\.openAlbumAfterClaim\(wasConfirmedMember\)/g) || []).length === 1,
+  /this\.openAlbumAfterClaim\(\s*wasConfirmedMember,\s*activityGeneration\s*\)/.test(
+    joinedNpcSuccessBody
+  ) &&
+    (
+      chooseNpcRoleBody.match(
+        /this\.openAlbumAfterClaim\(\s*wasConfirmedMember,\s*activityGeneration\s*\)/g
+      ) || []
+    ).length === 1,
   "NPC claim may open the album only from the explicit npc_joined success branch"
 );
 assertBefore(
   chooseNpcRoleBody,
-  "await this.loadPublishedSession(this.sessionId)",
-  "this.openAlbumAfterClaim(wasConfirmedMember)",
+  "await this.loadPublishedSession(",
+  "this.openAlbumAfterClaim(",
   "NPC claim must reload successful server state before post-claim album navigation"
 );
 assert(

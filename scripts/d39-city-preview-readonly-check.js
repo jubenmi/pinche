@@ -93,7 +93,7 @@ assert(
 for (const shareJoinToken of [
   "/api/session-seats/${seatId}/claim",
   'url: "/api/signups"',
-  "await this.claimSeat(targetRole)"
+  "await this.claimSeat(targetRole, activityGeneration)"
 ]) {
   assert(
     share.includes(shareJoinToken),

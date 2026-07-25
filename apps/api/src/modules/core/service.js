@@ -4270,13 +4270,6 @@ export async function createSessionJoinInviteToken(
   const id = positiveId(sessionId, "sessionId");
   const runWithTransaction = options.withTransaction || withTransaction;
   return runWithTransaction(async (connection) => {
-    const session = await findById(connection, "sessions", id);
-    if (!session) {
-      throw notFound("Session not found");
-    }
-    if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
-      throw forbidden("Only session members can share a join invitation");
-    }
     const lockedSession = await findById(connection, "sessions", id, {
       forUpdate: true
     });
@@ -4285,9 +4278,7 @@ export async function createSessionJoinInviteToken(
     }
     assertSessionJoinInviteTokenAllowed(lockedSession);
     if (
-      !(await isSessionAlbumMember(connection, lockedSession, user.user.id, {
-        forUpdate: true
-      }))
+      !(await isSessionAlbumMember(connection, lockedSession, user.user.id))
     ) {
       throw forbidden("Only session members can share a join invitation");
     }

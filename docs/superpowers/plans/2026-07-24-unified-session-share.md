@@ -842,6 +842,7 @@ Expected: no whitespace errors; only intentional feature files and the user’s 
 
 - Modify: `apps/miniprogram/src/pages/session/share.vue`
 - Modify: `apps/miniprogram/test/sessionSharePage.test.mjs`
+- Modify: `scripts/check-miniprogram.js`
 - Modify: `docs/superpowers/plans/2026-07-24-unified-session-share.md`
 
 - [x] **Step 1: Invalidate a hidden page during an authoritative GET**
@@ -864,3 +865,47 @@ Expected: no whitespace errors; only intentional feature files and the user’s 
 
   Run D56 unit/check, focused adjacent miniprogram guards, the complete `npm run check`,
   `git diff --check`, artifact/status checks, and create a follow-up feature commit.
+
+### Task 10: Final quality-review hardening
+
+**Files:**
+
+- Modify: `apps/api/src/modules/core/service.js`
+- Modify: `apps/api/test/session-share-lifecycle.test.mjs`
+- Modify: `apps/miniprogram/src/pages/session/share.vue`
+- Modify: `apps/miniprogram/test/sessionSharePage.test.mjs`
+- Modify: `scripts/check-miniprogram.js`
+- Modify: `scripts/d29-join-login-gate-check.js`
+- Modify: `scripts/d39-city-preview-readonly-check.js`
+- Modify: `docs/superpowers/plans/2026-07-24-unified-session-share.md`
+
+- [x] **Step 1: Add bounded lifecycle recovery**
+
+  After the capped clock-skew refreshes, expose one explicit full lifecycle retry instead of
+  leaving the active page in a permanent preparation state. Prove a later authoritative
+  `has_started=true` response recovers sharing without restarting background polling.
+
+- [x] **Step 2: Make role actionability server-authoritative**
+
+  Derive published-session start actionability only from `session.has_started`. Cover both a fast
+  client with `has_started=false` and a slow client with `has_started=true` in role-card behavior.
+
+- [x] **Step 3: Invalidate seat and NPC action continuations**
+
+  Carry the page activity generation through login, confirmation, claim, subscription, refresh,
+  status, toast, and album-navigation continuations. Deferred seat and NPC tests must prove a
+  hidden or unloaded page performs no post-response UI/subscription/navigation work; the next
+  `onShow` remains responsible for reconciliation.
+
+- [x] **Step 4: Remove the token lock-order cycle**
+
+  Record that the repository has mixed—not established child-first—locking: cancellation and
+  reschedule are session-first, seat claim is child-only, and joined NPC/kick locks have
+  optimizer-dependent physical order. Lock only the session for cancellation serialization, then
+  perform a fresh membership authorization immediately before signing without taking child locks.
+  Add SQL-order and concurrent-cancellation tests.
+
+- [x] **Step 5: Verify and commit**
+
+  Run focused suites, the complete `npm run check`, `git diff --check`, artifact/status checks,
+  and create a follow-up commit on top of `70337b0f`.

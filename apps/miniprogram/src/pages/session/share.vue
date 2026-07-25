@@ -74,7 +74,25 @@
 
     <view v-else class="share-actions">
       <button
-        v-if="showInviteRetry"
+        v-if="showLifecycleRetry"
+        class="button wechat-action"
+        :disabled="sessionLoading"
+        @tap="retryLifecycleRefresh"
+      >
+        <view class="wechat-action-content">
+          <t-image
+            class="button-icon"
+            src="/static/icons/share-light.svg"
+            mode="aspectFit"
+            width="48rpx"
+            height="48rpx"
+            custom-style="width: 48rpx; height: 48rpx; opacity: 0.82;"
+          />
+          <text>刷新分享状态</text>
+        </view>
+      </button>
+      <button
+        v-else-if="showInviteRetry"
         class="button wechat-action"
         :disabled="invitePreparing"
         @tap="retryPrepareInvite"
@@ -195,6 +213,7 @@ export default {
       startBoundaryTimer: null,
       startBoundaryRefreshPending: false,
       postBoundaryRefreshAttempts: 0,
+      lifecycleRetryAvailable: false,
       shareMenuGeneration: 0,
       sharePageActive: true,
       shareActivityGeneration: 0,
@@ -262,6 +281,17 @@ export default {
         !this.inviteToken &&
         !this.invitePreparing &&
         this.invitePrepareError &&
+        !this.shareUnavailableText &&
+        !this.sessionLoadError
+      );
+    },
+    showLifecycleRetry() {
+      return Boolean(
+        this.sharePageActive &&
+        this.sessionId &&
+        this.sessionLoaded &&
+        !this.sessionLoading &&
+        this.lifecycleRetryAvailable &&
         !this.shareUnavailableText &&
         !this.sessionLoadError
       );
@@ -565,6 +595,7 @@ export default {
       this.sharePageActive = true;
       this.shareActivityGeneration += 1;
     }
+    this.lifecycleRetryAvailable = false;
     if (!this.sessionId) {
       this.showShareMenus();
       return;
@@ -703,12 +734,14 @@ export default {
       this.shareActivityGeneration += 1;
       this.startBoundaryRefreshPending = false;
       this.postBoundaryRefreshAttempts = 0;
+      this.lifecycleRetryAvailable = false;
       this.clearStartBoundaryRefresh();
       this.shareRefreshPromise = null;
       this.sessionLoadSerial += 1;
       this.sessionLoading = false;
       this.sessionLoadPromise = null;
       this.invitePreparing = false;
+      this.roleSelectionSubmitting = false;
       this.hideShareMenus();
     },
     hideShareMenus() {
@@ -735,6 +768,7 @@ export default {
         this.session.has_started !== false
       ) {
         this.postBoundaryRefreshAttempts = 0;
+        this.lifecycleRetryAvailable = false;
         return;
       }
       const startAtMs = Date.parse(this.session.start_at);
@@ -745,6 +779,7 @@ export default {
       let delay;
       if (remainingMs <= 0) {
         if (this.postBoundaryRefreshAttempts >= MAX_POST_BOUNDARY_REFRESH_ATTEMPTS) {
+          this.lifecycleRetryAvailable = true;
           return;
         }
         delay =
@@ -752,6 +787,7 @@ export default {
         this.postBoundaryRefreshAttempts += 1;
       } else {
         this.postBoundaryRefreshAttempts = 0;
+        this.lifecycleRetryAvailable = false;
         delay = Math.min(remainingMs, MAX_START_BOUNDARY_TIMER_MS);
       }
       this.startBoundaryTimer = setTimeout(() => {
@@ -895,13 +931,25 @@ export default {
       return role.bound_user_gender || role.pending_signup_user_gender || role.role_gender || "unlimited";
     },
     async ensureSeatSelectionLogin(options = {}) {
+      const activityGeneration =
+        options.activityGeneration ?? this.shareActivityGeneration;
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return null;
+      }
+      const {
+        activityGeneration: _activityGeneration,
+        ...loginOptions
+      } = options;
       const wasLoggedIn = this.hasSeatSelectionLogin();
       const auth = await ensureLoggedIn({
         content: this.isClaimMode
           ? "登录后可以认领自己玩过的角色。"
           : "登录后可以选择角色并锁定你的位置。",
-        ...options
+        ...loginOptions
       });
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return null;
+      }
       if (!auth?.user) {
         this.statusText = this.isClaimMode
           ? "登录后可继续认领角色。"
@@ -912,7 +960,13 @@ export default {
       this.refreshCurrentUserGender(auth);
       if (options.refreshAfterFreshLogin === true && !wasLoggedIn) {
         if (this.sessionId) {
-          await this.loadPublishedSession(this.sessionId);
+          await this.loadPublishedSession(
+            this.sessionId,
+            activityGeneration
+          );
+          if (!this.isShareActivityCurrent(activityGeneration)) {
+            return null;
+          }
         }
       }
       return auth;
@@ -1122,13 +1176,25 @@ export default {
       this.postBoundaryRefreshAttempts = 0;
       await this.refreshPublishedShareState();
     },
+    async retryLifecycleRefresh() {
+      if (!this.showLifecycleRetry) {
+        return;
+      }
+      this.lifecycleRetryAvailable = false;
+      this.postBoundaryRefreshAttempts = 0;
+      await this.refreshPublishedShareState();
+    },
     updateNavigationBarTitle() {
       if (typeof uni !== "undefined" && typeof uni.setNavigationBarTitle === "function") {
         uni.setNavigationBarTitle({ title: this.pageTitle });
       }
     },
-    openAlbumAfterClaim(wasConfirmedMember = false) {
+    openAlbumAfterClaim(
+      wasConfirmedMember = false,
+      activityGeneration = this.shareActivityGeneration
+    ) {
       if (
+        !this.isShareActivityCurrent(activityGeneration) ||
         !this.isClaimMode ||
         wasConfirmedMember ||
         !this.sessionId ||
@@ -1237,11 +1303,16 @@ export default {
       if (this.roleSelectionSubmitting) {
         return;
       }
+      const activityGeneration = this.shareActivityGeneration;
       const selectedRoleKey = this.roleKey(role);
       const auth = await this.ensureSeatSelectionLogin({
-        refreshAfterFreshLogin: true
+        refreshAfterFreshLogin: true,
+        activityGeneration
       });
-      if (!auth) {
+      if (
+        !auth ||
+        !this.isShareActivityCurrent(activityGeneration)
+      ) {
         return;
       }
       const targetRole =
@@ -1270,19 +1341,28 @@ export default {
       this.roleSelectionSubmitting = true;
       try {
         const switchConfirmed = await this.confirmSwitchRole(targetRole);
-        if (!switchConfirmed) {
+        if (
+          !this.isShareActivityCurrent(activityGeneration) ||
+          !switchConfirmed
+        ) {
           return;
         }
         const confirmed = await this.confirmCrossCastRole(targetRole);
-        if (!confirmed) {
+        if (
+          !this.isShareActivityCurrent(activityGeneration) ||
+          !confirmed
+        ) {
           return;
         }
         this.confirmedCrossCastRoleKey = this.roleKey(targetRole);
         await this.confirmRole(targetRole, {
-          revealPending: !this.sessionId
+          revealPending: !this.sessionId,
+          activityGeneration
         });
       } finally {
-        this.roleSelectionSubmitting = false;
+        if (this.isShareActivityCurrent(activityGeneration)) {
+          this.roleSelectionSubmitting = false;
+        }
       }
     },
     handleSharedRoleTap(payload) {
@@ -1294,11 +1374,7 @@ export default {
       this.chooseRole(role);
     },
     isSessionStarted() {
-      if (!this.session.start_at) {
-        return false;
-      }
-      const startAt = Date.parse(String(this.session.start_at).replace(" ", "T"));
-      return Number.isFinite(startAt) && startAt <= Date.now();
+      return this.session.has_started === true;
     },
     isRoleClaimable(role, mine = false) {
       if (!this.session.id || mine) {
@@ -1322,6 +1398,11 @@ export default {
       return `${role.name}${symbol ? ` ${symbol}` : ""}${suffix}`;
     },
     async confirmRole(role = null, options = {}) {
+      const activityGeneration =
+        options.activityGeneration ?? this.shareActivityGeneration;
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return;
+      }
       const targetRole = role || this.pendingRole;
       const revealPending = options.revealPending !== false;
       const copy = this.selectionCopy();
@@ -1336,8 +1417,12 @@ export default {
         refreshAfterFreshLogin: true,
         requirePhone: this.joinRequiresPhone,
         phoneRequiredTitle: copy.phoneTitle,
-        phoneRequiredContent: copy.phoneContent
+        phoneRequiredContent: copy.phoneContent,
+        activityGeneration
       });
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return;
+      }
       if (!auth) {
         if (revealPending) {
           this.pendingRole = null;
@@ -1350,7 +1435,10 @@ export default {
         this.confirmedCrossCastRoleKey !== pendingRoleKey
       ) {
         const confirmed = await this.confirmCrossCastRole(targetRole);
-        if (!confirmed) {
+        if (
+          !this.isShareActivityCurrent(activityGeneration) ||
+          !confirmed
+        ) {
           if (revealPending) {
             this.pendingRole = null;
           }
@@ -1359,7 +1447,7 @@ export default {
         this.confirmedCrossCastRoleKey = pendingRoleKey;
       }
       if (this.sessionId) {
-        await this.claimSeat(targetRole);
+        await this.claimSeat(targetRole, activityGeneration);
         return;
       }
       const previousRole = this.role;
@@ -1372,7 +1460,13 @@ export default {
       this.persistFlow();
       showToast({ title: copy.success, icon: "none" });
     },
-    async claimSeat(role) {
+    async claimSeat(
+      role,
+      activityGeneration = this.shareActivityGeneration
+    ) {
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return;
+      }
       const copy = this.selectionCopy();
       try {
         const seatId = role.seatId || role.id;
@@ -1385,6 +1479,9 @@ export default {
               note: copy.directNote
             }
           });
+          if (!this.isShareActivityCurrent(activityGeneration)) {
+            return;
+          }
           const joinResult = dataOf(claimResponse)?.join_result;
           await requestSubscriptionAfterConfirmedJoin(
             wasConfirmedMember,
@@ -1392,10 +1489,24 @@ export default {
             "joined",
             requestSessionRescheduledSubscription
           );
+          if (!this.isShareActivityCurrent(activityGeneration)) {
+            return;
+          }
           this.pendingRole = null;
-          await this.loadPublishedSession(this.sessionId);
+          await this.loadPublishedSession(
+            this.sessionId,
+            activityGeneration
+          );
+          if (!this.isShareActivityCurrent(activityGeneration)) {
+            return;
+          }
           if (joinResult === "joined") {
-            if (this.openAlbumAfterClaim(wasConfirmedMember)) {
+            if (
+              this.openAlbumAfterClaim(
+                wasConfirmedMember,
+                activityGeneration
+              )
+            ) {
               return;
             }
             if (!(this.isClaimMode && !wasConfirmedMember)) {
@@ -1424,8 +1535,17 @@ export default {
             note: copy.directNote
           }
         });
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         this.pendingRole = null;
-        await this.loadPublishedSession(this.sessionId);
+        await this.loadPublishedSession(
+          this.sessionId,
+          activityGeneration
+        );
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         this.statusText = this.isClaimMode
           ? "已提交认领，等待车头确认。"
           : "已提交申请，等待车头审核。";
@@ -1435,6 +1555,9 @@ export default {
         });
         requestSignupReviewedSubscription();
       } catch (error) {
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         if (error?.statusCode === 409) {
           this.statusText = copy.conflict;
         } else if (error?.statusCode === 401) {
@@ -1452,11 +1575,16 @@ export default {
       if (this.roleSelectionSubmitting) {
         return;
       }
+      const activityGeneration = this.shareActivityGeneration;
       const selectedRoleKey = this.roleKey(npcRole);
       const loginAuth = await this.ensureSeatSelectionLogin({
-        refreshAfterFreshLogin: true
+        refreshAfterFreshLogin: true,
+        activityGeneration
       });
-      if (!loginAuth) {
+      if (
+        !loginAuth ||
+        !this.isShareActivityCurrent(activityGeneration)
+      ) {
         return;
       }
       const copy = this.selectionCopy();
@@ -1489,11 +1617,17 @@ export default {
       this.roleSelectionSubmitting = true;
       try {
         const switchConfirmed = await this.confirmSwitchRole(targetRole);
-        if (!switchConfirmed) {
+        if (
+          !this.isShareActivityCurrent(activityGeneration) ||
+          !switchConfirmed
+        ) {
           return;
         }
         const confirmed = await this.confirmCrossCastRole(targetRole);
-        if (!confirmed) {
+        if (
+          !this.isShareActivityCurrent(activityGeneration) ||
+          !confirmed
+        ) {
           return;
         }
         this.confirmedCrossCastRoleKey = this.roleKey(targetRole);
@@ -1501,9 +1635,13 @@ export default {
           refreshAfterFreshLogin: true,
           requirePhone: this.joinRequiresPhone,
           phoneRequiredTitle: copy.phoneTitle,
-          phoneRequiredContent: copy.phoneContent
+          phoneRequiredContent: copy.phoneContent,
+          activityGeneration
         });
-        if (!auth) {
+        if (
+          !auth ||
+          !this.isShareActivityCurrent(activityGeneration)
+        ) {
           return;
         }
         const wasConfirmedMember = isConfirmedSessionMember(this.session, this.currentUserId);
@@ -1514,6 +1652,9 @@ export default {
             note: copy.directNote
           }
         });
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         const result = dataOf(response) || {};
         if (result.join_result === "npc_joined") {
           await requestSubscriptionAfterConfirmedJoin(
@@ -1522,8 +1663,22 @@ export default {
             "npc_joined",
             requestSessionRescheduledSubscription
           );
-          await this.loadPublishedSession(this.sessionId);
-          if (this.openAlbumAfterClaim(wasConfirmedMember)) {
+          if (!this.isShareActivityCurrent(activityGeneration)) {
+            return;
+          }
+          await this.loadPublishedSession(
+            this.sessionId,
+            activityGeneration
+          );
+          if (!this.isShareActivityCurrent(activityGeneration)) {
+            return;
+          }
+          if (
+            this.openAlbumAfterClaim(
+              wasConfirmedMember,
+              activityGeneration
+            )
+          ) {
             return;
           }
           if (!(this.isClaimMode && !wasConfirmedMember)) {
@@ -1533,7 +1688,13 @@ export default {
           return;
         }
         if (result.join_result === "pending_review") {
-          await this.loadPublishedSession(this.sessionId);
+          await this.loadPublishedSession(
+            this.sessionId,
+            activityGeneration
+          );
+          if (!this.isShareActivityCurrent(activityGeneration)) {
+            return;
+          }
           this.statusText = this.isClaimMode
             ? "已提交NPC角色认领，等待车头确认。"
             : "已提交NPC角色申请，等待车头审核。";
@@ -1544,7 +1705,13 @@ export default {
           requestSignupReviewedSubscription();
           return;
         }
-        await this.loadPublishedSession(this.sessionId);
+        await this.loadPublishedSession(
+          this.sessionId,
+          activityGeneration
+        );
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         this.statusText = this.isClaimMode
           ? "认领结果异常，请刷新后确认NPC角色状态。"
           : "上车结果异常，请刷新后确认NPC角色状态。";
@@ -1553,6 +1720,9 @@ export default {
           icon: "none"
         });
       } catch (error) {
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         if (error?.statusCode === 403) {
           this.statusText = "本场NPC由车头安排。";
         } else if (error?.statusCode === 409) {
@@ -1567,7 +1737,9 @@ export default {
             : "NPC角色申请失败，请稍后重试。";
         }
       } finally {
-        this.roleSelectionSubmitting = false;
+        if (this.isShareActivityCurrent(activityGeneration)) {
+          this.roleSelectionSubmitting = false;
+        }
       }
     },
     showShareMenus() {

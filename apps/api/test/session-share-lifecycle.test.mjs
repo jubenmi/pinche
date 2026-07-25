@@ -34,17 +34,94 @@ test("cancelled sessions cannot authorize join-invite token creation", () => {
   );
 });
 
-test("join-invite signing rechecks a concurrent cancellation under the transaction lock", async () => {
+test("join-invite signing locks only the session before fresh membership authorization", async () => {
+  const events = [];
+  const queries = [];
+  const connection = {
+    async query(sql) {
+      const normalizedSql = String(sql).replace(/\s+/g, " ").trim();
+      queries.push(normalizedSql);
+      if (normalizedSql.startsWith("SELECT * FROM sessions WHERE id = ?")) {
+        events.push("session-read");
+        return [[{
+          id: 42,
+          organizer_user_id: 1,
+          dm_user_id: null,
+          npc_user_id: null,
+          status: "recruiting"
+        }]];
+      }
+      if (normalizedSql.includes("FROM session_seats")) {
+        events.push("membership-read");
+        return [[{ id: 7 }]];
+      }
+      throw new Error(`unexpected query: ${normalizedSql}`);
+    }
+  };
+  const result = await createSessionJoinInviteToken(
+    { user: { id: 7 } },
+    42,
+    () => {
+      events.push("sign");
+      return { token: "member-token" };
+    },
+    {
+      withTransaction: async (work) => {
+        events.push("begin");
+        const value = await work(connection);
+        events.push("commit");
+        return value;
+      }
+    }
+  );
+
+  assert.deepEqual(result, { token: "member-token" });
+  assert.deepEqual(events, [
+    "begin",
+    "session-read",
+    "membership-read",
+    "sign",
+    "commit"
+  ]);
+  assert.match(queries[0], /SELECT \* FROM sessions WHERE id = \? FOR UPDATE$/);
+  assert.doesNotMatch(
+    queries[1],
+    /FOR UPDATE/,
+    "membership authorization must not wait on child locks"
+  );
+  assert.equal(queries.length, 2, "authorization must not use stale preliminary reads");
+});
+
+test("join-invite signing serializes before a cancellation that arrives during membership", async () => {
   const membershipLookupStarted = deferred();
   const finishMembershipLookup = deferred();
   const events = [];
   let sessionStatus = "recruiting";
-  let signerCalls = 0;
+  let releaseTokenLock = null;
+  let sessionLockTail = Promise.resolve();
+  const acquireSessionLock = async (owner) => {
+    const previousLock = sessionLockTail;
+    let release;
+    sessionLockTail = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previousLock;
+    events.push(`${owner}-lock`);
+    return () => {
+      events.push(`${owner}-unlock`);
+      release();
+    };
+  };
   const connection = {
     async query(sql) {
       const normalizedSql = String(sql).replace(/\s+/g, " ").trim();
       if (normalizedSql.startsWith("SELECT * FROM sessions WHERE id = ?")) {
-        events.push(normalizedSql.endsWith("FOR UPDATE") ? "locked-read" : "initial-read");
+        if (normalizedSql.endsWith("FOR UPDATE")) {
+          releaseTokenLock = await acquireSessionLock("token");
+          events.push("locked-read");
+        } else {
+          events.push("initial-read");
+        }
         return [
           [
             {
@@ -72,9 +149,11 @@ test("join-invite signing rechecks a concurrent cancellation under the transacti
     try {
       const result = await work(connection);
       events.push("commit");
+      releaseTokenLock?.();
       return result;
     } catch (error) {
       events.push("rollback");
+      releaseTokenLock?.();
       throw error;
     }
   };
@@ -83,31 +162,29 @@ test("join-invite signing rechecks a concurrent cancellation under the transacti
     { user: { id: 7 } },
     42,
     () => {
-      signerCalls += 1;
       events.push("sign");
-      return { token: "must-not-exist" };
+      return { token: "serialized-token" };
     },
     { withTransaction }
   );
   await membershipLookupStarted.promise;
-  events.push("cancel");
-  sessionStatus = "cancelled";
+  const cancellationPromise = (async () => {
+    events.push("cancel-request");
+    const releaseCancellationLock = await acquireSessionLock("cancel");
+    sessionStatus = "cancelled";
+    events.push("cancel-write");
+    releaseCancellationLock();
+  })();
+  await Promise.resolve();
   finishMembershipLookup.resolve();
 
-  await assert.rejects(
-    tokenPromise,
-    (error) => error?.statusCode === 409 && error?.code === "CONFLICT"
-  );
-  assert.equal(signerCalls, 0, "the signer must not run after cancellation wins the race");
-  assert.deepEqual(events, [
-    "begin",
-    "initial-read",
-    "membership-started",
-    "cancel",
-    "membership-finished",
-    "locked-read",
-    "rollback"
-  ]);
+  assert.deepEqual(await tokenPromise, { token: "serialized-token" });
+  await cancellationPromise;
+  assert.ok(events.indexOf("token-lock") < events.indexOf("membership-started"));
+  assert.ok(events.indexOf("sign") < events.indexOf("commit"));
+  assert.ok(events.indexOf("commit") < events.indexOf("cancel-lock"));
+  assert.ok(events.indexOf("sign") < events.indexOf("cancel-write"));
+  assert.equal(sessionStatus, "cancelled");
 });
 
 function deferred() {

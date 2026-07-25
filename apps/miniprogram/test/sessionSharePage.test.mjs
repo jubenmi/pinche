@@ -376,7 +376,7 @@ test("client-ahead boundary reconciliation stops after capped backoff refreshes"
       getCount += 1;
       return {
         data: sessionResponse({
-          has_started: false,
+          has_started: getCount > 4,
           start_at: new globalThis.Date(nowMs - 60_000).toISOString()
         })
       };
@@ -413,6 +413,21 @@ test("client-ahead boundary reconciliation stops after capped backoff refreshes"
   assert.equal(vm.startBoundaryTimer, null, "the retry cap must leave no live timer");
   await Promise.resolve();
   assert.equal(getCount, 4, "no background refresh may continue after the cap");
+  assert.equal(vm.showLifecycleRetry, true, "the capped state must expose explicit recovery");
+
+  await vm.retryLifecycleRefresh();
+
+  assert.equal(getCount, 5, "recovery must perform exactly one user-triggered full refresh");
+  assert.equal(postCount, 1);
+  assert.equal(vm.showLifecycleRetry, false);
+  assert.equal(vm.shareReady, true);
+  assert.equal(vm.startBoundaryTimer, null);
+
+  const source = fs.readFileSync(sharePagePath, "utf8");
+  assert.match(
+    source,
+    /v-if="showLifecycleRetry"[\s\S]{0,500}@tap="retryLifecycleRefresh"/
+  );
 });
 
 test("onHide invalidates a deferred lifecycle GET and onShow recovers authoritatively", async () => {
@@ -587,6 +602,194 @@ test("public invite-preview NPC cards honor stripped bound and pending occupancy
       { id: 3, stateKind: "available", claimable: true }
     ]
   );
+});
+
+test("published role actionability follows server lifecycle despite fast or slow device clocks", () => {
+  const deviceNow = globalThis.Date.parse("2026-07-24T12:00:00.000Z");
+  const component = loadSharePageComponent({
+    Date: {
+      now: () => deviceNow,
+      parse: globalThis.Date.parse
+    }
+  });
+  const openRole = {
+    id: "1",
+    seatId: 1,
+    name: "侦探",
+    status: "open",
+    roleGender: "unlimited",
+    confirmedUserId: ""
+  };
+  const slowDeviceVm = createSharePageVm(component, {
+    sessionId: "42",
+    sessionLoaded: true,
+    session: sessionResponse({
+      status: "locked",
+      has_started: true,
+      start_at: new globalThis.Date(deviceNow + 60_000).toISOString()
+    }),
+    roleOptions: [openRole]
+  });
+  const fastDeviceVm = createSharePageVm(component, {
+    sessionId: "42",
+    sessionLoaded: true,
+    session: sessionResponse({
+      status: "locked",
+      has_started: false,
+      start_at: new globalThis.Date(deviceNow - 60_000).toISOString()
+    }),
+    roleOptions: [openRole]
+  });
+
+  assert.equal(slowDeviceVm.isSessionStarted(), true);
+  assert.equal(slowDeviceVm.roleCards[0].claimable, true);
+  assert.equal(slowDeviceVm.roleCards[0].stateKind, "available");
+  assert.equal(fastDeviceVm.isSessionStarted(), false);
+  assert.equal(fastDeviceVm.roleCards[0].claimable, false);
+  assert.equal(fastDeviceVm.roleCards[0].stateKind, "unavailable");
+});
+
+test("a hidden direct seat claim defers all result effects until onShow reconciliation", async () => {
+  const claimStarted = deferred();
+  const claimResponse = deferred();
+  const subscriptions = [];
+  const redirects = [];
+  const toasts = [];
+  let getCount = 0;
+  const component = loadSharePageComponent({
+    request: async ({ url, method = "GET" }) => {
+      if (url.includes("/claim") && method === "POST") {
+        claimStarted.resolve();
+        return claimResponse.promise;
+      }
+      if (method === "GET") {
+        getCount += 1;
+        return {
+          data: sessionResponse({
+            has_started: true,
+            start_at: new Date(Date.now() - 1_000).toISOString()
+          })
+        };
+      }
+      throw new Error(`unexpected request: ${method} ${url}`);
+    },
+    requestSubscriptionAfterConfirmedJoin: (...args) => subscriptions.push(args),
+    showToast: (options) => toasts.push(options),
+    uni: {
+      hideShareMenu: ({ complete } = {}) => complete?.(),
+      redirectTo: (options) => redirects.push(options),
+      setNavigationBarTitle() {}
+    }
+  });
+  const role = {
+    id: "5",
+    seatId: 5,
+    name: "侦探",
+    status: "open",
+    roleGender: "unlimited"
+  };
+  const vm = createSharePageVm(component, {
+    sessionId: "42",
+    currentUserId: "7",
+    inviteToken: "existing-token",
+    sessionLoaded: true,
+    session: sessionResponse({
+      join_policy: "direct",
+      has_started: true,
+      active_album_photo_count: 1
+    }),
+    pendingRole: role,
+    statusText: "before-claim"
+  });
+
+  const action = vm.claimSeat(role);
+  await claimStarted.promise;
+  component.onHide.call(vm);
+  claimResponse.resolve({ data: { join_result: "joined" } });
+  await action;
+
+  assert.equal(subscriptions.length, 0);
+  assert.equal(redirects.length, 0);
+  assert.equal(toasts.length, 0);
+  assert.equal(getCount, 0);
+  assert.equal(vm.statusText, "before-claim");
+  assert.equal(vm.pendingRole, role);
+
+  await component.onShow.call(vm);
+  assert.equal(getCount, 1, "the next visible generation must reconcile the server mutation");
+  assert.equal(vm.sessionLoaded, true);
+});
+
+test("an unloaded NPC claim cannot subscribe, refresh, navigate, or update result UI", async () => {
+  const claimStarted = deferred();
+  const claimResponse = deferred();
+  const subscriptions = [];
+  const redirects = [];
+  const toasts = [];
+  let getCount = 0;
+  const component = loadSharePageComponent({
+    ensureLoggedIn: async () => ({ user: { id: 7, gender: "male" } }),
+    getCurrentUser: () => ({ user: { id: 7, gender: "male" } }),
+    getToken: () => "auth-token",
+    request: async ({ url, method = "GET" }) => {
+      if (url.includes("/api/session-npc-roles/") && method === "POST") {
+        claimStarted.resolve();
+        return claimResponse.promise;
+      }
+      if (method === "GET") {
+        getCount += 1;
+        return { data: sessionResponse({ has_started: true }) };
+      }
+      throw new Error(`unexpected request: ${method} ${url}`);
+    },
+    requestSubscriptionAfterConfirmedJoin: (...args) => subscriptions.push(args),
+    showToast: (options) => toasts.push(options),
+    uni: {
+      hideShareMenu: ({ complete } = {}) => complete?.(),
+      redirectTo: (options) => redirects.push(options),
+      setNavigationBarTitle() {}
+    }
+  });
+  const vm = createSharePageVm(component, {
+    sessionId: "42",
+    currentUserId: "7",
+    sessionLoaded: true,
+    session: sessionResponse({
+      join_policy: "direct",
+      has_started: true,
+      active_album_photo_count: 1,
+      session_npc_roles: [
+        {
+          id: 9,
+          name: "管家",
+          role_gender: "unlimited",
+          status: "active",
+          bound_user_id: null,
+          pending_signup_user_id: null
+        }
+      ]
+    }),
+    statusText: "before-npc-claim"
+  });
+  const npcRole = vm.npcRoleCards[0];
+
+  const action = vm.chooseNpcRole(npcRole);
+  await claimStarted.promise;
+  assert.equal(vm.roleSelectionSubmitting, true);
+  component.onUnload.call(vm);
+  assert.equal(
+    vm.roleSelectionSubmitting,
+    false,
+    "unload must immediately release local action state"
+  );
+  claimResponse.resolve({ data: { join_result: "npc_joined" } });
+  await action;
+
+  assert.equal(subscriptions.length, 0);
+  assert.equal(redirects.length, 0);
+  assert.equal(toasts.length, 0);
+  assert.equal(getCount, 0);
+  assert.equal(vm.statusText, "before-npc-claim");
 });
 
 test("top-right sharing stays hidden after a published-session load failure", async () => {

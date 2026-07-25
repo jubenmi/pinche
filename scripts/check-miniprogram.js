@@ -282,7 +282,9 @@ function isAllowedNativeAvatarPrimitiveTag(tag, tagSource, file) {
             /\bopen-type\s*=\s*["']share["']/.test(tagSource) &&
             /@tap\s*=\s*["']persistFlow["']/.test(tagSource)
           ) ||
-          /@tap\s*=\s*["']retryPrepareInvite["']/.test(tagSource)
+          /@tap\s*=\s*["'](?:retryPrepareInvite|retryLifecycleRefresh)["']/.test(
+            tagSource
+          )
         )
       ) ||
       (
@@ -1604,7 +1606,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     !openAlbumAfterClaimSource.includes("!this.isClaimMode") ||
     !openAlbumAfterClaimSource.includes("uni.redirectTo({") ||
     shareOnLoadLifecycleSource.includes("openAlbumAfterClaim") ||
-    !claimSeatSource.includes("this.openAlbumAfterClaim(wasConfirmedMember)")
+    !claimSeatSource.includes("this.openAlbumAfterClaim(")
   ) {
     fail("Share sender must stay on the unified page and album navigation must happen only after a new claim");
   }
@@ -1695,7 +1697,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "async confirmRole(role = null, options = {})",
     "const targetRole = role || this.pendingRole",
     "const revealPending = options.revealPending !== false",
-    "await this.claimSeat(targetRole)"
+    "await this.claimSeat(targetRole, activityGeneration)"
   ]) {
     if (!shareSource.includes(requiredSilentSwitchText)) {
       fail(`Share role switching must hide intermediate selection state: ${requiredSilentSwitchText}`);
@@ -4040,7 +4042,9 @@ if (!fs.existsSync(pagesJsonPath)) {
             /\bwechat-action\b/.test(buttonSource) &&
             (
               /@tap\s*=\s*["']persistFlow["']/.test(buttonSource) ||
-              /@tap\s*=\s*["']retryPrepareInvite["']/.test(buttonSource)
+              /@tap\s*=\s*["'](?:retryPrepareInvite|retryLifecycleRefresh)["']/.test(
+                buttonSource
+              )
             )
           ) ||
           (
