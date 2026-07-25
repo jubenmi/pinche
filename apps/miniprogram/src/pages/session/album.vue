@@ -1766,7 +1766,6 @@ export default {
       this.previewInitialIndex = 0;
       this.previewVideoUrlRequests = {};
       this.resetPreviewVideoViewerState();
-      this.refreshWaterfall();
     },
     albumTimelineQuery(albumShareToken = this.activeAlbumShareToken) {
       return queryString({

@@ -245,3 +245,18 @@ test("single-image sharing explicitly allows an owned untagged image and explain
   assert.match(albumPageSource, /未标注，仅在你主动分享后公开/);
   assert.match(albumPageSource, /previewShowsOwnedUntaggedShareNote/);
 });
+
+test("showing the full public album keeps the mounted waterfall and scroll position", () => {
+  const showFullBlock = sourceBlock(
+    "showFullPublicAlbum() {",
+    "albumTimelineQuery("
+  );
+
+  assert.match(showFullBlock, /this\.focusedPublicMode\s*=\s*false/);
+  assert.match(showFullBlock, /this\.previewOverlayVisible\s*=\s*false/);
+  assert.doesNotMatch(showFullBlock, /refreshWaterfall|\.clear\s*\(/);
+  assert.doesNotMatch(
+    showFullBlock,
+    /waterfallPhotos|waterfallList1|waterfallList2|albumScrollTop|pageScrollTo/
+  );
+});
