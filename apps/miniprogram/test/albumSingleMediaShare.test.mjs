@@ -42,9 +42,13 @@ test("public album captions use normalized tag labels for images and videos", ()
 test("public album captions discard invalid labels and never use legacy categories", () => {
   assert.equal(typeof albumSingleMediaShare.normalizePublicAlbumTagLabels, "function");
   const dirtyLabels = [" 标签A ", "", " ", null, 7, {}, "标签A", "标签B"];
-  assert.equal(
-    JSON.stringify(albumSingleMediaShare.normalizePublicAlbumTagLabels(dirtyLabels)),
-    JSON.stringify(["标签A", "标签B"])
+  assert.deepEqual(
+    albumSingleMediaShare.normalizePublicAlbumTagLabels(dirtyLabels),
+    ["标签A", "标签B"]
+  );
+  assert.deepEqual(
+    albumSingleMediaShare.normalizePublicAlbumTagLabels([" 标签B ", "标签A", "标签B"]),
+    ["标签B", "标签A"]
   );
   assert.equal(
     albumSingleMediaShare.publicAlbumMediaCaption(
@@ -53,18 +57,27 @@ test("public album captions discard invalid labels and never use legacy categori
     ),
     "照片里：标签A、标签B"
   );
-  assert.equal(albumSingleMediaShare.publicAlbumMediaCaption({}, "叶辰"), "待标注");
-  assert.equal(albumSingleMediaShare.publicAlbumMediaCaption({ public_tag_labels: "标签A" }, "叶辰"), "待标注");
+  assert.equal(
+    albumSingleMediaShare.publicAlbumMediaCaption({ media_type: "image" }, "叶辰"),
+    "待标注"
+  );
   assert.equal(
     albumSingleMediaShare.publicAlbumMediaCaption(
-      { public_tag_labels: [], public_category: "share_subject" },
+      { media_type: "video", public_tag_labels: "标签A" },
       "叶辰"
     ),
     "待标注"
   );
   assert.equal(
     albumSingleMediaShare.publicAlbumMediaCaption(
-      { public_tag_labels: [" ", 7], public_category: "other" },
+      { media_type: "image", public_tag_labels: [], public_category: "share_subject" },
+      "叶辰"
+    ),
+    "待标注"
+  );
+  assert.equal(
+    albumSingleMediaShare.publicAlbumMediaCaption(
+      { media_type: "video", public_tag_labels: [" ", 7], public_category: "other" },
       "叶辰"
     ),
     "待标注"
