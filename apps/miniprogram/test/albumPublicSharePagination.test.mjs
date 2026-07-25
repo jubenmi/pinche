@@ -78,20 +78,28 @@ test("public-share continuation appends without rebuilding mounted cards", () =>
   assert.match(albumSource, /publicShareLoadedPageCount: 0/);
   assert.match(loadPublicAlbum, /this\.publicShareLoadedPageCount = 1/);
   assert.match(resetPublicSharePagination, /this\.publicShareLoadedPageCount = 0/);
-  assert.match(loadMorePublicAlbum, /this\.appendPublicAlbumWaterfallPhotos\(merged\.appendedPhotos\)/);
+  assert.match(
+    loadMorePublicAlbum,
+    /this\.appendPublicAlbumWaterfallPhotos\s*\(\s*merged\.appendedPhotos\s*\)/
+  );
   assert.match(loadMorePublicAlbum, /this\.publicShareLoadedPageCount \+= 1/);
   assert.match(loadMorePublicAlbum, /this\.albumMediaRefresh\?\.schedule\(\)/);
   assert.match(
     appendPublicAlbumWaterfallPhotos,
     /this\.waterfallPhotos\s*=\s*\[\s*\.\.\.this\.waterfallPhotos\s*,\s*\.\.\.appended\s*\]/
   );
-  for (const forbidden of [
-    "this.refreshWaterfall()",
-    ".clear()",
-    "waterfallPhotos = []",
-    "pageScrollTo"
+  const forbiddenOperations = [
+    ["refreshWaterfall call", /this\.refreshWaterfall\s*\(/],
+    ["waterfall clear call", /\.clear\s*\(/],
+    ["empty waterfall model assignment", /waterfallPhotos\s*=\s*\[\s*\]/],
+    ["page scroll call", /pageScrollTo\s*\(/]
+  ];
+  for (const [blockName, block] of [
+    ["continuation loading", loadMorePublicAlbum],
+    ["waterfall append helper", appendPublicAlbumWaterfallPhotos]
   ]) {
-    assert.equal(loadMorePublicAlbum.includes(forbidden), false, forbidden);
-    assert.equal(appendPublicAlbumWaterfallPhotos.includes(forbidden), false, forbidden);
+    for (const [operationName, pattern] of forbiddenOperations) {
+      assert.doesNotMatch(block, pattern, `${blockName}: ${operationName}`);
+    }
   }
 });

@@ -94,19 +94,20 @@ assert(
   ),
   "D54 public waterfall append helper must grow the existing model tail"
 );
-for (const forbidden of [
-  "this.refreshWaterfall()",
-  ".clear()",
-  "waterfallPhotos = []",
-  "pageScrollTo"
+const forbiddenOperations = [
+  ["refreshWaterfall call", /this\.refreshWaterfall\s*\(/],
+  ["waterfall clear call", /\.clear\s*\(/],
+  ["empty waterfall model assignment", /waterfallPhotos\s*=\s*\[\s*\]/],
+  ["page scroll call", /pageScrollTo\s*\(/]
+];
+for (const [blockName, block] of [
+  ["continuation loading", loadMorePublicAlbum],
+  ["waterfall append helper", appendPublicAlbumWaterfallPhotos]
 ]) {
-  for (const [name, block] of [
-    ["continuation loading", loadMorePublicAlbum],
-    ["waterfall append helper", appendPublicAlbumWaterfallPhotos]
-  ]) {
+  for (const [operationName, pattern] of forbiddenOperations) {
     assert(
-      !block.includes(forbidden),
-      `D54 ${name} must not use destructive scroll recovery: ${forbidden}`
+      !pattern.test(block),
+      `D54 ${blockName} must not use destructive scroll recovery: ${operationName}`
     );
   }
 }
