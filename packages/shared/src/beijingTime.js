@@ -1,20 +1,10 @@
 export const BEIJING_TIME_ZONE = "Asia/Shanghai";
 
+const BEIJING_OFFSET_MILLISECONDS = 8 * 60 * 60 * 1000;
 const WALL_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/;
 const EXPLICIT_TIME_ZONE_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:?\d{2})$/i;
-
-const beijingFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: BEIJING_TIME_ZONE,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23"
-});
 
 function calendarParts(match) {
   return {
@@ -96,23 +86,15 @@ export function beijingDateParts(value) {
   if (!date) {
     return null;
   }
-  const values = Object.fromEntries(
-    beijingFormatter
-      .formatToParts(date)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value])
-  );
-  const year = Number(values.year);
-  const month = Number(values.month);
-  const day = Number(values.day);
+  const beijingDate = new Date(date.getTime() + BEIJING_OFFSET_MILLISECONDS);
   return {
-    year,
-    month,
-    day,
-    hour: Number(values.hour),
-    minute: Number(values.minute),
-    second: Number(values.second),
-    weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+    year: beijingDate.getUTCFullYear(),
+    month: beijingDate.getUTCMonth() + 1,
+    day: beijingDate.getUTCDate(),
+    hour: beijingDate.getUTCHours(),
+    minute: beijingDate.getUTCMinutes(),
+    second: beijingDate.getUTCSeconds(),
+    weekday: beijingDate.getUTCDay()
   };
 }
 

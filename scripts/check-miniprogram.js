@@ -3906,11 +3906,35 @@ if (!fs.existsSync(pagesJsonPath)) {
       const authIsFirstRootChild = /^\s*<AuthIdentityBar\b/.test(afterRoot);
       const authIsFirstScrollContentChild =
         /^\s*<scroll-view\b[^>]*>\s*<view\b[^>]*>\s*<AuthIdentityBar\b/.test(afterRoot);
+      const homeBootOpeningTag = afterRoot.match(/^\s*(<view\b[^>]*>)/)?.[1] || "";
+      const homeBusinessBranch = afterRoot.match(
+        /\n\s*<template\b[^>]*\bv-if="[A-Za-z_$][\w$]*"[^>]*>\s*<AuthIdentityBar\b/
+      );
+      const homeBootMarkup = homeBusinessBranch
+        ? afterRoot.slice(0, homeBusinessBranch.index)
+        : "";
+      let homeBootViewDepth = 0;
+      let homeBootClosingIndex = -1;
+      for (const tagMatch of homeBootMarkup.matchAll(/<\/?view\b[^>]*>/g)) {
+        homeBootViewDepth += tagMatch[0].startsWith("</") ? -1 : 1;
+        if (homeBootViewDepth === 0) {
+          homeBootClosingIndex = tagMatch.index + tagMatch[0].length;
+          break;
+        }
+      }
+      const homeBootTagNames = [
+        ...homeBootMarkup.matchAll(/<\/?([A-Za-z][\w-]*)\b/g)
+      ].map((match) => match[1]);
       const homeBootsBeforeAuth =
         pagePath === "pages/index/index" &&
-        /^\s*<view\b[^>]*class="home-boot-state"[^>]*:style="\{ display: isHomeReady \? 'none' : 'flex' \}"[^>]*>[\s\S]*?<template\s+v-if="isHomeReady">\s*<AuthIdentityBar\b/.test(
-          afterRoot
-        );
+        /\bclass="[^"]*\bhome-boot-state\b[^"]*"/.test(homeBootOpeningTag) &&
+        /:style="\{\s*display:\s*[A-Za-z_$][\w$]*\s*\?\s*'flex'\s*:\s*'none'\s*\}"/.test(
+          homeBootOpeningTag
+        ) &&
+        homeBusinessBranch &&
+        homeBootClosingIndex !== -1 &&
+        homeBootMarkup.slice(homeBootClosingIndex).trim() === "" &&
+        homeBootTagNames.every((tagName) => ["view", "text", "image"].includes(tagName));
       if (!authIsFirstRootChild && !authIsFirstScrollContentChild && !homeBootsBeforeAuth) {
         fail(`Auth identity bar must be the first page element: ${pagePath}`);
       }

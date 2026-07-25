@@ -1,13 +1,13 @@
 <template>
   <view class="page home-page">
-    <view class="home-boot-state" :style="{ display: isHomeReady ? 'none' : 'flex' }">
+    <view class="home-boot-state" :style="{ display: showHomeBoot ? 'flex' : 'none' }">
       <view class="home-boot-mark">拼</view>
       <view class="home-boot-title">剧本迷·拼车</view>
       <view class="home-boot-text">首页加载中...</view>
       <view class="home-boot-hint">正在获取公开车局</view>
     </view>
 
-    <template v-if="isHomeReady">
+    <template v-if="hasBackendResult">
       <AuthIdentityBar passive-guest @guest-login="loginFromGuestBar" />
       <FeedbackHost />
 
@@ -94,11 +94,17 @@ const loadingSignups = ref(false);
 const loadingGuestSessions = ref(false);
 const isRefreshingCalendar = ref(false);
 const lastLoadedAt = ref(null);
+const initialHomeSettled = ref(false);
 let maintenanceTimer = null;
 let authExpiredToastActive = false;
 
 const retryButtonText = computed(() => (backendStatus.checking ? "检查中..." : "重试"));
-const isHomeReady = computed(() => backendStatus.available !== null);
+const hasBackendResult = computed(() => backendStatus.available !== null);
+const showHomeBoot = computed(
+  () =>
+    backendStatus.available === null ||
+    (backendStatus.available === true && !initialHomeSettled.value)
+);
 const isAdmin = computed(() => roles.value.includes("system_admin"));
 const calendarMode = computed(() => (isAuthenticated.value ? "member" : "guest"));
 const createButtonLabel = computed(() =>
@@ -277,6 +283,8 @@ async function loadHomeCalendar() {
         ? "车局加载失败，请稍后重试。"
         : "近期车局加载失败，请稍后重试。");
     return false;
+  } finally {
+    initialHomeSettled.value = true;
   }
 }
 
@@ -394,8 +402,12 @@ onShareTimeline(() => ({
 }
 
 .home-boot-state {
-  position: relative;
-  z-index: 1;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -403,6 +415,7 @@ onShareTimeline(() => ({
   justify-content: center;
   min-height: 760rpx;
   padding: 72rpx 24rpx;
+  background: #fbfaf6;
   box-sizing: border-box;
   text-align: center;
 }
