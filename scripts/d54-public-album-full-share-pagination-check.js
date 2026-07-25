@@ -7,6 +7,7 @@ const paths = Object.freeze({
   server: "apps/api/src/legacy-app.js",
   albumPage: "apps/miniprogram/src/pages/session/album.vue",
   paginationHelper: "apps/miniprogram/src/utils/albumPublicSharePagination.js",
+  publicReadState: "apps/miniprogram/src/utils/publicAlbumReadState.js",
   apiTest: "apps/api/test/album-public-share-pagination.test.mjs",
   miniTest: "apps/miniprogram/test/albumPublicSharePagination.test.mjs",
   packageJson: "package.json"
@@ -33,6 +34,7 @@ const service = read(paths.service);
 const server = read(paths.server);
 const albumPage = read(paths.albumPage);
 const helper = read(paths.paginationHelper);
+const publicReadState = read(paths.publicReadState);
 const apiTest = read(paths.apiTest);
 const miniTest = read(paths.miniTest);
 const packageJson = JSON.parse(read(paths.packageJson));
@@ -59,16 +61,63 @@ for (const required of [
   "loadMorePublicAlbum()",
   "publicShareNextCursor",
   "publicShareHasMore",
-  "publicShareLoadingMore",
-  "继续加载失败，可重试"
+  "publicShareLoadingMore"
 ]) {
   assert(albumPage.includes(required), `D54 mini-program pagination is missing ${required}`);
 }
+assert(
+  publicReadState.includes('event.type === "NEXT_PAGE"')
+    && publicReadState.includes('event.status === "failure"')
+    && publicReadState.includes('pageError: "继续加载失败，可重试。"'),
+  "D54 reducer must own the retryable continuation error without forcing a page reload"
+);
 assert(
   helper.includes("export function publicAlbumSharePageUrl")
     && helper.includes("export function mergePublicAlbumSharePages"),
   "D54 pagination helper must remain independently testable"
 );
+const loadMorePublicAlbum = between(
+  albumPage,
+  "async loadMorePublicAlbum() {",
+  "retryAlbumLoad() {",
+  "public pagination append path"
+);
+const appendPublicAlbumWaterfallPhotos = between(
+  albumPage,
+  "appendPublicAlbumWaterfallPhotos(photos = []) {",
+  "refreshWaterfall() {",
+  "public waterfall append helper"
+);
+assert(
+  helper.includes("appendedPhotos")
+    && /this\.appendPublicAlbumWaterfallPhotos\s*\(\s*merged\.appendedPhotos\s*\)/s.test(
+      loadMorePublicAlbum
+    ),
+  "D54 continuation loading must append only newly merged media"
+);
+assert(
+  /this\.waterfallPhotos\s*=\s*\[\s*\.\.\.this\.waterfallPhotos\s*,\s*\.\.\.appended\s*\]/s.test(
+    appendPublicAlbumWaterfallPhotos
+  ),
+  "D54 public waterfall append helper must grow the existing model tail"
+);
+const forbiddenOperations = [
+  ["refreshWaterfall call", /this\.refreshWaterfall\s*\(/],
+  ["waterfall clear call", /\.clear\s*\(/],
+  ["empty waterfall model assignment", /waterfallPhotos\s*=\s*\[\s*\]/],
+  ["page scroll call", /pageScrollTo\s*\(/]
+];
+for (const [blockName, block] of [
+  ["continuation loading", loadMorePublicAlbum],
+  ["waterfall append helper", appendPublicAlbumWaterfallPhotos]
+]) {
+  for (const [operationName, pattern] of forbiddenOperations) {
+    assert(
+      !pattern.test(block),
+      `D54 ${blockName} must not use destructive scroll recovery: ${operationName}`
+    );
+  }
+}
 assert(
   apiTest.includes("100") && apiTest.includes("next_cursor") && apiTest.includes("Invalid album share cursor"),
   "D54 API pagination tests must keep long-snapshot and cursor coverage"

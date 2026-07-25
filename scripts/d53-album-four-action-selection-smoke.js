@@ -88,7 +88,6 @@ async function insertAlbumMedia({
   sessionId,
   uploaderUserId,
   tagSeatId,
-  tagUserId,
   label,
   mediaType = "image",
   processingStatus = "ready",
@@ -133,9 +132,9 @@ async function insertAlbumMedia({
           ]
     );
     await connection.query(
-      `INSERT INTO session_album_photo_tags (photo_id, tag_type, seat_id, user_id, label, sort_order)
-       VALUES (?, 'seat', ?, ?, 'D53 车友', 0)`,
-      [insert.insertId, tagSeatId, tagUserId]
+      `INSERT INTO session_album_media_tags (media_id, kind, seat_id, sort_order)
+       VALUES (?, 'role', ?, 0)`,
+      [insert.insertId, tagSeatId]
     );
     return Number(insert.insertId);
   } finally {
@@ -150,7 +149,6 @@ async function insertEligibleMedia(sessionId, userId, seatId) {
       sessionId,
       uploaderUserId: userId,
       tagSeatId: seatId,
-      tagUserId: userId,
       label: `eligible-${index}`,
       createdOffset: index
     }));
@@ -224,14 +222,12 @@ async function main() {
     sessionId: crossFixture.session.id,
     uploaderUserId: owner.user.id,
     tagSeatId: crossFixture.seats[0].id,
-    tagUserId: owner.user.id,
     label: "cross-session"
   });
   const authorPrivateMediaId = await insertAlbumMedia({
     sessionId: fixture.session.id,
     uploaderUserId: owner.user.id,
     tagSeatId: ownerSeat.id,
-    tagUserId: owner.user.id,
     label: "author-private",
     moderationStatus: "rejected",
     authorVisibilityVersion: 1
@@ -240,7 +236,6 @@ async function main() {
     sessionId: fixture.session.id,
     uploaderUserId: owner.user.id,
     tagSeatId: ownerSeat.id,
-    tagUserId: owner.user.id,
     label: "unreviewed",
     moderationStatus: "pending"
   });
@@ -248,7 +243,6 @@ async function main() {
     sessionId: fixture.session.id,
     uploaderUserId: owner.user.id,
     tagSeatId: ownerSeat.id,
-    tagUserId: owner.user.id,
     label: "processing-video",
     mediaType: "video",
     processingStatus: "processing"
@@ -257,7 +251,6 @@ async function main() {
     sessionId: fixture.session.id,
     uploaderUserId: privateUploader.user.id,
     tagSeatId: ownerSeat.id,
-    tagUserId: owner.user.id,
     label: "privacy-blocked"
   });
   await request(

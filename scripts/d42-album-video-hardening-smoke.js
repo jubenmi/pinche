@@ -205,8 +205,8 @@ async function cleanupFixture(connection, fixture = {}) {
     await connection.query(
       `
         DELETE tag
-        FROM session_album_photo_tags tag
-        INNER JOIN session_album_photos photo ON photo.id = tag.photo_id
+        FROM session_album_media_tags tag
+        INNER JOIN session_album_photos photo ON photo.id = tag.media_id
         WHERE photo.session_id = ?
       `,
       [fixture.sessionId]
@@ -279,8 +279,8 @@ async function runConcurrentCreateScenario(dependencies, connection, fixture) {
 async function runDeleteRetryScenario(dependencies, connection, fixture, created) {
   await connection.query(
     `
-      INSERT INTO session_album_photo_tags (photo_id, tag_type, label, sort_order)
-      VALUES (?, 'user', 'D42 smoke deletion tag', 0)
+      INSERT INTO session_album_media_tags (media_id, kind, sort_order)
+      VALUES (?, 'other', 0)
     `,
     [created.mediaId]
   );
@@ -304,7 +304,7 @@ async function runDeleteRetryScenario(dependencies, connection, fixture, created
   );
   assert.equal(finalizeCalls, 0, "failed object cleanup must not delete the database retry anchor");
   assert.equal(await fixtureRowCount(connection, "session_album_photos", "id", created.mediaId), 1);
-  assert.equal(await fixtureRowCount(connection, "session_album_photo_tags", "photo_id", created.mediaId), 1);
+  assert.equal(await fixtureRowCount(connection, "session_album_media_tags", "media_id", created.mediaId), 1);
 
   const deletedUrls = [];
   const finalized = await dependencies.cleanupAlbumVideoBeforeDelete({
@@ -321,7 +321,7 @@ async function runDeleteRetryScenario(dependencies, connection, fixture, created
   assert.equal(finalized.deleted, true);
   assert.deepEqual(deletedUrls, [created.sourceUrl]);
   assert.equal(await fixtureRowCount(connection, "session_album_photos", "id", created.mediaId), 0);
-  assert.equal(await fixtureRowCount(connection, "session_album_photo_tags", "photo_id", created.mediaId), 0);
+  assert.equal(await fixtureRowCount(connection, "session_album_media_tags", "media_id", created.mediaId), 0);
 }
 
 export async function runD42AlbumVideoHardeningSmoke(options = {}) {

@@ -17,13 +17,22 @@ const migration = read("apps/api/migrations/0013_session_album_privacy.sql");
 for (const token of [
   "CREATE TABLE IF NOT EXISTS session_album_privacy",
   "CREATE TABLE IF NOT EXISTS session_album_photos",
-  "CREATE TABLE IF NOT EXISTS session_album_photo_tags",
   "allow_uploaded_visible",
   "allow_tagged_visible",
-  "uploader_user_id",
-  "tag_type"
+  "uploader_user_id"
 ]) {
   assert(migration.includes(token), `album migration must include ${token}`);
+}
+
+const tagMigration = read("apps/api/migrations/0035_album_tag_public_share_read_model.sql");
+for (const token of [
+  "CREATE TABLE IF NOT EXISTS session_album_media_tags",
+  "media_id",
+  "kind",
+  "seat_id",
+  "session_npc_role_id"
+]) {
+  assert(tagMigration.includes(token), `canonical album tag migration must include ${token}`);
 }
 
 const displayMigration = read("apps/api/migrations/0014_session_album_display_metadata.sql");
@@ -46,7 +55,6 @@ for (const token of [
   "getVisibleSessionAlbumPhotoForMedia",
   "Only the photo uploader can tag this photo",
   "tags.length === 0",
-  "other:session",
   "session-album",
   "display",
   "image_width",
@@ -59,7 +67,10 @@ for (const token of [
   'filters.scope === "album"',
   "album_membership_role",
   "hasOnlyAlbumMemberPublicTags",
-  "isAlbumMemberPublicTag"
+  "isAlbumMemberPublicTag",
+  "resolveAlbumTagReadContext",
+  "listAlbumTagOptions",
+  "writeAlbumMediaTags"
 ]) {
   assert(service.includes(token), `service must include ${token}`);
 }
@@ -76,23 +87,25 @@ assert(
   "album photo visibility must not grant system_admin bypass"
 );
 assert(
-  /isAlbumPhotoVisibleToUser[\s\S]{0,900}hasOnlyAlbumMemberPublicTags\(tags,\s*privacyByUser\)/.test(service),
-  "album member visibility must allow member-public special tags"
+  /isAlbumPhotoVisibleToUser[\s\S]{0,1200}hasOnlyAlbumMemberPublicTags\(tags,\s*privacyByUser,\s*privacyUserIds\)/.test(service),
+  "album member visibility must allow canonical NPC-role/other tags only after privacy-subject checks"
 );
-const albumPeopleSource = service.slice(
-  service.indexOf("async function sessionAlbumPeople"),
-  service.indexOf("function normalizeAlbumTagKeys")
-);
+const albumTags = read("apps/api/src/modules/core/album-tags.js");
 for (const token of [
-  'const roleLabel = seat.role_name || seat.name || "车友"',
-  "const accountName = seat.confirmed_user_id",
-  "label: roleLabel",
-  "note: accountName",
-  "role_name: seat.role_name",
-  "account_name: accountName"
+  "listAlbumTagOptions",
+  "canonicalText(seat.role_name, seat.name)",
+  "canonicalText(role.name)",
+  'kind: "role"',
+  'kind: "npc_role"',
+  'kind: "other"',
+  'label: "其他"'
 ]) {
-  assert(albumPeopleSource.includes(token), `album people should separate role labels from account names: ${token}`);
+  assert(albumTags.includes(token), `canonical album tag options must include: ${token}`);
 }
+assert(
+  !/nickname|open_id|account_name/i.test(albumTags),
+  "canonical album tag labels must not expose account identity"
+);
 
 const server = read("apps/api/src/legacy-app.js");
 for (const token of [
@@ -261,7 +274,7 @@ assert(
   "album title must fall back to the current uploader's tagged role when the user is not bound to a seat"
 );
 assert(
-  /albumRoleNameFromMineTags\(\)[\s\S]{0,1600}photo\.is_mine[\s\S]{0,1600}tag\.tag_type === "seat"/.test(albumPage),
+  /albumRoleNameFromMineTags\(\)[\s\S]{0,1600}photo\.is_mine[\s\S]{0,1600}tag\.kind === "role"/.test(albumPage),
   "album title fallback must infer role names from the current user's own seat-tagged photos"
 );
 assert(
@@ -324,9 +337,9 @@ for (const token of [
   "other-tagged same-session member should open media",
   "npc-only photo should be visible to unrelated same-session members",
   "npc-only same-session member should open media",
-  "legacy NPC-only photo should be visible to unrelated same-session members",
+  "unbound NPC role photo should be visible to unrelated same-session members",
   "bound NPC role privacy should hide npc-only photo from unrelated same-session members",
-  "unbound legacy NPC-only photo should stay visible to unrelated same-session members",
+  "unbound NPC role photo should stay visible to unrelated same-session members",
   "bound NPC role user should see their NPC-only photo",
   "admin must not bypass tagged player privacy",
   "uploader should be allowed to delete own uploaded photo",

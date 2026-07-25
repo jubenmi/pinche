@@ -69,11 +69,12 @@ test("registry validation finds duplicate claims before any preparer can run", (
   assert.equal(prepareCalls, 0);
 });
 
-test("default registry owns album video, content moderation, and user image migrations", () => {
+test("default registry owns album tags, album video, moderation, and image migrations", () => {
   assert.deepEqual(
     defaultMigrationPreparers.map(({ id }) => id),
     [
       "schema-migration-checksums",
+      "album-tags",
       "album-video",
       "content-moderation",
       "user-image-assets",
@@ -90,6 +91,7 @@ test("default registry owns album video, content moderation, and user image migr
     "0030_author_private_content_visibility.sql",
     "0031_user_image_assets.sql",
     "0034_schema_migration_checksums.sql",
+    "0035_album_tag_public_share_read_model.sql",
   ]);
 });
 

@@ -1,3 +1,4 @@
 [
-  "0034_schema_migration_checksums.sql"
+  "0034_schema_migration_checksums.sql",
+  "0035_album_tag_public_share_read_model.sql"
 ]

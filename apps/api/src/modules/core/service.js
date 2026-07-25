@@ -80,6 +80,24 @@ import {
   normalizeSessionReviewAlbumPhotoIds,
   serializePublicSessionReview
 } from "./session-review.js";
+import {
+  listAlbumTagOptions,
+  normalizeAlbumTagKeys,
+  resolveAlbumTagReadContext,
+  resolveAlbumTags,
+  writeAlbumMediaTags
+} from "./album-tags.js";
+import {
+  assertManifestMatchesLegacySnapshot,
+  decodePublicShareOrdinalCursor,
+  emitPublicShareManifestTelemetry,
+  encodePublicShareOrdinalCursor,
+  loadPublicShareItems,
+  publicShareManifestInvalid,
+  readPublicShareItemPage,
+  writePublicShareItems
+} from "./public-album-share-manifest.js";
+import { readPublicAlbumMediaState } from "./public-album-media-state.js";
 
 export { normalizeSessionReviewAlbumPhotoIds } from "./session-review.js";
 
@@ -825,7 +843,11 @@ function albumMediaResponse(media, tags = [], options = {}) {
     created_at: media.created_at,
     tags: options.publicShare ? [] : tags,
     ...(options.publicShare
-      ? { public_category: options.publicCategory === "share_subject" ? "share_subject" : "other" }
+      ? {
+          public_category:
+            options.publicCategory === "share_subject" ? "share_subject" : "other",
+          public_tag_labels: publicAlbumTagLabels(tags)
+        }
       : {})
   };
 
@@ -864,6 +886,7 @@ function albumMediaResponse(media, tags = [], options = {}) {
     uploader_user_id: Number(media.uploader_user_id),
     uploader_name: media.uploader_nickname || media.uploader_open_id || "车友",
     is_mine: Number(media.uploader_user_id) === Number(options.userId),
+    is_tagged_with_me: options.isTaggedWithMe === true,
     can_delete: Number(media.uploader_user_id) === Number(options.userId),
     can_tag: published && Number(media.uploader_user_id) === Number(options.userId)
   };
@@ -1878,226 +1901,75 @@ async function albumPrivacyMap(connection, sessionId, userIds) {
   return privacyByUser;
 }
 
-async function sessionAlbumPeople(connection, session) {
-  const [seatRows] = await connection.query(
-    `
-      SELECT
-        seat.id,
-        seat.name,
-        seat.role_name,
-        seat.seat_type,
-        seat.confirmed_user_id,
-        user.nickname AS user_nickname,
-        user.open_id AS user_open_id
-      FROM session_seats seat
-      LEFT JOIN users user ON user.id = seat.confirmed_user_id
-      WHERE seat.session_id = ?
-      ORDER BY seat.id
-    `,
-    [session.id]
-  );
+function albumTagKeyValues(body = {}) {
+  if (Array.isArray(body.tagKeys)) return body.tagKeys;
+  if (!Array.isArray(body.tags)) return [];
+  return body.tags.map((tag) => tag?.key ?? tag?.tagKey ?? tag);
+}
 
-  const sessionUserIds = [
-    session.dm_user_id,
-    session.npc_user_id
-  ]
-    .map(Number)
+function albumTagReadForMedia(tagReadContext, mediaId) {
+  const id = Number(mediaId);
+  const tagsByMediaId = tagReadContext?.tagsByMediaId;
+  const privacySubjectsByMediaId = tagReadContext?.privacySubjectsByMediaId;
+  if (
+    !tagsByMediaId?.has?.(id) ||
+    !privacySubjectsByMediaId?.has?.(id)
+  ) {
+    return null;
+  }
+  const tags = tagsByMediaId.get(id);
+  const privacyUserIds = privacySubjectsByMediaId.get(id);
+  return Array.isArray(tags) && Array.isArray(privacyUserIds)
+    ? { tags, privacyUserIds }
+    : null;
+}
+
+function collectAlbumPrivacyUserIds(photos, tagReadContext) {
+  return (Array.isArray(photos) ? photos : []).flatMap((photo) => {
+    const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+    return [photo.uploader_user_id, ...(tagRead?.privacyUserIds || [])];
+  }).filter(Boolean);
+}
+
+async function resolveAlbumTagContext(connection, sessionId, photos) {
+  const mediaIds = (Array.isArray(photos) ? photos : [])
+    .map((photo) => Number(photo.id))
     .filter(Boolean);
-  const userNamesById = new Map();
-  if (sessionUserIds.length > 0) {
-    const placeholders = sessionUserIds.map(() => "?").join(", ");
-    const [userRows] = await connection.query(
-      `
-        SELECT id, nickname, open_id
-        FROM users
-        WHERE id IN (${placeholders})
-      `,
-      sessionUserIds
-    );
-    for (const row of userRows) {
-      userNamesById.set(Number(row.id), row.nickname || row.open_id || "");
-    }
-  }
-
-  const people = [];
-  const addPerson = (person) => {
-    if (!person.key || people.some((item) => item.key === person.key)) {
-      return;
-    }
-    people.push(person);
-  };
-
-  for (const seat of seatRows) {
-    const roleLabel = seat.role_name || seat.name || "车友";
-    const accountName = seat.confirmed_user_id
-      ? seat.user_nickname || seat.user_open_id || ""
-      : "";
-    addPerson({
-      key: `seat:${seat.id}`,
-      tag_type: "seat",
-      seat_id: Number(seat.id),
-      user_id: seat.confirmed_user_id ? Number(seat.confirmed_user_id) : null,
-      label: roleLabel,
-      note: accountName,
-      role_name: seat.role_name || "",
-      seat_name: seat.name || "",
-      account_name: accountName
-    });
-  }
-
-  if (session.dm_user_id || session.dm_name_snapshot) {
-    addPerson({
-      key: "dm:session",
-      tag_type: "dm",
-      seat_id: null,
-      user_id: session.dm_user_id ? Number(session.dm_user_id) : null,
-      label:
-        session.dm_name_snapshot ||
-        userNamesById.get(Number(session.dm_user_id)) ||
-        "DM",
-      note: "DM"
-    });
-  }
-
-  if (session.npc_user_id || session.npc_name_snapshot) {
-    addPerson({
-      key: "npc:session",
-      tag_type: "npc",
-      seat_id: null,
-      user_id: session.npc_user_id ? Number(session.npc_user_id) : null,
-      label:
-        session.npc_name_snapshot ||
-        userNamesById.get(Number(session.npc_user_id)) ||
-        "NPC",
-      note: "NPC"
-    });
-  }
-
-  addPerson({
-    key: "other:session",
-    tag_type: "other",
-    seat_id: null,
-    user_id: null,
-    label: "其他",
-    note: "风景/主线外照片"
-  });
-
-  const sessionNpcRoles = await sessionNpcRolesForSession(connection, session.id);
-  for (const role of sessionNpcRoles) {
-    const accountName = role.bound_user_name || "";
-    addPerson({
-      key: `session-npc:${role.id}`,
-      tag_type: "session_npc_role",
-      seat_id: null,
-      session_npc_role_id: Number(role.id),
-      user_id: role.bound_user_id ? Number(role.bound_user_id) : null,
-      label: role.name,
-      role_gender: role.role_gender || "unlimited",
-      note: accountName,
-      account_name: accountName
-    });
-  }
-
-  return people;
-}
-
-function normalizeAlbumTagKeys(body = {}) {
-  const raw = Array.isArray(body.tagKeys)
-    ? body.tagKeys
-    : Array.isArray(body.tags)
-      ? body.tags.map((tag) => tag.key || tag.tagKey || tag.id || tag)
-      : [];
-  const seen = new Set();
-  const keys = [];
-  for (const item of raw) {
-    const key = String(item || "").trim();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    if (!/^(seat:\d+|dm:session|npc:session|other:session|session-npc:\d+)$/.test(key)) {
-      throw badRequest("tags contains an invalid person key");
-    }
-    seen.add(key);
-    keys.push(key);
-  }
-  return keys;
-}
-
-function tagsByPhotoId(rows = []) {
-  const map = new Map();
-  for (const row of rows) {
-    const photoId = Number(row.photo_id);
-    const list = map.get(photoId) || [];
-    list.push({
-      id: Number(row.id),
-      key: row.tag_type === "seat" && row.seat_id
-        ? `seat:${row.seat_id}`
-        : row.tag_type === "session_npc_role" && row.session_npc_role_id
-          ? `session-npc:${row.session_npc_role_id}`
-          : ["organizer", "dm", "npc", "other"].includes(row.tag_type)
-            ? `${row.tag_type}:session`
-            : `${row.tag_type}:${row.id}`,
-      tag_type: row.tag_type,
-      seat_id: row.seat_id ? Number(row.seat_id) : null,
-      session_npc_role_id: row.session_npc_role_id
-        ? Number(row.session_npc_role_id)
-        : null,
-      user_id: row.user_id ? Number(row.user_id) : null,
-      seat_user_id: row.seat_user_id ? Number(row.seat_user_id) : null,
-      label: row.label
-    });
-    map.set(photoId, list);
-  }
-  return map;
-}
-
-async function albumTagsForPhotos(connection, photoIds) {
-  if (photoIds.length === 0) {
-    return new Map();
-  }
-  const placeholders = photoIds.map(() => "?").join(", ");
-  const [rows] = await connection.query(
-    `
-      SELECT tag.*, seat.confirmed_user_id AS seat_user_id
-      FROM session_album_photo_tags tag
-      LEFT JOIN session_seats seat ON seat.id = tag.seat_id
-      WHERE tag.photo_id IN (${placeholders})
-      ORDER BY tag.photo_id, tag.sort_order, tag.id
-    `,
-    photoIds
+  const tagReadContext = await resolveAlbumTagReadContext(
+    connection,
+    sessionId,
+    mediaIds
   );
-  return tagsByPhotoId(rows);
+  const privacyByUser = await albumPrivacyMap(
+    connection,
+    sessionId,
+    collectAlbumPrivacyUserIds(photos, tagReadContext)
+  );
+  return {
+    tagReadContext,
+    privacyByUser
+  };
 }
 
 function isAlbumTagInPersonalScope(tag, scope) {
-  if (Number(tag.user_id || 0) === scope.userId) {
-    return true;
-  }
-  if (tag.tag_type === "seat" && scope.seatIds.has(Number(tag.seat_id || 0))) {
+  if (tag.kind === "role" && scope.seatIds.has(Number(tag.ref_id || 0))) {
     return true;
   }
   return (
-    tag.tag_type === "session_npc_role" &&
-    scope.sessionNpcRoleIds.has(Number(tag.session_npc_role_id || 0))
+    tag.kind === "npc_role" &&
+    scope.sessionNpcRoleIds.has(Number(tag.ref_id || 0))
   );
 }
 
 function isAlbumMemberPublicTag(tag) {
-  return ["other", "npc", "session_npc_role"].includes(tag.tag_type);
+  return ["other", "npc_role"].includes(tag.kind);
 }
 
-function hasOnlyAlbumMemberPublicTags(tags, privacyByUser) {
+function hasOnlyAlbumMemberPublicTags(tags, privacyByUser, tagPrivacyUserIds) {
   if (tags.length === 0 || !tags.every((tag) => isAlbumMemberPublicTag(tag))) {
     return false;
   }
-  for (const tag of tags) {
-    if (!["npc", "session_npc_role"].includes(tag.tag_type)) {
-      continue;
-    }
-    const taggedUserId = Number(tag.user_id || 0);
-    if (!taggedUserId) {
-      continue;
-    }
+  for (const taggedUserId of tagPrivacyUserIds) {
     const taggedPrivacy = privacyByUser.get(taggedUserId) || albumPrivacy();
     if (!taggedPrivacy.allow_tagged_visible) {
       return false;
@@ -2106,7 +1978,16 @@ function hasOnlyAlbumMemberPublicTags(tags, privacyByUser) {
   return true;
 }
 
-function isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, userId, personalScope = null) {
+function isAlbumPhotoVisibleToUser(
+  photo,
+  tagReadContext,
+  privacyByUser,
+  userId,
+  personalScope = null
+) {
+  const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+  if (!tagRead) return false;
+  const { tags, privacyUserIds } = tagRead;
   const scope = personalScope || {
     userId: Number(userId),
     seatIds: new Set(),
@@ -2120,7 +2001,7 @@ function isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, userId, personalS
   if (tags.some((tag) => isAlbumTagInPersonalScope(tag, scope))) {
     return true;
   }
-  if (hasOnlyAlbumMemberPublicTags(tags, privacyByUser)) {
+  if (hasOnlyAlbumMemberPublicTags(tags, privacyByUser, privacyUserIds)) {
     return true;
   }
   return false;
@@ -2170,12 +2051,15 @@ async function requirePublicAlbumShareSeat(connection, claims) {
 
 export function isAlbumPhotoVisibleInPublicShare(
   photo,
-  tags,
+  tagReadContext,
   privacyByUser,
   claims,
   options = {}
 ) {
   const { sessionId, sharerUserId, seatId } = normalizeAlbumShareClaims(claims);
+  const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+  if (!tagRead) return false;
+  const { tags, privacyUserIds } = tagRead;
   if (
     Number(photo.session_id) !== sessionId ||
     photo.status !== "active" ||
@@ -2220,24 +2104,13 @@ export function isAlbumPhotoVisibleInPublicShare(
   }
 
   const hasSharerSeatTag = tags.some(
-    (tag) => tag.tag_type === "seat" && Number(tag.seat_id) === seatId
+    (tag) => tag.kind === "role" && Number(tag.ref_id) === seatId
   );
   if (!hasSharerSeatTag && uploaderUserId !== sharerUserId) {
     return false;
   }
 
-  const taggedUserIds = new Set();
-  for (const tag of tags) {
-    const taggedUserId = Number(tag.user_id || 0);
-    const seatUserId = tag.tag_type === "seat"
-      ? Number(tag.seat_user_id || 0)
-      : 0;
-    if (seatUserId && (!taggedUserId || taggedUserId !== seatUserId)) {
-      return false;
-    }
-    if (taggedUserId) taggedUserIds.add(taggedUserId);
-  }
-  for (const taggedUserId of taggedUserIds) {
+  for (const taggedUserId of privacyUserIds) {
     const taggedPrivacy = privacyByUser.get(taggedUserId) || albumPrivacy();
     if (!taggedPrivacy.allow_tagged_visible) {
       return false;
@@ -2246,10 +2119,23 @@ export function isAlbumPhotoVisibleInPublicShare(
   return true;
 }
 
+export function publicAlbumTagLabels(tags) {
+  const labels = [];
+  const seen = new Set();
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    if (typeof tag?.label !== "string") continue;
+    const label = tag.label.trim();
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  return labels;
+}
+
 export function publicAlbumMediaCategory(tags, claims) {
   const { seatId } = normalizeAlbumShareClaims(claims);
   return Array.isArray(tags) && tags.some(
-    (tag) => tag.tag_type === "seat" && Number(tag.seat_id) === seatId
+    (tag) => tag.kind === "role" && Number(tag.ref_id) === seatId
   )
     ? "share_subject"
     : "other";
@@ -2266,7 +2152,7 @@ function publicShareMediaPriority(photo, tags, claims) {
   const { sharerUserId, seatId } = normalizeAlbumShareClaims(claims);
   const uploadedBySharer = Number(photo.uploader_user_id) === sharerUserId;
   const taggedWithSharerSeat = tags.some(
-    (tag) => tag.tag_type === "seat" && Number(tag.seat_id) === seatId
+    (tag) => tag.kind === "role" && Number(tag.ref_id) === seatId
   );
   if (uploadedBySharer && taggedWithSharerSeat) return 0;
   if (taggedWithSharerSeat) return 1;
@@ -2296,13 +2182,21 @@ export function normalizePublicShareSelectedMediaIds(value) {
   return ids;
 }
 
-export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claims, options = {}) {
+export function selectPublicShareMedia(
+  candidates,
+  tagReadContext,
+  privacyByUser,
+  claims,
+  options = {}
+) {
   const ranked = [];
   for (const photo of Array.isArray(candidates) ? candidates : []) {
-    const tags = tagsMap.get(Number(photo.id)) || [];
+    const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+    if (!tagRead) continue;
+    const { tags } = tagRead;
     if (!isAlbumPhotoVisibleInPublicShare(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
       claims,
       options
@@ -2420,16 +2314,15 @@ export function normalizeSessionAlbumPublicShareScope(options = {}) {
 
 export function selectEligiblePublicShareMedia(
   candidates,
-  tagsMap,
+  tagReadContext,
   privacyByUser,
   claims,
   options = {}
 ) {
   return (Array.isArray(candidates) ? candidates : []).filter((photo) => {
-    const tags = tagsMap.get(Number(photo.id)) || [];
     return isAlbumPhotoVisibleInPublicShare(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
       claims,
       options
@@ -2438,45 +2331,51 @@ export function selectEligiblePublicShareMedia(
 }
 
 const PUBLIC_SHARE_SAFE_SCENE_TAG_TYPES = new Set([
-  "npc",
-  "session_npc_role",
+  "npc_role",
   "other"
 ]);
 
-function publicShareCoverPriority(photo, tags, privacyByUser, claims) {
+function publicShareCoverPriority(
+  photo,
+  tagReadContext,
+  privacyByUser,
+  claims
+) {
+  const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+  if (!tagRead) return null;
+  const { tags, privacyUserIds } = tagRead;
   const { sharerUserId, seatId } = normalizeAlbumShareClaims(claims);
   if (
     albumMediaType(photo) !== "image" ||
     Number(photo.uploader_user_id) !== sharerUserId ||
-    !isAlbumPhotoVisibleInPublicShare(photo, tags, privacyByUser, claims)
+    !isAlbumPhotoVisibleInPublicShare(
+      photo,
+      tagReadContext,
+      privacyByUser,
+      claims,
+      {}
+    )
   ) {
     return null;
   }
   const hasSharerSeatTag = tags.some(
-    (tag) => tag.tag_type === "seat" &&
-      Number(tag.seat_id) === seatId &&
-      Number(tag.user_id || 0) === sharerUserId
+    (tag) => tag.kind === "role" && Number(tag.ref_id) === seatId
   );
-  const hasAnotherRealPerson = tags.some(
-    (tag) => Number(tag.user_id || 0) > 0 && Number(tag.user_id) !== sharerUserId
+  const hasAnotherRealPerson = privacyUserIds.some(
+    (userId) => Number(userId) !== sharerUserId
   );
   if (hasAnotherRealPerson) return null;
   const hasOnlySharerAndSafeSceneTags = tags.every((tag) => {
     if (
-      tag.tag_type === "seat" &&
-      Number(tag.seat_id) === seatId &&
-      Number(tag.user_id || 0) === sharerUserId
+      tag.kind === "role" &&
+      Number(tag.ref_id) === seatId
     ) {
       return true;
     }
-    return !tag.user_id && PUBLIC_SHARE_SAFE_SCENE_TAG_TYPES.has(tag.tag_type);
+    return PUBLIC_SHARE_SAFE_SCENE_TAG_TYPES.has(tag.kind);
   });
   if (hasSharerSeatTag && hasOnlySharerAndSafeSceneTags) return 0;
-  if (
-    tags.every(
-      (tag) => !tag.user_id && PUBLIC_SHARE_SAFE_SCENE_TAG_TYPES.has(tag.tag_type)
-    )
-  ) {
+  if (tags.every((tag) => PUBLIC_SHARE_SAFE_SCENE_TAG_TYPES.has(tag.kind))) {
     return 1;
   }
   return null;
@@ -2484,14 +2383,18 @@ function publicShareCoverPriority(photo, tags, privacyByUser, claims) {
 
 export function selectPublicShareCoverMedia(
   selectedMedia,
-  tagsMap,
+  tagReadContext,
   privacyByUser,
   claims
 ) {
   const candidates = [];
   for (const photo of Array.isArray(selectedMedia) ? selectedMedia : []) {
-    const tags = tagsMap.get(Number(photo.id)) || [];
-    const priority = publicShareCoverPriority(photo, tags, privacyByUser, claims);
+    const priority = publicShareCoverPriority(
+      photo,
+      tagReadContext,
+      privacyByUser,
+      claims
+    );
     if (priority === null) continue;
     candidates.push({ photo, priority });
   }
@@ -2549,12 +2452,16 @@ export function normalizePublicShareSnapshotIds(value, options = {}) {
   const ids = [];
   const seen = new Set();
   for (const valueItem of parsed) {
-    const id = Number(valueItem);
-    if (!Number.isSafeInteger(id) || id <= 0 || seen.has(id)) {
+    if (
+      typeof valueItem !== "number" ||
+      !Number.isSafeInteger(valueItem) ||
+      valueItem <= 0 ||
+      seen.has(valueItem)
+    ) {
       throw forbidden("Album share snapshot is invalid");
     }
-    seen.add(id);
-    ids.push(id);
+    seen.add(valueItem);
+    ids.push(valueItem);
   }
   if (options.subsetOf) {
     const allowed = new Set(options.subsetOf.map(Number));
@@ -2563,58 +2470,6 @@ export function normalizePublicShareSnapshotIds(value, options = {}) {
     }
   }
   return ids;
-}
-
-export function isPublicShareSnapshotMediaId(mediaIds, mediaId) {
-  const id = Number(mediaId);
-  return Number.isSafeInteger(id) && id > 0 && mediaIds.includes(id);
-}
-
-function publicSharePageCursorSignature(payload) {
-  return crypto
-    .createHmac("sha256", config.sessionSecret)
-    .update(`album-share-page:${payload}`)
-    .digest("base64url");
-}
-
-function publicSharePageCursorOffset(value) {
-  const offset = Number(value);
-  if (!Number.isSafeInteger(offset) || offset < 0) {
-    throw badRequest("Invalid album share cursor");
-  }
-  return offset;
-}
-
-export function encodePublicSharePageCursor(shareId, offset) {
-  const payload = Buffer.from(JSON.stringify({
-    share_id: positiveId(shareId, "shareId"),
-    offset: publicSharePageCursorOffset(offset)
-  })).toString("base64url");
-  return `${payload}.${publicSharePageCursorSignature(payload)}`;
-}
-
-export function decodePublicSharePageCursor(cursor, shareId) {
-  try {
-    const [payload, signature, extra] = String(cursor || "").split(".");
-    const expected = publicSharePageCursorSignature(payload || "");
-    if (
-      extra !== undefined ||
-      !payload ||
-      !signature ||
-      signature.length !== expected.length ||
-      !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-    ) {
-      throw new Error("invalid signature");
-    }
-    const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (Number(decoded.share_id) !== positiveId(shareId, "shareId")) {
-      throw new Error("wrong share");
-    }
-    return publicSharePageCursorOffset(decoded.offset);
-  } catch (error) {
-    if (error?.statusCode === 400) throw error;
-    throw badRequest("Invalid album share cursor");
-  }
 }
 
 function publicSharePageLimit(value) {
@@ -2630,26 +2485,6 @@ function publicSharePageLimit(value) {
     throw badRequest("Invalid album share page limit");
   }
   return limit;
-}
-
-export function publicShareSnapshotPage(mediaIds, shareId, options = {}) {
-  const ids = normalizePublicShareSnapshotIds(mediaIds);
-  const limit = publicSharePageLimit(options.limit);
-  const offset = options.cursor
-    ? decodePublicSharePageCursor(options.cursor, shareId)
-    : 0;
-  if (offset > ids.length) {
-    throw badRequest("Invalid album share cursor");
-  }
-  const nextOffset = Math.min(offset + limit, ids.length);
-  const hasMore = nextOffset < ids.length;
-  return {
-    media_ids: ids.slice(offset, nextOffset),
-    offset,
-    next_offset: nextOffset,
-    next_cursor: hasMore ? encodePublicSharePageCursor(shareId, nextOffset) : null,
-    has_more: hasMore
-  };
 }
 
 export function normalizeImplicitUntaggedMedia(value, options = {}) {
@@ -2769,7 +2604,35 @@ function implicitUntaggedByMediaIdForShare(share) {
   );
 }
 
-async function loadSessionAlbumPublicShareWithConnection(connection, claims) {
+function emitPublicShareMembershipDenied(claims, emitManifestEvent) {
+  try {
+    const fields = {
+      sessionId: Number(claims?.sessionId ?? claims?.session_id) || 0,
+      shareId: Number(claims?.shareId ?? claims?.share_id) || 0,
+      requestedLimit: 1,
+      returnedCount: 0,
+      scannedCount: 1,
+      resultCode: "OUTSIDE_MANIFEST",
+      durationMs: 0,
+    };
+    if (typeof emitManifestEvent === "function") {
+      emitManifestEvent("public_share_manifest_membership_denied", fields);
+    } else {
+      emitPublicShareManifestTelemetry(
+        "public_share_manifest_membership_denied",
+        fields
+      );
+    }
+  } catch {
+    // Observability must not change manifest membership enforcement.
+  }
+}
+
+async function loadSessionAlbumPublicShareWithConnection(
+  connection,
+  claims,
+  options = {}
+) {
   const normalizedClaims = normalizeAlbumShareClaims(claims);
   const shareId = positiveId(claims.shareId ?? claims.share_id, "shareId");
   const [rows] = await connection.query(
@@ -2791,10 +2654,47 @@ async function loadSessionAlbumPublicShareWithConnection(connection, claims) {
       normalizedClaims.seatId
     ]
   );
-  const share = normalizeSessionAlbumPublicShareRow(rows[0]);
+  let share;
+  let items = [];
+  try {
+    try {
+      share = normalizeSessionAlbumPublicShareRow(rows[0]);
+    } catch (error) {
+      if (!rows[0]) throw error;
+      throw publicShareManifestInvalid();
+    }
+    items = await loadPublicShareItems(connection, share.id);
+    assertManifestMatchesLegacySnapshot(items, share.media_ids);
+  } catch (error) {
+    if (error?.code === "ALBUM_PUBLIC_SHARE_MANIFEST_INVALID") {
+      try {
+        const fields = {
+          sessionId: normalizedClaims.sessionId,
+          shareId,
+          requestedLimit: 0,
+          returnedCount: 0,
+          scannedCount: items.length,
+          resultCode: "MANIFEST_MISMATCH",
+          durationMs: 0,
+        };
+        if (typeof options.emitManifestEvent === "function") {
+          options.emitManifestEvent("public_share_manifest_mismatch", fields);
+        } else {
+          emitPublicShareManifestTelemetry(
+            "public_share_manifest_mismatch",
+            fields
+          );
+        }
+      } catch {
+        // Observability must not change manifest consistency enforcement.
+      }
+    }
+    throw error;
+  }
+  const manifestIds = new Set(items.map((item) => item.media_id));
   const session = await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
   const { seat } = await requirePublicAlbumShareSeat(connection, normalizedClaims);
-  return { share, session, seat };
+  return { share, session, seat, items, manifestIds };
 }
 
 export async function loadSessionAlbumPublicShare(claims) {
@@ -6660,26 +6560,13 @@ async function deleteSessionTree(connection, id) {
         `
     ],
     [
-      "albumPhotoTagsForPhotos",
+      "albumMediaTagsForPhotos",
       `
-          DELETE FROM session_album_photo_tags
-          WHERE photo_id IN (
+          DELETE FROM session_album_media_tags
+          WHERE media_id IN (
             SELECT id FROM session_album_photos WHERE session_id = ?
           )
         `
-    ],
-    [
-      "albumPhotoTagsForSessionPeople",
-      `
-          DELETE FROM session_album_photo_tags
-          WHERE seat_id IN (
-            SELECT id FROM session_seats WHERE session_id = ?
-          )
-          OR session_npc_role_id IN (
-            SELECT id FROM session_npc_roles WHERE session_id = ?
-          )
-        `,
-      [id, id]
     ],
     [
       "sessionAlbumPublicShares",
@@ -6870,7 +6757,7 @@ export async function listSessionAlbumPeople(user, sessionId) {
     await requireSessionAlbumMember(connection, session, user);
     return {
       session_id: id,
-      people: await sessionAlbumPeople(connection, session)
+      people: await listAlbumTagOptions(connection, id)
     };
   });
 }
@@ -6962,19 +6849,13 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       `,
       [id]
     );
-    const photoIds = photoRows.map((photo) => Number(photo.id));
-    const tagsMap = await albumTagsForPhotos(connection, photoIds);
-    const privacyUserIds = [];
-    for (const photo of photoRows) {
-      privacyUserIds.push(photo.uploader_user_id);
-      for (const tag of tagsMap.get(Number(photo.id)) || []) {
-        if (tag.user_id) privacyUserIds.push(tag.user_id);
-      }
-    }
-    const privacyByUser = await albumPrivacyMap(connection, id, privacyUserIds);
+    const {
+      tagReadContext,
+      privacyByUser
+    } = await resolveAlbumTagContext(connection, id, photoRows);
     const eligibleMedia = selectEligiblePublicShareMedia(
       photoRows,
-      tagsMap,
+      tagReadContext,
       privacyByUser,
       claims,
       {
@@ -6995,7 +6876,7 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       }
       selectedMedia = eligibleMedia.filter((media) => selectedIds.has(Number(media.id)));
     } else {
-      selectedMedia = selectPublicShareMedia(photoRows, tagsMap, privacyByUser, claims, {
+      selectedMedia = selectPublicShareMedia(photoRows, tagReadContext, privacyByUser, claims, {
         requiredMediaId: focusMediaId,
         allowOwnedUntaggedImages: includeOwnedUntaggedImages,
         selectedMediaIds: selectedMediaIds || undefined
@@ -7029,7 +6910,9 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     );
     const implicitUntaggedMedia = normalizeImplicitUntaggedMedia(
       selectedMedia
-        .filter((photo) => (tagsMap.get(Number(photo.id)) || []).length === 0)
+        .filter((photo) => (
+          albumTagReadForMedia(tagReadContext, photo.id)?.tags || []
+        ).length === 0)
         .map((photo) => ({
           media_id: Number(photo.id),
           tag_version: Number(photo.tag_version || 0)
@@ -7040,7 +6923,7 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     // actual-buffer quality stage may remove candidates but must never add one.
     const coverMediaIds = selectPublicShareCoverMedia(
       selectedMedia,
-      tagsMap,
+      tagReadContext,
       privacyByUser,
       claims
     ).map((photo) => Number(photo.id));
@@ -7092,10 +6975,14 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
           expiresAt
         ]
       );
+      const insertedShareId = positiveId(insertResult.insertId, "shareId");
+      await writePublicShareItems(connection, insertedShareId, mediaIds);
       share = normalizeSessionAlbumPublicShareRow(
         await selectInserted(connection, "session_album_public_shares", insertResult)
       );
     }
+    const manifestItems = await loadPublicShareItems(connection, share.id);
+    assertManifestMatchesLegacySnapshot(manifestItems, share.media_ids);
 
     const photoCount = selectedMedia.filter(
       (photo) => albumMediaType(photo) === "image"
@@ -7108,8 +6995,12 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     for (const mediaId of share.cover_media_ids) {
       const photo = selectedMediaById.get(Number(mediaId));
       if (!photo) continue;
-      const tags = tagsMap.get(Number(mediaId)) || [];
-      if (publicShareCoverPriority(photo, tags, privacyByUser, claims) === null) {
+      if (publicShareCoverPriority(
+        photo,
+        tagReadContext,
+        privacyByUser,
+        claims
+      ) === null) {
         continue;
       }
       coverMedia.push(publicShareCoverRecipeMedia(photo));
@@ -7162,23 +7053,15 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
       `,
       [id, user.user.id]
     );
-    const photoIds = photoRows.map((photo) => Number(photo.id));
-    const tagsMap = await albumTagsForPhotos(connection, photoIds);
-    const privacyUserIds = [];
-    for (const photo of photoRows) {
-      privacyUserIds.push(photo.uploader_user_id);
-      for (const tag of tagsMap.get(Number(photo.id)) || []) {
-        if (tag.user_id) {
-          privacyUserIds.push(tag.user_id);
-        }
-      }
-    }
-    const privacyByUser = await albumPrivacyMap(connection, id, privacyUserIds);
+    const {
+      tagReadContext,
+      privacyByUser
+    } = await resolveAlbumTagContext(connection, id, photoRows);
     const photos = [];
     let hiddenCount = 0;
     let untaggedCount = 0;
     for (const photo of photoRows) {
-      const tags = tagsMap.get(Number(photo.id)) || [];
+      const tags = albumTagReadForMedia(tagReadContext, photo.id)?.tags || [];
       const mediaType = albumMediaType(photo);
       const processingStatus = albumMediaProcessingStatus(photo);
       if (!isModerationPublished(photo.moderation_status)) {
@@ -7203,7 +7086,7 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
       }
       const isVisibleByAlbumPrivacy = isAlbumPhotoVisibleToUser(
         photo,
-        tags,
+        tagReadContext,
         privacyByUser,
         user.user.id,
         personalScope
@@ -7213,14 +7096,20 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
         processingStatus !== "ready" &&
         canViewAlbumVideoProcessingState(user, session, photo)
       ) {
-        photos.push(albumMediaResponse(photo, tags, { userId: user.user.id }));
+        photos.push(albumMediaResponse(photo, tags, {
+          userId: user.user.id,
+          isTaggedWithMe: tags.some((tag) => isAlbumTagInPersonalScope(tag, personalScope))
+        }));
         continue;
       }
       if (!isVisibleByAlbumPrivacy) {
         hiddenCount += 1;
         continue;
       }
-      photos.push(albumMediaResponse(photo, tags, { userId: user.user.id }));
+      photos.push(albumMediaResponse(photo, tags, {
+        userId: user.user.id,
+        isTaggedWithMe: tags.some((tag) => isAlbumTagInPersonalScope(tag, personalScope))
+      }));
     }
     return {
       session_id: id,
@@ -7238,6 +7127,98 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
   });
 }
 
+async function readVisiblePublicShareMedia(
+  connection,
+  claims,
+  candidateIds = null,
+  share = null
+) {
+  const normalizedClaims = normalizeAlbumShareClaims(claims);
+  const snapshotClause = candidateIds
+    ? `AND photo.id IN (${candidateIds.map(() => "?").join(", ")})`
+    : "";
+  const [photoRows] = await connection.query(
+    `
+      SELECT photo.*
+      FROM session_album_photos photo
+      WHERE photo.session_id = ?
+        AND photo.status = 'active'
+        AND photo.moderation_status IN ('approved', 'approved_legacy')
+        ${snapshotClause}
+      ORDER BY photo.created_at ASC, photo.id ASC
+    `,
+    [normalizedClaims.sessionId, ...(candidateIds || [])]
+  );
+  const {
+    tagReadContext,
+    privacyByUser
+  } = await resolveAlbumTagContext(
+    connection,
+    normalizedClaims.sessionId,
+    photoRows
+  );
+  const photoById = new Map(photoRows.map((photo) => [Number(photo.id), photo]));
+  const orderedRows = candidateIds
+    ? candidateIds.map((id) => photoById.get(Number(id))).filter(Boolean)
+    : photoRows;
+  const implicitUntaggedByMediaId = implicitUntaggedByMediaIdForShare(share);
+  const visiblePhotos = [];
+  for (const photo of orderedRows) {
+    const tags = albumTagReadForMedia(tagReadContext, photo.id)?.tags || [];
+    if (albumMediaType(photo) === "video" && albumMediaProcessingStatus(photo) !== "ready") {
+      continue;
+    }
+    if (
+      !isAlbumPhotoVisibleInPublicShare(
+        photo,
+        tagReadContext,
+        privacyByUser,
+        normalizedClaims,
+        { implicitUntaggedByMediaId }
+      )
+    ) {
+      continue;
+    }
+    visiblePhotos.push(publicAlbumMediaResponse(photo, tags, normalizedClaims));
+  }
+  return visiblePhotos;
+}
+
+export async function readPublicSessionAlbumMediaState(
+  claims,
+  mediaIds,
+  options = {}
+) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("options must be an object");
+  }
+  if (
+    options.withDatabaseConnection !== undefined &&
+    typeof options.withDatabaseConnection !== "function"
+  ) {
+    throw new TypeError("withDatabaseConnection must be a function");
+  }
+  const runWithDatabaseConnection =
+    options.withDatabaseConnection || withDatabaseConnection;
+  return runWithDatabaseConnection((connection) => readPublicAlbumMediaState({
+    connection,
+    claims,
+    mediaIds,
+    loadShare: loadSessionAlbumPublicShareWithConnection,
+    readVisibleMedia: (
+      currentConnection,
+      currentClaims,
+      requestedIds,
+      loadedShare
+    ) => readVisiblePublicShareMedia(
+      currentConnection,
+      currentClaims,
+      requestedIds,
+      loadedShare.share
+    )
+  }));
+}
+
 export async function listPublicSessionAlbumShare(claims, options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("options must be an object");
@@ -7248,13 +7229,37 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
   ) {
     throw new TypeError("withDatabaseConnection must be a function");
   }
+  if (
+    options.emitManifestEvent !== undefined &&
+    typeof options.emitManifestEvent !== "function"
+  ) {
+    throw new TypeError("emitManifestEvent must be a function");
+  }
+  const startedAt = Date.now();
+  const isSnapshotShare = Boolean(claims.shareId ?? claims.share_id);
   const normalizedClaims = normalizeAlbumShareClaims(claims);
   const runWithDatabaseConnection =
     options.withDatabaseConnection || withDatabaseConnection;
-  return runWithDatabaseConnection(async (connection) => {
-    const isSnapshotShare = Boolean(claims.shareId ?? claims.share_id);
+  let requestedLimit = 0;
+  let scannedCount = 0;
+  const emitManifestEvent = (eventName, fields) => {
+    try {
+      if (options.emitManifestEvent) {
+        options.emitManifestEvent(eventName, fields);
+      } else {
+        emitPublicShareManifestTelemetry(eventName, fields);
+      }
+    } catch {
+      // Observability must not alter public-share authorization or output.
+    }
+  };
+  try {
+    requestedLimit = isSnapshotShare ? publicSharePageLimit(options.limit) : 0;
+    const result = await runWithDatabaseConnection(async (connection) => {
     const snapshotContext = isSnapshotShare
-      ? await loadSessionAlbumPublicShareWithConnection(connection, claims)
+      ? await loadSessionAlbumPublicShareWithConnection(connection, claims, {
+          emitManifestEvent,
+        })
       : null;
     const session = snapshotContext?.session ||
       await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
@@ -7280,74 +7285,30 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
       [normalizedClaims.sharerUserId]
     );
     const owner = ownerRows[0] || {};
-    const snapshotIds = snapshotContext?.share.media_ids || [];
-    const pageLimit = isSnapshotShare ? publicSharePageLimit(options.limit) : null;
-    const snapshotPage = isSnapshotShare
-      ? publicShareSnapshotPage(snapshotIds, snapshotContext.share.id, options)
-      : null;
-    const implicitUntaggedByMediaId = implicitUntaggedByMediaIdForShare(
-      snapshotContext?.share
-    );
-    const readVisiblePhotos = async (candidateIds = null) => {
-      const snapshotClause = candidateIds
-        ? `AND photo.id IN (${candidateIds.map(() => "?").join(", ")})`
-        : "";
-      const [photoRows] = await connection.query(
-        `
-          SELECT photo.*
-          FROM session_album_photos photo
-          WHERE photo.session_id = ?
-            AND photo.status = 'active'
-            AND photo.moderation_status IN ('approved', 'approved_legacy')
-            ${snapshotClause}
-          ORDER BY photo.created_at ASC, photo.id ASC
-        `,
-        [normalizedClaims.sessionId, ...(candidateIds || [])]
-      );
-      const photoIds = photoRows.map((photo) => Number(photo.id));
-      const tagsMap = await albumTagsForPhotos(connection, photoIds);
-      const privacyUserIds = [];
-      for (const photo of photoRows) {
-        privacyUserIds.push(photo.uploader_user_id);
-        for (const tag of tagsMap.get(Number(photo.id)) || []) {
-          if (tag.user_id) {
-            privacyUserIds.push(tag.user_id);
+    const snapshotItems = snapshotContext?.items || [];
+    const lastManifestOrdinal = snapshotItems.at(-1)?.ordinal ?? -1;
+    const pageLimit = isSnapshotShare ? requestedLimit : null;
+    const initialAfterOrdinal = isSnapshotShare && options.cursor
+      ? decodePublicShareOrdinalCursor(
+          options.cursor,
+          snapshotContext.share.id,
+          {
+            maxOrdinal: lastManifestOrdinal,
+            manifestLength: snapshotItems.length
           }
-        }
-      }
-      const privacyByUser = await albumPrivacyMap(
+        )
+      : -1;
+    const readVisiblePhotos = (candidateIds = null) =>
+      readVisiblePublicShareMedia(
         connection,
-        normalizedClaims.sessionId,
-        privacyUserIds
+        normalizedClaims,
+        candidateIds,
+        snapshotContext?.share
       );
-      const photoById = new Map(photoRows.map((photo) => [Number(photo.id), photo]));
-      const orderedRows = candidateIds
-        ? candidateIds.map((id) => photoById.get(Number(id))).filter(Boolean)
-        : photoRows;
-      const visiblePhotos = [];
-      for (const photo of orderedRows) {
-        const tags = tagsMap.get(Number(photo.id)) || [];
-        if (albumMediaType(photo) === "video" && albumMediaProcessingStatus(photo) !== "ready") {
-          continue;
-        }
-        if (
-          !isAlbumPhotoVisibleInPublicShare(
-          photo,
-          tags,
-          privacyByUser,
-          normalizedClaims,
-          { implicitUntaggedByMediaId }
-          )
-        ) {
-          continue;
-        }
-        visiblePhotos.push(publicAlbumMediaResponse(photo, tags, normalizedClaims));
-      }
-      return visiblePhotos;
-    };
 
     const readCoverMedia = async () => {
-      const candidateIds = snapshotContext?.share.cover_media_ids || [];
+      const candidateIds = (snapshotContext?.share.cover_media_ids || [])
+        .filter((mediaId) => snapshotContext.manifestIds.has(mediaId));
       if (candidateIds.length === 0) return [];
       const [photoRows] = await connection.query(
         `
@@ -7360,26 +7321,25 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
         `,
         [normalizedClaims.sessionId, ...candidateIds]
       );
-      const tagsMap = await albumTagsForPhotos(connection, candidateIds);
-      const privacyUserIds = [];
-      for (const photo of photoRows) {
-        privacyUserIds.push(photo.uploader_user_id);
-        for (const tag of tagsMap.get(Number(photo.id)) || []) {
-          if (tag.user_id) privacyUserIds.push(tag.user_id);
-        }
-      }
-      const privacyByUser = await albumPrivacyMap(
+      const {
+        tagReadContext,
+        privacyByUser
+      } = await resolveAlbumTagContext(
         connection,
         normalizedClaims.sessionId,
-        privacyUserIds
+        photoRows
       );
       const photosById = new Map(photoRows.map((photo) => [Number(photo.id), photo]));
       const coverMedia = [];
       for (const mediaId of candidateIds) {
         const photo = photosById.get(Number(mediaId));
         if (!photo) continue;
-        const tags = tagsMap.get(Number(mediaId)) || [];
-        if (publicShareCoverPriority(photo, tags, privacyByUser, normalizedClaims) === null) {
+        if (publicShareCoverPriority(
+          photo,
+          tagReadContext,
+          privacyByUser,
+          normalizedClaims
+        ) === null) {
           continue;
         }
         coverMedia.push(publicShareCoverRecipeMedia(photo));
@@ -7391,20 +7351,27 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
     let photos;
     let nextCursor = null;
     let hasMore = false;
-    if (snapshotPage) {
-      let scannedOffset = snapshotPage.offset;
+    if (isSnapshotShare) {
+      let scannedOrdinal = initialAfterOrdinal;
       photos = [];
-      while (scannedOffset < snapshotIds.length && photos.length < pageLimit) {
-        const candidateIds = snapshotIds.slice(
-          scannedOffset,
-          scannedOffset + Math.min(PUBLIC_SHARE_PAGE_SIZE, pageLimit - photos.length)
+      while (scannedOrdinal < lastManifestOrdinal && photos.length < pageLimit) {
+        const itemPage = await readPublicShareItemPage(
+          connection,
+          snapshotContext.share.id,
+          {
+            afterOrdinal: scannedOrdinal,
+            limit: Math.min(PUBLIC_SHARE_PAGE_SIZE, pageLimit - photos.length)
+          }
         );
-        scannedOffset += candidateIds.length;
+        if (itemPage.items.length === 0) break;
+        scannedCount += itemPage.items.length;
+        scannedOrdinal = itemPage.lastScannedOrdinal;
+        const candidateIds = itemPage.items.map((item) => item.media_id);
         photos.push(...await readVisiblePhotos(candidateIds));
       }
-      hasMore = scannedOffset < snapshotIds.length;
+      hasMore = scannedOrdinal < lastManifestOrdinal;
       nextCursor = hasMore
-        ? encodePublicSharePageCursor(snapshotContext.share.id, scannedOffset)
+        ? encodePublicShareOrdinalCursor(snapshotContext.share.id, scannedOrdinal)
         : null;
     } else {
       photos = await readVisiblePhotos();
@@ -7422,7 +7389,7 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
         nickname: owner.nickname || "车友",
         avatar_url: owner.avatar_url || ""
       },
-      visible_count: isSnapshotShare ? snapshotIds.length : photos.length,
+      visible_count: isSnapshotShare ? snapshotItems.length : photos.length,
       photo_count: photos.filter((photo) => photo.media_type === "image").length,
       video_count: photos.filter((photo) => photo.media_type === "video").length,
       photos,
@@ -7430,7 +7397,42 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
       next_cursor: nextCursor,
       has_more: hasMore
     };
-  });
+    });
+    if (isSnapshotShare) {
+      emitManifestEvent("public_share_manifest_page", {
+        sessionId: normalizedClaims.sessionId,
+        shareId: Number(claims.shareId ?? claims.share_id),
+        requestedLimit,
+        returnedCount: result.photos.length,
+        scannedCount,
+        resultCode: "SUCCESS",
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
+    }
+    return result;
+  } catch (error) {
+    if (isSnapshotShare) {
+      const manifestMismatch =
+        error?.code === "ALBUM_PUBLIC_SHARE_MANIFEST_INVALID";
+      const resultCode = manifestMismatch
+        ? "MANIFEST_MISMATCH"
+        : error?.message === "Invalid album share cursor" ||
+            error?.message === "Invalid album share page"
+          ? "INVALID_CURSOR"
+          : "READ_FAILED";
+      const fields = {
+        sessionId: normalizedClaims.sessionId,
+        shareId: Number(claims.shareId ?? claims.share_id),
+        requestedLimit,
+        returnedCount: 0,
+        scannedCount,
+        resultCode,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      };
+      emitManifestEvent("public_share_manifest_page", fields);
+    }
+    throw error;
+  }
 }
 
 export async function createSessionAlbumPhoto(user, sessionId, body = {}, options = {}) {
@@ -7900,7 +7902,7 @@ export async function updateSessionAlbumVideoProcessingResult(
 
 export async function updateSessionAlbumPhotoTags(user, photoId, body = {}) {
   const id = positiveId(photoId, "photoId");
-  const tagKeys = normalizeAlbumTagKeys(body);
+  const normalizedTags = normalizeAlbumTagKeys(albumTagKeyValues(body));
   return withTransaction(async (connection) => {
     const photo = await findById(connection, "session_album_photos", id, {
       forUpdate: true
@@ -7914,57 +7916,28 @@ export async function updateSessionAlbumPhotoTags(user, photoId, body = {}) {
     if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the photo uploader can tag this photo");
     }
-    const session = await requireSessionAlbumOpen(connection, photo.session_id);
-    const people = await sessionAlbumPeople(connection, session);
-    const peopleByKey = new Map(people.map((person) => [person.key, person]));
-    const tags = tagKeys.map((key) => {
-      const person = peopleByKey.get(key);
-      if (!person) {
-        throw badRequest("tags contains a person outside this session");
-      }
-      return person;
+    await requireSessionAlbumOpen(connection, photo.session_id);
+    await writeAlbumMediaTags(connection, {
+      mediaId: id,
+      sessionId: Number(photo.session_id),
+      normalizedTags
     });
-
-    await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [id]);
-    for (const [index, tag] of tags.entries()) {
-      await connection.query(
-        `
-          INSERT INTO session_album_photo_tags
-            (
-              photo_id, tag_type, seat_id, session_npc_role_id,
-              user_id, label, sort_order
-            )
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `,
-        [
-          id,
-          tag.tag_type,
-          tag.seat_id || null,
-          tag.session_npc_role_id || null,
-          tag.user_id || null,
-          tag.label,
-          index
-        ]
-      );
-    }
     await connection.query(
       `UPDATE session_album_photos
        SET tag_version = tag_version + 1
        WHERE id = ?`,
       [id]
     );
+    const tags = (await resolveAlbumTags(
+      connection,
+      Number(photo.session_id),
+      [id]
+    )).get(id) || [];
 
     return {
       id,
       tag_version: Number(photo.tag_version || 0) + 1,
-      tags: tags.map((tag) => ({
-        key: tag.key,
-        tag_type: tag.tag_type,
-        seat_id: tag.seat_id,
-        session_npc_role_id: tag.session_npc_role_id || null,
-        user_id: tag.user_id,
-        label: tag.label
-      }))
+      tags
     };
   });
 }
@@ -7979,7 +7952,7 @@ export async function deleteSessionAlbumPhoto(user, photoId) {
     if (Number(photo.uploader_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the photo uploader can delete this photo");
     }
-    await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [id]);
+    await connection.query("DELETE FROM session_album_media_tags WHERE media_id = ?", [id]);
     await connection.query("DELETE FROM session_album_photos WHERE id = ?", [id]);
     return {
       id,
@@ -8221,7 +8194,7 @@ export async function finalizeSessionAlbumPhotoDeletion(user, photoId, snapshot)
     }
     const current = JSON.stringify(canonicalUrls([photo.photo_url, photo.source_url, photo.display_url, photo.cover_url]));
     if (current !== expected) return { deleted: false, reason: "snapshot_changed" };
-    await connection.query("DELETE FROM session_album_photo_tags WHERE photo_id = ?", [id]);
+    await connection.query("DELETE FROM session_album_media_tags WHERE media_id = ?", [id]);
     await connection.query("DELETE FROM session_album_photos WHERE id = ?", [id]);
     return { id, deleted: true };
   });
@@ -8276,17 +8249,17 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
       throw forbidden("Only session members can view the session album");
     }
     const personalScope = await sessionAlbumPersonalScope(connection, session, currentUserId);
-    const tagsMap = await albumTagsForPhotos(connection, [id]);
-    const tags = tagsMap.get(id) || [];
-    const privacyByUser = await albumPrivacyMap(
-      connection,
-      photo.session_id,
-      [
-        photo.uploader_user_id,
-        ...tags.map((tag) => tag.user_id).filter(Boolean)
-      ]
-    );
-    if (!isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, currentUserId, personalScope)) {
+    const {
+      tagReadContext,
+      privacyByUser
+    } = await resolveAlbumTagContext(connection, photo.session_id, [photo]);
+    if (!isAlbumPhotoVisibleToUser(
+      photo,
+      tagReadContext,
+      privacyByUser,
+      currentUserId,
+      personalScope
+    )) {
       throw forbidden("Album photo is not visible");
     }
     return photo;
@@ -8313,28 +8286,26 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId, option
     }
     let snapshotShare = null;
     if (claims.shareId ?? claims.share_id) {
-      const { share } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
+      const {
+        share,
+        manifestIds
+      } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
       snapshotShare = share;
-      if (!isPublicShareSnapshotMediaId(share.media_ids, id)) {
+      if (!manifestIds.has(id)) {
+        emitPublicShareMembershipDenied(claims, options.emitManifestEvent);
         throw forbidden("Album photo is outside this public share");
       }
     } else {
       await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
       await requirePublicAlbumShareSeat(connection, normalizedClaims);
     }
-    const tagsMap = await albumTagsForPhotos(connection, [id]);
-    const tags = tagsMap.get(id) || [];
-    const privacyByUser = await albumPrivacyMap(
-      connection,
-      normalizedClaims.sessionId,
-      [
-        photo.uploader_user_id,
-        ...tags.map((tag) => tag.user_id).filter(Boolean)
-      ]
-    );
+    const {
+      tagReadContext,
+      privacyByUser
+    } = await resolveAlbumTagContext(connection, normalizedClaims.sessionId, [photo]);
     if (!isAlbumPhotoVisibleInPublicShare(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
       normalizedClaims,
       {
@@ -8365,27 +8336,28 @@ export async function getVisibleSessionAlbumVideoForPlayback(user, mediaId) {
       throw forbidden("Only session members can view the session album");
     }
     const personalScope = await sessionAlbumPersonalScope(connection, session, user.user.id);
-    const tagsMap = await albumTagsForPhotos(connection, [id]);
-    const tags = tagsMap.get(id) || [];
-    const privacyByUser = await albumPrivacyMap(
-      connection,
-      media.session_id,
-      [
-        media.uploader_user_id,
-        ...tags.map((tag) => tag.user_id).filter(Boolean)
-      ]
-    );
-    if (!isAlbumPhotoVisibleToUser(media, tags, privacyByUser, user.user.id, personalScope)) {
+    const {
+      tagReadContext,
+      privacyByUser
+    } = await resolveAlbumTagContext(connection, media.session_id, [media]);
+    if (!isAlbumPhotoVisibleToUser(
+      media,
+      tagReadContext,
+      privacyByUser,
+      user.user.id,
+      personalScope
+    )) {
       throw forbidden("Album video is not visible");
     }
     return media;
   });
 }
 
-export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
+export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId, options = {}) {
   const id = positiveId(mediaId, "mediaId");
   const normalizedClaims = normalizeAlbumShareClaims(claims);
-  return withDatabaseConnection(async (connection) => {
+  const withConnection = options.withConnection || withDatabaseConnection;
+  return withConnection(async (connection) => {
     const media = await findById(connection, "session_album_photos", id);
     if (!media || media.status !== "active" || albumMediaType(media) !== "video") {
       throw notFound("Album video not found");
@@ -8401,28 +8373,26 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
     }
     let snapshotShare = null;
     if (claims.shareId ?? claims.share_id) {
-      const { share } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
+      const {
+        share,
+        manifestIds
+      } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
       snapshotShare = share;
-      if (!isPublicShareSnapshotMediaId(share.media_ids, id)) {
+      if (!manifestIds.has(id)) {
+        emitPublicShareMembershipDenied(claims, options.emitManifestEvent);
         throw forbidden("Album video is outside this public share");
       }
     } else {
       await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
       await requirePublicAlbumShareSeat(connection, normalizedClaims);
     }
-    const tagsMap = await albumTagsForPhotos(connection, [id]);
-    const tags = tagsMap.get(id) || [];
-    const privacyByUser = await albumPrivacyMap(
-      connection,
-      normalizedClaims.sessionId,
-      [
-        media.uploader_user_id,
-        ...tags.map((tag) => tag.user_id).filter(Boolean)
-      ]
-    );
+    const {
+      tagReadContext,
+      privacyByUser
+    } = await resolveAlbumTagContext(connection, normalizedClaims.sessionId, [media]);
     if (!isAlbumPhotoVisibleInPublicShare(
       media,
-      tags,
+      tagReadContext,
       privacyByUser,
       normalizedClaims,
       {
@@ -8459,23 +8429,21 @@ export async function getPublicSessionAlbumVideoForPlayback(claims, mediaId, opt
     if (Number(media.session_id) !== normalizedClaims.sessionId) {
       throw forbidden("Album video is outside this public share");
     }
-    const { share } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
-    if (!isPublicShareSnapshotMediaId(share.media_ids, id)) {
+    const {
+      share,
+      manifestIds
+    } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
+    if (!manifestIds.has(id)) {
+      emitPublicShareMembershipDenied(claims, options.emitManifestEvent);
       throw forbidden("Album video is outside this public share");
     }
-    const tagsMap = await albumTagsForPhotos(connection, [id]);
-    const tags = tagsMap.get(id) || [];
-    const privacyByUser = await albumPrivacyMap(
-      connection,
-      normalizedClaims.sessionId,
-      [
-        media.uploader_user_id,
-        ...tags.map((tag) => tag.user_id).filter(Boolean)
-      ]
-    );
+    const {
+      tagReadContext,
+      privacyByUser
+    } = await resolveAlbumTagContext(connection, normalizedClaims.sessionId, [media]);
     if (!isAlbumPhotoVisibleInPublicShare(
       media,
-      tags,
+      tagReadContext,
       privacyByUser,
       normalizedClaims,
       {
@@ -8737,19 +8705,13 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
       albumPhotoIds
     );
     const photosById = new Map(albumPhotoRows.map((photo) => [Number(photo.id), photo]));
-    const tagsMap = await albumTagsForPhotos(connection, albumPhotoIds);
-    const privacyByUser = await albumPrivacyMap(
-      connection,
-      id,
-      albumPhotoRows.flatMap((photo) => [
-        photo.uploader_user_id,
-        ...(tagsMap.get(Number(photo.id)) || []).map((tag) => tag.user_id)
-      ]).filter(Boolean)
-    );
+    const {
+      tagReadContext,
+      privacyByUser
+    } = await resolveAlbumTagContext(connection, id, albumPhotoRows);
     const personalScope = await sessionAlbumPersonalScope(connection, session, user.user.id);
     albumPhotos = albumPhotoIds.map((albumPhotoId) => {
       const photo = photosById.get(albumPhotoId);
-      const tags = tagsMap.get(albumPhotoId) || [];
       if (
         !photo ||
         Number(photo.session_id) !== id ||
@@ -8757,7 +8719,13 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
         albumMediaType(photo) !== "image" ||
         albumMediaProcessingStatus(photo) !== "ready" ||
         !isModerationPublished(photo.moderation_status) ||
-        !isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, user.user.id, personalScope)
+        !isAlbumPhotoVisibleToUser(
+          photo,
+          tagReadContext,
+          privacyByUser,
+          user.user.id,
+          personalScope
+        )
       ) {
         throw badRequest("albumPhotoIds must reference visible approved photos from this session album");
       }

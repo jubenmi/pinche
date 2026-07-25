@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "d51:check": "node --test scripts/d51-architecture-hardening-check.test.mjs && node scripts/d51-architecture-hardening-check.js --allow-red",
-    "postcheck": "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check && npm run unified-share:unit && npm run unified-share:check",
+    "postcheck": "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check && npm run unified-share:unit && npm run unified-share:check && npm run d57:unit && npm run d57:check",
     "d51:migrations": "node --test apps/api/test/migration-runner.test.mjs apps/api/test/migration-runner-hardening.test.mjs apps/api/test/migration-registry.test.mjs scripts/check-migration-filenames.test.mjs && node scripts/check-migration-filenames.mjs",
     "d51:security": "node --test apps/api/test/http-body-boundaries.test.mjs apps/api/test/runtime-config.test.mjs apps/api/test/rate-limit.test.mjs",
     "d51:http-kernel": "node --test apps/api/test/router.test.mjs apps/api/test/app-routing.test.mjs apps/api/test/app-dependencies.test.mjs apps/api/test/server-entrypoint.test.mjs",
@@ -57,6 +57,8 @@
     "d55:check": "node scripts/d55-client-canvas-album-share-cover-check.js",
     "d56:unit": "node --test apps/miniprogram/test/albumShareEntry.test.mjs",
     "d56:check": "node scripts/d56-album-share-entry-remap-check.js",
+    "d57:unit": "node --test apps/api/test/album-tag-model.test.mjs apps/api/test/album-public-share-manifest.test.mjs apps/api/test/album-public-media-state.test.mjs apps/miniprogram/test/publicAlbumReadState.test.mjs",
+    "d57:check": "node scripts/d57-album-tag-public-share-read-model-check.js",
     "d50:unit": "node --test apps/api/test/album-single-media-share.test.mjs apps/miniprogram/test/albumSingleMediaShare.test.mjs",
     "d50:check": "node scripts/d50-album-single-media-sharing-check.js",
     "d53:unit": "node --test apps/api/test/album-share-selection.test.mjs apps/api/test/request-body-limits.test.mjs",

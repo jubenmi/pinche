@@ -143,8 +143,10 @@ assert(
 );
 
 const publicShareBody = functionBody(service, "listPublicSessionAlbumShare");
+const visiblePublicShareMediaBody = functionBody(service, "readVisiblePublicShareMedia");
 assert(
-  publicShareBody.includes("isAlbumPhotoVisibleInPublicShare") &&
+  publicShareBody.includes("readVisiblePublicShareMedia") &&
+    visiblePublicShareMediaBody.includes("isAlbumPhotoVisibleInPublicShare") &&
     publicShareBody.includes("share_subject") &&
     publicShareBody.includes("photos"),
   "public album share list must filter photos by public share visibility"
@@ -160,10 +162,13 @@ assert(
 for (const token of [
   "createOrReuseSessionAlbumPublicShare",
   "loadSessionAlbumPublicShare",
-  "isPublicShareSnapshotMediaId",
+  "assertManifestMatchesLegacySnapshot",
   "revokeMySessionAlbumPublicShares"
 ]) {
-  assert(service.includes(token), `D48 must explicitly replace the D23 dynamic share boundary: ${token}`);
+  assert(
+    service.includes(token),
+    `D48/D57 must explicitly replace the D23 dynamic share boundary: ${token}`
+  );
 }
 
 const server = read("apps/api/src/legacy-app.js");

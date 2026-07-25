@@ -14,6 +14,10 @@ D50 采用“一份公开快照、两种展示模式”：成员为当前媒体�
 
 当前公开相册只提供 ready 视频封面，没有匿名播放 URL。D50 新增绑定 v2 快照的短期公开视频 capability，并在应用层按请求复核资格与代理 Range 字节。
 
+### D57 后续权威契约
+
+D57 supersedes 下文将 `share.media_ids` 当作单媒体运行时授权来源的历史描述。所有单媒体 getter 与 capability 复核都查询 `session_album_public_share_items`；兼容 JSON 仅用于旧快照回填和完整性校验。公开首屏先提交 `INITIAL_PAGE`，再等待 media-state 复核并 patch 当前卡片，通过 request authority 门禁后才投影 `focusMediaId`。
+
 ## 2. 组件与文件边界
 
 | 单元 | 责任 |
@@ -87,7 +91,7 @@ getPublicSessionAlbumVideoForPlayback(claims, mediaId)
 - processing 为 ready；
 - `display_url` 存在；
 - session 与 claims 一致；
-- media ID 属于 share `media_ids`；
+- media ID 存在于 `session_album_public_share_items`，且归属当前 share；
 - 当前 `isAlbumPhotoVisibleInPublicShare` 仍为 true。
 
 返回内部 media row，只供受控 server responder 使用。

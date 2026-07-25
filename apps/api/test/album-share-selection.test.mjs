@@ -28,16 +28,18 @@ function media(id, overrides = {}) {
 
 function tagRow(photoId) {
   return {
-    photo_id: photoId,
-    tag_type: "seat",
+    media_id: photoId,
+    kind: "role",
     seat_id: 1000,
-    user_id: 100,
-    seat_user_id: 100
+    session_npc_role_id: null,
+    canonical_label: "Sharer",
+    privacy_user_id: 100
   };
 }
 
 function shareConnection(photoRows, options = {}) {
   const shares = [];
+  const shareItems = [];
   const untaggedIds = new Set((options.untaggedIds || []).map(Number));
   const session = { id: 10, organizer_user_id: 100, status: "completed" };
   const seat = {
@@ -51,6 +53,7 @@ function shareConnection(photoRows, options = {}) {
   };
   return {
     shares,
+    shareItems,
     async query(sql, values = []) {
       if (sql.includes("FROM sessions session")) return [[session]];
       if (sql.includes("FROM session_seats seat") && sql.includes("JOIN users account")) {
@@ -59,9 +62,11 @@ function shareConnection(photoRows, options = {}) {
       if (sql.includes("FROM session_album_photos photo")) {
         return [[...photoRows].sort((left, right) => Number(right.id) - Number(left.id))];
       }
-      if (sql.includes("FROM session_album_photo_tags tag")) {
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        const requestedIds = new Set(values.slice(1).map(Number));
         return [photoRows
           .filter((photo) => !untaggedIds.has(Number(photo.id)))
+          .filter((photo) => requestedIds.has(Number(photo.id)))
           .map((photo) => tagRow(photo.id))];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
@@ -83,6 +88,22 @@ function shareConnection(photoRows, options = {}) {
         };
         shares.push(share);
         return [{ insertId: share.id }];
+      }
+      if (sql.includes("INSERT INTO session_album_public_share_items")) {
+        for (let index = 0; index < values.length; index += 3) {
+          shareItems.push({
+            share_id: values[index],
+            ordinal: values[index + 1],
+            media_id: values[index + 2]
+          });
+        }
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [shareItems
+          .filter((item) => Number(item.share_id) === Number(values[0]))
+          .sort((left, right) => left.ordinal - right.ordinal)
+          .map(({ ordinal, media_id }) => ({ ordinal, media_id }))];
       }
       if (sql.includes("SELECT * FROM session_album_public_shares WHERE id = ?")) {
         return [[shares.find((share) => Number(share.id) === Number(values[0]))].filter(Boolean)];

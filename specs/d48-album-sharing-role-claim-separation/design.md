@@ -15,7 +15,11 @@ D48 不新建第二套相册页面或第二套认领状态机，而是在现有 
 3. 服务端把公开过滤改为“分享者角色标注或分享者上传”加上传者/被标注者隐私一票否决，并在签发 token 时保存最多 30 项的固定快照。
 4. 分享 token 返回从快照内安全图片生成的封面 URL；客户端只有在无安全图片或读取失败时才使用现有固定票根图。
 
-该方案保留现有公开相册接口、媒体签名、相册页模板和邀请页，不引入新的前端页面。为了可靠保存快照且避免把 30 个媒体 ID 塞进微信 query，只新增一张有界快照表。
+该方案保留现有公开相册接口、媒体签名、相册页模板和邀请页，不引入新的前端页面。D48 原始实现先新增分享主表；后续 D57 再为运行时快照成员建立规范化明细表。
+
+### D57 后续权威契约
+
+D57 supersedes 本文后续关于旧标签行与 JSON 快照运行时读取的原始设计。标签写入 `session_album_media_tags`，只保存 canonical `role`、`npc_role`、`other` 引用；显示 `label` 从当前 `session_seats` / `session_npc_roles` 名称解析，隐私主体另行解析，标签中不保存玩家账号、DM 或 NPC 工作人员身份。公开成员、顺序和逐媒体授权以 `session_album_public_share_items` 为唯一运行时权威；`media_ids`、`implicit_untagged_media` 等 JSON 只作为旧链接兼容与完整性核对输入。
 
 ## 2. 当前基线与最小差异
 
@@ -64,18 +68,18 @@ CREATE TABLE session_album_public_shares (
 
 设计约束：
 
-- `media_ids` 只能保存 1–30 个去重正整数，服务层读写时必须严格校验。
+- `media_ids` 是 D48 历史兼容快照，服务层只将其用于迁移回填和完整性核对；D57 新写入同时生成规范化 items。
 - `snapshot_digest` 是排序后媒体 ID、封面 ID 集合、分享者和席位的 SHA-256，用于复用未过期且内容相同的快照，避免每次进入相册都插入新行。
 - `cover_media_ids` 只能保存 0–9 个去重正整数，并且每个 ID 都必须包含在 `media_ids` 中。
 - 过期时间继续使用现有 30 天相册分享期限。
 - `revoked_at` 非空的快照不得被复用，也不得继续签发列表、封面或媒体 URL。
-- 不建立快照媒体明细表；公开上限固定为 30，使用有界 JSON 可以少一张表和一组写事务，同时不会产生任意大小字段。
+- D48 原始版本未建立快照媒体明细表；该限制已由 D57 的 `session_album_public_share_items` 取代。
 
 ### 3.2 不改动的数据
 
 - `session_album_privacy.allow_uploaded_visible`
 - `session_album_privacy.allow_tagged_visible`
-- `session_album_photos` 与 `session_album_photo_tags`
+- `session_album_photos`；历史 `session_album_photo_tags` 仅供迁移兼容，D57 运行时使用 `session_album_media_tags`
 - `sessions.join_policy`
 - `signups` 与 `session_seats`
 
@@ -94,7 +98,7 @@ AND (
 )
 AND privacy(media.uploader_user_id).allow_uploaded_visible
 AND every bound tag user allows allow_tagged_visible
-AND no inconsistent occupied-seat tag is missing user_id
+AND every canonical role ref resolves to a consistent current privacy subject
 ```
 
 重要变化：
@@ -139,7 +143,7 @@ selectPublicShareCoverMedia(selectedMedia, tagsMap, subject)
 
 - `uploader_user_id == sharerUserId`；
 - 标签包含分享者 `seat_id`；
-- 不存在 `user_id != sharerUserId` 的真实玩家标签。
+- 不存在解析后隐私主体不同于分享者的 canonical `role` 标签。
 
 第二优先级：
 
@@ -254,7 +258,7 @@ GET /api/sessions/:id/album/public-share?token=<albumShareToken>
 1. 验证 version 2 token。
 2. 读取 `session_album_public_shares` 并核对 share/session/sharer/seat/expiry。
 3. 重新验证席位仍归分享者且状态为 `confirmed` 或 `locked`。
-4. 只查询快照 `media_ids` 中的媒体。
+4. 只查询 `session_album_public_share_items` 中属于该 share 的媒体。
 5. 对每项重新执行审核、状态、关联和隐私门禁。
 6. 生成公开媒体短期 URL。
 7. 返回清理后的公开 DTO。
@@ -294,7 +298,7 @@ DELETE /api/sessions/:id/album/public-shares
 }
 ```
 
-`albumMediaResponse(..., { publicShare: true })` 在 D48 必须把 `tags` 固定为空数组，并继续移除上传者、对象 Key、ETag、作者私有字段和内部 URL。精确 `start_at` 不再出现在公开 DTO；服务端返回北京时间 `played_on`。公开页不需要原始标签，只使用 `share_subject` 生成统一说明。
+`albumMediaResponse(..., { publicShare: true })` 在 D48 必须把 `tags` 固定为空数组，并继续移除上传者、对象 Key、ETag、作者私有字段、标签关联字段和内部 URL；后续规格允许它为已经通过公开资格复核的媒体单独投影展示用标签文字数组。精确 `start_at` 不再出现在公开 DTO；服务端返回北京时间 `played_on`。标签文字只用于展示，不参与客户端授权。
 
 ## 5. 小程序设计
 

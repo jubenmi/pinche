@@ -100,9 +100,18 @@ assert(
     albumPage.includes("thumbnailUrlResolver: (url) => this.normalizeAlbumMediaUrl(url)"),
   "album sharing must select one local-first representative image before enabling Moments"
 );
+const memberAlbumCommit = albumPage.indexOf(
+  "this.albumSession = this.albumSessionSummary(data);",
+  albumPage.indexOf("async loadAlbum() {")
+);
+const publicAlbumCommit = albumPage.indexOf(
+  "this.albumSession = this.albumSessionSummary(data);",
+  albumPage.indexOf("async loadPublicAlbum() {")
+);
 assert(
-  albumPage.match(/this\.albumSession = this\.albumSessionSummary\(data\);/g)?.length >= 3,
-  "public album refresh must preserve header metadata when onLoad and onShow race"
+  memberAlbumCommit > albumPage.indexOf("async loadAlbum() {")
+    && publicAlbumCommit > albumPage.indexOf("async loadPublicAlbum() {"),
+  "member and public initial-page commits must both preserve album header metadata"
 );
 assert(
   !albumPage.includes("shareFriendCoverUrl") &&

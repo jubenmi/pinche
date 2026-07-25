@@ -6,6 +6,8 @@ import test from "node:test";
 
 import {
   createOrReuseSessionAlbumPublicShare,
+  getPublicSessionAlbumPhotoForMedia,
+  getPublicSessionAlbumVideoCoverForMedia,
   getPublicSessionAlbumVideoForPlayback,
   publicShareSnapshotDigest,
   selectPublicShareMedia
@@ -48,15 +50,46 @@ function eligibleMedia(id, overrides = {}) {
 
 function sharerSeatTag() {
   return {
-    tag_type: "seat",
-    seat_id: 1000,
-    user_id: 100,
-    seat_user_id: 100
+    kind: "role",
+    ref_id: 1000,
+    label: "Sharer"
+  };
+}
+
+function albumTagQueryRows(sql, values, fixtures) {
+  const mediaIds = new Set(values.slice(1).map(Number));
+  const rows = fixtures.filter((row) =>
+    mediaIds.has(Number(row.media_id ?? row.photo_id))
+  );
+  return rows.map((row) => ({
+    media_id: Number(row.media_id ?? row.photo_id),
+    kind: row.kind,
+    seat_id: row.kind === "role" ? Number(row.ref_id) : null,
+    session_npc_role_id: row.kind === "npc_role" ? Number(row.ref_id) : null,
+    canonical_label: row.kind === "other" ? null : row.label,
+    privacy_user_id: row.privacy_user_id ??
+      (row.kind === "role" && Number(row.ref_id) === 1000 ? 100 : null)
+  }));
+}
+
+function tagReadContext(tagsByMediaId) {
+  return {
+    tagsByMediaId,
+    privacySubjectsByMediaId: new Map(
+      [...tagsByMediaId].map(([mediaId, tags]) => [
+        mediaId,
+        tags.some((tag) => tag.kind === "role" && Number(tag.ref_id) === 1000)
+          ? [100]
+          : [],
+      ]),
+    ),
   };
 }
 
 function tagsFor(candidates) {
-  return new Map(candidates.map((media) => [Number(media.id), [sharerSeatTag()]]));
+  return tagReadContext(
+    new Map(candidates.map((media) => [Number(media.id), [sharerSeatTag()]])),
+  );
 }
 
 test("public media category distinguishes the shared role from safe other content", () => {
@@ -67,36 +100,95 @@ test("public media category distinguishes the shared role from safe other conten
   );
   assert.equal(
     coreService.publicAlbumMediaCategory(
-      [{ tag_type: "other", user_id: null }],
+      [{ kind: "other", ref_id: null, label: "其他" }],
       claims
     ),
     "other"
   );
   assert.equal(
     coreService.publicAlbumMediaCategory(
-      [{ tag_type: "session_npc_role", user_id: null }],
+      [{ kind: "npc_role", ref_id: 8, label: "阿离" }],
       claims
     ),
     "other"
   );
 });
 
-test("public media response exposes only the safe category and keeps raw tags private", () => {
+test("public tag labels trim, discard invalid values, and deduplicate in source order", () => {
+  assert.equal(typeof coreService.publicAlbumTagLabels, "function");
+  assert.deepEqual(
+    coreService.publicAlbumTagLabels([
+      { label: " 沈清商 " },
+      { label: "阿离" },
+      { label: "沈清商" },
+      { label: "  " },
+      { label: 7 },
+      null
+    ]),
+    ["沈清商", "阿离"]
+  );
+});
+
+test("public media response exposes label strings without raw tag metadata", () => {
   assert.equal(typeof coreService.publicAlbumMediaResponse, "function");
-  const otherTag = { tag_type: "other", user_id: null, label: "内部标签" };
+  const rawTags = [
+    {
+      id: 9001,
+      key: "role:private-canary",
+      kind: "role",
+      ref_id: 1000,
+      session_npc_role_id: 9002,
+      user_id: 100,
+      seat_user_id: 100,
+      label: "沈清商",
+      account_name: "ACCOUNT_CANARY",
+      note: "NOTE_CANARY"
+    },
+    {
+      id: 9003,
+      key: "npc-role:private-canary",
+      kind: "npc_role",
+      ref_id: 9004,
+      session_npc_role_id: 9004,
+      user_id: null,
+      label: "阿离"
+    }
+  ];
   const response = coreService.publicAlbumMediaResponse(
     eligibleMedia(41),
-    [otherTag],
+    rawTags,
     claims
   );
 
-  assert.equal(response.public_category, "other");
+  assert.equal(response.public_category, "share_subject");
   assert.deepEqual(response.tags, []);
-  assert.equal(JSON.stringify(response).includes(otherTag.label), false);
+  assert.deepEqual(response.public_tag_labels, ["沈清商", "阿离"]);
+  assert.deepEqual(
+    coreService.publicAlbumMediaResponse(eligibleMedia(42), [], claims).public_tag_labels,
+    []
+  );
+
+  const serialized = JSON.stringify(response);
+  for (const key of [
+    "key",
+    "label",
+    "tag_type",
+    "seat_id",
+    "session_npc_role_id",
+    "user_id",
+    "seat_user_id",
+    "account_name",
+    "note"
+  ]) {
+    assert.equal(serialized.includes(`\"${key}\"`), false);
+  }
+  assert.equal(serialized.includes("ACCOUNT_CANARY"), false);
+  assert.equal(serialized.includes("NOTE_CANARY"), false);
 });
 
 function focusedShareConnection(photoRows, tagRows) {
   const shares = [];
+  const shareItems = [];
   const session = { id: 10, organizer_user_id: 100 };
   const seat = {
     id: 1000,
@@ -110,13 +202,16 @@ function focusedShareConnection(photoRows, tagRows) {
 
   return {
     shares,
+    shareItems,
     async query(sql, values = []) {
       if (sql.includes("FROM sessions session")) return [[session]];
       if (sql.includes("FROM session_seats seat") && sql.includes("JOIN users account")) {
         return [[seat]];
       }
       if (sql.includes("FROM session_album_photos photo")) return [photoRows];
-      if (sql.includes("FROM session_album_photo_tags tag")) return [tagRows];
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        return [albumTagQueryRows(sql, values, tagRows)];
+      }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {
         return [[shares.find((share) => share.snapshot_digest === values[3])].filter(Boolean)];
@@ -136,6 +231,22 @@ function focusedShareConnection(photoRows, tagRows) {
         };
         shares.push(share);
         return [{ insertId: share.id }];
+      }
+      if (sql.includes("INSERT INTO session_album_public_share_items")) {
+        for (let index = 0; index < values.length; index += 3) {
+          shareItems.push({
+            share_id: values[index],
+            ordinal: values[index + 1],
+            media_id: values[index + 2]
+          });
+        }
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [shareItems
+          .filter((item) => Number(item.share_id) === Number(values[0]))
+          .sort((left, right) => left.ordinal - right.ordinal)
+          .map(({ ordinal, media_id }) => ({ ordinal, media_id }))];
       }
       if (sql.includes("SELECT * FROM session_album_public_shares WHERE id = ?")) {
         return [[shares.find((share) => Number(share.id) === Number(values[0]))].filter(Boolean)];
@@ -207,12 +318,12 @@ test("selectPublicShareMedia without options preserves D48 ranking order", () =>
     }),
     eligibleMedia(4, { created_at: "2026-07-19T00:00:02.000Z" })
   ];
-  const tags = new Map([
+  const tags = tagReadContext(new Map([
     [1, [sharerSeatTag()]],
     [2, [sharerSeatTag()]],
     [3, [sharerSeatTag()]],
-    [4, [{ tag_type: "other", user_id: null }]]
-  ]);
+    [4, [{ kind: "other", ref_id: null, label: "其他" }]]
+  ]));
 
   assert.deepEqual(
     selectPublicShareMedia(candidates, tags, openPrivacy([100, 200]), claims)
@@ -241,8 +352,35 @@ test("createOrReuseSessionAlbumPublicShare persists and reuses an eligible focus
   assert.equal(first.focus_media_id, 1);
   assert.deepEqual(first.media_ids, [1, 2]);
   assert.equal(connection.shares.length, 1);
+  assert.deepEqual(connection.shareItems, [
+    { share_id: 1, ordinal: 0, media_id: 1 },
+    { share_id: 1, ordinal: 1, media_id: 2 }
+  ]);
   assert.equal(second.share_id, first.share_id);
   assert.equal(second.focus_media_id, 1);
+});
+
+test("createOrReuseSessionAlbumPublicShare fails closed before reusing a mismatched manifest", async () => {
+  const photos = [
+    eligibleMedia(1, { created_at: "2026-07-19T00:00:01.000Z" }),
+    eligibleMedia(2, { created_at: "2026-07-19T00:00:02.000Z" })
+  ];
+  const connection = focusedShareConnection(
+    photos,
+    photos.map((photo) => ({ photo_id: photo.id, ...sharerSeatTag() }))
+  );
+  const options = {
+    withTransaction: async (work) => work(connection)
+  };
+  await createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, options);
+  [connection.shareItems[0].media_id, connection.shareItems[1].media_id] =
+    [connection.shareItems[1].media_id, connection.shareItems[0].media_id];
+
+  await assert.rejects(
+    () => createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, options),
+    (error) => error?.statusCode === 403
+  );
+  assert.equal(connection.shares.length, 1);
 });
 
 test("createOrReuseSessionAlbumPublicShare persists a safe three-image Canvas cover snapshot", async () => {
@@ -265,15 +403,15 @@ test("createOrReuseSessionAlbumPublicShare persists a safe three-image Canvas co
     { photo_id: groupPhoto.id, ...sharerSeatTag() },
     {
       photo_id: groupPhoto.id,
-      tag_type: "seat",
-      seat_id: 2000,
-      user_id: 200,
-      seat_user_id: 200
+      kind: "role",
+      ref_id: 2000,
+      label: "Other role",
+      privacy_user_id: 200
     },
     { photo_id: otherUploaderPhoto.id, ...sharerSeatTag() },
     { photo_id: video.id, ...sharerSeatTag() },
     { photo_id: pending.id, ...sharerSeatTag() },
-    { photo_id: safeScene.id, tag_type: "other", user_id: null }
+    { photo_id: safeScene.id, kind: "other", ref_id: null, label: "其他" }
   ];
   const connection = focusedShareConnection(photos, tagRows);
   const options = { withTransaction: async (work) => work(connection) };
@@ -347,7 +485,7 @@ test("focused album shares validate the focus ID and expose it through the share
   assert.match(serviceSource, /ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE/);
   assert.match(
     serviceSource,
-    /selectPublicShareMedia\(photoRows, tagsMap, privacyByUser, claims, \{\s*requiredMediaId: focusMediaId,\s*allowOwnedUntaggedImages: includeOwnedUntaggedImages,\s*selectedMediaIds:/
+    /selectPublicShareMedia\(photoRows, tagReadContext, privacyByUser, claims, \{\s*requiredMediaId: focusMediaId,\s*allowOwnedUntaggedImages: includeOwnedUntaggedImages,\s*selectedMediaIds:/
   );
   assert.match(serviceSource, /focus_media_id: focusMediaId \|\| null/);
 
@@ -409,13 +547,17 @@ function publicVideoPlaybackConnection(media, options = {}) {
   });
   const tags = options.tags || [{ photo_id: 77, ...sharerSeatTag() }];
   const privacy = options.privacy || [];
+  const manifestIds = options.manifestIds || share.media_ids;
   return {
-    async query(sql) {
+    async query(sql, values = []) {
       if (sql.includes("SELECT * FROM session_album_photos WHERE id = ?")) {
         return [[media]].filter(Boolean);
       }
       if (sql.includes("FROM session_album_public_shares")) {
         return [options.revoked ? [] : [share]];
+      }
+      if (sql.includes("FROM session_album_public_share_items")) {
+        return [manifestIds.map((mediaId, ordinal) => ({ ordinal, media_id: mediaId }))];
       }
       if (sql.includes("FROM sessions session")) {
         return [[{ id: 10, status: "completed" }]];
@@ -423,7 +565,9 @@ function publicVideoPlaybackConnection(media, options = {}) {
       if (sql.includes("FROM session_seats") && sql.includes("confirmed_user_id")) {
         return [[{ id: 1000, confirmed_user_id: 100, status: "confirmed" }]];
       }
-      if (sql.includes("FROM session_album_photo_tags")) return [tags];
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        return [albumTagQueryRows(sql, values, tags)];
+      }
       if (sql.includes("FROM session_album_privacy")) return [privacy];
       throw new Error(`Unexpected public video playback test query: ${sql}`);
     }
@@ -494,6 +638,51 @@ test("getPublicSessionAlbumVideoForPlayback fails closed for disallowed public p
       undefined,
       name
     );
+  }
+});
+
+test("all public image and video byte authorizers use normalized manifest membership", async () => {
+  const photo = eligibleMedia(77, {
+    photo_url: "/uploads/session-album/display/public-77.jpg"
+  });
+  const video = eligibleMedia(77, {
+    media_type: "video",
+    display_url: "/uploads/session-album/videos/display/public-77.mp4",
+    cover_url: "/uploads/session-album/videos/cover/public-77.jpg"
+  });
+  // The compatibility JSON still names the requested media. The normalized
+  // manifest does not, so every byte path must fail closed before serving it.
+  const options = { mediaIds: [77], manifestIds: [78] };
+
+  await assert.rejects(
+    () => getPublicSessionAlbumPhotoForMedia(publicVideoClaims, 77, {
+      withConnection: async (work) => work(publicVideoPlaybackConnection(photo, options))
+    }),
+    (error) => error?.statusCode === 403
+  );
+  await assert.rejects(
+    () => getPublicSessionAlbumVideoCoverForMedia(publicVideoClaims, 77, {
+      withConnection: async (work) => work(publicVideoPlaybackConnection(video, options))
+    }),
+    (error) => error?.statusCode === 403
+  );
+  await assert.rejects(
+    () => getPublicSessionAlbumVideoForPlayback(publicVideoClaims, 77, {
+      withConnection: async (work) => work(publicVideoPlaybackConnection(video, options))
+    }),
+    (error) => error?.statusCode === 403
+  );
+
+  for (const functionName of [
+    "getPublicSessionAlbumPhotoForMedia",
+    "getPublicSessionAlbumVideoCoverForMedia",
+    "getPublicSessionAlbumVideoForPlayback"
+  ]) {
+    const start = serviceSource.indexOf(`export async function ${functionName}`);
+    const end = serviceSource.indexOf("\nexport async function ", start + 1);
+    const source = serviceSource.slice(start, end < 0 ? undefined : end);
+    assert.match(source, /manifestIds\.has\(id\)/, functionName);
+    assert.doesNotMatch(source, /share\.media_ids/, functionName);
   }
 });
 

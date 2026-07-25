@@ -315,7 +315,7 @@ async function main() {
   await request(
     "PUT",
     `/api/session-album/photos/${processingVideoId}/tags`,
-    { tagKeys: [`seat:${memberSeat.id}`] },
+    { tagKeys: [`role:${memberSeat.id}`] },
     admin.token
   );
   const memberAlbum = await request("GET", `/api/sessions/${session.id}/album`, undefined, member.token);

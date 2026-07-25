@@ -127,7 +127,7 @@ assert(
 assert(
   service.includes("DELETE FROM session_messages") &&
     service.includes("DELETE FROM session_chat_rooms") &&
-    service.includes("DELETE FROM session_album_photo_tags") &&
+    service.includes("DELETE FROM session_album_media_tags") &&
     service.includes("DELETE FROM session_album_photos") &&
     service.includes("DELETE FROM session_album_privacy") &&
     service.includes("DELETE FROM session_review_photos") &&
@@ -153,7 +153,7 @@ assert(
 );
 assert(
   service.includes("export async function deleteSessionAlbumPhoto") &&
-    service.includes("DELETE FROM session_album_photo_tags WHERE photo_id = ?") &&
+    service.includes("DELETE FROM session_album_media_tags WHERE media_id = ?") &&
     service.includes("DELETE FROM session_album_photos WHERE id = ?") &&
     !service.includes("UPDATE session_album_photos SET status = 'deleted'"),
   "album photo deletion should clear the photo record instead of soft-hiding it"
