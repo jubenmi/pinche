@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { config } from "../src/config/env.js";
 import { forbidden } from "../src/http/errors.js";
 import {
   PUBLIC_MEDIA_STATE_BATCH_LIMIT,
@@ -48,6 +50,20 @@ function media(id, overrides = {}) {
     image_content_type: "image/jpeg",
     ...overrides,
   };
+}
+
+function verifiedCapabilityPayload(url, purpose) {
+  const token = new URL(url, "http://localhost").searchParams.get("token");
+  const [payloadText, signature, extra] = String(token || "").split(".");
+  assert(payloadText);
+  assert(signature);
+  assert.equal(extra, undefined);
+  const expected = crypto
+    .createHmac("sha256", config.sessionSecret)
+    .update(`${purpose}:${payloadText}`)
+    .digest("hex");
+  assert.equal(signature, expected);
+  return JSON.parse(Buffer.from(payloadText, "base64url").toString("utf8"));
 }
 
 function mediaStateConnection(options = {}) {
@@ -298,6 +314,64 @@ test("public media-state URL attachment strips internal fields and returns expir
     assert.equal(serialized.includes(canary), false);
   }
   assert.equal("uploader_user_id" in attached.patches[0], false);
+});
+
+test("public media-state capability tokens and metadata share one bounded absolute expiry", () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  for (const remainingShareSeconds of [3600, 120]) {
+    const currentClaims = {
+      ...claims,
+      exp: nowSeconds + remainingShareSeconds,
+    };
+    const expectedExp = Math.min(currentClaims.exp, nowSeconds + 10 * 60);
+    const attached = attachPublicSessionAlbumMediaStateUrls({
+      patches: [
+        {
+          ...media(1),
+          public_tag_labels: ["沈清商"],
+        },
+        {
+          ...media(3, {
+            media_type: "video",
+            processing_status: "ready",
+            has_cover: true,
+          }),
+          public_tag_labels: ["阿离"],
+        },
+      ],
+      unavailable_ids: [],
+    }, currentClaims, "album-token", { nowSeconds });
+
+    const [imagePatch, videoPatch] = attached.patches;
+    const imageClaims = verifiedCapabilityPayload(
+      imagePatch.preview_display_url,
+      "session-album-public-media",
+    );
+    const thumbnailClaims = verifiedCapabilityPayload(
+      imagePatch.thumbnail_display_url,
+      "session-album-public-media",
+    );
+    const coverClaims = verifiedCapabilityPayload(
+      videoPatch.cover_url,
+      "session-album-public-media",
+    );
+    const videoClaims = verifiedCapabilityPayload(
+      videoPatch.video_url,
+      "session-album-public-video-file",
+    );
+    const expectedExpiresAt = new Date(expectedExp * 1000).toISOString();
+
+    assert.equal(imagePatch.media_url_expires_at, expectedExpiresAt);
+    assert.equal(videoPatch.media_url_expires_at, expectedExpiresAt);
+    assert.equal(imageClaims.exp, expectedExp);
+    assert.equal(thumbnailClaims.exp, expectedExp);
+    assert.equal(coverClaims.exp, expectedExp);
+    assert.equal(videoClaims.exp, expectedExp);
+    assert.equal(imageClaims.usage, "image");
+    assert.equal(thumbnailClaims.usage, "image");
+    assert.equal(coverClaims.usage, "video_cover");
+    assert.equal(videoClaims.purpose, "session-album-public-video-file");
+  }
 });
 
 test("public media-state telemetry emits only the approved numeric counters", () => {

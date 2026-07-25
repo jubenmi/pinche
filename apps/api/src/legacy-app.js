@@ -3282,8 +3282,20 @@ function sessionAlbumTokenDigest(token) {
     .digest("hex");
 }
 
+function boundedSessionAlbumPublicMediaExp(payload) {
+  const defaultExp = Math.floor(Date.now() / 1000) +
+    SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS;
+  const shareExp = payload.exp === undefined
+    ? defaultExp
+    : tokenPositiveInteger(payload.exp, "exp");
+  const requestedExp = payload.capabilityExp === undefined
+    ? defaultExp
+    : tokenPositiveInteger(payload.capabilityExp, "capabilityExp");
+  return Math.min(shareExp, requestedExp);
+}
+
 function signSessionAlbumPublicMediaToken(payload) {
-  const exp = Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS;
+  const exp = boundedSessionAlbumPublicMediaExp(payload);
   const shareClaims = normalizeSessionAlbumShareClaims({ ...payload, exp });
   const usage = String(payload.usage || "");
   if (!new Set(["image", "video_cover"]).has(usage)) {
@@ -3302,13 +3314,15 @@ function sessionAlbumPublicMediaPath(
   photoId,
   claims,
   albumShareToken,
-  variant = "preview"
+  variant = "preview",
+  capabilityExp
 ) {
   const token = signSessionAlbumPublicMediaToken({
     ...claims,
     photoId,
     usage: "image",
-    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
+    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken),
+    capabilityExp
   });
   const path = `/api/session-album/public-share/photos/${photoId}/image?token=${encodeURIComponent(
     token
@@ -3316,12 +3330,18 @@ function sessionAlbumPublicMediaPath(
   return variant === "thumbnail" ? `${path}&variant=thumbnail` : path;
 }
 
-function sessionAlbumPublicVideoCoverPath(mediaId, claims, albumShareToken) {
+function sessionAlbumPublicVideoCoverPath(
+  mediaId,
+  claims,
+  albumShareToken,
+  capabilityExp
+) {
   const token = signSessionAlbumPublicMediaToken({
     ...claims,
     photoId: mediaId,
     usage: "video_cover",
-    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
+    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken),
+    capabilityExp
   });
   return `/api/session-album/public-share/media/${mediaId}/cover?token=${encodeURIComponent(
     token
@@ -3345,8 +3365,7 @@ function verifySessionAlbumPublicMediaQuery(photoId, query, expectedUsage) {
 }
 
 export function signSessionAlbumPublicVideoFileToken(payload) {
-  const exp = payload.exp ||
-    Math.floor(Date.now() / 1000) + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS;
+  const exp = boundedSessionAlbumPublicMediaExp(payload);
   const claims = normalizeSessionAlbumShareClaims({ ...payload, exp });
   if (claims.version !== 2) {
     throw forbidden("album public video token is invalid");
@@ -3389,11 +3408,17 @@ export function verifySessionAlbumPublicVideoFileQuery(mediaId, query) {
   };
 }
 
-function sessionAlbumPublicVideoFilePath(mediaId, claims, albumShareToken) {
+function sessionAlbumPublicVideoFilePath(
+  mediaId,
+  claims,
+  albumShareToken,
+  capabilityExp
+) {
   const token = signSessionAlbumPublicVideoFileToken({
     ...claims,
     mediaId,
-    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken)
+    shareTokenDigest: sessionAlbumTokenDigest(albumShareToken),
+    capabilityExp
   });
   return `/api/session-album/public-share/media/${mediaId}/video-file?token=${encodeURIComponent(
     token
@@ -3555,9 +3580,14 @@ export function attachPublicSessionAlbumMediaStateUrls(
   options = {}
 ) {
   const nowSeconds = options.nowSeconds ?? Math.floor(Date.now() / 1000);
-  const expiresAt = new Date(
-    (nowSeconds + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS) * 1000
-  ).toISOString();
+  const capabilityExp = Math.min(
+    tokenPositiveInteger(claims.exp, "exp"),
+    tokenPositiveInteger(
+      nowSeconds + SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS,
+      "capabilityExp"
+    )
+  );
+  const expiresAt = new Date(capabilityExp * 1000).toISOString();
   const resolved = albumImageUrlOptions({
     ...options,
     directMediaUrls: false,
@@ -3571,20 +3601,42 @@ export function attachPublicSessionAlbumMediaStateUrls(
       return {
         ...publicMedia,
         cover_url: approved && ready && publicMedia.has_cover
-          ? sessionAlbumPublicVideoCoverPath(publicMedia.id, claims, albumShareToken)
+          ? sessionAlbumPublicVideoCoverPath(
+              publicMedia.id,
+              claims,
+              albumShareToken,
+              capabilityExp
+            )
           : "",
         video_url: approved && ready
-          ? sessionAlbumPublicVideoFilePath(publicMedia.id, claims, albumShareToken)
+          ? sessionAlbumPublicVideoFilePath(
+              publicMedia.id,
+              claims,
+              albumShareToken,
+              capabilityExp
+            )
           : "",
         media_url_expires_at: approved && ready ? expiresAt : null
       };
     }
     const approved = isModerationPublished(publicMedia.moderation_status);
     const preview = approved
-      ? sessionAlbumPublicMediaPath(publicMedia.id, claims, albumShareToken, "preview")
+      ? sessionAlbumPublicMediaPath(
+          publicMedia.id,
+          claims,
+          albumShareToken,
+          "preview",
+          capabilityExp
+        )
       : undefined;
     const thumbnail = approved
-      ? sessionAlbumPublicMediaPath(publicMedia.id, claims, albumShareToken, "thumbnail")
+      ? sessionAlbumPublicMediaPath(
+          publicMedia.id,
+          claims,
+          albumShareToken,
+          "thumbnail",
+          capabilityExp
+        )
       : undefined;
     const attached = attachAlbumImageUrls(
       publicMedia,
