@@ -71,37 +71,53 @@ PublicAlbumReadState
 ### 3.1 `session_album_media_tags`
 
 ```sql
-CREATE TABLE session_album_media_tags (
+CREATE TABLE IF NOT EXISTS session_album_media_tags (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   media_id BIGINT UNSIGNED NOT NULL,
-  kind VARCHAR(32) NOT NULL,
+  kind VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   seat_id BIGINT UNSIGNED NULL,
   session_npc_role_id BIGINT UNSIGNED NULL,
   subject_ref_id BIGINT UNSIGNED
     GENERATED ALWAYS AS (
       CASE
-        WHEN kind = 'role' THEN seat_id
-        WHEN kind = 'npc_role' THEN session_npc_role_id
+        WHEN CAST(kind AS BINARY) = CAST('role' AS BINARY) THEN seat_id
+        WHEN CAST(kind AS BINARY) = CAST('npc_role' AS BINARY)
+          THEN session_npc_role_id
         ELSE 0
       END
     ) STORED,
   sort_order INT UNSIGNED NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_album_media_tag_shape CHECK (
-    (kind = 'role' AND seat_id IS NOT NULL AND session_npc_role_id IS NULL)
+    (
+      CAST(kind AS BINARY) = CAST('role' AS BINARY)
+      AND seat_id IS NOT NULL
+      AND session_npc_role_id IS NULL
+    )
     OR
-    (kind = 'npc_role' AND seat_id IS NULL AND session_npc_role_id IS NOT NULL)
+    (
+      CAST(kind AS BINARY) = CAST('npc_role' AS BINARY)
+      AND seat_id IS NULL
+      AND session_npc_role_id IS NOT NULL
+    )
     OR
-    (kind = 'other' AND seat_id IS NULL AND session_npc_role_id IS NULL)
+    (
+      CAST(kind AS BINARY) = CAST('other' AS BINARY)
+      AND seat_id IS NULL
+      AND session_npc_role_id IS NULL
+    )
   ),
   UNIQUE KEY uniq_album_media_tag_subject (media_id, kind, subject_ref_id),
-  FOREIGN KEY (media_id) REFERENCES session_album_photos(id),
-  FOREIGN KEY (seat_id) REFERENCES session_seats(id),
+  FOREIGN KEY (media_id) REFERENCES session_album_photos(id)
+    ON DELETE CASCADE,
+  FOREIGN KEY (seat_id) REFERENCES session_seats(id)
+    ON DELETE RESTRICT,
   FOREIGN KEY (session_npc_role_id) REFERENCES session_npc_roles(id)
+    ON DELETE RESTRICT
 );
 ```
 
-跨表“媒体与角色属于同一场次”由写入事务验证，迁移通过带 `session_id` 条件的 join 只回填可信行。
+跨表“媒体与角色属于同一场次”由写入事务验证，迁移通过带 `session_id` 条件的 join 只回填可信行。`kind` 使用字节级精确比较，拒绝大小写和尾空格变体。媒体是标签行的所有者，因此删除媒体时标签级联删除；角色引用使用显式 `RESTRICT`，避免 MySQL 对生成列依赖字段的级联限制。
 
 回填映射：
 
@@ -117,7 +133,7 @@ dm/npc/organizer  -> 丢弃
 ### 3.2 `session_album_public_share_items`
 
 ```sql
-CREATE TABLE session_album_public_share_items (
+CREATE TABLE IF NOT EXISTS session_album_public_share_items (
   share_id BIGINT UNSIGNED NOT NULL,
   ordinal INT UNSIGNED NOT NULL,
   media_id BIGINT UNSIGNED NOT NULL,
@@ -125,12 +141,13 @@ CREATE TABLE session_album_public_share_items (
   PRIMARY KEY (share_id, ordinal),
   UNIQUE KEY uniq_album_public_share_media (share_id, media_id),
   FOREIGN KEY (share_id) REFERENCES session_album_public_shares(id)
+    ON DELETE CASCADE
 );
 ```
 
 清单项故意不对 `media_id` 建外键：分享创建后媒体可能被物理删除，但冻结清单仍需保留该 ordinal 作为不可见墓碑，避免旧 cursor 的位置语义改变。媒体读取始终重新关联 `session_album_photos` 并执行当前资格复核。
 
-迁移使用 MySQL 8 `JSON_TABLE(... FOR ORDINALITY ...)` 按 `media_ids` 原顺序回填，使用 `INSERT IGNORE` 保证回填重复执行时不新增重复行。迁移测试验证无效 JSON、重复 ID 和已删除媒体墓碑的处理与审计策略。
+迁移使用 MySQL 8 `JSON_TABLE(... FOR ORDINALITY ...)` 按 `media_ids` 原顺序回填。回填先按 JSON 原始类型、正整数字面量和 unsigned bigint 范围严格筛选，重复媒体确定保留第一次出现的原 ordinal；已存在的 ordinal 或 media 通过反连接跳过，使 DDL 中途失败后的重跑安全且不依赖 `INSERT IGNORE`。迁移测试验证非法标量、越界值、重复 ID、重试和已删除媒体墓碑。
 
 新分享仍写入兼容用 `media_ids`、摘要和封面字段，保证旧 token 与 D48/D50/D52/D55 逻辑可读；同一事务随后写入 share items。运行时清单成员、顺序和分页只读取 share items。加载分享时先验证兼容 JSON 摘要，再验证其 ID 序列与 share items 完全一致；不一致时关闭式失败。
 

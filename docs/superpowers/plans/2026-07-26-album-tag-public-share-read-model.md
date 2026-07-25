@@ -162,37 +162,44 @@ Expected: FAIL because migration 0035 and the history entry do not exist.
 Implement the two tables with this shape:
 
 ```sql
-CREATE TABLE session_album_media_tags (
+CREATE TABLE IF NOT EXISTS session_album_media_tags (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   media_id BIGINT UNSIGNED NOT NULL,
-  kind VARCHAR(32) NOT NULL,
+  kind VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   seat_id BIGINT UNSIGNED NULL,
   session_npc_role_id BIGINT UNSIGNED NULL,
   subject_ref_id BIGINT UNSIGNED
     GENERATED ALWAYS AS (
       CASE
-        WHEN kind = 'role' THEN seat_id
-        WHEN kind = 'npc_role' THEN session_npc_role_id
+        WHEN CAST(kind AS BINARY) = CAST('role' AS BINARY) THEN seat_id
+        WHEN CAST(kind AS BINARY) = CAST('npc_role' AS BINARY)
+          THEN session_npc_role_id
         ELSE 0
       END
     ) STORED,
   sort_order INT UNSIGNED NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_album_media_tag_shape CHECK (
-    (kind = 'role' AND seat_id IS NOT NULL AND session_npc_role_id IS NULL)
-    OR (kind = 'npc_role' AND seat_id IS NULL AND session_npc_role_id IS NOT NULL)
-    OR (kind = 'other' AND seat_id IS NULL AND session_npc_role_id IS NULL)
+    (CAST(kind AS BINARY) = CAST('role' AS BINARY)
+      AND seat_id IS NOT NULL AND session_npc_role_id IS NULL)
+    OR (CAST(kind AS BINARY) = CAST('npc_role' AS BINARY)
+      AND seat_id IS NULL AND session_npc_role_id IS NOT NULL)
+    OR (CAST(kind AS BINARY) = CAST('other' AS BINARY)
+      AND seat_id IS NULL AND session_npc_role_id IS NULL)
   ),
   UNIQUE KEY uniq_album_media_tag_subject (media_id, kind, subject_ref_id),
   CONSTRAINT fk_album_media_tag_media
-    FOREIGN KEY (media_id) REFERENCES session_album_photos(id),
+    FOREIGN KEY (media_id) REFERENCES session_album_photos(id)
+    ON DELETE CASCADE,
   CONSTRAINT fk_album_media_tag_seat
-    FOREIGN KEY (seat_id) REFERENCES session_seats(id),
+    FOREIGN KEY (seat_id) REFERENCES session_seats(id)
+    ON DELETE RESTRICT,
   CONSTRAINT fk_album_media_tag_npc_role
     FOREIGN KEY (session_npc_role_id) REFERENCES session_npc_roles(id)
+    ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE session_album_public_share_items (
+CREATE TABLE IF NOT EXISTS session_album_public_share_items (
   share_id BIGINT UNSIGNED NOT NULL,
   ordinal INT UNSIGNED NOT NULL,
   media_id BIGINT UNSIGNED NOT NULL,
@@ -201,39 +208,25 @@ CREATE TABLE session_album_public_share_items (
   UNIQUE KEY uniq_album_public_share_media (share_id, media_id),
   CONSTRAINT fk_album_public_share_item_share
     FOREIGN KEY (share_id) REFERENCES session_album_public_shares(id)
+    ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
-Backfill tags using same-session joins:
+Backfill tags using same-session joins. Group duplicate trusted subjects by
+media/reference and keep the minimum legacy `sort_order`; use an idempotent
+upsert so a partially committed migration can safely resume:
 
-```sql
-INSERT IGNORE INTO session_album_media_tags
-  (media_id, kind, seat_id, session_npc_role_id, sort_order)
-SELECT
-  legacy.photo_id,
-  CASE
-    WHEN legacy.tag_type = 'seat' THEN 'role'
-    WHEN legacy.tag_type = 'session_npc_role' THEN 'npc_role'
-    ELSE 'other'
-  END,
-  CASE WHEN legacy.tag_type = 'seat' THEN seat.id ELSE NULL END,
-  CASE WHEN legacy.tag_type = 'session_npc_role' THEN npc_role.id ELSE NULL END,
-  legacy.sort_order
-FROM session_album_photo_tags legacy
-JOIN session_album_photos media ON media.id = legacy.photo_id
-LEFT JOIN session_seats seat
-  ON seat.id = legacy.seat_id
- AND seat.session_id = media.session_id
-LEFT JOIN session_npc_roles npc_role
-  ON npc_role.id = legacy.session_npc_role_id
- AND npc_role.session_id = media.session_id
-WHERE
-  (legacy.tag_type = 'seat' AND seat.id IS NOT NULL)
-  OR (legacy.tag_type = 'session_npc_role' AND npc_role.id IS NOT NULL)
-  OR legacy.tag_type = 'other';
-```
+The production statement groups by
+`(media_id, kind, seat_id, session_npc_role_id)`, selects
+`MIN(sort_order)`, and uses `ON DUPLICATE KEY UPDATE` with `LEAST` so a
+retry never increases or duplicates the stored order.
 
-Backfill share items directly from `JSON_TABLE(... FOR ORDINALITY ...)`. Do not join `session_album_photos`: a physically deleted media ID remains an immutable manifest tombstone and resolves as unavailable at read time.
+Backfill share items directly from `JSON_TABLE(... FOR ORDINALITY ...)`. Extract
+each value as raw JSON and accept only exact positive JSON integers within the
+unsigned bigint range. Keep the first occurrence of duplicate media IDs and skip
+already-written ordinal/media pairs on retry. Do not join
+`session_album_photos`: a physically deleted media ID remains an immutable
+manifest tombstone and resolves as unavailable at read time.
 
 - [ ] **Step 4: Append migration history**
 
