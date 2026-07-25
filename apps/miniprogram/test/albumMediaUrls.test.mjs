@@ -136,6 +136,107 @@ test("failed media refresh preserves album state and schedules a bounded retry",
   assert.equal(scheduled.at(-1)?.delay, 30_000);
 });
 
+test("dispose during an in-flight media refresh prevents late writes and timers", async () => {
+  const response = deferred();
+  const album = {
+    photos: [{
+      id: 1,
+      preview_display_url: "old-url",
+      media_url_expires_at: "2099-01-01T00:00:00.000Z"
+    }]
+  };
+  let loads = 0;
+  let writes = 0;
+  let timers = 0;
+  const controller = createAlbumMediaRefreshController({
+    readAlbum: () => album,
+    writeAlbum: () => { writes += 1; },
+    reloadAlbum: async () => {
+      loads += 1;
+      return response.promise;
+    },
+    setTimer: () => {
+      timers += 1;
+      return timers;
+    },
+    clearTimer: () => {}
+  });
+
+  const refresh = controller.refresh();
+  await Promise.resolve();
+  controller.dispose();
+  response.resolve({
+    photos: [{ id: 1, preview_display_url: "new-url" }]
+  });
+  await refresh;
+  assert.equal(writes, 0);
+  assert.equal(timers, 0);
+
+  controller.schedule();
+  await controller.refresh();
+  assert.equal(loads, 1);
+  assert.equal(writes, 0);
+  assert.equal(timers, 0);
+});
+
+test("dispose during a failing media refresh prevents retry scheduling", async () => {
+  const response = deferred();
+  let writes = 0;
+  let timers = 0;
+  const controller = createAlbumMediaRefreshController({
+    readAlbum: () => ({
+      photos: [{ id: 1, preview_display_url: "old-url" }]
+    }),
+    writeAlbum: () => { writes += 1; },
+    reloadAlbum: async () => response.promise,
+    setTimer: () => {
+      timers += 1;
+      return timers;
+    },
+    clearTimer: () => {}
+  });
+
+  const refresh = controller.refresh();
+  await Promise.resolve();
+  controller.dispose();
+  response.reject(new Error("late refresh failed"));
+  await assert.rejects(refresh, /late refresh failed/);
+  assert.equal(writes, 0);
+  assert.equal(timers, 0);
+});
+
+test("media refresh retry delay rejects invalid values and clamps platform timer bounds", async () => {
+  const retryDelayFor = async (retryDelayMs) => {
+    let scheduledDelay = null;
+    const controller = createAlbumMediaRefreshController({
+      readAlbum: () => ({ photos: [{ id: 1, preview_display_url: "old-url" }] }),
+      writeAlbum: () => {},
+      reloadAlbum: async () => {
+        throw new Error("refresh failed");
+      },
+      retryDelayMs,
+      setTimer: (_callback, delay) => {
+        scheduledDelay = delay;
+        return 1;
+      },
+      clearTimer: () => {}
+    });
+    await assert.rejects(controller.refresh(), /refresh failed/);
+    return scheduledDelay;
+  };
+
+  const actualDelays = [];
+  for (const retryDelayMs of [null, Infinity, 0, Number.MAX_SAFE_INTEGER]) {
+    actualDelays.push(await retryDelayFor(retryDelayMs));
+  }
+  assert.deepEqual(actualDelays, [
+    30_000,
+    30_000,
+    1_000,
+    2_147_483_647
+  ]);
+});
+
 test("stale refresh result skips the list write", async () => {
   let writes = 0;
   let album = {
@@ -297,10 +398,12 @@ test("onShow forces a server refresh so a revoked cached video is pruned", async
 
 function deferred() {
   let resolve;
-  const promise = new Promise((nextResolve) => {
+  let reject;
+  const promise = new Promise((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function applyLatestAlbumList(state, photos) {
