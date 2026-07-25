@@ -196,6 +196,8 @@ export default {
       startBoundaryRefreshPending: false,
       postBoundaryRefreshAttempts: 0,
       shareMenuGeneration: 0,
+      sharePageActive: true,
+      shareActivityGeneration: 0,
       invitePreparing: false,
       invitePrepareError: false,
       navigatingAlbum: false,
@@ -238,9 +240,10 @@ export default {
     },
     shareReady() {
       if (!this.sessionId) {
-        return !this.sessionLoadError;
+        return this.sharePageActive && !this.sessionLoadError;
       }
       return Boolean(
+        this.sharePageActive &&
         !this.sessionLoading &&
         this.sessionLoaded &&
         String(this.session.id || "") === String(this.sessionId) &&
@@ -558,6 +561,10 @@ export default {
     this.showShareMenus();
   },
   onShow() {
+    if (!this.sharePageActive) {
+      this.sharePageActive = true;
+      this.shareActivityGeneration += 1;
+    }
     if (!this.sessionId) {
       this.showShareMenus();
       return;
@@ -566,12 +573,10 @@ export default {
     return this.refreshPublishedShareState();
   },
   onHide() {
-    this.startBoundaryRefreshPending = false;
-    this.clearStartBoundaryRefresh();
+    this.deactivateSharePage();
   },
   onUnload() {
-    this.startBoundaryRefreshPending = false;
-    this.clearStartBoundaryRefresh();
+    this.deactivateSharePage();
     this.unbindAuthChangeListener();
   },
   onShareAppMessage() {
@@ -687,6 +692,25 @@ export default {
       this.pendingRole = null;
       this.confirmedCrossCastRoleKey = "";
     },
+    isShareActivityCurrent(generation) {
+      return (
+        this.sharePageActive &&
+        generation === this.shareActivityGeneration
+      );
+    },
+    deactivateSharePage() {
+      this.sharePageActive = false;
+      this.shareActivityGeneration += 1;
+      this.startBoundaryRefreshPending = false;
+      this.postBoundaryRefreshAttempts = 0;
+      this.clearStartBoundaryRefresh();
+      this.shareRefreshPromise = null;
+      this.sessionLoadSerial += 1;
+      this.sessionLoading = false;
+      this.sessionLoadPromise = null;
+      this.invitePreparing = false;
+      this.hideShareMenus();
+    },
     hideShareMenus() {
       this.shareMenuGeneration += 1;
       if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
@@ -701,9 +725,15 @@ export default {
         this.startBoundaryTimer = null;
       }
     },
-    scheduleStartBoundaryRefresh() {
+    scheduleStartBoundaryRefresh(
+      activityGeneration = this.shareActivityGeneration
+    ) {
       this.clearStartBoundaryRefresh();
-      if (this.shareUnavailableText || this.session.has_started !== false) {
+      if (
+        !this.isShareActivityCurrent(activityGeneration) ||
+        this.shareUnavailableText ||
+        this.session.has_started !== false
+      ) {
         this.postBoundaryRefreshAttempts = 0;
         return;
       }
@@ -726,6 +756,9 @@ export default {
       }
       this.startBoundaryTimer = setTimeout(() => {
         this.startBoundaryTimer = null;
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         const currentStartAtMs = Date.parse(this.session.start_at);
         if (
           !this.shareUnavailableText &&
@@ -733,12 +766,17 @@ export default {
           Number.isFinite(currentStartAtMs) &&
           currentStartAtMs <= Date.now()
         ) {
-          return this.handleStartBoundaryRefresh();
+          return this.handleStartBoundaryRefresh(activityGeneration);
         }
-        return this.scheduleStartBoundaryRefresh();
+        return this.scheduleStartBoundaryRefresh(activityGeneration);
       }, delay);
     },
-    handleStartBoundaryRefresh() {
+    handleStartBoundaryRefresh(
+      activityGeneration = this.shareActivityGeneration
+    ) {
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return Promise.resolve(false);
+      }
       this.startBoundaryRefreshPending = true;
       this.showShareMenus();
       if (this.shareRefreshPromise) {
@@ -748,6 +786,10 @@ export default {
       return this.refreshPublishedShareState();
     },
     refreshPublishedShareState() {
+      if (!this.sharePageActive) {
+        this.hideShareMenus();
+        return Promise.resolve(false);
+      }
       if (!this.sessionId) {
         this.showShareMenus();
         return Promise.resolve(false);
@@ -755,13 +797,18 @@ export default {
       if (this.shareRefreshPromise) {
         return this.shareRefreshPromise;
       }
-      const refreshPromise = this.performPublishedShareStateRefresh();
+      const activityGeneration = this.shareActivityGeneration;
+      const refreshPromise =
+        this.performPublishedShareStateRefresh(activityGeneration);
       this.shareRefreshPromise = refreshPromise;
       const finishRefresh = () => {
         if (this.shareRefreshPromise === refreshPromise) {
           this.shareRefreshPromise = null;
         }
-        if (this.startBoundaryRefreshPending) {
+        if (
+          this.isShareActivityCurrent(activityGeneration) &&
+          this.startBoundaryRefreshPending
+        ) {
           this.startBoundaryRefreshPending = false;
           this.refreshPublishedShareState();
         }
@@ -769,15 +816,31 @@ export default {
       void refreshPromise.then(finishRefresh, finishRefresh);
       return refreshPromise;
     },
-    async performPublishedShareStateRefresh() {
+    async performPublishedShareStateRefresh(activityGeneration) {
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return false;
+      }
       this.clearStartBoundaryRefresh();
       this.hideShareMenus();
-      const loaded = await this.loadPublishedSession(this.sessionId);
-      if (loaded) {
-        this.scheduleStartBoundaryRefresh();
-        await this.prepareJoinInviteToken();
+      const loaded = await this.loadPublishedSession(
+        this.sessionId,
+        activityGeneration
+      );
+      if (
+        !loaded ||
+        !this.isShareActivityCurrent(activityGeneration)
+      ) {
+        return false;
       }
-      return Boolean(this.shareReady);
+      this.scheduleStartBoundaryRefresh(activityGeneration);
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return false;
+      }
+      await this.prepareJoinInviteToken(activityGeneration);
+      return Boolean(
+        this.isShareActivityCurrent(activityGeneration) &&
+        this.shareReady
+      );
     },
     roleOccupantAvatarUrl(role) {
       const auth = getCurrentUser();
@@ -854,7 +917,13 @@ export default {
       }
       return auth;
     },
-    loadPublishedSession(sessionId) {
+    loadPublishedSession(
+      sessionId,
+      activityGeneration = this.shareActivityGeneration
+    ) {
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return Promise.resolve(false);
+      }
       if (this.sessionLoading && this.sessionLoadPromise) {
         return this.sessionLoadPromise;
       }
@@ -865,17 +934,28 @@ export default {
       this.sessionLoadError = "";
       this.statusText = "";
       this.showShareMenus();
-      const loadPromise = this.performPublishedSessionLoad(sessionId, serial);
+      const loadPromise = this.performPublishedSessionLoad(
+        sessionId,
+        serial,
+        activityGeneration
+      );
       this.sessionLoadPromise = loadPromise;
       return loadPromise;
     },
-    async performPublishedSessionLoad(sessionId, serial) {
+    async performPublishedSessionLoad(
+      sessionId,
+      serial,
+      activityGeneration
+    ) {
       try {
         const inviteQuery = this.inviteToken
           ? `?inviteToken=${encodeURIComponent(this.inviteToken)}`
           : "";
         const response = await request({ url: `/api/sessions/${sessionId}${inviteQuery}` });
-        if (serial !== this.sessionLoadSerial) {
+        if (
+          serial !== this.sessionLoadSerial ||
+          !this.isShareActivityCurrent(activityGeneration)
+        ) {
           return false;
         }
         const session = dataOf(response) || {};
@@ -941,7 +1021,10 @@ export default {
         this.sessionLoaded = true;
         return true;
       } catch (error) {
-        if (serial !== this.sessionLoadSerial) {
+        if (
+          serial !== this.sessionLoadSerial ||
+          !this.isShareActivityCurrent(activityGeneration)
+        ) {
           return false;
         }
         this.sessionLoaded = false;
@@ -949,15 +1032,21 @@ export default {
         showToast({ title: this.sessionLoadError, icon: "none" });
         return false;
       } finally {
-        if (serial === this.sessionLoadSerial) {
+        if (
+          serial === this.sessionLoadSerial &&
+          this.isShareActivityCurrent(activityGeneration)
+        ) {
           this.sessionLoading = false;
           this.sessionLoadPromise = null;
           this.showShareMenus();
         }
       }
     },
-    async prepareJoinInviteToken() {
+    async prepareJoinInviteToken(
+      activityGeneration = this.shareActivityGeneration
+    ) {
       if (
+        !this.isShareActivityCurrent(activityGeneration) ||
         this.invitePreparing ||
         this.inviteToken ||
         !this.sessionId ||
@@ -978,12 +1067,18 @@ export default {
           method: "POST",
           data: {}
         });
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         this.inviteToken = dataOf(response)?.token || "";
         if (!this.inviteToken) {
           this.invitePrepareError = true;
           this.statusText = "分享准备失败，请重试。";
         }
       } catch (error) {
+        if (!this.isShareActivityCurrent(activityGeneration)) {
+          return;
+        }
         this.inviteToken = "";
         if (error?.statusCode === 409) {
           this.invitePrepareError = false;
@@ -998,17 +1093,23 @@ export default {
           this.statusText = "分享准备失败，请重试。";
         }
       } finally {
-        this.invitePreparing = false;
-        this.showShareMenus();
+        if (this.isShareActivityCurrent(activityGeneration)) {
+          this.invitePreparing = false;
+          this.showShareMenus();
+        }
       }
     },
     async retryPrepareInvite() {
       if (this.invitePreparing) {
         return;
       }
+      const activityGeneration = this.shareActivityGeneration;
       this.invitePrepareError = false;
       this.statusText = "";
-      await this.prepareJoinInviteToken();
+      await this.prepareJoinInviteToken(activityGeneration);
+      if (!this.isShareActivityCurrent(activityGeneration)) {
+        return;
+      }
       if (this.inviteToken) {
         this.invitePrepareError = false;
         this.statusText = "";
@@ -1470,14 +1571,19 @@ export default {
       }
     },
     showShareMenus() {
-      if (!this.shareReady) {
+      if (!this.sharePageActive || !this.shareReady) {
         this.hideShareMenus();
         return;
       }
+      const activityGeneration = this.shareActivityGeneration;
       const generation = this.shareMenuGeneration + 1;
       this.shareMenuGeneration = generation;
       const showFriendShareMenu = () => {
-        if (generation !== this.shareMenuGeneration || !this.shareReady) {
+        if (
+          !this.isShareActivityCurrent(activityGeneration) ||
+          generation !== this.shareMenuGeneration ||
+          !this.shareReady
+        ) {
           return;
         }
         showWechatShareMenus({

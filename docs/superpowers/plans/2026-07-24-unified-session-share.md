@@ -835,3 +835,32 @@ Expected: no whitespace errors; only intentional feature files and the user’s 
 
   Run focused tests, the complete `npm run check`, diff/status/artifact checks, and amend the
   feature commit only after all regressions pass.
+
+### Task 9: Page-activity lifecycle invalidation
+
+**Files:**
+
+- Modify: `apps/miniprogram/src/pages/session/share.vue`
+- Modify: `apps/miniprogram/test/sessionSharePage.test.mjs`
+- Modify: `docs/superpowers/plans/2026-07-24-unified-session-share.md`
+
+- [x] **Step 1: Invalidate a hidden page during an authoritative GET**
+
+  Add a deferred-GET regression proving `onHide` immediately hides sharing and prevents the stale
+  response from scheduling a boundary timer, preparing a token, or showing a menu. Prove the next
+  `onShow` starts a fresh authoritative refresh and can recover normally.
+
+- [x] **Step 2: Invalidate an unloaded page during token preparation**
+
+  Add a deferred-token regression proving `onUnload` clears timers, ignores the stale token
+  response, and does not reevaluate or show sharing after navigation.
+
+- [x] **Step 3: Invalidate delayed menu completions on navigation**
+
+  Add a delayed-`hideShareMenu.complete` regression proving hide/unload invalidation prevents the
+  callback from showing a friend-share menu even if the page was ready when it began.
+
+- [x] **Step 4: Verify and commit**
+
+  Run D56 unit/check, focused adjacent miniprogram guards, the complete `npm run check`,
+  `git diff --check`, artifact/status checks, and create a follow-up feature commit.

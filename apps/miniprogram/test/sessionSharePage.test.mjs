@@ -415,6 +415,138 @@ test("client-ahead boundary reconciliation stops after capped backoff refreshes"
   assert.equal(getCount, 4, "no background refresh may continue after the cap");
 });
 
+test("onHide invalidates a deferred lifecycle GET and onShow recovers authoritatively", async () => {
+  const firstLoad = deferred();
+  const hiddenMenus = [];
+  const shownMenus = [];
+  const activeTimers = new Map();
+  let nextTimerId = 0;
+  let getCount = 0;
+  let postCount = 0;
+  const component = loadSharePageComponent({
+    request: async ({ method = "GET" }) => {
+      if (method === "POST") {
+        postCount += 1;
+        return { data: { token: "reactivated-token" } };
+      }
+      getCount += 1;
+      if (getCount === 1) {
+        return firstLoad.promise;
+      }
+      return {
+        data: sessionResponse({
+          start_at: new Date(Date.now() + 60_000).toISOString()
+        })
+      };
+    },
+    showWechatShareMenus: (options) => shownMenus.push(options),
+    uni: {
+      hideShareMenu: (options = {}) => {
+        hiddenMenus.push(options.menus);
+        options.complete?.();
+      },
+      setNavigationBarTitle() {}
+    },
+    setTimeout: (callback, delay) => {
+      nextTimerId += 1;
+      activeTimers.set(nextTimerId, { callback, delay });
+      return nextTimerId;
+    },
+    clearTimeout: (timerId) => activeTimers.delete(timerId)
+  });
+  const vm = createSharePageVm(component, {
+    sessionId: "42",
+    currentUserId: "7"
+  });
+
+  const staleRefresh = vm.refreshPublishedShareState();
+  await Promise.resolve();
+  assert.equal(getCount, 1);
+
+  const hidesBeforeNavigation = hiddenMenus.length;
+  component.onHide.call(vm);
+  assert.equal(
+    hiddenMenus.length,
+    hidesBeforeNavigation + 1,
+    "hiding the page must immediately fail the platform share menus closed"
+  );
+  firstLoad.resolve({ data: sessionResponse() });
+  await staleRefresh;
+
+  assert.equal(postCount, 0, "the stale GET must not start token preparation");
+  assert.equal(activeTimers.size, 0, "the stale GET must not rearm a boundary timer");
+  assert.equal(shownMenus.length, 0, "the stale GET must not show a share menu");
+  assert.equal(vm.shareReady, false);
+
+  await component.onShow.call(vm);
+
+  assert.equal(getCount, 2, "reactivation must perform a fresh authoritative GET");
+  assert.equal(postCount, 1);
+  assert.equal(activeTimers.size, 1);
+  assert.equal(shownMenus.length, 1);
+  assert.equal(vm.shareReady, true);
+});
+
+test("onUnload ignores a deferred token response and keeps timers and menus closed", async () => {
+  const tokenStarted = deferred();
+  const tokenResponse = deferred();
+  const hiddenMenus = [];
+  const shownMenus = [];
+  const activeTimers = new Map();
+  let nextTimerId = 0;
+  let postCount = 0;
+  const component = loadSharePageComponent({
+    request: async ({ method = "GET" }) => {
+      if (method === "POST") {
+        postCount += 1;
+        tokenStarted.resolve();
+        return tokenResponse.promise;
+      }
+      return {
+        data: sessionResponse({
+          start_at: new Date(Date.now() + 60_000).toISOString()
+        })
+      };
+    },
+    showWechatShareMenus: (options) => shownMenus.push(options),
+    uni: {
+      hideShareMenu: (options = {}) => {
+        hiddenMenus.push(options.menus);
+        options.complete?.();
+      },
+      setNavigationBarTitle() {}
+    },
+    setTimeout: (callback, delay) => {
+      nextTimerId += 1;
+      activeTimers.set(nextTimerId, { callback, delay });
+      return nextTimerId;
+    },
+    clearTimeout: (timerId) => activeTimers.delete(timerId)
+  });
+  const vm = createSharePageVm(component, {
+    sessionId: "42",
+    currentUserId: "7"
+  });
+
+  const refresh = vm.refreshPublishedShareState();
+  await tokenStarted.promise;
+  assert.equal(postCount, 1);
+  assert.equal(activeTimers.size, 1);
+
+  const hidesBeforeNavigation = hiddenMenus.length;
+  component.onUnload.call(vm);
+  assert.equal(activeTimers.size, 0);
+  assert.equal(hiddenMenus.length, hidesBeforeNavigation + 1);
+
+  tokenResponse.resolve({ data: { token: "stale-token" } });
+  await refresh;
+
+  assert.equal(vm.inviteToken, "", "an unloaded page must ignore the token response");
+  assert.equal(vm.shareReady, false);
+  assert.equal(activeTimers.size, 0);
+  assert.equal(shownMenus.length, 0);
+});
+
 test("public invite-preview NPC cards honor stripped bound and pending occupancy flags", () => {
   const component = loadSharePageComponent();
   const vm = createSharePageVm(component, {
@@ -622,6 +754,44 @@ test("a stale hideShareMenu completion cannot re-enable sharing after readiness 
   );
   completions[1]();
   assert.equal(shownMenus.length, 1);
+});
+
+test("onUnload invalidates a delayed ready-menu completion", () => {
+  const completions = [];
+  const hiddenMenus = [];
+  const shownMenus = [];
+  const component = loadSharePageComponent({
+    showWechatShareMenus: (options) => shownMenus.push(options),
+    uni: {
+      hideShareMenu: (options = {}) => {
+        hiddenMenus.push(options.menus);
+        if (typeof options.complete === "function") {
+          completions.push(options.complete);
+        }
+      },
+      setNavigationBarTitle() {}
+    }
+  });
+  const vm = createSharePageVm(component, {
+    sessionId: "42",
+    sessionLoaded: true,
+    session: sessionResponse({
+      has_started: true,
+      start_at: new Date(Date.now() - 1_000).toISOString()
+    }),
+    inviteToken: "ready-token"
+  });
+
+  vm.showShareMenus();
+  assert.equal(completions.length, 1);
+
+  const hidesBeforeNavigation = hiddenMenus.length;
+  component.onUnload.call(vm);
+  assert.equal(hiddenMenus.length, hidesBeforeNavigation + 1);
+  completions[0]();
+
+  assert.equal(shownMenus.length, 0);
+  assert.equal(vm.shareReady, false);
 });
 
 test("the native open-type share button is absent until shareReady is true", () => {
