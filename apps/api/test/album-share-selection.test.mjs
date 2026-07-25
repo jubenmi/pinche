@@ -62,16 +62,10 @@ function shareConnection(photoRows, options = {}) {
       }
       if (sql.includes("FROM session_album_media_tags tag")) {
         const requestedIds = new Set(values.slice(1).map(Number));
-        const rows = photoRows
+        return [photoRows
           .filter((photo) => !untaggedIds.has(Number(photo.id)))
           .filter((photo) => requestedIds.has(Number(photo.id)))
-          .map((photo) => tagRow(photo.id));
-        return [sql.includes("AS privacy_user_id")
-          ? rows.map((row) => ({
-              media_id: row.media_id,
-              privacy_user_id: row.privacy_user_id
-            }))
-          : rows];
+          .map((photo) => tagRow(photo.id))];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {

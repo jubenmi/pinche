@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import * as albumTagModel from "../src/modules/core/album-tags.js";
 import {
   listAlbumTagOptions,
   normalizeAlbumTagKeys,
@@ -8,6 +9,7 @@ import {
   resolveAlbumTags,
   writeAlbumMediaTags,
 } from "../src/modules/core/album-tags.js";
+import { isAlbumPhotoVisibleInPublicShare } from "../src/modules/core/service.js";
 
 const migrationUrl = new URL(
   "../migrations/0035_album_tag_public_share_read_model.sql",
@@ -16,6 +18,13 @@ const migrationUrl = new URL(
 
 async function migrationSql() {
   return readFile(migrationUrl, "utf8").catch(() => "");
+}
+
+async function serviceSource() {
+  return readFile(
+    new URL("../src/modules/core/service.js", import.meta.url),
+    "utf8",
+  );
 }
 
 function tagBackfill(sql) {
@@ -82,6 +91,83 @@ test("table creation can resume after either DDL statement already succeeded", a
   assert.match(sql, /CREATE TABLE IF NOT EXISTS session_album_media_tags/);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS session_album_public_share_items/);
   assert.doesNotMatch(sql, /DROP TABLE|TRUNCATE TABLE/);
+});
+
+test("migration preparer atomically reconciles the legacy photo FK", async () => {
+  const sql = await migrationSql();
+  const { prepareAlbumTagMigration } = await import(
+    "../src/modules/core/album-tags-migration.js"
+  );
+  const migrationFilename = "0035_album_tag_public_share_read_model.sql";
+  const legacyConnectionCalls = [];
+  const legacyConnection = {
+    async query(statement, params = []) {
+      legacyConnectionCalls.push({ statement, params });
+      if (statement.includes("information_schema.key_column_usage")) {
+        return [[{
+          constraint_name: "fk_session_album_photo_tags_photo",
+          column_name: "photo_id",
+          referenced_table_name: "session_album_photos",
+          referenced_column_name: "id",
+          delete_rule: "NO ACTION",
+        }]];
+      }
+      if (statement.startsWith("ALTER TABLE")) return [{ affectedRows: 0 }];
+      throw new Error(`Unexpected SQL: ${statement}`);
+    },
+  };
+
+  assert.deepEqual(
+    await prepareAlbumTagMigration(legacyConnection, migrationFilename),
+    { skipStatements: false, reconciledLegacyPhotoForeignKey: true },
+  );
+  assert.equal(legacyConnectionCalls.length, 2);
+  assert.match(
+    legacyConnectionCalls[1].statement,
+    /ALTER TABLE session_album_photo_tags[\s\S]*DROP FOREIGN KEY fk_session_album_photo_tags_photo,[\s\S]*ADD CONSTRAINT fk_session_album_photo_tags_photo_cascade[\s\S]*FOREIGN KEY \(photo_id\)[\s\S]*REFERENCES session_album_photos\(id\)[\s\S]*ON DELETE CASCADE/,
+  );
+  assert.doesNotMatch(sql, /legacy_photo_fk|PREPARE|DROP FOREIGN KEY/);
+});
+
+test("album tag migration preparer accepts cascade and restores a missing FK", async () => {
+  const { prepareAlbumTagMigration } = await import(
+    "../src/modules/core/album-tags-migration.js"
+  );
+  const migrationFilename = "0035_album_tag_public_share_read_model.sql";
+  for (const [rows, expectedDdl] of [
+    [[{
+      constraint_name: "fk_session_album_photo_tags_photo_cascade",
+      column_name: "photo_id",
+      referenced_table_name: "session_album_photos",
+      referenced_column_name: "id",
+      delete_rule: "CASCADE",
+    }], null],
+    [[], /ADD CONSTRAINT fk_session_album_photo_tags_photo_cascade/],
+  ]) {
+    const calls = [];
+    const connection = {
+      async query(statement) {
+        calls.push(statement);
+        if (statement.includes("information_schema.key_column_usage")) {
+          return [rows];
+        }
+        if (statement.startsWith("ALTER TABLE")) return [{ affectedRows: 0 }];
+        throw new Error(`Unexpected SQL: ${statement}`);
+      },
+    };
+
+    assert.deepEqual(
+      await prepareAlbumTagMigration(connection, migrationFilename),
+      { skipStatements: false, reconciledLegacyPhotoForeignKey: true },
+    );
+    if (expectedDdl) {
+      assert.equal(calls.length, 2);
+      assert.match(calls[1], expectedDdl);
+      assert.doesNotMatch(calls[1], /DROP FOREIGN KEY/);
+    } else {
+      assert.equal(calls.length, 1);
+    }
+  }
 });
 
 test("tag backfill accepts only trusted same-session role references and other", async () => {
@@ -299,6 +385,127 @@ test("resolves privacy users separately from display tags", async () => {
   assert.match(calls[0].sql, /seat\.session_id = media\.session_id/);
   assert.match(calls[0].sql, /npc_role\.session_id = media\.session_id/);
   assert.doesNotMatch(calls[0].sql, /\busers\b|\bnickname\b|\bopen_id\b/i);
+});
+
+test("one tag read snapshot keeps NPC display and privacy denial inseparable", async () => {
+  const row = {
+    media_id: 41,
+    kind: "npc_role",
+    seat_id: null,
+    session_npc_role_id: 8,
+    canonical_label: "阿离",
+    privacy_user_id: 202,
+  };
+  let splitQueryCount = 0;
+  const splitConnection = {
+    async query() {
+      splitQueryCount += 1;
+      return splitQueryCount === 1 ? [[row]] : [[]];
+    },
+  };
+  const splitTags = await resolveAlbumTags(splitConnection, 77, [41]);
+  const splitSubjects = await resolveAlbumTagPrivacySubjects(
+    splitConnection,
+    77,
+    [41],
+  );
+  const photo = {
+    id: 41,
+    session_id: 77,
+    uploader_user_id: 100,
+    status: "active",
+    moderation_status: "approved",
+    media_type: "image",
+  };
+  const claims = { sessionId: 77, sharerUserId: 100, seatId: 12 };
+  const privacyByUser = new Map([
+    [100, { allow_uploaded_visible: true, allow_tagged_visible: true }],
+    [202, { allow_uploaded_visible: true, allow_tagged_visible: false }],
+  ]);
+
+  assert.equal(
+    isAlbumPhotoVisibleInPublicShare(
+      photo,
+      splitTags.get(41),
+      privacyByUser,
+      claims,
+      {},
+      splitSubjects.get(41),
+    ),
+    false,
+    "the authorization API rejects the former split-read arguments",
+  );
+
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return [[row]];
+    },
+  };
+  const context = await albumTagModel.resolveAlbumTagReadContext(
+    connection,
+    77,
+    [41],
+  );
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].params, [77, 41]);
+  assert.match(calls[0].sql, /AS canonical_label/);
+  assert.match(calls[0].sql, /AS privacy_user_id/);
+  assert.deepEqual(context.tagsByMediaId.get(41), [
+    { kind: "npc_role", ref_id: 8, label: "阿离" },
+  ]);
+  assert.deepEqual(context.privacySubjectsByMediaId.get(41), [202]);
+  assert.deepEqual(
+    Object.keys(context.tagsByMediaId.get(41)[0]).sort(),
+    ["kind", "label", "ref_id"],
+  );
+  assert.equal(
+    isAlbumPhotoVisibleInPublicShare(photo, context, privacyByUser, claims),
+    false,
+  );
+  assert.equal(
+    isAlbumPhotoVisibleInPublicShare(
+      photo,
+      { tagsByMediaId: context.tagsByMediaId },
+      privacyByUser,
+      claims,
+    ),
+    false,
+    "a caller cannot omit the privacy-subject projection",
+  );
+});
+
+test("one tag read snapshot drops both projections when the role is inactive", async () => {
+  let queryCount = 0;
+  const context = await albumTagModel.resolveAlbumTagReadContext(
+    {
+      async query() {
+        queryCount += 1;
+        return [[]];
+      },
+    },
+    77,
+    [41],
+  );
+
+  assert.equal(queryCount, 1);
+  assert.deepEqual(context.tagsByMediaId.get(41), []);
+  assert.deepEqual(context.privacySubjectsByMediaId.get(41), []);
+});
+
+test("service visibility context uses only the combined tag resolver", async () => {
+  const source = await serviceSource();
+  const contextFunction = source.match(
+    /async function resolveAlbumTagContext[\s\S]*?\n}\n\nfunction isAlbumTagInPersonalScope/,
+  )?.[0] ?? "";
+
+  assert.match(contextFunction, /resolveAlbumTagReadContext/);
+  assert.doesNotMatch(
+    contextFunction,
+    /resolveAlbumTags|resolveAlbumTagPrivacySubjects/,
+  );
 });
 
 test("writes only validated same-session normalized references", async () => {

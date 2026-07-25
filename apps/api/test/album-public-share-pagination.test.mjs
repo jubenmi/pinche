@@ -63,7 +63,7 @@ function publicSharePaginationConnection(mediaIds, options = {}) {
       }
       if (sql.includes("FROM users account")) return [[{ nickname: "Sharer", avatar_url: "" }]];
       if (sql.includes("FROM session_album_media_tags tag")) {
-        const rows = values.slice(1).map((photoId) => ({
+        return [values.slice(1).map((photoId) => ({
           id: Number(photoId),
           media_id: Number(photoId),
           kind: "role",
@@ -72,13 +72,7 @@ function publicSharePaginationConnection(mediaIds, options = {}) {
           canonical_label: "Sharer",
           privacy_user_id: 100,
           sort_order: 0
-        }));
-        return [sql.includes("AS privacy_user_id")
-          ? rows.map((row) => ({
-              media_id: row.media_id,
-              privacy_user_id: row.privacy_user_id
-            }))
-          : rows];
+        }))];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_photos photo")) {

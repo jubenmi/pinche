@@ -83,7 +83,7 @@ import {
 import {
   listAlbumTagOptions,
   normalizeAlbumTagKeys,
-  resolveAlbumTagPrivacySubjects,
+  resolveAlbumTagReadContext,
   resolveAlbumTags,
   writeAlbumMediaTags
 } from "./album-tags.js";
@@ -1896,24 +1896,35 @@ function albumTagKeyValues(body = {}) {
   return body.tags.map((tag) => tag?.key ?? tag?.tagKey ?? tag);
 }
 
-function albumTagPrivacyUserIds(subjectsByMediaId, mediaId) {
-  const values = subjectsByMediaId?.get?.(Number(mediaId));
-  return Array.isArray(values) ? values : [];
+function albumTagReadForMedia(tagReadContext, mediaId) {
+  const id = Number(mediaId);
+  const tagsByMediaId = tagReadContext?.tagsByMediaId;
+  const privacySubjectsByMediaId = tagReadContext?.privacySubjectsByMediaId;
+  if (
+    !tagsByMediaId?.has?.(id) ||
+    !privacySubjectsByMediaId?.has?.(id)
+  ) {
+    return null;
+  }
+  const tags = tagsByMediaId.get(id);
+  const privacyUserIds = privacySubjectsByMediaId.get(id);
+  return Array.isArray(tags) && Array.isArray(privacyUserIds)
+    ? { tags, privacyUserIds }
+    : null;
 }
 
-function collectAlbumPrivacyUserIds(photos, subjectsByMediaId) {
-  return (Array.isArray(photos) ? photos : []).flatMap((photo) => [
-    photo.uploader_user_id,
-    ...albumTagPrivacyUserIds(subjectsByMediaId, photo.id)
-  ]).filter(Boolean);
+function collectAlbumPrivacyUserIds(photos, tagReadContext) {
+  return (Array.isArray(photos) ? photos : []).flatMap((photo) => {
+    const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+    return [photo.uploader_user_id, ...(tagRead?.privacyUserIds || [])];
+  }).filter(Boolean);
 }
 
 async function resolveAlbumTagContext(connection, sessionId, photos) {
   const mediaIds = (Array.isArray(photos) ? photos : [])
     .map((photo) => Number(photo.id))
     .filter(Boolean);
-  const tagsByMediaId = await resolveAlbumTags(connection, sessionId, mediaIds);
-  const privacySubjectsByMediaId = await resolveAlbumTagPrivacySubjects(
+  const tagReadContext = await resolveAlbumTagReadContext(
     connection,
     sessionId,
     mediaIds
@@ -1921,11 +1932,10 @@ async function resolveAlbumTagContext(connection, sessionId, photos) {
   const privacyByUser = await albumPrivacyMap(
     connection,
     sessionId,
-    collectAlbumPrivacyUserIds(photos, privacySubjectsByMediaId)
+    collectAlbumPrivacyUserIds(photos, tagReadContext)
   );
   return {
-    tagsByMediaId,
-    privacySubjectsByMediaId,
+    tagReadContext,
     privacyByUser
   };
 }
@@ -1959,12 +1969,14 @@ function hasOnlyAlbumMemberPublicTags(tags, privacyByUser, tagPrivacyUserIds) {
 
 function isAlbumPhotoVisibleToUser(
   photo,
-  tags,
+  tagReadContext,
   privacyByUser,
   userId,
-  personalScope = null,
-  tagPrivacyUserIds = []
+  personalScope = null
 ) {
+  const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+  if (!tagRead) return false;
+  const { tags, privacyUserIds } = tagRead;
   const scope = personalScope || {
     userId: Number(userId),
     seatIds: new Set(),
@@ -1978,7 +1990,7 @@ function isAlbumPhotoVisibleToUser(
   if (tags.some((tag) => isAlbumTagInPersonalScope(tag, scope))) {
     return true;
   }
-  if (hasOnlyAlbumMemberPublicTags(tags, privacyByUser, tagPrivacyUserIds)) {
+  if (hasOnlyAlbumMemberPublicTags(tags, privacyByUser, privacyUserIds)) {
     return true;
   }
   return false;
@@ -2028,13 +2040,15 @@ async function requirePublicAlbumShareSeat(connection, claims) {
 
 export function isAlbumPhotoVisibleInPublicShare(
   photo,
-  tags,
+  tagReadContext,
   privacyByUser,
   claims,
-  options = {},
-  tagPrivacyUserIds = []
+  options = {}
 ) {
   const { sessionId, sharerUserId, seatId } = normalizeAlbumShareClaims(claims);
+  const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+  if (!tagRead) return false;
+  const { tags, privacyUserIds } = tagRead;
   if (
     Number(photo.session_id) !== sessionId ||
     photo.status !== "active" ||
@@ -2085,7 +2099,7 @@ export function isAlbumPhotoVisibleInPublicShare(
     return false;
   }
 
-  for (const taggedUserId of tagPrivacyUserIds) {
+  for (const taggedUserId of privacyUserIds) {
     const taggedPrivacy = privacyByUser.get(taggedUserId) || albumPrivacy();
     if (!taggedPrivacy.allow_tagged_visible) {
       return false;
@@ -2157,21 +2171,24 @@ export function normalizePublicShareSelectedMediaIds(value) {
   return ids;
 }
 
-export function selectPublicShareMedia(candidates, tagsMap, privacyByUser, claims, options = {}) {
+export function selectPublicShareMedia(
+  candidates,
+  tagReadContext,
+  privacyByUser,
+  claims,
+  options = {}
+) {
   const ranked = [];
   for (const photo of Array.isArray(candidates) ? candidates : []) {
-    const tags = tagsMap.get(Number(photo.id)) || [];
-    const tagPrivacyUserIds = albumTagPrivacyUserIds(
-      options.tagPrivacySubjectsByMediaId,
-      photo.id
-    );
+    const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+    if (!tagRead) continue;
+    const { tags } = tagRead;
     if (!isAlbumPhotoVisibleInPublicShare(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
       claims,
-      options,
-      tagPrivacyUserIds
+      options
     )) {
       continue;
     }
@@ -2286,24 +2303,18 @@ export function normalizeSessionAlbumPublicShareScope(options = {}) {
 
 export function selectEligiblePublicShareMedia(
   candidates,
-  tagsMap,
+  tagReadContext,
   privacyByUser,
   claims,
   options = {}
 ) {
   return (Array.isArray(candidates) ? candidates : []).filter((photo) => {
-    const tags = tagsMap.get(Number(photo.id)) || [];
-    const tagPrivacyUserIds = albumTagPrivacyUserIds(
-      options.tagPrivacySubjectsByMediaId,
-      photo.id
-    );
     return isAlbumPhotoVisibleInPublicShare(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
       claims,
-      options,
-      tagPrivacyUserIds
+      options
     );
   });
 }
@@ -2315,22 +2326,23 @@ const PUBLIC_SHARE_SAFE_SCENE_TAG_TYPES = new Set([
 
 function publicShareCoverPriority(
   photo,
-  tags,
+  tagReadContext,
   privacyByUser,
-  claims,
-  tagPrivacyUserIds = []
+  claims
 ) {
+  const tagRead = albumTagReadForMedia(tagReadContext, photo.id);
+  if (!tagRead) return null;
+  const { tags, privacyUserIds } = tagRead;
   const { sharerUserId, seatId } = normalizeAlbumShareClaims(claims);
   if (
     albumMediaType(photo) !== "image" ||
     Number(photo.uploader_user_id) !== sharerUserId ||
     !isAlbumPhotoVisibleInPublicShare(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
       claims,
-      {},
-      tagPrivacyUserIds
+      {}
     )
   ) {
     return null;
@@ -2338,7 +2350,7 @@ function publicShareCoverPriority(
   const hasSharerSeatTag = tags.some(
     (tag) => tag.kind === "role" && Number(tag.ref_id) === seatId
   );
-  const hasAnotherRealPerson = tagPrivacyUserIds.some(
+  const hasAnotherRealPerson = privacyUserIds.some(
     (userId) => Number(userId) !== sharerUserId
   );
   if (hasAnotherRealPerson) return null;
@@ -2360,20 +2372,17 @@ function publicShareCoverPriority(
 
 export function selectPublicShareCoverMedia(
   selectedMedia,
-  tagsMap,
+  tagReadContext,
   privacyByUser,
-  claims,
-  tagPrivacySubjectsByMediaId = new Map()
+  claims
 ) {
   const candidates = [];
   for (const photo of Array.isArray(selectedMedia) ? selectedMedia : []) {
-    const tags = tagsMap.get(Number(photo.id)) || [];
     const priority = publicShareCoverPriority(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
-      claims,
-      albumTagPrivacyUserIds(tagPrivacySubjectsByMediaId, photo.id)
+      claims
     );
     if (priority === null) continue;
     candidates.push({ photo, priority });
@@ -6833,21 +6842,19 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       [id]
     );
     const {
-      tagsByMediaId: tagsMap,
-      privacySubjectsByMediaId,
+      tagReadContext,
       privacyByUser
     } = await resolveAlbumTagContext(connection, id, photoRows);
     const eligibleMedia = selectEligiblePublicShareMedia(
       photoRows,
-      tagsMap,
+      tagReadContext,
       privacyByUser,
       claims,
       {
         // The new four-action client is itself an explicit sharing surface.
         // Keep the D52 opt-in eligibility for the sharer's own untagged images.
         allowOwnedUntaggedImages: shareScope.mode === "all" ||
-          shareScope.mode === "selected",
-        tagPrivacySubjectsByMediaId: privacySubjectsByMediaId
+          shareScope.mode === "selected"
       }
     );
     let selectedMedia;
@@ -6861,11 +6868,10 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
       }
       selectedMedia = eligibleMedia.filter((media) => selectedIds.has(Number(media.id)));
     } else {
-      selectedMedia = selectPublicShareMedia(photoRows, tagsMap, privacyByUser, claims, {
+      selectedMedia = selectPublicShareMedia(photoRows, tagReadContext, privacyByUser, claims, {
         requiredMediaId: focusMediaId,
         allowOwnedUntaggedImages: includeOwnedUntaggedImages,
-        selectedMediaIds: selectedMediaIds || undefined,
-        tagPrivacySubjectsByMediaId: privacySubjectsByMediaId
+        selectedMediaIds: selectedMediaIds || undefined
       });
     }
     if (focusMediaId && !selectedMedia.some((media) => Number(media.id) === focusMediaId)) {
@@ -6896,7 +6902,9 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     );
     const implicitUntaggedMedia = normalizeImplicitUntaggedMedia(
       selectedMedia
-        .filter((photo) => (tagsMap.get(Number(photo.id)) || []).length === 0)
+        .filter((photo) => (
+          albumTagReadForMedia(tagReadContext, photo.id)?.tags || []
+        ).length === 0)
         .map((photo) => ({
           media_id: Number(photo.id),
           tag_version: Number(photo.tag_version || 0)
@@ -6907,10 +6915,9 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     // actual-buffer quality stage may remove candidates but must never add one.
     const coverMediaIds = selectPublicShareCoverMedia(
       selectedMedia,
-      tagsMap,
+      tagReadContext,
       privacyByUser,
-      claims,
-      privacySubjectsByMediaId
+      claims
     ).map((photo) => Number(photo.id));
     const snapshotDigest = publicShareSnapshotDigest({
       ...claims,
@@ -6976,13 +6983,11 @@ export async function createOrReuseSessionAlbumPublicShare(user, sessionId, opti
     for (const mediaId of share.cover_media_ids) {
       const photo = selectedMediaById.get(Number(mediaId));
       if (!photo) continue;
-      const tags = tagsMap.get(Number(mediaId)) || [];
       if (publicShareCoverPriority(
         photo,
-        tags,
+        tagReadContext,
         privacyByUser,
-        claims,
-        albumTagPrivacyUserIds(privacySubjectsByMediaId, mediaId)
+        claims
       ) === null) {
         continue;
       }
@@ -7037,15 +7042,14 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
       [id, user.user.id]
     );
     const {
-      tagsByMediaId: tagsMap,
-      privacySubjectsByMediaId,
+      tagReadContext,
       privacyByUser
     } = await resolveAlbumTagContext(connection, id, photoRows);
     const photos = [];
     let hiddenCount = 0;
     let untaggedCount = 0;
     for (const photo of photoRows) {
-      const tags = tagsMap.get(Number(photo.id)) || [];
+      const tags = albumTagReadForMedia(tagReadContext, photo.id)?.tags || [];
       const mediaType = albumMediaType(photo);
       const processingStatus = albumMediaProcessingStatus(photo);
       if (!isModerationPublished(photo.moderation_status)) {
@@ -7070,11 +7074,10 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
       }
       const isVisibleByAlbumPrivacy = isAlbumPhotoVisibleToUser(
         photo,
-        tags,
+        tagReadContext,
         privacyByUser,
         user.user.id,
-        personalScope,
-        albumTagPrivacyUserIds(privacySubjectsByMediaId, photo.id)
+        personalScope
       );
       if (
         mediaType === "video" &&
@@ -7179,8 +7182,7 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
         [normalizedClaims.sessionId, ...(candidateIds || [])]
       );
       const {
-        tagsByMediaId: tagsMap,
-        privacySubjectsByMediaId,
+        tagReadContext,
         privacyByUser
       } = await resolveAlbumTagContext(
         connection,
@@ -7193,18 +7195,17 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
         : photoRows;
       const visiblePhotos = [];
       for (const photo of orderedRows) {
-        const tags = tagsMap.get(Number(photo.id)) || [];
+        const tags = albumTagReadForMedia(tagReadContext, photo.id)?.tags || [];
         if (albumMediaType(photo) === "video" && albumMediaProcessingStatus(photo) !== "ready") {
           continue;
         }
         if (
           !isAlbumPhotoVisibleInPublicShare(
             photo,
-            tags,
+            tagReadContext,
             privacyByUser,
             normalizedClaims,
-            { implicitUntaggedByMediaId },
-            albumTagPrivacyUserIds(privacySubjectsByMediaId, photo.id)
+            { implicitUntaggedByMediaId }
           )
         ) {
           continue;
@@ -7229,8 +7230,7 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
         [normalizedClaims.sessionId, ...candidateIds]
       );
       const {
-        tagsByMediaId: tagsMap,
-        privacySubjectsByMediaId,
+        tagReadContext,
         privacyByUser
       } = await resolveAlbumTagContext(
         connection,
@@ -7242,13 +7242,11 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
       for (const mediaId of candidateIds) {
         const photo = photosById.get(Number(mediaId));
         if (!photo) continue;
-        const tags = tagsMap.get(Number(mediaId)) || [];
         if (publicShareCoverPriority(
           photo,
-          tags,
+          tagReadContext,
           privacyByUser,
-          normalizedClaims,
-          albumTagPrivacyUserIds(privacySubjectsByMediaId, mediaId)
+          normalizedClaims
         ) === null) {
           continue;
         }
@@ -8118,18 +8116,15 @@ export async function getVisibleSessionAlbumPhotoForMedia(userId, photoId) {
     }
     const personalScope = await sessionAlbumPersonalScope(connection, session, currentUserId);
     const {
-      tagsByMediaId: tagsMap,
-      privacySubjectsByMediaId,
+      tagReadContext,
       privacyByUser
     } = await resolveAlbumTagContext(connection, photo.session_id, [photo]);
-    const tags = tagsMap.get(id) || [];
     if (!isAlbumPhotoVisibleToUser(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
       currentUserId,
-      personalScope,
-      albumTagPrivacyUserIds(privacySubjectsByMediaId, id)
+      personalScope
     )) {
       throw forbidden("Album photo is not visible");
     }
@@ -8167,20 +8162,17 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId, option
       await requirePublicAlbumShareSeat(connection, normalizedClaims);
     }
     const {
-      tagsByMediaId: tagsMap,
-      privacySubjectsByMediaId,
+      tagReadContext,
       privacyByUser
     } = await resolveAlbumTagContext(connection, normalizedClaims.sessionId, [photo]);
-    const tags = tagsMap.get(id) || [];
     if (!isAlbumPhotoVisibleInPublicShare(
       photo,
-      tags,
+      tagReadContext,
       privacyByUser,
       normalizedClaims,
       {
         implicitUntaggedByMediaId: implicitUntaggedByMediaIdForShare(snapshotShare)
-      },
-      albumTagPrivacyUserIds(privacySubjectsByMediaId, id)
+      }
     )) {
       throw forbidden("Album photo is not visible in this public share");
     }
@@ -8207,18 +8199,15 @@ export async function getVisibleSessionAlbumVideoForPlayback(user, mediaId) {
     }
     const personalScope = await sessionAlbumPersonalScope(connection, session, user.user.id);
     const {
-      tagsByMediaId: tagsMap,
-      privacySubjectsByMediaId,
+      tagReadContext,
       privacyByUser
     } = await resolveAlbumTagContext(connection, media.session_id, [media]);
-    const tags = tagsMap.get(id) || [];
     if (!isAlbumPhotoVisibleToUser(
       media,
-      tags,
+      tagReadContext,
       privacyByUser,
       user.user.id,
-      personalScope,
-      albumTagPrivacyUserIds(privacySubjectsByMediaId, id)
+      personalScope
     )) {
       throw forbidden("Album video is not visible");
     }
@@ -8255,20 +8244,17 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId) {
       await requirePublicAlbumShareSeat(connection, normalizedClaims);
     }
     const {
-      tagsByMediaId: tagsMap,
-      privacySubjectsByMediaId,
+      tagReadContext,
       privacyByUser
     } = await resolveAlbumTagContext(connection, normalizedClaims.sessionId, [media]);
-    const tags = tagsMap.get(id) || [];
     if (!isAlbumPhotoVisibleInPublicShare(
       media,
-      tags,
+      tagReadContext,
       privacyByUser,
       normalizedClaims,
       {
         implicitUntaggedByMediaId: implicitUntaggedByMediaIdForShare(snapshotShare)
-      },
-      albumTagPrivacyUserIds(privacySubjectsByMediaId, id)
+      }
     )) {
       throw forbidden("Album video is not visible in this public share");
     }
@@ -8305,20 +8291,17 @@ export async function getPublicSessionAlbumVideoForPlayback(claims, mediaId, opt
       throw forbidden("Album video is outside this public share");
     }
     const {
-      tagsByMediaId: tagsMap,
-      privacySubjectsByMediaId,
+      tagReadContext,
       privacyByUser
     } = await resolveAlbumTagContext(connection, normalizedClaims.sessionId, [media]);
-    const tags = tagsMap.get(id) || [];
     if (!isAlbumPhotoVisibleInPublicShare(
       media,
-      tags,
+      tagReadContext,
       privacyByUser,
       normalizedClaims,
       {
         implicitUntaggedByMediaId: implicitUntaggedByMediaIdForShare(share)
-      },
-      albumTagPrivacyUserIds(privacySubjectsByMediaId, id)
+      }
     )) {
       throw forbidden("Album video is not visible in this public share");
     }
@@ -8576,14 +8559,12 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
     );
     const photosById = new Map(albumPhotoRows.map((photo) => [Number(photo.id), photo]));
     const {
-      tagsByMediaId: tagsMap,
-      privacySubjectsByMediaId,
+      tagReadContext,
       privacyByUser
     } = await resolveAlbumTagContext(connection, id, albumPhotoRows);
     const personalScope = await sessionAlbumPersonalScope(connection, session, user.user.id);
     albumPhotos = albumPhotoIds.map((albumPhotoId) => {
       const photo = photosById.get(albumPhotoId);
-      const tags = tagsMap.get(albumPhotoId) || [];
       if (
         !photo ||
         Number(photo.session_id) !== id ||
@@ -8593,11 +8574,10 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
         !isModerationPublished(photo.moderation_status) ||
         !isAlbumPhotoVisibleToUser(
           photo,
-          tags,
+          tagReadContext,
           privacyByUser,
           user.user.id,
-          personalScope,
-          albumTagPrivacyUserIds(privacySubjectsByMediaId, albumPhotoId)
+          personalScope
         )
       ) {
         throw badRequest("albumPhotoIds must reference visible approved photos from this session album");

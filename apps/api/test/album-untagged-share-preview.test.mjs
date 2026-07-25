@@ -152,6 +152,20 @@ function sharerSeatTag() {
   };
 }
 
+function tagReadContext(tagsByMediaId) {
+  return {
+    tagsByMediaId,
+    privacySubjectsByMediaId: new Map(
+      [...tagsByMediaId].map(([mediaId, tags]) => [
+        mediaId,
+        tags.some((tag) => tag.kind === "role" && Number(tag.ref_id) === 1000)
+          ? [100]
+          : [],
+      ]),
+    ),
+  };
+}
+
 test("D52 migration adds tag versions and snapshot-local untagged entries", async () => {
   const migrationSql = await readFile(
     new URL("../migrations/0033_album_untagged_share_preview.sql", import.meta.url),
@@ -210,7 +224,7 @@ test("implicit untagged entries are normalized as a bounded media subset", () =>
 
 test("owned untagged images require the explicit share option", () => {
   const owned = media(9);
-  const tags = new Map([[9, []]]);
+  const tags = tagReadContext(new Map([[9, []]]));
   const privacyByUser = privacy([[100]]);
 
   assert.deepEqual(
@@ -236,7 +250,7 @@ test("other users, videos and uploader privacy veto stay excluded when untagged"
     assert.deepEqual(
       selectPublicShareMedia(
         [candidate],
-        new Map([[candidate.id, []]]),
+        tagReadContext(new Map([[candidate.id, []]])),
         privacyByUser,
         claims,
         { allowOwnedUntaggedImages: true }
@@ -250,7 +264,7 @@ test("owned untagged images rank after tagged groups but a focused target is see
   const tagged = media(20, { created_at: "2026-07-20T00:00:00.000Z" });
   const untagged = media(21, { created_at: "2026-07-22T00:00:00.000Z" });
   const candidates = [untagged, tagged];
-  const tags = new Map([[20, [sharerSeatTag()]], [21, []]]);
+  const tags = tagReadContext(new Map([[20, [sharerSeatTag()]], [21, []]]));
   const privacyByUser = privacy([[100]]);
 
   assert.deepEqual(
@@ -301,28 +315,28 @@ test("snapshot-local untagged visibility requires an exact current tag version",
 
   assert.equal(isAlbumPhotoVisibleInPublicShare(
     photo,
-    [],
+    tagReadContext(new Map([[40, []]])),
     privacyByUser,
     claims,
     { implicitUntaggedByMediaId: new Map([[40, 8]]) }
   ), true);
   assert.equal(isAlbumPhotoVisibleInPublicShare(
     photo,
-    [],
+    tagReadContext(new Map([[40, []]])),
     privacyByUser,
     claims,
     { implicitUntaggedByMediaId: new Map([[40, 7]]) }
   ), false);
   assert.equal(isAlbumPhotoVisibleInPublicShare(
     photo,
-    [],
+    tagReadContext(new Map([[40, []]])),
     privacyByUser,
     claims,
     { implicitUntaggedByMediaId: new Map() }
   ), false);
   assert.equal(isAlbumPhotoVisibleInPublicShare(
     photo,
-    [sharerSeatTag()],
+    tagReadContext(new Map([[40, [sharerSeatTag()]]])),
     privacyByUser,
     claims,
     { implicitUntaggedByMediaId: new Map([[40, 7]]) }
@@ -334,7 +348,7 @@ test("implicit untagged media is never eligible as a public share cover", () => 
   assert.deepEqual(
     selectPublicShareCoverMedia(
       [photo],
-      new Map([[41, []]]),
+      tagReadContext(new Map([[41, []]])),
       privacy([[100]]),
       claims
     ),
@@ -382,7 +396,9 @@ test("public image bytes are reauthorized against the snapshot tag version", asy
 
 test("custom selection returns only exact eligible IDs and never refills", () => {
   const candidates = [media(50), media(51), media(52)];
-  const tags = new Map(candidates.map((item) => [item.id, [sharerSeatTag()]]));
+  const tags = tagReadContext(
+    new Map(candidates.map((item) => [item.id, [sharerSeatTag()]])),
+  );
   const selected = selectPublicShareMedia(
     candidates,
     tags,
@@ -406,7 +422,9 @@ test("custom selection rejects invalid shape, focus conflicts and video overflow
   const videos = Array.from({ length: 4 }, (_, index) => media(60 + index, {
     media_type: "video"
   }));
-  const videoTags = new Map(videos.map((item) => [item.id, [sharerSeatTag()]]));
+  const videoTags = tagReadContext(
+    new Map(videos.map((item) => [item.id, [sharerSeatTag()]])),
+  );
   assert.throws(
     () => selectPublicShareMedia(videos, videoTags, privacy([[100]]), claims, {
       selectedMediaIds: videos.map((item) => item.id)

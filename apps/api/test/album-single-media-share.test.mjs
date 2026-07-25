@@ -59,24 +59,35 @@ function albumTagQueryRows(sql, values, fixtures) {
   const rows = fixtures.filter((row) =>
     mediaIds.has(Number(row.media_id ?? row.photo_id))
   );
-  if (sql.includes("AS privacy_user_id")) {
-    return rows.map((row) => ({
-      media_id: Number(row.media_id ?? row.photo_id),
-      privacy_user_id: row.privacy_user_id ??
-        (row.kind === "role" && Number(row.ref_id) === 1000 ? 100 : null)
-    }));
-  }
   return rows.map((row) => ({
     media_id: Number(row.media_id ?? row.photo_id),
     kind: row.kind,
     seat_id: row.kind === "role" ? Number(row.ref_id) : null,
     session_npc_role_id: row.kind === "npc_role" ? Number(row.ref_id) : null,
-    canonical_label: row.kind === "other" ? null : row.label
+    canonical_label: row.kind === "other" ? null : row.label,
+    privacy_user_id: row.privacy_user_id ??
+      (row.kind === "role" && Number(row.ref_id) === 1000 ? 100 : null)
   }));
 }
 
+function tagReadContext(tagsByMediaId) {
+  return {
+    tagsByMediaId,
+    privacySubjectsByMediaId: new Map(
+      [...tagsByMediaId].map(([mediaId, tags]) => [
+        mediaId,
+        tags.some((tag) => tag.kind === "role" && Number(tag.ref_id) === 1000)
+          ? [100]
+          : [],
+      ]),
+    ),
+  };
+}
+
 function tagsFor(candidates) {
-  return new Map(candidates.map((media) => [Number(media.id), [sharerSeatTag()]]));
+  return tagReadContext(
+    new Map(candidates.map((media) => [Number(media.id), [sharerSeatTag()]])),
+  );
 }
 
 test("public media category distinguishes the shared role from safe other content", () => {
@@ -287,12 +298,12 @@ test("selectPublicShareMedia without options preserves D48 ranking order", () =>
     }),
     eligibleMedia(4, { created_at: "2026-07-19T00:00:02.000Z" })
   ];
-  const tags = new Map([
+  const tags = tagReadContext(new Map([
     [1, [sharerSeatTag()]],
     [2, [sharerSeatTag()]],
     [3, [sharerSeatTag()]],
     [4, [{ kind: "other", ref_id: null, label: "其他" }]]
-  ]);
+  ]));
 
   assert.deepEqual(
     selectPublicShareMedia(candidates, tags, openPrivacy([100, 200]), claims)
@@ -427,7 +438,7 @@ test("focused album shares validate the focus ID and expose it through the share
   assert.match(serviceSource, /ALBUM_PUBLIC_SHARE_MEDIA_UNAVAILABLE/);
   assert.match(
     serviceSource,
-    /selectPublicShareMedia\(photoRows, tagsMap, privacyByUser, claims, \{\s*requiredMediaId: focusMediaId,\s*allowOwnedUntaggedImages: includeOwnedUntaggedImages,\s*selectedMediaIds:/
+    /selectPublicShareMedia\(photoRows, tagReadContext, privacyByUser, claims, \{\s*requiredMediaId: focusMediaId,\s*allowOwnedUntaggedImages: includeOwnedUntaggedImages,\s*selectedMediaIds:/
   );
   assert.match(serviceSource, /focus_media_id: focusMediaId \|\| null/);
 

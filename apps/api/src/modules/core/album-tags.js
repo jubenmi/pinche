@@ -90,7 +90,7 @@ export async function listAlbumTagOptions(connection, sessionId) {
   ];
 }
 
-async function selectCanonicalAlbumTagRows(connection, sessionId, mediaIds) {
+async function selectAlbumTagReadRows(connection, sessionId, mediaIds) {
   if (mediaIds.length === 0) return [];
   const placeholders = mediaIds.map(() => "?").join(", ");
   const [rows] = await connection.query(
@@ -109,76 +109,7 @@ async function selectCanonicalAlbumTagRows(connection, sessionId, mediaIds) {
           WHEN tag.kind = 'npc_role'
             THEN NULLIF(TRIM(npc_role.name), '')
           ELSE NULL
-        END AS canonical_label
-      FROM session_album_media_tags tag
-      JOIN session_album_photos media
-        ON media.id = tag.media_id
-       AND media.session_id = ?
-      LEFT JOIN session_seats seat
-        ON tag.kind = 'role'
-       AND seat.id = tag.seat_id
-       AND seat.session_id = media.session_id
-       AND seat.status IN ('confirmed', 'locked')
-      LEFT JOIN session_npc_roles npc_role
-        ON tag.kind = 'npc_role'
-       AND npc_role.id = tag.session_npc_role_id
-       AND npc_role.session_id = media.session_id
-       AND npc_role.status = 'active'
-      WHERE tag.media_id IN (${placeholders})
-        AND (
-          (tag.kind = 'role' AND seat.id IS NOT NULL)
-          OR (tag.kind = 'npc_role' AND npc_role.id IS NOT NULL)
-          OR (
-            tag.kind = 'other'
-            AND tag.seat_id IS NULL
-            AND tag.session_npc_role_id IS NULL
-          )
-        )
-      ORDER BY tag.media_id, tag.sort_order, tag.id
-    `,
-    [sessionId, ...mediaIds],
-  );
-  return rows;
-}
-
-function groupCanonicalAlbumTags(rows = []) {
-  const tagsByMediaId = new Map();
-  for (const row of rows) {
-    const mediaId = positiveSafeId(row.media_id);
-    if (!mediaId) continue;
-    let tag = null;
-    if (row.kind === "role") {
-      const refId = positiveSafeId(row.seat_id);
-      const label = canonicalText(row.canonical_label);
-      if (refId && label) tag = { kind: "role", ref_id: refId, label };
-    } else if (row.kind === "npc_role") {
-      const refId = positiveSafeId(row.session_npc_role_id);
-      const label = canonicalText(row.canonical_label);
-      if (refId && label) tag = { kind: "npc_role", ref_id: refId, label };
-    } else if (row.kind === "other") {
-      tag = { kind: "other", ref_id: null, label: "其他" };
-    }
-    if (!tag) continue;
-    const tags = tagsByMediaId.get(mediaId) || [];
-    tags.push(tag);
-    tagsByMediaId.set(mediaId, tags);
-  }
-  return tagsByMediaId;
-}
-
-export async function resolveAlbumTags(connection, sessionId, mediaIds) {
-  const ids = normalizedMediaIds(mediaIds);
-  const rows = await selectCanonicalAlbumTagRows(connection, sessionId, ids);
-  return groupCanonicalAlbumTags(rows);
-}
-
-async function selectAlbumTagPrivacyRows(connection, sessionId, mediaIds) {
-  if (mediaIds.length === 0) return [];
-  const placeholders = mediaIds.map(() => "?").join(", ");
-  const [rows] = await connection.query(
-    `
-      SELECT
-        tag.media_id,
+        END AS canonical_label,
         CASE
           WHEN tag.kind = 'role' THEN seat.confirmed_user_id
           WHEN tag.kind = 'npc_role' THEN npc_role.bound_user_id
@@ -215,24 +146,73 @@ async function selectAlbumTagPrivacyRows(connection, sessionId, mediaIds) {
   return rows;
 }
 
-export async function resolveAlbumTagPrivacySubjects(
+function projectAlbumTagReadRows(mediaIds, rows = []) {
+  const tagsByMediaId = new Map(mediaIds.map((id) => [id, []]));
+  const privacySubjectsByMediaId = new Map(
+    mediaIds.map((id) => [id, []]),
+  );
+  const seenPrivacySubjectsByMediaId = new Map(
+    mediaIds.map((id) => [id, new Set()]),
+  );
+  for (const row of rows) {
+    const mediaId = positiveSafeId(row.media_id);
+    if (!mediaId || !tagsByMediaId.has(mediaId)) continue;
+    let tag = null;
+    if (row.kind === "role") {
+      const refId = positiveSafeId(row.seat_id);
+      const label = canonicalText(row.canonical_label);
+      if (refId && label) tag = { kind: "role", ref_id: refId, label };
+    } else if (row.kind === "npc_role") {
+      const refId = positiveSafeId(row.session_npc_role_id);
+      const label = canonicalText(row.canonical_label);
+      if (refId && label) tag = { kind: "npc_role", ref_id: refId, label };
+    } else if (row.kind === "other") {
+      tag = { kind: "other", ref_id: null, label: "其他" };
+    }
+    if (tag) tagsByMediaId.get(mediaId).push(tag);
+
+    const privacyUserId = positiveSafeId(row.privacy_user_id);
+    const seenPrivacySubjects = seenPrivacySubjectsByMediaId.get(mediaId);
+    if (privacyUserId && !seenPrivacySubjects.has(privacyUserId)) {
+      seenPrivacySubjects.add(privacyUserId);
+      privacySubjectsByMediaId.get(mediaId).push(privacyUserId);
+    }
+  }
+  return { tagsByMediaId, privacySubjectsByMediaId };
+}
+
+export async function resolveAlbumTagReadContext(
   connection,
   sessionId,
   mediaIds,
 ) {
   const ids = normalizedMediaIds(mediaIds);
-  const subjectsByMediaId = new Map(ids.map((id) => [id, []]));
-  const rows = await selectAlbumTagPrivacyRows(connection, sessionId, ids);
-  const seenByMediaId = new Map(ids.map((id) => [id, new Set()]));
-  for (const row of rows) {
-    const mediaId = positiveSafeId(row.media_id);
-    if (!mediaId || !subjectsByMediaId.has(mediaId)) continue;
-    const userId = positiveSafeId(row.privacy_user_id);
-    if (!userId || seenByMediaId.get(mediaId).has(userId)) continue;
-    seenByMediaId.get(mediaId).add(userId);
-    subjectsByMediaId.get(mediaId).push(userId);
-  }
-  return subjectsByMediaId;
+  const rows = await selectAlbumTagReadRows(connection, sessionId, ids);
+  return projectAlbumTagReadRows(ids, rows);
+}
+
+export async function resolveAlbumTags(connection, sessionId, mediaIds) {
+  const { tagsByMediaId } = await resolveAlbumTagReadContext(
+    connection,
+    sessionId,
+    mediaIds,
+  );
+  return new Map(
+    [...tagsByMediaId].filter(([, tags]) => tags.length > 0),
+  );
+}
+
+export async function resolveAlbumTagPrivacySubjects(
+  connection,
+  sessionId,
+  mediaIds,
+) {
+  const { privacySubjectsByMediaId } = await resolveAlbumTagReadContext(
+    connection,
+    sessionId,
+    mediaIds,
+  );
+  return privacySubjectsByMediaId;
 }
 
 async function assertAlbumTagReferences(

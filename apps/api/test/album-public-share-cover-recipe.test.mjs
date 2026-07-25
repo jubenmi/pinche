@@ -52,13 +52,7 @@ function sharerSeatTag(photoId) {
 
 function albumTagRows(sql, values, fixtures) {
   const requestedIds = new Set(values.slice(1).map(Number));
-  const rows = fixtures.filter((tag) => requestedIds.has(Number(tag.media_id)));
-  return sql.includes("AS privacy_user_id")
-    ? rows.map((tag) => ({
-        media_id: tag.media_id,
-        privacy_user_id: tag.privacy_user_id ?? null
-      }))
-    : rows;
+  return fixtures.filter((tag) => requestedIds.has(Number(tag.media_id)));
 }
 
 function shareCreationConnection(photos) {
