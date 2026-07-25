@@ -85,8 +85,8 @@ const tdesignSupportComponentNames = [
   "transition"
 ];
 const tdesignRequiredBaseFolders = ["common"];
+const tdesignIdeMetadataPath = ".wechatide.ib.json";
 const tdesignRequiredRuntimePaths = [
-  ".wechatide.ib.json",
   "index.js",
   "mixins/transition.js",
   "mixins/using-config.js",
@@ -492,6 +492,12 @@ function assertTdesignMigrationConfig(pagesJson) {
       fail(`Vite TDesign runtime copy list must include ${runtimePath}`);
     }
   }
+  if (copiedRuntimePaths.has(tdesignIdeMetadataPath)) {
+    fail("Production TDesign runtime copy list must exclude WeChat IDE metadata");
+  }
+  if (!fs.existsSync(path.join(tdesignWxcomponentsPath, tdesignIdeMetadataPath))) {
+    fail("Miniprogram source must retain TDesign WeChat IDE metadata for local development");
+  }
 
   assertNoNativeTdesignPrimitiveTags(appVueFiles);
   assertNoDirectFeedbackApis(sourceAppCodeFiles());
@@ -847,6 +853,18 @@ if (!fs.existsSync(pagesJsonPath)) {
   ]) {
     if (!fs.existsSync(packageRoot)) {
       continue;
+    }
+    const builtTdesignIdeMetadataPath = path.join(
+      packageRoot,
+      "wxcomponents",
+      tdesignPackageName,
+      tdesignIdeMetadataPath
+    );
+    if (packageLabel === "Dev package" && !fs.existsSync(builtTdesignIdeMetadataPath)) {
+      fail("Development mini-program package must retain TDesign WeChat IDE metadata");
+    }
+    if (packageLabel === "Build package" && fs.existsSync(builtTdesignIdeMetadataPath)) {
+      fail("Production mini-program package must exclude TDesign WeChat IDE metadata");
     }
     const builtAppJsonPath = path.join(packageRoot, "app.json");
     if (fs.existsSync(builtAppJsonPath)) {

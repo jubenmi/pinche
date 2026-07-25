@@ -390,7 +390,7 @@ reducer 对输入不做原地修改并冻结测试快照。
 - 账号身份标签不回填；
 - share items 保持 JSON 顺序；
 - 已删除媒体 ID 仍产生 item 墓碑，并在读取时进入 unavailable；
-- 重复执行通过 `INSERT IGNORE` 保持结果不变。
+- 重复执行通过已存在 ordinal/media 的反连接跳过保持结果不变，不依赖 `INSERT IGNORE` 吞掉结构错误。
 
 `scripts/migration-filename-history.json` 追加 0035，迁移 registry/checksum 测试同步更新。
 
@@ -406,6 +406,7 @@ reducer 对输入不做原地修改并冻结测试快照。
   - `public_media_state_refresh`
   - `public_media_state_unavailable`
   - `public_share_manifest_mismatch`
+  - `public_share_manifest_membership_denied`
 - 事件只记录 session/share 的数值 ID、数量、结果码和耗时，不记录 token、标签文字、账号或 URL。
 
 ## 10. 测试策略

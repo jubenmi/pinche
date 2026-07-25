@@ -39,22 +39,24 @@
   - [x] 6.3 将首屏、下一页、媒体 patch 和 unload 接入 `album.vue`。
   - [x] 6.4 按 ID 更新/移除瀑布流卡片，保证除首屏外不做全量 rebuild。
 
-- [ ] 7. 删除旧公开刷新补丁并对齐历史契约
-  - 进度：生产代码已删除旧公开刷新链并隔离成员/公开 controller；正在更新被 D57 替代的旧测试、门禁和规格说明。
+- [x] 7. 删除旧公开刷新补丁并对齐历史契约
+  - 验证：生产代码已删除旧公开刷新链并隔离成员/公开 controller；D23/D26 历史门禁已改为验证 normalized manifest 与 canonical tag DTO，D48/D50/D52/D54 说明和回归均已对齐。
   - [x] 7.1 删除前缀重读、`publicShareLoadedPageCount`、序列比较和公开完整列表 reload。
   - [x] 7.2 保留成员相册完整媒体刷新，与公开 media-state 控制器分离。
-  - [ ] 7.3 更新 D48/D50/D52/D54 被 D57 替换的标签和刷新说明。
-  - [ ] 7.4 更新旧 fixture、smoke 和静态门禁，不让生产代码重新引用旧标签表或补丁 helper。
+  - [x] 7.3 更新 D48/D50/D52/D54 被 D57 替换的标签和刷新说明。
+  - [x] 7.4 更新旧 fixture、smoke 和静态门禁，不让生产代码重新引用旧标签表或补丁 helper。
 
-- [ ] 8. 建立 D57 门禁并完成自动化回归
-  - [ ] 8.1 新增 `d57:unit`、`d57:check` 并接入 `postcheck`。
-  - [ ] 8.2 运行迁移、D48/D50/D54/D55/D56、D57 聚焦测试与小程序构建。
-  - [ ] 8.3 运行完整 `npm run check`、`git diff --check` 并记录结果。
+- [x] 8. 建立 D57 门禁并完成自动化回归
+  - 验证：D57 61/61、相关 D54/D55/D56/统一分享回归、迁移和小程序 production build 全绿；2026-07-26 完整 `npm run check` 与 `git diff --check` 退出码均为 0。生产主包 1,497,058 bytes，低于 1.5 MiB 门限 75,806 bytes；开发包保留 76,826-byte IDE metadata，生产包排除该文件。
+  - [x] 8.1 新增 `d57:unit`、`d57:check` 并接入 `postcheck`。
+  - [x] 8.2 运行迁移、D48/D50/D54/D55/D56、D57 聚焦测试与小程序构建。
+  - [x] 8.3 运行完整 `npm run check`、`git diff --check` 并记录结果。
 
-- [ ] 9. 整体代码审查与修复
-  - [ ] 9.1 逐条对照 requirements、design 和 tasks 做完成审计。
-  - [ ] 9.2 审查数据库安全、公开 DTO、并发状态、卸载和回归风险。
-  - [ ] 9.3 修复全部 Critical/Important 问题并重新运行完整验证。
+- [x] 9. 整体代码审查与修复
+  - 验证：两名独立审查者分别完成规格与质量复审；完整修复 manifest 审计、总数语义、公开 reducer 写入、请求 authority 隔离及历史规格矛盾后，最终 Critical / Important / Minor 均为 0。非法历史 JSON 新增 RED→GREEN 回归；最终 `npm run check`、D57 61/61、公开分页 9/9 与 `git diff --check` 全绿。
+  - [x] 9.1 逐条对照 requirements、design 和 tasks 做完成审计。
+  - [x] 9.2 审查数据库安全、公开 DTO、并发状态、卸载和回归风险。
+  - [x] 9.3 修复全部 Critical/Important 问题并重新运行完整验证。
 
 - [ ] 10. CI 发布
   - [ ] 10.1 将已验证提交落地 `develop` 并等待 CI 成功。

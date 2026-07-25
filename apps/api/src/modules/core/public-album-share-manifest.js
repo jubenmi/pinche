@@ -1,10 +1,55 @@
 import crypto from "node:crypto";
 
 import { config } from "../../config/env.js";
-import { badRequest, forbidden } from "../../http/errors.js";
+import { AppError, badRequest } from "../../http/errors.js";
 
 const PUBLIC_SHARE_MANIFEST_PAGE_LIMIT = 30;
 const PUBLIC_SHARE_MANIFEST_WRITE_BATCH_SIZE = 500;
+const PUBLIC_SHARE_MANIFEST_TELEMETRY_EVENTS = new Set([
+  "public_share_manifest_page",
+  "public_share_manifest_mismatch",
+  "public_share_manifest_membership_denied",
+]);
+
+function manifestInvalid() {
+  return new AppError(
+    403,
+    "ALBUM_PUBLIC_SHARE_MANIFEST_INVALID",
+    "Album share manifest is invalid",
+  );
+}
+
+export function publicShareManifestInvalid() {
+  return manifestInvalid();
+}
+
+function finiteMetric(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function safeResultCode(value) {
+  const code = String(value || "").trim().toUpperCase();
+  return /^[A-Z0-9_]{1,64}$/.test(code) ? code : "UNKNOWN";
+}
+
+export function emitPublicShareManifestTelemetry(eventName, fields, sink = console.info) {
+  if (!PUBLIC_SHARE_MANIFEST_TELEMETRY_EVENTS.has(eventName)) {
+    throw new TypeError("unsupported public share manifest telemetry event");
+  }
+  const event = {
+    event: eventName,
+    sessionId: finiteMetric(fields?.sessionId),
+    shareId: finiteMetric(fields?.shareId),
+    requestedLimit: finiteMetric(fields?.requestedLimit),
+    returnedCount: finiteMetric(fields?.returnedCount),
+    scannedCount: finiteMetric(fields?.scannedCount),
+    resultCode: safeResultCode(fields?.resultCode),
+    durationMs: finiteMetric(fields?.durationMs),
+  };
+  sink(JSON.stringify(event));
+  return event;
+}
 
 function isPositiveSafeInteger(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -23,7 +68,7 @@ function requestShareId(value) {
 
 function storedShareId(value) {
   if (!isPositiveSafeInteger(value)) {
-    throw forbidden("Album share manifest is invalid");
+    throw manifestInvalid();
   }
   return value;
 }
@@ -50,17 +95,17 @@ function normalizeLegacyMediaIds(value) {
     try {
       parsed = JSON.parse(parsed);
     } catch {
-      throw forbidden("Album share manifest is invalid");
+      throw manifestInvalid();
     }
   }
   if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw forbidden("Album share manifest is invalid");
+    throw manifestInvalid();
   }
   const seen = new Set();
   const mediaIds = [];
   for (const mediaId of parsed) {
     if (!isPositiveSafeInteger(mediaId) || seen.has(mediaId)) {
-      throw forbidden("Album share manifest is invalid");
+      throw manifestInvalid();
     }
     seen.add(mediaId);
     mediaIds.push(mediaId);
@@ -70,7 +115,7 @@ function normalizeLegacyMediaIds(value) {
 
 function normalizeStoredItems(rows, options = {}) {
   if (!Array.isArray(rows)) {
-    throw forbidden("Album share manifest is invalid");
+    throw manifestInvalid();
   }
   const afterOrdinal = options.afterOrdinal ?? -1;
   let previousOrdinal = afterOrdinal;
@@ -84,7 +129,7 @@ function normalizeStoredItems(rows, options = {}) {
       !isPositiveSafeInteger(mediaId) ||
       mediaIds.has(mediaId)
     ) {
-      throw forbidden("Album share manifest is invalid");
+      throw manifestInvalid();
     }
     previousOrdinal = ordinal;
     mediaIds.add(mediaId);
@@ -155,7 +200,7 @@ export function assertManifestMatchesLegacySnapshot(items, legacyMediaIds) {
       item.ordinal !== index || item.media_id !== normalizedLegacyIds[index]
     ))
   ) {
-    throw forbidden("Album share manifest is invalid");
+    throw manifestInvalid();
   }
 }
 

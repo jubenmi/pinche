@@ -8,6 +8,7 @@ import { forbidden } from "../src/http/errors.js";
 import {
   PUBLIC_MEDIA_STATE_BATCH_LIMIT,
   emitPublicMediaStateTelemetry,
+  emitPublicMediaStateUnavailableTelemetry,
   normalizePublicMediaStateIds,
   readPublicAlbumMediaState,
 } from "../src/modules/core/public-album-media-state.js";
@@ -435,8 +436,32 @@ test("public media-state telemetry emits only the approved numeric counters", ()
   }]);
 });
 
+test("manifest membership denial emits a dedicated metadata-safe event", () => {
+  const events = [];
+  emitPublicMediaStateUnavailableTelemetry({
+    sessionId: 10,
+    shareId: 50,
+    requestedCount: 1,
+    resultCode: "OUTSIDE_MANIFEST",
+    durationMs: 4,
+    token: "TOKEN_CANARY",
+    labels: ["LABEL_CANARY"],
+    url: "URL_CANARY",
+  }, (line) => events.push(JSON.parse(line)));
+
+  assert.deepEqual(events, [{
+    event: "public_media_state_unavailable",
+    sessionId: 10,
+    shareId: 50,
+    requestedCount: 1,
+    resultCode: "OUTSIDE_MANIFEST",
+    durationMs: 4,
+  }]);
+});
+
 test("POST media-state verifies token/session, returns safe patches, and emits safe telemetry", async () => {
   const telemetry = [];
+  const unavailableTelemetry = [];
   const reads = [];
   const app = createApp({
     publicMediaState: {
@@ -447,7 +472,9 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
       async read(claimsArg, mediaIds) {
         reads.push({ claims: claimsArg, mediaIds });
         if (mediaIds.includes(9)) {
-          throw forbidden("Album share media is unavailable");
+          const error = forbidden("Album share media is unavailable");
+          error.code = "ALBUM_PUBLIC_SHARE_MEDIA_OUTSIDE_MANIFEST";
+          throw error;
         }
         if (mediaIds.length === 0) {
           return { patches: [], unavailable_ids: [] };
@@ -462,6 +489,9 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
       },
       emit(fields) {
         telemetry.push(fields);
+      },
+      emitUnavailable(fields) {
+        unavailableTelemetry.push(fields);
       },
     },
   });
@@ -540,6 +570,13 @@ test("POST media-state verifies token/session, returns safe patches, and emits s
     );
     assert.equal(unavailable.status, 403);
     assert.equal(reads.length, 3);
+    assert.deepEqual(unavailableTelemetry, [{
+      sessionId: 10,
+      shareId: 50,
+      requestedCount: 1,
+      resultCode: "OUTSIDE_MANIFEST",
+      durationMs: unavailableTelemetry[0].durationMs,
+    }]);
     assert.equal(telemetry.length, 4);
     assert.deepEqual(telemetry.slice(2), [
       {

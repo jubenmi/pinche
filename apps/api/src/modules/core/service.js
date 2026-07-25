@@ -90,8 +90,10 @@ import {
 import {
   assertManifestMatchesLegacySnapshot,
   decodePublicShareOrdinalCursor,
+  emitPublicShareManifestTelemetry,
   encodePublicShareOrdinalCursor,
   loadPublicShareItems,
+  publicShareManifestInvalid,
   readPublicShareItemPage,
   writePublicShareItems
 } from "./public-album-share-manifest.js";
@@ -2602,7 +2604,35 @@ function implicitUntaggedByMediaIdForShare(share) {
   );
 }
 
-async function loadSessionAlbumPublicShareWithConnection(connection, claims) {
+function emitPublicShareMembershipDenied(claims, emitManifestEvent) {
+  try {
+    const fields = {
+      sessionId: Number(claims?.sessionId ?? claims?.session_id) || 0,
+      shareId: Number(claims?.shareId ?? claims?.share_id) || 0,
+      requestedLimit: 1,
+      returnedCount: 0,
+      scannedCount: 1,
+      resultCode: "OUTSIDE_MANIFEST",
+      durationMs: 0,
+    };
+    if (typeof emitManifestEvent === "function") {
+      emitManifestEvent("public_share_manifest_membership_denied", fields);
+    } else {
+      emitPublicShareManifestTelemetry(
+        "public_share_manifest_membership_denied",
+        fields
+      );
+    }
+  } catch {
+    // Observability must not change manifest membership enforcement.
+  }
+}
+
+async function loadSessionAlbumPublicShareWithConnection(
+  connection,
+  claims,
+  options = {}
+) {
   const normalizedClaims = normalizeAlbumShareClaims(claims);
   const shareId = positiveId(claims.shareId ?? claims.share_id, "shareId");
   const [rows] = await connection.query(
@@ -2624,9 +2654,43 @@ async function loadSessionAlbumPublicShareWithConnection(connection, claims) {
       normalizedClaims.seatId
     ]
   );
-  const share = normalizeSessionAlbumPublicShareRow(rows[0]);
-  const items = await loadPublicShareItems(connection, share.id);
-  assertManifestMatchesLegacySnapshot(items, share.media_ids);
+  let share;
+  let items = [];
+  try {
+    try {
+      share = normalizeSessionAlbumPublicShareRow(rows[0]);
+    } catch (error) {
+      if (!rows[0]) throw error;
+      throw publicShareManifestInvalid();
+    }
+    items = await loadPublicShareItems(connection, share.id);
+    assertManifestMatchesLegacySnapshot(items, share.media_ids);
+  } catch (error) {
+    if (error?.code === "ALBUM_PUBLIC_SHARE_MANIFEST_INVALID") {
+      try {
+        const fields = {
+          sessionId: normalizedClaims.sessionId,
+          shareId,
+          requestedLimit: 0,
+          returnedCount: 0,
+          scannedCount: items.length,
+          resultCode: "MANIFEST_MISMATCH",
+          durationMs: 0,
+        };
+        if (typeof options.emitManifestEvent === "function") {
+          options.emitManifestEvent("public_share_manifest_mismatch", fields);
+        } else {
+          emitPublicShareManifestTelemetry(
+            "public_share_manifest_mismatch",
+            fields
+          );
+        }
+      } catch {
+        // Observability must not change manifest consistency enforcement.
+      }
+    }
+    throw error;
+  }
   const manifestIds = new Set(items.map((item) => item.media_id));
   const session = await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
   const { seat } = await requirePublicAlbumShareSeat(connection, normalizedClaims);
@@ -7165,13 +7229,37 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
   ) {
     throw new TypeError("withDatabaseConnection must be a function");
   }
+  if (
+    options.emitManifestEvent !== undefined &&
+    typeof options.emitManifestEvent !== "function"
+  ) {
+    throw new TypeError("emitManifestEvent must be a function");
+  }
+  const startedAt = Date.now();
+  const isSnapshotShare = Boolean(claims.shareId ?? claims.share_id);
   const normalizedClaims = normalizeAlbumShareClaims(claims);
   const runWithDatabaseConnection =
     options.withDatabaseConnection || withDatabaseConnection;
-  return runWithDatabaseConnection(async (connection) => {
-    const isSnapshotShare = Boolean(claims.shareId ?? claims.share_id);
+  let requestedLimit = 0;
+  let scannedCount = 0;
+  const emitManifestEvent = (eventName, fields) => {
+    try {
+      if (options.emitManifestEvent) {
+        options.emitManifestEvent(eventName, fields);
+      } else {
+        emitPublicShareManifestTelemetry(eventName, fields);
+      }
+    } catch {
+      // Observability must not alter public-share authorization or output.
+    }
+  };
+  try {
+    requestedLimit = isSnapshotShare ? publicSharePageLimit(options.limit) : 0;
+    const result = await runWithDatabaseConnection(async (connection) => {
     const snapshotContext = isSnapshotShare
-      ? await loadSessionAlbumPublicShareWithConnection(connection, claims)
+      ? await loadSessionAlbumPublicShareWithConnection(connection, claims, {
+          emitManifestEvent,
+        })
       : null;
     const session = snapshotContext?.session ||
       await requireSessionAlbumOpen(connection, normalizedClaims.sessionId);
@@ -7199,7 +7287,7 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
     const owner = ownerRows[0] || {};
     const snapshotItems = snapshotContext?.items || [];
     const lastManifestOrdinal = snapshotItems.at(-1)?.ordinal ?? -1;
-    const pageLimit = isSnapshotShare ? publicSharePageLimit(options.limit) : null;
+    const pageLimit = isSnapshotShare ? requestedLimit : null;
     const initialAfterOrdinal = isSnapshotShare && options.cursor
       ? decodePublicShareOrdinalCursor(
           options.cursor,
@@ -7276,6 +7364,7 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
           }
         );
         if (itemPage.items.length === 0) break;
+        scannedCount += itemPage.items.length;
         scannedOrdinal = itemPage.lastScannedOrdinal;
         const candidateIds = itemPage.items.map((item) => item.media_id);
         photos.push(...await readVisiblePhotos(candidateIds));
@@ -7308,7 +7397,42 @@ export async function listPublicSessionAlbumShare(claims, options = {}) {
       next_cursor: nextCursor,
       has_more: hasMore
     };
-  });
+    });
+    if (isSnapshotShare) {
+      emitManifestEvent("public_share_manifest_page", {
+        sessionId: normalizedClaims.sessionId,
+        shareId: Number(claims.shareId ?? claims.share_id),
+        requestedLimit,
+        returnedCount: result.photos.length,
+        scannedCount,
+        resultCode: "SUCCESS",
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
+    }
+    return result;
+  } catch (error) {
+    if (isSnapshotShare) {
+      const manifestMismatch =
+        error?.code === "ALBUM_PUBLIC_SHARE_MANIFEST_INVALID";
+      const resultCode = manifestMismatch
+        ? "MANIFEST_MISMATCH"
+        : error?.message === "Invalid album share cursor" ||
+            error?.message === "Invalid album share page"
+          ? "INVALID_CURSOR"
+          : "READ_FAILED";
+      const fields = {
+        sessionId: normalizedClaims.sessionId,
+        shareId: Number(claims.shareId ?? claims.share_id),
+        requestedLimit,
+        returnedCount: 0,
+        scannedCount,
+        resultCode,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      };
+      emitManifestEvent("public_share_manifest_page", fields);
+    }
+    throw error;
+  }
 }
 
 export async function createSessionAlbumPhoto(user, sessionId, body = {}, options = {}) {
@@ -8168,6 +8292,7 @@ export async function getPublicSessionAlbumPhotoForMedia(claims, photoId, option
       } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
       snapshotShare = share;
       if (!manifestIds.has(id)) {
+        emitPublicShareMembershipDenied(claims, options.emitManifestEvent);
         throw forbidden("Album photo is outside this public share");
       }
     } else {
@@ -8254,6 +8379,7 @@ export async function getPublicSessionAlbumVideoCoverForMedia(claims, mediaId, o
       } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
       snapshotShare = share;
       if (!manifestIds.has(id)) {
+        emitPublicShareMembershipDenied(claims, options.emitManifestEvent);
         throw forbidden("Album video is outside this public share");
       }
     } else {
@@ -8308,6 +8434,7 @@ export async function getPublicSessionAlbumVideoForPlayback(claims, mediaId, opt
       manifestIds
     } = await loadSessionAlbumPublicShareWithConnection(connection, claims);
     if (!manifestIds.has(id)) {
+      emitPublicShareMembershipDenied(claims, options.emitManifestEvent);
       throw forbidden("Album video is outside this public share");
     }
     const {

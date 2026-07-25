@@ -123,6 +123,9 @@ for (const token of [
   "assertManifestMatchesLegacySnapshot",
   "readPublicShareItemPage",
   "ordinal > ?",
+  "public_share_manifest_page",
+  "public_share_manifest_mismatch",
+  "public_share_manifest_membership_denied",
 ]) {
   requireText(manifest, token, `D57 manifest authority is missing ${token}`);
 }
@@ -133,6 +136,7 @@ for (const token of [
   "loadShare(connection, claims)",
   "patches",
   "unavailable_ids",
+  "public_media_state_unavailable",
 ]) {
   requireText(mediaState, token, `D57 media-state service is missing ${token}`);
 }
@@ -141,6 +145,9 @@ const server = read(paths.server);
 requireText(server, "publicSessionAlbumMediaStateId");
 requireText(server, "public-share\\/media-state");
 requireText(server, "readPublicSessionAlbumMediaState");
+requireText(server, "snapshotVisibleCount");
+requireText(server, "emitPublicShareManifestTelemetry");
+requireText(server, "emitPublicMediaStateUnavailableTelemetry");
 
 const publicReadState = read(paths.publicReadState);
 for (const event of ["INITIAL_PAGE", "NEXT_PAGE", "MEDIA_PATCH", "UNLOAD"]) {
@@ -178,6 +185,39 @@ forbidText(
   "D54 static-gate compatibility; remove/update in Task8",
   "D57 must remove the temporary D54 static-gate compatibility comment"
 );
+const publicListMethods = albumPage.slice(
+  albumPage.indexOf("async loadPublicAlbum()"),
+  albumPage.indexOf("async refreshLoadedPublicAlbumMedia()")
+);
+for (const forbidden of [
+  "albumListRequestAuthority",
+  "beginAlbumListRequest",
+  "isCurrentAlbumListRequest",
+]) {
+  forbidText(
+    publicListMethods,
+    forbidden,
+    `D57 public initial/page reads must not share member list authority: ${forbidden}`
+  );
+}
+const updatePhotoDisplayUrlStart = albumPage.indexOf(
+  "updatePhotoDisplayUrl(photoId, displayUrl)"
+);
+const updatePhotoDisplayUrlMethod = albumPage.slice(
+  updatePhotoDisplayUrlStart,
+  albumPage.indexOf("pruneUnpublishedAlbumMediaState", updatePhotoDisplayUrlStart)
+);
+for (const token of [
+  "if (this.timelineMode)",
+  'type: "MEDIA_PATCH"',
+  "this.commitPublicAlbumEvent",
+]) {
+  requireText(
+    updatePhotoDisplayUrlMethod,
+    token,
+    `D57 public display projection must remain reducer-owned: ${token}`
+  );
+}
 
 const fixtureFiles = sourceFiles("scripts").filter(
   (file) => file !== "scripts/d57-album-tag-public-share-read-model-check.js"

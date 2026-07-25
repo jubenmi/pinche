@@ -8,7 +8,7 @@ D52 允许同车成员把本人上传、审核通过但尚未标注的图片加�
 
 ### D57 后续权威契约
 
-D57 只替换标签与 manifest 的运行时读模型，不取消 D52 的“隐式资格”：本人上传、当前无标签的图片仍须以 `media_id + tag_version` 记录和动态复核，且不得被写成 `other`。该资格随对应 `session_album_public_share_items` 条目存在，不能因规范化 manifest 而扩大到他人上传、视频或标签版本已变化的媒体。
+D57 只替换标签与 manifest 的运行时读模型，不取消 D52 的“隐式资格”：本人上传、当前无标签的图片仍须在分享主表的摘要绑定资格元数据中以 `media_id + tag_version` 记录和动态复核，且不得被写成 `other`。该资格只有与对应 `session_album_public_share_items` 成员同时存在时才有效，不能因规范化 manifest 而扩大到他人上传、视频或标签版本已变化的媒体。
 
 ## 2. 术语
 

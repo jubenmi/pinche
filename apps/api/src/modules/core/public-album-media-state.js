@@ -1,4 +1,4 @@
-import { badRequest, forbidden } from "../../http/errors.js";
+import { AppError, badRequest } from "../../http/errors.js";
 
 export const PUBLIC_MEDIA_STATE_BATCH_LIMIT = 100;
 
@@ -53,7 +53,11 @@ export async function readPublicAlbumMediaState({
       .filter((id) => Number.isSafeInteger(id) && id > 0)
   );
   if (requestedIds.some((id) => !manifestIds.has(id))) {
-    throw forbidden("Album share media is unavailable");
+    throw new AppError(
+      403,
+      "ALBUM_PUBLIC_SHARE_MEDIA_OUTSIDE_MANIFEST",
+      "Album share media is unavailable",
+    );
   }
 
   const visible = await readVisibleMedia(
@@ -90,6 +94,20 @@ export function emitPublicMediaStateTelemetry(fields, sink = console.info) {
     patchCount: finiteMetric(fields?.patchCount),
     unavailableCount: finiteMetric(fields?.unavailableCount),
     durationMs: finiteMetric(fields?.durationMs)
+  };
+  sink(JSON.stringify(event));
+  return event;
+}
+
+export function emitPublicMediaStateUnavailableTelemetry(fields, sink = console.info) {
+  const resultCode = String(fields?.resultCode || "").trim().toUpperCase();
+  const event = {
+    event: "public_media_state_unavailable",
+    sessionId: finiteMetric(fields?.sessionId),
+    shareId: finiteMetric(fields?.shareId),
+    requestedCount: finiteMetric(fields?.requestedCount),
+    resultCode: /^[A-Z0-9_]{1,64}$/.test(resultCode) ? resultCode : "UNKNOWN",
+    durationMs: finiteMetric(fields?.durationMs),
   };
   sink(JSON.stringify(event));
   return event;

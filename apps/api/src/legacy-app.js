@@ -174,8 +174,10 @@ import {
 } from "./modules/core/service.js";
 import {
   emitPublicMediaStateTelemetry,
+  emitPublicMediaStateUnavailableTelemetry,
   normalizePublicMediaStateIds
 } from "./modules/core/public-album-media-state.js";
+import { emitPublicShareManifestTelemetry } from "./modules/core/public-album-share-manifest.js";
 import { isAlbumImageKind } from "./modules/album-image/constants.js";
 import { sessionRescheduleResponse } from "./modules/core/session-reschedule.js";
 import {
@@ -3522,10 +3524,14 @@ export function attachPublicSessionAlbumMediaUrls(
   (options.emit || emitAlbumImageEvent)("media_urls_signed", {
     sessionId: Number(album.session_id), outcome: "public-share", signedImageCount
   });
+  const snapshotVisibleCount = Number(publicAlbum.visible_count);
   const result = {
     ...publicAlbum,
     cover_recipe: sessionAlbumPublicCoverRecipe(coverMedia, claims, albumShareToken),
-    visible_count: photos.length,
+    visible_count:
+      Number.isSafeInteger(snapshotVisibleCount) && snapshotVisibleCount >= 0
+        ? snapshotVisibleCount
+        : photos.length,
     photos,
     media: photos
   };
@@ -6145,6 +6151,17 @@ export async function legacyRoute(context) {
         // Observability must not change public media-state authorization or output.
       }
     };
+    const emitUnavailableTelemetry = (fields) => {
+      try {
+        if (typeof publicMediaState.emitUnavailable === "function") {
+          publicMediaState.emitUnavailable(fields);
+        } else {
+          emitPublicMediaStateUnavailableTelemetry(fields);
+        }
+      } catch {
+        // Observability must not change public media-state authorization or output.
+      }
+    };
     let claims = null;
     let requestedIds = null;
     let safeState;
@@ -6177,6 +6194,15 @@ export async function legacyRoute(context) {
         { routeKind: "session_public_share" }
       );
     } catch (error) {
+      if (error?.code === "ALBUM_PUBLIC_SHARE_MEDIA_OUTSIDE_MANIFEST") {
+        emitUnavailableTelemetry({
+          sessionId: routeSessionId,
+          shareId: Number(claims?.shareId) || 0,
+          requestedCount: requestedIds?.length || 0,
+          resultCode: "OUTSIDE_MANIFEST",
+          durationMs: Math.max(0, Date.now() - startedAt)
+        });
+      }
       emitRouteTelemetry({
         sessionId: routeSessionId,
         shareId: Number(claims?.shareId) || 0,
@@ -6205,21 +6231,58 @@ export async function legacyRoute(context) {
     /^\/api\/sessions\/(\d+)\/album\/public-share$/
   );
   if (request.method === "GET" && publicSessionAlbumShareId) {
+    const startedAt = Date.now();
+    const routeSessionId = Number(publicSessionAlbumShareId);
     const albumShareToken =
       url.searchParams.get("token") || url.searchParams.get("albumShareToken") || "";
-    const claims = verifySessionAlbumShareToken(albumShareToken);
-    if (claims.sessionId !== Number(publicSessionAlbumShareId)) {
-      throw forbidden("album share token is invalid");
+    const publicShareManifest = options.publicShareManifest || {};
+    const emitManifestEvent = (eventName, fields) => {
+      try {
+        if (typeof publicShareManifest.emit === "function") {
+          publicShareManifest.emit(eventName, fields);
+        } else {
+          emitPublicShareManifestTelemetry(eventName, fields);
+        }
+      } catch {
+        // Observability must not change public-share authorization or output.
+      }
+    };
+    let claims = null;
+    let serviceStarted = false;
+    try {
+      claims = (
+        publicShareManifest.verifyShareToken || verifySessionAlbumShareToken
+      )(albumShareToken);
+      if (claims.sessionId !== routeSessionId) {
+        throw forbidden("album share token is invalid");
+      }
+      serviceStarted = true;
+      const album = await (
+        publicShareManifest.list || listPublicSessionAlbumShare
+      )(claims, {
+        cursor: url.searchParams.get("cursor"),
+        limit: url.searchParams.get("limit"),
+        emitManifestEvent
+      });
+      jsonResponse(response, 200, {
+        ok: true,
+        data: attachPublicSessionAlbumMediaUrls(album, claims, albumShareToken)
+      });
+      return;
+    } catch (error) {
+      if (!serviceStarted) {
+        emitManifestEvent("public_share_manifest_page", {
+          sessionId: routeSessionId,
+          shareId: Number(claims?.shareId) || 0,
+          requestedLimit: Number(url.searchParams.get("limit")) || 30,
+          returnedCount: 0,
+          scannedCount: 0,
+          resultCode: "INVALID_TOKEN",
+          durationMs: Math.max(0, Date.now() - startedAt)
+        });
+      }
+      throw error;
     }
-    const album = await listPublicSessionAlbumShare(claims, {
-      cursor: url.searchParams.get("cursor"),
-      limit: url.searchParams.get("limit")
-    });
-    jsonResponse(response, 200, {
-      ok: true,
-      data: attachPublicSessionAlbumMediaUrls(album, claims, albumShareToken)
-    });
-    return;
   }
 
   const albumUploadStatusId = stringMatch(

@@ -8,7 +8,7 @@ D52 复用 D48 的固定公开快照和 D50 的单图 `focusMediaId`。未标注
 
 ### D57 后续权威契约
 
-D57 supersedes D52 的 JSON 运行时成员来源，但完整保留“隐式资格”。`session_album_public_share_items` 以 `media_id`、`tag_version` 和 `implicit_untagged` 承载规范化条目；每次公开读取仍需同时满足本人上传、图片、当前无 canonical 标签、上传者隐私允许及版本完全匹配。历史 `implicit_untagged_media` JSON 只用于旧分享回填与摘要兼容，不能成为运行时授权来源。
+D57 只把运行时成员与顺序迁入 `session_album_public_share_items`，该表的条目仍只有 `share_id`、`ordinal` 和 `media_id`，并完整保留 D52 的“隐式资格”。`implicit_untagged_media` 继续作为分享主表上受摘要绑定的资格元数据保存 `media_id + tag_version`，并在每次公开读取时动态复核本人上传、图片、当前无 canonical 标签、上传者隐私允许及版本完全匹配。它本身不能授予成员资格：目标媒体还必须存在于当前分享的 normalized item 中。
 
 ## 2. 数据模型
 

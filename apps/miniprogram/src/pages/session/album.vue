@@ -1038,10 +1038,12 @@ export default {
       return this.normalizeAlbumMediaUrl(this.shareOwner?.avatar_url || "");
     },
     publicShareCountText() {
+      const totalCount = Number(this.shareCounts.total || 0);
       const photoCount = Number(this.shareCounts.photos || 0);
       const videoCount = Number(this.shareCounts.videos || 0);
+      if (totalCount > photoCount + videoCount) return `${totalCount} 项内容`;
       if (videoCount > 0) return `${photoCount} 张照片 · ${videoCount} 段视频`;
-      return `${photoCount || Number(this.shareCounts.total || 0)} 张照片`;
+      return `${photoCount || totalCount} 张照片`;
     },
     currentAlbumRoleName() {
       return (
@@ -2152,7 +2154,6 @@ export default {
       const unavailableIds = this.publicAlbumRead.cards
         .map((card) => Number(card.id))
         .filter((id) => Number.isSafeInteger(id) && id > 0);
-      this.albumListRequestAuthority.begin();
       this.publicAlbumMediaStateRefresh?.dispose();
       this.publicAlbumMediaStateRefresh = null;
       this.albumShareToken = "";
@@ -2189,7 +2190,6 @@ export default {
       this.publicAlbumSnapshotLoaded = false;
       this.resetAlbumShareCovers();
       this.showShareMenus();
-      const listRequest = this.beginAlbumListRequest();
       const publicRequest = {
         generation: this.publicAlbumRead.generation,
         sessionId: this.sessionId,
@@ -2201,19 +2201,10 @@ export default {
             token: publicRequest.token
           })}`
         });
-        if (
-          !this.isCurrentAlbumListRequest(listRequest) ||
-          !this.isCurrentPublicAlbumRequest(publicRequest)
-        ) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
         const data = dataOf(response) || {};
-        if (
-          !this.isCurrentAlbumListRequest(listRequest) ||
-          !isCurrentPublicAlbumGeneration(this.publicAlbumRead, publicRequest.generation)
-        ) {
-          return;
-        }
         this.disconnectPhotoObservers();
         this.visiblePhotoMedia = {};
         this.visiblePhotoMediaRequests = {};
@@ -2248,17 +2239,11 @@ export default {
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
         await this.publicAlbumMediaStateRefresh?.refresh().catch(() => null);
-        if (
-          !this.isCurrentAlbumListRequest(listRequest) ||
-          !this.isCurrentPublicAlbumRequest(publicRequest)
-        ) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
         await shareTimelineCoverPromise;
-        if (
-          !this.isCurrentAlbumListRequest(listRequest) ||
-          !this.isCurrentPublicAlbumRequest(publicRequest)
-        ) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
         if (this.singleMediaShareRequested) {
@@ -2278,10 +2263,7 @@ export default {
           this.ensurePreviewMediaAround(0);
         }
       } catch (error) {
-        if (
-          !this.isCurrentAlbumListRequest(listRequest) ||
-          !this.isCurrentPublicAlbumRequest(publicRequest)
-        ) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
         if (isUnavailablePublicAlbumError(error) || error?.statusCode === 401) {
@@ -2307,10 +2289,7 @@ export default {
         this.refreshWaterfall();
         this.applyAlbumNavigationTitle();
       } finally {
-        if (
-          this.isCurrentAlbumListRequest(listRequest) &&
-          this.isCurrentPublicAlbumRequest(publicRequest)
-        ) {
+        if (this.isCurrentPublicAlbumRequest(publicRequest)) {
           this.loadingAlbum = false;
         }
       }
@@ -2337,7 +2316,6 @@ export default {
         this.commitPublicAlbumEvent({ type: "NEXT_PAGE", status: "failure" });
         return;
       }
-      const listRequest = this.beginAlbumListRequest();
       const publicRequest = {
         generation: this.publicAlbumRead.generation,
         sessionId: this.sessionId,
@@ -2346,10 +2324,7 @@ export default {
       this.commitPublicAlbumEvent({ type: "NEXT_PAGE", status: "start" });
       try {
         const response = await request({ url, suppressMaintenance: true });
-        if (
-          !this.isCurrentAlbumListRequest(listRequest) ||
-          !this.isCurrentPublicAlbumRequest(publicRequest)
-        ) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
         const data = dataOf(response) || {};
@@ -2371,10 +2346,7 @@ export default {
         this.appendPublicAlbumWaterfallPhotos(merged.appendedPhotos);
         this.publicAlbumMediaStateRefresh?.schedule();
       } catch (error) {
-        if (
-          !this.isCurrentAlbumListRequest(listRequest) ||
-          !this.isCurrentPublicAlbumRequest(publicRequest)
-        ) {
+        if (!this.isCurrentPublicAlbumRequest(publicRequest)) {
           return;
         }
         if (isUnavailablePublicAlbumError(error) || error?.statusCode === 401) {
@@ -2989,40 +2961,18 @@ export default {
         });
       });
     },
-    async preparePhotoMedia() {
-      const serial = this.mediaLoadSerial + 1;
-      this.mediaLoadSerial = serial;
-      const photos = this.photos || [];
-      const hydrated = await Promise.all(
-        photos.map(async (photo) => {
-          if (!this.isCurrentPreviewableAlbumMedia(photo)) {
-            return { ...photo, display_url: "" };
-          }
-          try {
-            const displayUrl = await this.downloadAlbumImage(photo);
-            if (!this.isCurrentPreviewableAlbumMedia(photo)) {
-              return { ...photo, display_url: "" };
-            }
-            return {
-              ...photo,
-              display_url: displayUrl
-            };
-          } catch (error) {
-            return {
-              ...photo,
-              display_url: ""
-            };
-          }
-        })
-      );
-      if (serial === this.mediaLoadSerial) {
-        this.photos = hydrated.map((photo) => this.normalizePhotoMedia(photo));
-        this.pruneUnpublishedAlbumMediaState(this.photos);
-      }
-    },
     updatePhotoDisplayUrl(photoId, displayUrl) {
       const currentPhoto = this.photos.find((photo) => Number(photo.id) === Number(photoId));
       if (!this.isPreviewableAlbumMedia(currentPhoto)) {
+        return;
+      }
+      if (this.timelineMode) {
+        this.commitPublicAlbumEvent({
+          type: "MEDIA_PATCH",
+          patches: [{ id: Number(currentPhoto.id), display_url: displayUrl }],
+          unavailableIds: []
+        });
+        this.applyPublicAlbumMediaPatchToWaterfall(this.publicAlbumRead.cards);
         return;
       }
       this.photos = this.photos.map((photo) =>

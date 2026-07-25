@@ -9,6 +9,7 @@ import {
   decodePublicShareOrdinalCursor,
   encodePublicShareOrdinalCursor,
 } from "../src/modules/core/public-album-share-manifest.js";
+import { attachPublicSessionAlbumMediaUrls } from "../src/server.js";
 
 const serverSource = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
 
@@ -124,7 +125,7 @@ function publicSharePaginationConnection(mediaIds, options = {}) {
       throw new Error(`Unexpected public-share query: ${sql}`);
     }
   };
-  return { connection, mediaQueries };
+  return { connection, mediaQueries, share };
 }
 
 test("public-share ordinal cursors are signed and bound to their share", () => {
@@ -161,8 +162,10 @@ test("public-share listing returns 100 snapshot photos in bounded, non-overlappi
   const mediaIds = Array.from({ length: 100 }, (_, index) => index + 1);
   const fixture = publicSharePaginationConnection(mediaIds);
   const withDatabaseConnection = async (work) => work(fixture.connection);
+  const events = [];
   const first = await service.listPublicSessionAlbumShare(shareClaims, {
-    withDatabaseConnection
+    withDatabaseConnection,
+    emitManifestEvent: (event, fields) => events.push({ event, ...fields }),
   });
   const second = await service.listPublicSessionAlbumShare(shareClaims, {
     withDatabaseConnection,
@@ -182,6 +185,19 @@ test("public-share listing returns 100 snapshot photos in bounded, non-overlappi
   assert.deepEqual(third.photos.map(({ id }) => id), mediaIds.slice(60, 90));
   assert.deepEqual(fourth.photos.map(({ id }) => id), mediaIds.slice(90, 100));
   assert.equal(first.visible_count, 100);
+  assert.deepEqual(events, [{
+    event: "public_share_manifest_page",
+    sessionId: 10,
+    shareId: 50,
+    requestedLimit: 30,
+    returnedCount: 30,
+    scannedCount: 30,
+    resultCode: "SUCCESS",
+    durationMs: events[0].durationMs,
+  }]);
+  const attached = attachPublicSessionAlbumMediaUrls(first, shareClaims, "album-token");
+  assert.equal(attached.visible_count, 100);
+  assert.equal(attached.photos.length, 30);
   assert.equal(fourth.next_cursor, null);
   assert.equal(fourth.has_more, false);
   assert(fixture.mediaQueries.every((ids) => ids.length <= 30));
@@ -225,14 +241,51 @@ test("public-share listing fails closed when normalized items differ from legacy
   const fixture = publicSharePaginationConnection([1, 2, 3], {
     legacyMediaIds: [1, 3, 2],
   });
+  const events = [];
 
   await assert.rejects(
     () => service.listPublicSessionAlbumShare(shareClaims, {
       withDatabaseConnection: async (work) => work(fixture.connection),
+      emitManifestEvent: (event, fields) => events.push({ event, ...fields }),
     }),
     (error) => error?.statusCode === 403,
   );
   assert.deepEqual(fixture.mediaQueries, []);
+  assert.deepEqual(events.map(({ event, resultCode }) => ({ event, resultCode })), [
+    {
+      event: "public_share_manifest_mismatch",
+      resultCode: "MANIFEST_MISMATCH",
+    },
+    {
+      event: "public_share_manifest_page",
+      resultCode: "MANIFEST_MISMATCH",
+    },
+  ]);
+});
+
+test("public-share listing audits malformed legacy JSON as a manifest mismatch", async () => {
+  const fixture = publicSharePaginationConnection([1, 2, 3]);
+  fixture.share.media_ids = "{";
+  const events = [];
+
+  await assert.rejects(
+    () => service.listPublicSessionAlbumShare(shareClaims, {
+      withDatabaseConnection: async (work) => work(fixture.connection),
+      emitManifestEvent: (event, fields) => events.push({ event, ...fields }),
+    }),
+    (error) => error?.statusCode === 403,
+  );
+  assert.deepEqual(fixture.mediaQueries, []);
+  assert.deepEqual(events.map(({ event, resultCode }) => ({ event, resultCode })), [
+    {
+      event: "public_share_manifest_mismatch",
+      resultCode: "MANIFEST_MISMATCH",
+    },
+    {
+      event: "public_share_manifest_page",
+      resultCode: "MANIFEST_MISMATCH",
+    },
+  ]);
 });
 
 test("public-share listing rejects a signed ordinal beyond this manifest", async () => {
@@ -254,7 +307,9 @@ test("public-share route forwards cursor and limit to the paged service", () => 
     serverSource.indexOf("const publicSessionAlbumShareId"),
     serverSource.indexOf("const albumUploadStatusId")
   );
-  assert.match(route, /listPublicSessionAlbumShare\(claims, \{/);
+  assert.match(route, /publicShareManifest\.list \|\| listPublicSessionAlbumShare/);
+  assert.match(route, /\)\(claims, \{/);
   assert.match(route, /cursor:\s*url\.searchParams\.get\("cursor"\)/);
   assert.match(route, /limit:\s*url\.searchParams\.get\("limit"\)/);
+  assert.match(route, /emitManifestEvent/);
 });

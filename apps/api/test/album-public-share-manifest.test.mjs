@@ -8,6 +8,7 @@ import { config } from "../src/config/env.js";
 import {
   assertManifestMatchesLegacySnapshot,
   decodePublicShareOrdinalCursor,
+  emitPublicShareManifestTelemetry,
   encodePublicShareOrdinalCursor,
   loadPublicShareItems,
   readPublicShareItemPage,
@@ -127,6 +128,55 @@ test("manifest backfill accepts only exact positive JSON integers in unsigned bi
     /CAST\s*\(\s*JSON_UNQUOTE\s*\(\s*expanded\.raw_media_id\s*\)\s+AS UNSIGNED\s*\)/,
   );
   assert.doesNotMatch(backfill, /\bBINARY\s+JSON_UNQUOTE/);
+});
+
+test("manifest telemetry emits only approved identifiers, counters, result code, and duration", () => {
+  const events = [];
+  emitPublicShareManifestTelemetry("public_share_manifest_page", {
+    sessionId: 10,
+    shareId: 50,
+    requestedLimit: 30,
+    returnedCount: 28,
+    scannedCount: 30,
+    resultCode: "SUCCESS",
+    durationMs: 12.5,
+    token: "TOKEN_CANARY",
+    label: "LABEL_CANARY",
+    url: "URL_CANARY",
+  }, (line) => events.push(JSON.parse(line)));
+
+  assert.deepEqual(events, [{
+    event: "public_share_manifest_page",
+    sessionId: 10,
+    shareId: 50,
+    requestedLimit: 30,
+    returnedCount: 28,
+    scannedCount: 30,
+    resultCode: "SUCCESS",
+    durationMs: 12.5,
+  }]);
+
+  emitPublicShareManifestTelemetry("public_share_manifest_membership_denied", {
+    sessionId: 10,
+    shareId: 50,
+    requestedLimit: 1,
+    returnedCount: 0,
+    scannedCount: 1,
+    resultCode: "OUTSIDE_MANIFEST",
+    durationMs: 1,
+    mediaId: 999,
+    token: "TOKEN_CANARY",
+  }, (line) => events.push(JSON.parse(line)));
+  assert.deepEqual(events[1], {
+    event: "public_share_manifest_membership_denied",
+    sessionId: 10,
+    shareId: 50,
+    requestedLimit: 1,
+    returnedCount: 0,
+    scannedCount: 1,
+    resultCode: "OUTSIDE_MANIFEST",
+    durationMs: 1,
+  });
 });
 
 test("migration filename history appends migration 0035", async () => {
