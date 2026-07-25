@@ -268,7 +268,7 @@ Content-Type: application/json
 { "media_ids": [1, 2, 3] }
 ```
 
-单次最多 100 个去重正整数。响应：
+单次最多 100 个去重正整数；空数组表示只验证分享状态。响应：
 
 ```json
 {
@@ -293,6 +293,8 @@ Content-Type: application/json
 3. 使用与分页相同的当前公开资格函数复核每个媒体。
 4. 对可见媒体生成完整安全公开 DTO 并附加短期 URL。
 5. 对清单内但当前不可见的媒体只返回 ID。
+
+空数组仍完整验证分享、items、session 和 seat，但在 manifest 一致性之后直接返回空结果，不执行媒体可见性查询。客户端零卡片时用它在 `onShow` 检测分享撤回或过期。
 
 图片、缩略图、视频封面和视频文件能力与 DTO 的 `media_url_expires_at`
 共用同一个绝对到期值：`min(share claims.exp, now + 600 seconds)`。
@@ -345,6 +347,7 @@ reducer 对输入不做原地修改并冻结测试快照。
 
 - `loadPublicAlbum`
   - 捕获 generation，请求首屏，提交 `INITIAL_PAGE`，唯一一次调用 `refreshWaterfall`。
+  - 首屏挂载后立即执行一次 media-state 水合，获得一致的短期 URL 与 expiry。
 - `loadMorePublicAlbum`
   - 设置分页 loading，请求下一页，提交 `NEXT_PAGE`，只调用 `appendPublicAlbumWaterfallPhotos(appended)`.
 - `refreshLoadedPublicAlbumMedia`
@@ -353,6 +356,8 @@ reducer 对输入不做原地修改并冻结测试快照。
   - 按 ID 更新或过滤 `waterfallPhotos`、`waterfallList1`、`waterfallList2`，不调用 `clear`。
 - `onUnload`
   - 提交 `UNLOAD` 并 dispose 媒体状态 timer。
+
+朋友圈封面使用初始安全 capability 通过 `getImageInfo` 固化为本地临时文件；下载前后都校验 generation、session 和 token。失败时关闭朋友圈入口，不回退到会过期的在线 URL。
 
 删除：
 

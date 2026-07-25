@@ -720,8 +720,8 @@ Export:
 ```js
 export const PUBLIC_MEDIA_STATE_BATCH_LIMIT = 100;
 export function normalizePublicMediaStateIds(values) {
-  if (!Array.isArray(values) || values.length === 0) {
-    throw badRequest("media_ids must be a non-empty array");
+  if (!Array.isArray(values)) {
+    throw badRequest("media_ids must be an array");
   }
   const ids = [];
   const seen = new Set();
@@ -752,6 +752,9 @@ export async function readPublicAlbumMediaState({
 }) {
   const requestedIds = normalizePublicMediaStateIds(mediaIds);
   const share = await loadShare(connection, claims);
+  if (requestedIds.length === 0) {
+    return { patches: [], unavailable_ids: [] };
+  }
   const manifestIds = new Set(
     share.items.map((item) => Number(item.media_id))
   );

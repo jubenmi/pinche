@@ -70,6 +70,7 @@ D57 取代 D48/D54 中依赖 `session_album_photo_tags.label` 的公开展示标
 5. WHEN 媒体状态响应到达 THEN 客户端 SHALL 只按 ID 更新或移除已有卡片，不增加新卡片、不改变剩余顺序、不修改 cursor。
 6. WHEN 已加载媒体超过单次服务上限 THEN 客户端 SHALL 使用有界批次完成刷新并合并结果。
 7. WHEN 媒体状态刷新失败 THEN 客户端 SHALL 保留卡片集合并使用有最小值、最大值的延迟重试。
+8. WHEN 当前没有已加载媒体 THEN 客户端 SHALL 发送空 ID 集合只验证分享状态；服务 SHALL 在验证 token、session、分享状态和 manifest 一致性后返回空结果，不读取媒体可见性。
 
 ## 7. Requirement 6：四事件客户端状态模型
 

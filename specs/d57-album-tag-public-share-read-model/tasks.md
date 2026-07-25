@@ -32,16 +32,17 @@
   - [x] 5.3 增加 `POST .../media-state` 路由并附加短期图片/视频 URL。
   - [x] 5.4 增加不含敏感字段的结构化事件与失败关闭测试。
 
-- [ ] 6. 实现客户端四事件状态模型
-  - 进度：纯 reducer、稳定分批、generation 与单飞 controller 已通过规格/质量审查；正在接入页面并验证只追加/按 ID patch。
+- [x] 6. 实现客户端四事件状态模型
+  - 验证：修复 timer 零延迟风暴、聚焦预览重建、首屏水合、零卡片探针与本地封面生命周期后，规格/质量复审无 Critical/Important；聚焦测试 69/69、相册测试 117/117、小程序构建通过。
   - [x] 6.1 先写 reducer、并发排列、批次、失败原子性和 generation 失败测试。
   - [x] 6.2 新增 `publicAlbumReadState.js` 和公开媒体状态 timer controller。
-  - [ ] 6.3 将首屏、下一页、媒体 patch 和 unload 接入 `album.vue`。
-  - [ ] 6.4 按 ID 更新/移除瀑布流卡片，保证除首屏外不做全量 rebuild。
+  - [x] 6.3 将首屏、下一页、媒体 patch 和 unload 接入 `album.vue`。
+  - [x] 6.4 按 ID 更新/移除瀑布流卡片，保证除首屏外不做全量 rebuild。
 
 - [ ] 7. 删除旧公开刷新补丁并对齐历史契约
-  - [ ] 7.1 删除前缀重读、`publicShareLoadedPageCount`、序列比较和公开完整列表 reload。
-  - [ ] 7.2 保留成员相册完整媒体刷新，与公开 media-state 控制器分离。
+  - 进度：生产代码已删除旧公开刷新链并隔离成员/公开 controller；正在更新被 D57 替代的旧测试、门禁和规格说明。
+  - [x] 7.1 删除前缀重读、`publicShareLoadedPageCount`、序列比较和公开完整列表 reload。
+  - [x] 7.2 保留成员相册完整媒体刷新，与公开 media-state 控制器分离。
   - [ ] 7.3 更新 D48/D50/D52/D54 被 D57 替换的标签和刷新说明。
   - [ ] 7.4 更新旧 fixture、smoke 和静态门禁，不让生产代码重新引用旧标签表或补丁 helper。
 
