@@ -187,6 +187,10 @@ test("public background refresh keeps the waterfall mounted for the same media s
     /this\.publicShareLoadedPageCount\s*=\s*publicRefresh\.loadedPageCount/
   );
   assert.match(controller, /this\.publicShareLoadingMore\s*=\s*false/);
+  assert.match(
+    controller,
+    /finally\s*\{\s*if\s*\(\s*this\.timelineMode\s*&&\s*this\.isCurrentAlbumListRequest\(listRequest\)\s*\)\s*\{\s*this\.publicShareLoadingMore\s*=\s*false;\s*\}\s*\}/
+  );
   assert.match(albumSource, /reloadPublicAlbumSharePrefix\(\{/);
   assert.match(albumSource, /replacePublicAlbumMediaRows/);
 });

@@ -184,9 +184,14 @@ export function createAlbumMediaRefreshController({
   reloadAlbum,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  now = Date.now
+  now = Date.now,
+  retryDelayMs = 30_000
 }) {
   const flight = createSingleFlight();
+  const retryDelay = Number(retryDelayMs);
+  const normalizedRetryDelay = Number.isFinite(retryDelay) && retryDelay >= 0
+    ? retryDelay
+    : 30_000;
   let timer = null;
   const cancelTimer = () => {
     if (timer !== null) clearTimer(timer);
@@ -199,20 +204,32 @@ export function createAlbumMediaRefreshController({
       .filter(Number.isFinite);
     if (expiries.length === 0) return;
     const delay = Math.max(0, Math.min(...expiries) - now() - 30_000);
-    timer = setTimer(() => { void refresh(); }, delay);
+    timer = setTimer(() => { void refresh().catch(() => {}); }, delay);
+  };
+  const scheduleRetry = () => {
+    cancelTimer();
+    timer = setTimer(
+      () => { void refresh().catch(() => {}); },
+      normalizedRetryDelay
+    );
   };
   const refresh = () => flight.run(async () => {
-    const refreshed = await reloadAlbum();
-    if (
-      refreshed === null ||
-      (typeof refreshed?.isCurrent === "function" && !refreshed.isCurrent())
-    ) {
+    try {
+      const refreshed = await reloadAlbum();
+      if (
+        refreshed === null ||
+        (typeof refreshed?.isCurrent === "function" && !refreshed.isCurrent())
+      ) {
+        schedule();
+        return readAlbum();
+      }
+      writeAlbum(mergeAlbumMediaUrls(readAlbum(), refreshed));
       schedule();
       return readAlbum();
+    } catch (error) {
+      scheduleRetry();
+      throw error;
     }
-    writeAlbum(mergeAlbumMediaUrls(readAlbum(), refreshed));
-    schedule();
-    return readAlbum();
   });
   const checkNow = () => {
     const expiredSoon = (readAlbum()?.photos || []).some((photo) =>

@@ -2176,6 +2176,10 @@ export default {
               };
             }
             throw error;
+          } finally {
+            if (this.timelineMode && this.isCurrentAlbumListRequest(listRequest)) {
+              this.publicShareLoadingMore = false;
+            }
           }
         }
       });

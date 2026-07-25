@@ -109,6 +109,33 @@ test("public-share reload is supplied as a closure and remains single-flight", a
   assert.deepEqual(calls, ["public-share-token"]);
 });
 
+test("failed media refresh preserves album state and schedules a bounded retry", async () => {
+  const album = {
+    photos: [{ id: 1, preview_display_url: "old-url" }]
+  };
+  const scheduled = [];
+  let writes = 0;
+  const controller = createAlbumMediaRefreshController({
+    readAlbum: () => album,
+    writeAlbum: () => { writes += 1; },
+    reloadAlbum: async () => {
+      throw new Error("refresh failed");
+    },
+    setTimer: (callback, delay) => {
+      scheduled.push({ callback, delay });
+      return scheduled.length;
+    },
+    clearTimer: () => {}
+  });
+
+  await assert.rejects(controller.refresh(), /refresh failed/);
+  assert.deepEqual(album, {
+    photos: [{ id: 1, preview_display_url: "old-url" }]
+  });
+  assert.equal(writes, 0);
+  assert.equal(scheduled.at(-1)?.delay, 30_000);
+});
+
 test("stale refresh result skips the list write", async () => {
   let writes = 0;
   let album = {
