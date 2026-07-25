@@ -11,11 +11,12 @@
   - [x] 2.2 新增 `0035_album_tag_public_share_read_model.sql`，创建 tags/items 表并回填可信数据。
   - [x] 2.3 更新迁移文件名历史、registry/checksum 测试并验证迁移幂等。
 
-- [ ] 3. 实现 AlbumTagResolver 与规范化标签写入
-  - [ ] 3.1 先写三种 tag key、同场次约束、角色改名和 DTO 安全失败测试。
-  - [ ] 3.2 新增 `album-tags.js`，实现标签选项、写入解析、显示 resolver 和隐私 subject resolver。
-  - [ ] 3.3 将成员相册、公开资格、封面资格和标签更新切换到新表。
-  - [ ] 3.4 删除生产代码对旧标签表、持久化 label 和工作人员账号标签的读写。
+- [x] 3. 实现 AlbumTagResolver 与规范化标签写入
+  - 验证：Task 3 扩展聚焦、D48/D50/D54、小程序构建和真实 MySQL 8.4 通过；单快照 read context 与 legacy FK 修复经二次质量复审无 Critical/Important。
+  - [x] 3.1 先写三种 tag key、同场次约束、角色改名和 DTO 安全失败测试。
+  - [x] 3.2 新增 `album-tags.js`，实现标签选项、写入解析、显示 resolver 和隐私 subject resolver。
+  - [x] 3.3 将成员相册、公开资格、封面资格和标签更新切换到新表。
+  - [x] 3.4 删除生产代码对旧标签表、持久化 label 和工作人员账号标签的读写。
 
 - [ ] 4. 实现规范化 PublicShareManifest
   - [ ] 4.1 先写清单创建、历史顺序、mismatch、ordinal cursor 和动态失效填页测试。

@@ -269,10 +269,13 @@ git commit -m "feat(api): add normalized album share schema"
 
 **Files:**
 - Create: `apps/api/src/modules/core/album-tags.js`
+- Create: `apps/api/src/modules/core/album-tags-migration.js`
+- Modify: `apps/api/src/db/migration-registry.js`
 - Modify: `apps/api/src/modules/core/service.js`
 - Modify: `apps/api/src/modules/album-image/repository.js`
 - Modify: `apps/miniprogram/src/pages/session/album.vue`
 - Test: `apps/api/test/album-tag-model.test.mjs`
+- Test: `apps/api/test/migration-registry.test.mjs`
 - Test: `apps/miniprogram/test/albumTagModel.test.mjs`
 - Modify tests that fixture `session_album_photo_tags`
 
@@ -283,6 +286,7 @@ Test this public surface:
 ```js
 import {
   normalizeAlbumTagKeys,
+  resolveAlbumTagReadContext,
   resolveAlbumTags,
   resolveAlbumTagPrivacySubjects,
   writeAlbumMediaTags
@@ -377,13 +381,19 @@ export async function listAlbumTagOptions(connection, sessionId) {
 }
 
 export async function resolveAlbumTags(connection, sessionId, mediaIds) {
-  const rows = await selectCanonicalAlbumTagRows(connection, sessionId, mediaIds);
-  return groupCanonicalAlbumTags(rows);
+  return (await resolveAlbumTagReadContext(
+    connection,
+    sessionId,
+    mediaIds
+  )).tagsByMediaId;
 }
 
 export async function resolveAlbumTagPrivacySubjects(connection, sessionId, mediaIds) {
-  const rows = await selectAlbumTagPrivacyRows(connection, sessionId, mediaIds);
-  return groupAlbumTagPrivacyUserIds(rows);
+  return (await resolveAlbumTagReadContext(
+    connection,
+    sessionId,
+    mediaIds
+  )).privacySubjectsByMediaId;
 }
 
 export async function writeAlbumMediaTags(connection, {
@@ -413,9 +423,10 @@ export async function writeAlbumMediaTags(connection, {
 }
 ```
 
-The referenced private helpers must use the exact same-session SQL and DTO
-shape in `design.md`; they are internal to `album-tags.js` and are covered
-through the four exported functions.
+`resolveAlbumTagReadContext` must use one exact same-session SQL snapshot and
+project both `{ tagsByMediaId, privacySubjectsByMediaId }`. The display DTO
+shape remains the one in `design.md`; authorization callers consume the whole
+context so neither projection can come from a different database snapshot.
 
 The resolver query must join normalized tags to media and role tables with same-session predicates. Serialize only:
 
@@ -440,30 +451,36 @@ Drop rows whose canonical label is empty.
 In `service.js`:
 
 - replace `sessionAlbumPeople` use in tag-option and tag-update paths with `listAlbumTagOptions`;
-- replace `albumTagsForPhotos` with `resolveAlbumTags`;
-- replace tag privacy user collection with `resolveAlbumTagPrivacySubjects`;
+- replace `albumTagsForPhotos` and separate privacy reads with one
+  `resolveAlbumTagReadContext`;
 - replace delete/insert into `session_album_photo_tags` with `writeAlbumMediaTags`;
-- keep the outward member tag fields limited to `{ key, kind, ref_id, label }`;
+- keep media tag DTOs exactly `{ kind, ref_id, label }`; tag options may add
+  the derived `key`;
 - remove DM/NPC/organizer tag-key acceptance.
 
 Update `apps/api/src/modules/album-image/repository.js` to delete from
 `session_album_media_tags` when media is removed.
 
-Change the visibility helpers to accept a separate privacy-subject map:
+Change the visibility helpers to accept the complete read context:
 
 ```js
 isAlbumPhotoVisibleToUser(
   photo,
-  tags,
+  tagReadContext,
   privacyByUser,
   userId,
-  personalScope,
-  tagPrivacyUserIds
+  personalScope
 )
 ```
 
-The display `tags` array never carries `user_id`; only
-`tagPrivacyUserIds` participates in `allow_tagged_visible`.
+The helper fails closed if either context projection or the target media entry
+is missing. Display tags never carry `user_id`; only the internal subject
+projection participates in `allow_tagged_visible`.
+
+Add a registered 0035 migration preparer that reconciles the retained legacy
+photo-tag FK to a differently named `ON DELETE CASCADE` constraint with one
+atomic `ALTER TABLE`. It must accept an already-cascade constraint, restore a
+missing constraint, and continue executing the ordinary 0035 SQL statements.
 
 - [ ] **Step 5: Update the miniprogram tag picker**
 
@@ -504,10 +521,11 @@ Run:
 
 ```bash
 rg -n "session_album_photo_tags|dm:session|npc:session|organizer:session" \
-  apps/api/src
+  apps/api/src --glob '!**/album-tags-migration.js'
 ```
 
-Expected: no production source matches.
+Expected: no runtime production source matches. The explicit migration-only
+reconciler is the sole allowed legacy-table reference.
 
 - [ ] **Step 8: Commit**
 

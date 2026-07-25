@@ -128,7 +128,7 @@ other             -> other
 dm/npc/organizer  -> 丢弃
 ```
 
-旧 `session_album_photo_tags` 在 D57 运行时不再读取或写入，但本次发布保留物理表用于回滚。后续独立迁移在至少一个稳定发布周期后删除。
+旧 `session_album_photo_tags` 在 D57 运行时不再读取或写入，但本次发布保留物理表用于回滚。0035 的隔离 migration preparer 将其 `photo_id` 外键原子协调为 `ON DELETE CASCADE`，保证历史标签不会阻断媒体或场次删除；该 preparer 可识别已协调和约束缺失状态并安全重跑，不属于运行时标签读取。后续独立迁移在至少一个稳定发布周期后删除旧表。
 
 ### 3.2 `session_album_public_share_items`
 
@@ -186,14 +186,14 @@ NPC 角色同理；最后追加固定 `other`。
 
 ### 4.2 读取与序列化
 
-`resolveAlbumTags(connection, sessionId, mediaIds)` 只查询：
+`resolveAlbumTagReadContext(connection, sessionId, mediaIds)` 用一次 SQL 快照查询：
 
 - `session_album_media_tags`
 - `session_album_photos`
 - `session_seats`
 - `session_npc_roles`
 
-查询 join 同时限制角色表的 `session_id = media.session_id = sessionId`。resolver 输出：
+查询 join 同时限制角色表的 `session_id = media.session_id = sessionId`。同一批行分别投影显示标签和内部隐私主体；显示投影输出：
 
 ```js
 new Map([
@@ -205,14 +205,14 @@ new Map([
 ])
 ```
 
-缺失名称或跨场次引用不输出。resolver 不查询 `users`，不读取旧 `label`。
+缺失名称或跨场次引用不输出。resolver 不查询 `users`，不读取旧 `label`。`resolveAlbumTags` 与 `resolveAlbumTagPrivacySubjects` 是该 read context 的安全投影接口；所有可见性、选择、封面和媒体授权路径必须接收完整 context，不得自行组合两次查询。任一 map 或目标媒体项缺失时关闭式失败。
 
 ### 4.3 隐私资格
 
 显示标签和隐私资格分开：
 
-- `AlbumTagResolver` 只输出显示语义。
-- `resolveAlbumTagPrivacySubjects` 根据相同引用读取 `session_seats.confirmed_user_id` 或 `session_npc_roles.bound_user_id`。
+- `AlbumTagResolver` 只对外输出显示语义。
+- 同一 SQL 快照根据相同引用读取 `session_seats.confirmed_user_id` 或 `session_npc_roles.bound_user_id`，并投影为独立的 `privacySubjectsByMediaId`。
 - `albumPrivacyMap` 使用这些内部 user ID 复核 `allow_tagged_visible`。
 - 内部 user ID 只存在于授权调用栈，不进入 tag DTO 或公共响应。
 
