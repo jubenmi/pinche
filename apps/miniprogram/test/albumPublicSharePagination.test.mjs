@@ -46,6 +46,89 @@ test("public-share pagination appends unique media and only retains a valid cont
   );
 });
 
+test("public-share refresh reloads the currently loaded prefix and keeps the last cursor", async () => {
+  assert.equal(typeof pagination?.reloadPublicAlbumSharePrefix, "function");
+  const pages = new Map([
+    [null, {
+      photos: [{ id: 1 }, { id: 2 }],
+      next_cursor: "cursor-2",
+      has_more: true,
+      visible_count: 5
+    }],
+    ["cursor-2", {
+      photos: [{ id: 3 }, { id: 4 }],
+      next_cursor: "cursor-3",
+      has_more: true
+    }]
+  ]);
+  const cursors = [];
+
+  const refreshed = await pagination.reloadPublicAlbumSharePrefix({
+    pageCount: 2,
+    loadPage: async ({ cursor }) => {
+      cursors.push(cursor);
+      return pages.get(cursor);
+    }
+  });
+
+  assert.deepEqual(cursors, [null, "cursor-2"]);
+  assert.equal(refreshed.firstPage.visible_count, 5);
+  assert.deepEqual(refreshed.photos.map(({ id }) => id), [1, 2, 3, 4]);
+  assert.equal(refreshed.nextCursor, "cursor-3");
+  assert.equal(refreshed.hasMore, true);
+  assert.equal(refreshed.loadedPageCount, 2);
+});
+
+test("public-share refresh discards a stale partial prefix", async () => {
+  assert.equal(typeof pagination?.reloadPublicAlbumSharePrefix, "function");
+  const refreshed = await pagination.reloadPublicAlbumSharePrefix({
+    pageCount: 2,
+    loadPage: async ({ pageIndex }) => (
+      pageIndex === 0
+        ? {
+          photos: [{ id: 1 }, { id: 2 }],
+          next_cursor: "cursor-2",
+          has_more: true
+        }
+        : null
+    )
+  });
+
+  assert.equal(refreshed, null);
+});
+
+test("public-share refresh distinguishes field updates from media-set changes", () => {
+  assert.equal(typeof pagination?.samePublicAlbumMediaSequence, "function");
+  assert.equal(typeof pagination?.replacePublicAlbumMediaRows, "function");
+  const refreshedPhotos = [
+    { id: 1, preview_display_url: "new-1" },
+    { id: 2, preview_display_url: "new-2" }
+  ];
+
+  assert.equal(
+    pagination.samePublicAlbumMediaSequence(
+      [{ id: 1 }, { id: 2 }],
+      [{ id: "1" }, { id: 2, preview_display_url: "new" }]
+    ),
+    true
+  );
+  assert.equal(
+    pagination.samePublicAlbumMediaSequence([{ id: 1 }, { id: 2 }], [{ id: 2 }, { id: 1 }]),
+    false
+  );
+  assert.equal(
+    pagination.samePublicAlbumMediaSequence([{ id: 1 }, { id: 2 }], [{ id: 1 }]),
+    false
+  );
+  assert.deepEqual(
+    pagination.replacePublicAlbumMediaRows(
+      [{ id: 2, preview_display_url: "old" }],
+      refreshedPhotos
+    ),
+    [refreshedPhotos[1]]
+  );
+});
+
 test("album page declares guarded public-share continuation loading", () => {
   assert.match(albumSource, /onReachBottom\(\)/);
   assert.match(albumSource, /async loadMorePublicAlbum\(\)/);
