@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const specDir = path.join(repoRoot, "specs/d51-architecture-hardening-modularization");
-const historicalDuplicatePrefixes = new Set(["0021", "0022", "0024", "0030", "0032"]);
+const historicalDuplicatePrefixes = new Set(["0021", "0022", "0024", "0030", "0032", "0033"]);
 const targetModuleEntries = [
   "apps/api/src/modules/auth/index.js",
   "apps/api/src/modules/catalog/index.js",

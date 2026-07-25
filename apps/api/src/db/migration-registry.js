@@ -19,7 +19,7 @@ function migrationError(code, details) {
 }
 
 export const SCHEMA_MIGRATION_CHECKSUMS_MIGRATION =
-  "0033_schema_migration_checksums.sql";
+  "0034_schema_migration_checksums.sql";
 
 async function prepareSchemaMigrationChecksums(connection) {
   const [columns] = await connection.query(

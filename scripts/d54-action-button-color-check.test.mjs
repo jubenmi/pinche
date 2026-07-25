@@ -144,11 +144,18 @@ test("registers distinct action-button checks without replacing the existing D54
     packageJson.scripts["action-button:check"],
     "node scripts/d54-action-button-color-check.js"
   );
-  assert.match(packageJson.scripts.check, /npm run action-button:unit/);
-  assert.match(packageJson.scripts.check, /npm run action-button:check/);
-  assert.equal(
+  assert.match(packageJson.scripts["test:contracts"], /npm run action-button:unit/);
+  assert.match(packageJson.scripts["test:contracts"], /npm run action-button:check/);
+  assert.match(
     packageJson.scripts.postcheck,
-    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check"
+    new RegExp(`^${[
+      "npm run d54:unit",
+      "npm run d54:check",
+      "npm run d55:unit",
+      "npm run d55:check",
+      "npm run d56:unit",
+      "npm run d56:check"
+    ].join(" && ")}(?: && |$)`)
   );
   assert.match(packageJson.scripts["d54:check"], /d54-public-album-full-share-pagination-check/);
 });

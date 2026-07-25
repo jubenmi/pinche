@@ -46,7 +46,7 @@ function check(name, run) {
 }
 
 check("admin video upload wiring has no business byte cap and keeps admin authorization", async () => {
-  const server = await readFile(new URL("../apps/api/src/server.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../apps/api/src/legacy-app.js", import.meta.url), "utf8");
   const intentStart = server.indexOf('if (kind === "adminSessionAlbumVideo") {');
   const intentEnd = server.indexOf("\n\n  const sourceExtension", intentStart);
   const adminVideoIntent = server.slice(intentStart, intentEnd);

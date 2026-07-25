@@ -5,7 +5,7 @@ import test from "node:test";
 import { validateMigrationFilenames } from "./check-migration-filenames.mjs";
 
 const migrationsUrl = new URL("../apps/api/migrations/", import.meta.url);
-const currentFutureHistory = ["0033_schema_migration_checksums.sql"];
+const currentFutureHistory = ["0034_schema_migration_checksums.sql"];
 
 async function currentMigrationFilenames() {
   return (await readdir(migrationsUrl)).filter((name) => name.endsWith(".sql"));
@@ -18,7 +18,7 @@ function issueCodes(filenames, options) {
   }).map(({ code }) => code);
 }
 
-test("the current migration history, including five legacy duplicate prefixes, is valid", async () => {
+test("the current migration history, including six legacy duplicate prefixes, is valid", async () => {
   assert.deepEqual(validateMigrationFilenames(await currentMigrationFilenames(), {
     futureMigrationHistory: currentFutureHistory,
   }), []);
@@ -37,21 +37,21 @@ test("future migration filenames must use a four-digit prefix and snake_case des
   );
 });
 
-test("prefixes from 0033 onward are globally unique", async () => {
+test("prefixes from 0034 onward are globally unique", async () => {
   const filenames = await currentMigrationFilenames();
 
   assert.equal(
-    issueCodes([...filenames, "0034_add_alpha.sql", "0034_add_beta.sql"])
+    issueCodes([...filenames, "0035_add_alpha.sql", "0035_add_beta.sql"])
       .includes("MIGRATION_FILENAME_DUPLICATE_PREFIX"),
     true,
   );
   assert.deepEqual(
     validateMigrationFilenames(
-      [...filenames, "0034_add_alpha.sql", "0035_add_beta.sql"],
+      [...filenames, "0035_add_alpha.sql", "0036_add_beta.sql"],
       { futureMigrationHistory: [
         ...currentFutureHistory,
-        "0034_add_alpha.sql",
-        "0035_add_beta.sql",
+        "0035_add_alpha.sql",
+        "0036_add_beta.sql",
       ] },
     ),
     [],
@@ -62,9 +62,9 @@ test("future migration history is append-only and strictly increasing", async ()
   const filenames = await currentMigrationFilenames();
   const futureMigrationHistory = [
     ...currentFutureHistory,
-    "0034_first.sql",
-    "0036_existing.sql",
-    "0035_backdated.sql",
+    "0035_first.sql",
+    "0037_existing.sql",
+    "0036_backdated.sql",
   ];
 
   assert.equal(
@@ -78,14 +78,14 @@ test("future migration history cannot insert a backdated prefix before an existi
   const filenames = await currentMigrationFilenames();
   const baselineFutureMigrationHistory = [
     ...currentFutureHistory,
-    "0034_first.sql",
-    "0036_existing.sql",
+    "0035_first.sql",
+    "0037_existing.sql",
   ];
   const futureMigrationHistory = [
     ...currentFutureHistory,
-    "0034_first.sql",
-    "0035_backdated.sql",
-    "0036_existing.sql",
+    "0035_first.sql",
+    "0036_backdated.sql",
+    "0037_existing.sql",
   ];
 
   assert.equal(
@@ -97,7 +97,7 @@ test("future migration history cannot insert a backdated prefix before an existi
   );
 });
 
-test("new migrations cannot use a prefix at or below the 0032 legacy high-water mark", async () => {
+test("new migrations cannot use a prefix at or below the 0033 legacy high-water mark", async () => {
   const filenames = await currentMigrationFilenames();
 
   assert.deepEqual(

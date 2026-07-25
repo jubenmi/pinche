@@ -99,45 +99,45 @@ test("migration registry owns exact filenames and rejects duplicate handlers", a
   const { createMigrationRegistry } = await import("../src/infra/db/migration-registry.js");
   const calls = [];
   const registry = createMigrationRegistry();
-  registry.register("0033_schema_migration_checksums.sql", {
+  registry.register("0034_schema_migration_checksums.sql", {
     before: async (...args) => calls.push(["before", ...args]),
     reconcile: async (...args) => calls.push(["reconcile", ...args]),
     skipSql: true
   });
   assert.throws(
-    () => registry.register("0033_schema_migration_checksums.sql", {}),
+    () => registry.register("0034_schema_migration_checksums.sql", {}),
     (error) => error?.code === "MIGRATION_HANDLER_CONFLICT"
   );
 
   const connection = { marker: "connection" };
   assert.deepEqual(
-    await registry.prepare(connection, "0033_schema_migration_checksums.sql"),
+    await registry.prepare(connection, "0034_schema_migration_checksums.sql"),
     { skipStatements: true }
   );
   assert.deepEqual(calls, [
-    ["before", connection, "0033_schema_migration_checksums.sql"],
-    ["reconcile", connection, "0033_schema_migration_checksums.sql"]
+    ["before", connection, "0034_schema_migration_checksums.sql"],
+    ["reconcile", connection, "0034_schema_migration_checksums.sql"]
   ]);
   assert.deepEqual(
-    await registry.prepare(connection, "0034_plain.sql"),
+    await registry.prepare(connection, "0035_plain.sql"),
     { skipStatements: false }
   );
 });
 
 test("historical duplicate prefixes are fixed while every new prefix is unique", async () => {
   const { validateMigrationFilenames } = await import("../../../scripts/d51-architecture-hardening-check.js");
-  const historicalDuplicates = new Set(["0021", "0022", "0024", "0030", "0032"]);
+  const historicalDuplicates = new Set(["0021", "0022", "0024", "0030", "0032", "0033"]);
 
   assert.deepEqual(
     validateMigrationFilenames(
-      ["0032_old_a.sql", "0032_old_b.sql", "0033_checksum.sql"],
+      ["0033_old_a.sql", "0033_old_b.sql", "0034_checksum.sql"],
       { historicalDuplicates }
     ),
     []
   );
   assert.deepEqual(
     validateMigrationFilenames(
-      ["0033_checksum.sql", "0033_new_duplicate.sql"],
+      ["0034_checksum.sql", "0034_new_duplicate.sql"],
       { historicalDuplicates }
     ).map((finding) => finding.code),
     ["DUPLICATE_NEW_MIGRATION_PREFIX"]

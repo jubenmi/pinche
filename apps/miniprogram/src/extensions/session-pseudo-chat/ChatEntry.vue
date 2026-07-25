@@ -470,10 +470,13 @@ export default {
   padding: 0 28rpx;
   border: 1rpx solid #ded8ca;
   border-radius: 14rpx;
-  background: #fffefb;
+  background: #eef7f4;
   color: #193d35;
   box-shadow: 0 12rpx 28rpx rgba(31, 111, 91, 0.08);
   box-sizing: border-box;
+  --td-button-default-bg-color: #eef7f4;
+  --td-button-default-color: #193d35;
+  --td-button-default-border-color: #ded8ca;
 }
 
 .chat-entry-content {

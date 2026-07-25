@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 const root = process.cwd();
+const require = createRequire(import.meta.url);
 const apiServerPath = path.join(root, "apps/api/src/legacy-app.js");
 const miniprogramRoot = path.join(root, "apps/miniprogram");
 const srcRoot = path.join(miniprogramRoot, "src");
@@ -36,7 +38,10 @@ const localMediaPattern = /\.(?:png|jpe?g|gif|webp|mp3|m4a|aac|wav|mp4|mov)$/i;
 const localFontPattern = /\.(?:ttf|otf|woff2?|eot)$/i;
 const brandFontPath = "static/fonts/pinche-brand.ttf";
 const tdesignPackageName = "tdesign-miniprogram";
-const tdesignDistPath = path.join(root, "node_modules", tdesignPackageName, "miniprogram_dist");
+const tdesignDistPath = path.join(
+  path.dirname(require.resolve(`${tdesignPackageName}/package.json`)),
+  "miniprogram_dist"
+);
 const tdesignWxcomponentsPath = path.join(srcRoot, "wxcomponents", tdesignPackageName);
 const tdesignDirectComponentNames = [
   "action-sheet",
@@ -1797,7 +1802,7 @@ if (!fs.existsSync(pagesJsonPath)) {
     "createPublishedSession",
     'time: "14:00"',
     "/api/sessions",
-    "/chat/pin"
+    "idempotencyKey: this.creationIdempotencyKey"
   ]) {
     if (!setupSource.includes(requiredSetupText)) {
       fail(`Setup step must collect and persist start time plus pinned chat info: ${requiredSetupText}`);
@@ -1867,21 +1872,15 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   assertBefore(
     createPublishedSessionSource,
-    "ensureLoggedIn",
     "this.busyAction = true",
-    "Setup publish button must not mark busy before login"
+    "ensureLoggedIn",
+    "Setup publish button must guard duplicate login and publish attempts"
   );
   assertBefore(
     createPublishedSessionSource,
     "ensureLoggedIn",
     "request",
     "Setup publish button must request login before publishing"
-  );
-  assertBefore(
-    createPublishedSessionSource,
-    "requirePhone: true",
-    "this.busyAction = true",
-    "Setup publish button must require phone before marking busy"
   );
   assertBefore(
     createPublishedSessionSource,
@@ -2884,13 +2883,18 @@ if (!fs.existsSync(pagesJsonPath)) {
     }
   }
   if (
-    !albumSource.includes(':open-type="recruitInviteToken ? \'share\' : \'\'"') ||
-    !albumSource.includes('data-album-share="recruit"') ||
-    !albumSource.includes('@tap="handleRecruitShareTap"') ||
+    !albumSource.includes('@tap="openClaimShare"') ||
+    !albumSource.includes(">邀请认领</") ||
+    !methodBody(albumSource, "openClaimShare").includes(
+      "url: `/pages/session/share?id=${this.sessionId}&entry=album`"
+    ) ||
+    albumSource.includes("recruitInviteToken") ||
+    albumSource.includes('data-album-share="recruit"') ||
+    albumSource.includes("handleRecruitShareTap") ||
     albumSource.includes("openRecruitment") ||
-    /navigateTo\s*\([\s\S]{0,240}\/pages\/session\/share/.test(albumSource)
+    methodBody(albumSource, "openClaimShare").includes("openType")
   ) {
-    fail("Album recruitment action must use the token-gated native share entry without legacy invitation navigation");
+    fail("Album claim action must enter the unified session share page without the retired recruit token flow");
   }
   for (const forbiddenAlbumActionGroupText of [
     "album-action-group-title",
@@ -4150,7 +4154,7 @@ if (
 ) {
   fail("Root package must expose the TDesign WeChat runtime compatibility test");
 }
-if (!rootPackageJson.scripts?.check?.includes("npm run test:miniprogram-tdesign-runtime")) {
+if (!rootPackageJson.scripts?.["test:contracts"]?.includes("npm run test:miniprogram-tdesign-runtime")) {
   fail("Root check must run the TDesign WeChat runtime compatibility test");
 }
 

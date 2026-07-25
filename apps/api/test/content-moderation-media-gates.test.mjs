@@ -175,10 +175,10 @@ test("unapproved direct media reads retain a 404 response while emitting a safe 
   for (const subjectType of ["album_image", "album_video"]) {
     assert.equal(service.includes(`moderationUnpublishedNotFound("${subjectType}")`), true);
   }
-  assert.match(server, /error\?\.contentModerationDenied === true/);
+  assert.match(server, /if \(error\?\.contentModerationDenied !== true\) return;/);
   assert.match(server, /emitContentModerationEvent\("moderation_access_denied"/);
-  const denialStart = server.indexOf("error?.contentModerationDenied === true");
-  const denialBody = server.slice(denialStart, denialStart + 600);
+  const denialStart = server.indexOf("export function recordLegacyRouteError");
+  const denialBody = server.slice(denialStart, denialStart + 800);
   assert.doesNotMatch(denialBody, /photo_url|object_key|signedUrl|signature|token/);
 });
 

@@ -10,7 +10,7 @@ const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const FUTURE_HISTORY_PATH = "scripts/migration-filename-history.json";
 const futureHistoryUrl = new URL("./migration-filename-history.json", import.meta.url);
 
-export const LEGACY_MAX_PREFIX = 32;
+export const LEGACY_MAX_PREFIX = 33;
 
 export const LEGACY_DUPLICATE_PREFIXES = Object.freeze({
   "0021": Object.freeze([
@@ -32,6 +32,11 @@ export const LEGACY_DUPLICATE_PREFIXES = Object.freeze({
   "0032": Object.freeze([
     "0032_session_album_public_shares.sql",
     "0032_session_review_album_photos.sql",
+  ]),
+  "0033": Object.freeze([
+    "0033_album_untagged_share_preview.sql",
+    "0033_session_creation_idempotency.sql",
+    "0033_session_start_time_corrections.sql",
   ]),
 });
 
@@ -73,6 +78,9 @@ export const LEGACY_MIGRATION_FILENAMES = Object.freeze([
   "0031_user_image_assets.sql",
   "0032_session_album_public_shares.sql",
   "0032_session_review_album_photos.sql",
+  "0033_album_untagged_share_preview.sql",
+  "0033_session_creation_idempotency.sql",
+  "0033_session_start_time_corrections.sql",
 ]);
 
 const legacyFilenames = new Set(LEGACY_MIGRATION_FILENAMES);

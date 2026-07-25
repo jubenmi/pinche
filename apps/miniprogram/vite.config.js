@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, transformWithEsbuild } from "vite";
@@ -7,12 +8,17 @@ import uniPlugin from "@dcloudio/vite-plugin-uni";
 const uni = typeof uniPlugin === "function" ? uniPlugin : uniPlugin.default;
 const miniprogramRoot = fileURLToPath(new URL(".", import.meta.url));
 const workspaceRoot = path.resolve(miniprogramRoot, "../..");
+const require = createRequire(import.meta.url);
 const buildTime = formatBuildTime();
 const tdesignPackageName = "tdesign-miniprogram";
 const tdesignSourceRoot = path.join(miniprogramRoot, "src/wxcomponents", tdesignPackageName);
+const resolvedTdesignPackageRoot = path.dirname(
+  require.resolve(`${tdesignPackageName}/package.json`)
+);
 const tdesignPackageDistCandidates = [
   path.join(miniprogramRoot, "node_modules", tdesignPackageName, "miniprogram_dist"),
-  path.join(workspaceRoot, "node_modules", tdesignPackageName, "miniprogram_dist")
+  path.join(workspaceRoot, "node_modules", tdesignPackageName, "miniprogram_dist"),
+  path.join(resolvedTdesignPackageRoot, "miniprogram_dist")
 ];
 const tdesignPackageDistRoot = firstExistingPath(tdesignPackageDistCandidates) || tdesignPackageDistCandidates[0];
 const tdesignComponentFoldersToCopy = [

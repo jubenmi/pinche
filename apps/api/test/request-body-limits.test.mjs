@@ -19,15 +19,15 @@ test("generic JSON accepts a large selected-media payload below the byte limit",
   assert.deepEqual(await bodyFor(jsonRequest(body)), { mediaIds });
 });
 
-test("generic JSON rejects an oversized body with BAD_REQUEST rather than INVALID_JSON", async () => {
+test("generic JSON rejects an oversized body with PAYLOAD_TOO_LARGE rather than INVALID_JSON", async () => {
   const request = jsonRequest(" ".repeat(JSON_BODY_MAX_BYTES + 1));
 
   await assert.rejects(
     () => bodyFor(request),
     (error) =>
-      error?.statusCode === 400 &&
-      error.code === "BAD_REQUEST" &&
-      error.message === "request body is too large"
+      error?.statusCode === 413 &&
+      error.code === "PAYLOAD_TOO_LARGE" &&
+      error.message === "Request body is too large"
   );
 });
 

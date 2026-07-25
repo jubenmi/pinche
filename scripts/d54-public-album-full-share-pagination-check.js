@@ -4,7 +4,7 @@ import path from "node:path";
 const root = process.cwd();
 const paths = Object.freeze({
   service: "apps/api/src/modules/core/service.js",
-  server: "apps/api/src/server.js",
+  server: "apps/api/src/legacy-app.js",
   albumPage: "apps/miniprogram/src/pages/session/album.vue",
   paginationHelper: "apps/miniprogram/src/utils/albumPublicSharePagination.js",
   apiTest: "apps/api/test/album-public-share-pagination.test.mjs",
@@ -83,8 +83,9 @@ assert(
   "D54 package scripts are required"
 );
 assert(
-  packageJson.scripts.postcheck ===
-    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check",
+  packageJson.scripts.postcheck.startsWith(
+    "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check"
+  ),
   "D54 checks must run before D55 and D56 checks in the root check lifecycle"
 );
 

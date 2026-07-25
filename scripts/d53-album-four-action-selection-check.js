@@ -511,7 +511,7 @@ const albumScript = albumSfc.descriptor.script.content;
 const albumProgram = parseModule(albumScript, "album script");
 const albumOptions = exportDefaultObject(albumProgram);
 const serviceProgram = parseModule(read("apps/api/src/modules/core/service.js"), "album service");
-const serverProgram = parseModule(read("apps/api/src/server.js"), "server");
+const serverProgram = parseModule(read("apps/api/src/legacy-app.js"), "legacy server");
 const packageJson = read("package.json");
 
 for (const token of ["scope: \"all\"", "mediaIds", "ALBUM_PUBLIC_SHARE_SELECTION_INVALID"]) {
@@ -719,7 +719,7 @@ assert(
     ).length > 0,
   "share-token forwarding must copy only explicitly supplied scope fields"
 );
-const route = topLevelAsyncFunction(serverProgram, "route", "share-token route");
+const route = exportedFunction(serverProgram, "legacyRoute", "share-token route");
 const shareOptions = variableDeclarator(route, "shareOptions");
 assert(
   shareOptions?.init?.type === "CallExpression" &&
