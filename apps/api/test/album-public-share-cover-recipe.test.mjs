@@ -40,13 +40,25 @@ function photo(id, overrides = {}) {
 function sharerSeatTag(photoId) {
   return {
     id: photoId,
-    photo_id: photoId,
-    tag_type: "seat",
+    media_id: photoId,
+    kind: "role",
     seat_id: 1000,
-    user_id: 100,
-    seat_user_id: 100,
+    session_npc_role_id: null,
+    canonical_label: "Sharer",
+    privacy_user_id: 100,
     sort_order: 0
   };
+}
+
+function albumTagRows(sql, values, fixtures) {
+  const requestedIds = new Set(values.slice(1).map(Number));
+  const rows = fixtures.filter((tag) => requestedIds.has(Number(tag.media_id)));
+  return sql.includes("AS privacy_user_id")
+    ? rows.map((tag) => ({
+        media_id: tag.media_id,
+        privacy_user_id: tag.privacy_user_id ?? null
+      }))
+    : rows;
 }
 
 function shareCreationConnection(photos) {
@@ -70,8 +82,9 @@ function shareCreationConnection(photos) {
         return [[seat]];
       }
       if (sql.includes("FROM session_album_photos photo")) return [photos];
-      if (sql.includes("FROM session_album_photo_tags")) {
-        return [values.map((photoId) => sharerSeatTag(Number(photoId)))];
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        const fixtures = photos.map((entry) => sharerSeatTag(entry.id));
+        return [albumTagRows(sql, values, fixtures)];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {
@@ -152,14 +165,24 @@ function legacyShareRecipeConnection() {
     sharerSeatTag(3),
     {
       id: 30,
-      photo_id: 3,
-      tag_type: "seat",
+      media_id: 3,
+      kind: "role",
       seat_id: 2000,
-      user_id: 200,
-      seat_user_id: 200,
+      session_npc_role_id: null,
+      canonical_label: "Other role",
+      privacy_user_id: 200,
       sort_order: 1
     },
-    { id: 20, photo_id: 2, tag_type: "other", seat_id: null, user_id: null, sort_order: 0 },
+    {
+      id: 20,
+      media_id: 2,
+      kind: "other",
+      seat_id: null,
+      session_npc_role_id: null,
+      canonical_label: null,
+      privacy_user_id: null,
+      sort_order: 0
+    },
     sharerSeatTag(1)
   ];
   const connection = {
@@ -185,8 +208,8 @@ function legacyShareRecipeConnection() {
           status: "confirmed"
         }]];
       }
-      if (sql.includes("FROM session_album_photo_tags")) {
-        return [tags.filter((tag) => values.map(Number).includes(Number(tag.photo_id)))];
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        return [albumTagRows(sql, values, tags)];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_photos photo")) {

@@ -48,11 +48,31 @@ function eligibleMedia(id, overrides = {}) {
 
 function sharerSeatTag() {
   return {
-    tag_type: "seat",
-    seat_id: 1000,
-    user_id: 100,
-    seat_user_id: 100
+    kind: "role",
+    ref_id: 1000,
+    label: "Sharer"
   };
+}
+
+function albumTagQueryRows(sql, values, fixtures) {
+  const mediaIds = new Set(values.slice(1).map(Number));
+  const rows = fixtures.filter((row) =>
+    mediaIds.has(Number(row.media_id ?? row.photo_id))
+  );
+  if (sql.includes("AS privacy_user_id")) {
+    return rows.map((row) => ({
+      media_id: Number(row.media_id ?? row.photo_id),
+      privacy_user_id: row.privacy_user_id ??
+        (row.kind === "role" && Number(row.ref_id) === 1000 ? 100 : null)
+    }));
+  }
+  return rows.map((row) => ({
+    media_id: Number(row.media_id ?? row.photo_id),
+    kind: row.kind,
+    seat_id: row.kind === "role" ? Number(row.ref_id) : null,
+    session_npc_role_id: row.kind === "npc_role" ? Number(row.ref_id) : null,
+    canonical_label: row.kind === "other" ? null : row.label
+  }));
 }
 
 function tagsFor(candidates) {
@@ -67,14 +87,14 @@ test("public media category distinguishes the shared role from safe other conten
   );
   assert.equal(
     coreService.publicAlbumMediaCategory(
-      [{ tag_type: "other", user_id: null }],
+      [{ kind: "other", ref_id: null, label: "其他" }],
       claims
     ),
     "other"
   );
   assert.equal(
     coreService.publicAlbumMediaCategory(
-      [{ tag_type: "session_npc_role", user_id: null }],
+      [{ kind: "npc_role", ref_id: 8, label: "阿离" }],
       claims
     ),
     "other"
@@ -101,9 +121,9 @@ test("public media response exposes label strings without raw tag metadata", () 
   const rawTags = [
     {
       id: 9001,
-      key: "seat:private-canary",
-      tag_type: "seat",
-      seat_id: 1000,
+      key: "role:private-canary",
+      kind: "role",
+      ref_id: 1000,
       session_npc_role_id: 9002,
       user_id: 100,
       seat_user_id: 100,
@@ -113,8 +133,9 @@ test("public media response exposes label strings without raw tag metadata", () 
     },
     {
       id: 9003,
-      key: "session-npc:private-canary",
-      tag_type: "session_npc_role",
+      key: "npc-role:private-canary",
+      kind: "npc_role",
+      ref_id: 9004,
       session_npc_role_id: 9004,
       user_id: null,
       label: "阿离"
@@ -173,7 +194,9 @@ function focusedShareConnection(photoRows, tagRows) {
         return [[seat]];
       }
       if (sql.includes("FROM session_album_photos photo")) return [photoRows];
-      if (sql.includes("FROM session_album_photo_tags tag")) return [tagRows];
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        return [albumTagQueryRows(sql, values, tagRows)];
+      }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {
         return [[shares.find((share) => share.snapshot_digest === values[3])].filter(Boolean)];
@@ -268,7 +291,7 @@ test("selectPublicShareMedia without options preserves D48 ranking order", () =>
     [1, [sharerSeatTag()]],
     [2, [sharerSeatTag()]],
     [3, [sharerSeatTag()]],
-    [4, [{ tag_type: "other", user_id: null }]]
+    [4, [{ kind: "other", ref_id: null, label: "其他" }]]
   ]);
 
   assert.deepEqual(
@@ -322,15 +345,15 @@ test("createOrReuseSessionAlbumPublicShare persists a safe three-image Canvas co
     { photo_id: groupPhoto.id, ...sharerSeatTag() },
     {
       photo_id: groupPhoto.id,
-      tag_type: "seat",
-      seat_id: 2000,
-      user_id: 200,
-      seat_user_id: 200
+      kind: "role",
+      ref_id: 2000,
+      label: "Other role",
+      privacy_user_id: 200
     },
     { photo_id: otherUploaderPhoto.id, ...sharerSeatTag() },
     { photo_id: video.id, ...sharerSeatTag() },
     { photo_id: pending.id, ...sharerSeatTag() },
-    { photo_id: safeScene.id, tag_type: "other", user_id: null }
+    { photo_id: safeScene.id, kind: "other", ref_id: null, label: "其他" }
   ];
   const connection = focusedShareConnection(photos, tagRows);
   const options = { withTransaction: async (work) => work(connection) };
@@ -467,7 +490,7 @@ function publicVideoPlaybackConnection(media, options = {}) {
   const tags = options.tags || [{ photo_id: 77, ...sharerSeatTag() }];
   const privacy = options.privacy || [];
   return {
-    async query(sql) {
+    async query(sql, values = []) {
       if (sql.includes("SELECT * FROM session_album_photos WHERE id = ?")) {
         return [[media]].filter(Boolean);
       }
@@ -480,7 +503,9 @@ function publicVideoPlaybackConnection(media, options = {}) {
       if (sql.includes("FROM session_seats") && sql.includes("confirmed_user_id")) {
         return [[{ id: 1000, confirmed_user_id: 100, status: "confirmed" }]];
       }
-      if (sql.includes("FROM session_album_photo_tags")) return [tags];
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        return [albumTagQueryRows(sql, values, tags)];
+      }
       if (sql.includes("FROM session_album_privacy")) return [privacy];
       throw new Error(`Unexpected public video playback test query: ${sql}`);
     }

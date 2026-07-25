@@ -28,11 +28,12 @@ function media(id, overrides = {}) {
 
 function tagRow(photoId) {
   return {
-    photo_id: photoId,
-    tag_type: "seat",
+    media_id: photoId,
+    kind: "role",
     seat_id: 1000,
-    user_id: 100,
-    seat_user_id: 100
+    session_npc_role_id: null,
+    canonical_label: "Sharer",
+    privacy_user_id: 100
   };
 }
 
@@ -59,10 +60,18 @@ function shareConnection(photoRows, options = {}) {
       if (sql.includes("FROM session_album_photos photo")) {
         return [[...photoRows].sort((left, right) => Number(right.id) - Number(left.id))];
       }
-      if (sql.includes("FROM session_album_photo_tags tag")) {
-        return [photoRows
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        const requestedIds = new Set(values.slice(1).map(Number));
+        const rows = photoRows
           .filter((photo) => !untaggedIds.has(Number(photo.id)))
-          .map((photo) => tagRow(photo.id))];
+          .filter((photo) => requestedIds.has(Number(photo.id)))
+          .map((photo) => tagRow(photo.id));
+        return [sql.includes("AS privacy_user_id")
+          ? rows.map((row) => ({
+              media_id: row.media_id,
+              privacy_user_id: row.privacy_user_id
+            }))
+          : rows];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {

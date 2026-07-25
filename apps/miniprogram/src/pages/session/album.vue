@@ -640,13 +640,6 @@
             @tap="togglePerson(person.key)"
           >
             <text>{{ tagPersonTitle(person) }}</text>
-            <text
-              v-if="person.tag_type === 'session_npc_role'"
-              class="npc-gender-mark"
-              :class="npcRoleGenderClass(person.role_gender)"
-            >
-              {{ npcRoleGenderText(person.role_gender) }}
-            </text>
             <text>×</text>
           </t-tag>
           <t-empty
@@ -738,7 +731,6 @@ import {
   contentModerationErrorText,
   contentModerationStatusText
 } from "../../utils/contentModeration";
-import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
 import {
   albumShareFriendPayload,
   albumShareLocalImagePath,
@@ -1039,21 +1031,16 @@ export default {
       return `${photoCount || Number(this.shareCounts.total || 0)} 张照片`;
     },
     currentAlbumRoleName() {
-      const userId = Number(this.currentUserId || 0);
-      if (!userId) {
-        return "";
-      }
-      const matchingPeople = this.people.filter(
-        (person) => Number(person?.user_id || 0) === userId
+      return (
+        this.activeAlbumShareSubjectLabel ||
+        String(
+          this.defaultAlbumShareSubject?.role_name ||
+          this.defaultAlbumShareSubject?.seat_name ||
+          this.defaultAlbumShareSubject?.label ||
+          ""
+        ).trim() ||
+        this.albumRoleNameFromMineTags()
       );
-      const person =
-        matchingPeople.find(
-          (item) => item.tag_type === "seat" && Number(item.seat_id || 0) > 0
-        ) ||
-        matchingPeople.find((item) => item.tag_type === "session_npc_role") ||
-        matchingPeople.find((item) => ["dm", "npc"].includes(item.tag_type)) ||
-        matchingPeople[0];
-      return person ? this.tagPersonTitle(person) : this.albumRoleNameFromMineTags();
     },
     albumIntro() {
       if (this.timelineMode) {
@@ -1158,22 +1145,18 @@ export default {
         this.taggablePhotos.some((photo) => Number(photo.id) === Number(photoId))
       );
     },
-    seatPeople() {
-      return this.people.filter((person) => person.tag_type === "seat");
-    },
-    npcPeople() {
-      return this.people.filter((person) => ["dm", "npc"].includes(person.tag_type));
+    rolePeople() {
+      return this.people.filter((person) => person.kind === "role");
     },
     npcRolePeople() {
-      return this.people.filter((person) => person.tag_type === "session_npc_role");
+      return this.people.filter((person) => person.kind === "npc_role");
     },
     otherPeople() {
-      return this.people.filter((person) => person.tag_type === "other");
+      return this.people.filter((person) => person.kind === "other");
     },
     albumTagSections() {
       return [
-        this.albumTagSection("seat", "车友", this.seatPeople),
-        this.albumTagSection("staff", "DM / NPC工作人员", this.npcPeople),
+        this.albumTagSection("role", "角色", this.rolePeople),
         this.albumTagSection("npcRole", "NPC角色", this.npcRolePeople),
         this.albumTagSection("other", "其他", this.otherPeople)
       ].filter((section) => section.items.length);
@@ -1616,7 +1599,7 @@ export default {
       this.activeAlbumShareCount = Number(data.visible_count || 0);
       this.activeAlbumShareTimelineCoverUrl = "";
       this.activeAlbumShareTimelineCoverPrepared = false;
-      this.activeAlbumShareSubject = data.share_subject || this.localAlbumShareSubject();
+      this.activeAlbumShareSubject = data.share_subject || null;
       this.activeAlbumShareOwner = data.share_owner || null;
       this.activeAlbumShareCounts = {
         total: this.activeAlbumShareCount,
@@ -1629,7 +1612,7 @@ export default {
       this.defaultAlbumShareToken = token;
       this.defaultAlbumShareTimelineCoverUrl = "";
       this.defaultAlbumShareTimelineCoverPrepared = false;
-      this.defaultAlbumShareSubject = data.share_subject || this.localAlbumShareSubject();
+      this.defaultAlbumShareSubject = data.share_subject || null;
       this.defaultAlbumShareCounts = {
         total: Number(data.visible_count || 0),
         photos: Number(data.photo_count || 0),
@@ -1841,83 +1824,32 @@ export default {
         this.albumScrollTop > 180
       );
     },
-    localAlbumShareSubject() {
-      const userId = Number(this.currentUserId || 0);
-      if (!userId) {
-        return null;
+    albumTagKey(tag) {
+      const refId = Number(tag?.ref_id);
+      if (tag?.kind === "role" && Number.isSafeInteger(refId) && refId > 0) {
+        return `role:${refId}`;
       }
-      const seat = this.people.find(
-        (person) =>
-          person.tag_type === "seat" &&
-          Number(person.user_id || 0) === userId &&
-          Number(person.seat_id || 0) > 0
-      );
-      if (!seat) {
-        return null;
+      if (tag?.kind === "npc_role" && Number.isSafeInteger(refId) && refId > 0) {
+        return `npc-role:${refId}`;
       }
-      return {
-        type: "seat",
-        seat_id: Number(seat.seat_id),
-        role_name: seat.role_name || "",
-        seat_name: seat.seat_name || "",
-        label: seat.role_name || seat.seat_name || seat.label || "车友"
-      };
-    },
-    inferredSeatRoleName(person) {
-      return String(person?.note || "")
-        .split(" · ")
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .slice(-1)[0] || "";
+      return tag?.kind === "other" ? "other" : "";
     },
     tagPersonTitle(person) {
-      if (person?.tag_type !== "seat") {
-        return person?.label || this.tagTypeLabel(person?.tag_type);
-      }
-      return person.role_name || this.inferredSeatRoleName(person) || person.label || "车友";
+      return String(person?.label || this.tagTypeLabel(person?.kind)).trim();
     },
     tagTypeLabel(value) {
       const labels = {
-        seat: "车友",
-        dm: "DM",
-        npc: "NPC",
-        session_npc_role: "NPC角色",
+        role: "角色",
+        npc_role: "NPC角色",
         other: "其他"
       };
-      return labels[value] || "成员";
+      return labels[value] || "角色";
     },
     tagPersonSubtitle(person) {
-      if (!person) {
-        return "";
-      }
-      const title = this.tagPersonTitle(person);
-      if (person.tag_type === "seat") {
-        const accountName = String(person.account_name || person.account_nickname || "").trim();
-        if (accountName && accountName !== title) {
-          return accountName;
-        }
-        const legacyLabel = String(person.label || "").trim();
-        return legacyLabel && legacyLabel !== title ? legacyLabel : "";
-      }
-      if (person.tag_type === "session_npc_role") {
-        const accountName = String(person.account_name || person.bound_user_name || "").trim();
-        if (accountName && accountName !== title) {
-          return accountName;
-        }
-        const legacyBinding = String(person.note || "").split("绑定：")[1]?.split(" · ")[0]?.trim() || "";
-        return legacyBinding && legacyBinding !== title ? legacyBinding : "";
-      }
-      const subtitle = String(person.account_name || person.note || "").trim();
-      return subtitle && subtitle !== person.label ? subtitle : "";
+      return "";
     },
     roleFilterOptionLabel(person) {
-      const title = this.tagPersonTitle(person);
-      const subtitle = this.tagPersonSubtitle(person);
-      const genderText =
-        person?.tag_type === "session_npc_role"
-          ? ` ${this.npcRoleGenderText(person.role_gender)}`
-          : "";
-      return subtitle ? `${title}${genderText} / ${subtitle}` : `${title}${genderText}`;
+      return this.tagPersonTitle(person);
     },
     albumRoleNameFromMineTags() {
       const roleCounts = new Map();
@@ -1926,12 +1858,15 @@ export default {
           continue;
         }
         for (const tag of photo.tags || []) {
-          if (tag.tag_type === "seat") {
+          if (tag.kind === "role") {
             const label = String(tag.label || "").trim();
             if (!label) {
               continue;
             }
-            const key = tag.key || (tag.seat_id ? `seat:${tag.seat_id}` : label);
+            const key = this.albumTagKey(tag);
+            if (!key) {
+              continue;
+            }
             const current = roleCounts.get(key) || { label, count: 0 };
             roleCounts.set(key, {
               label: current.label || label,
@@ -1944,12 +1879,6 @@ export default {
       return (
         [...roleCounts.values()].sort((left, right) => right.count - left.count)[0]?.label || ""
       );
-    },
-    npcRoleGenderText(roleGender) {
-      return roleGenderSymbol(roleGender) || "不限";
-    },
-    npcRoleGenderClass(roleGender) {
-      return normalizeRoleGender(roleGender);
     },
     albumTagSection(key, title, people) {
       return {
@@ -1966,12 +1895,6 @@ export default {
         raw: person,
         name: this.tagPersonTitle(person),
         note: this.tagPersonSubtitle(person),
-        roleGender: person.role_gender || person.roleGender || person.gender || "unlimited",
-        genderSymbol:
-          person.tag_type === "session_npc_role"
-            ? this.npcRoleGenderText(person.role_gender)
-            : "",
-        showGenderSymbol: person.tag_type === "session_npc_role",
         selected,
         checked: selected,
         stateKind: selected ? "mine" : "available",
@@ -1988,9 +1911,7 @@ export default {
         scopedPhotos = scopedPhotos.filter((photo) => photo.is_mine);
       }
       if (filterValue === "withMe") {
-        scopedPhotos = scopedPhotos.filter((photo) =>
-          photo.tags.some((tag) => Number(tag.user_id) === Number(this.currentUserId))
-        );
+        scopedPhotos = scopedPhotos.filter((photo) => photo.is_tagged_with_me === true);
       }
       if (filterValue === "untagged") {
         scopedPhotos = scopedPhotos.filter((photo) => photo.tags.length === 0);
@@ -2028,7 +1949,7 @@ export default {
       return this.photoMatchesRole(photo, this.selectedRoleFilter);
     },
     photoMatchesRole(photo, roleKey) {
-      return (photo.tags || []).some((tag) => tag.key === roleKey);
+      return (photo.tags || []).some((tag) => this.albumTagKey(tag) === roleKey);
     },
     openRoleFilterPicker() {
       if (this.albumBusy || this.albumRoleFilterOptions.length <= 1) {
@@ -3398,77 +3319,61 @@ export default {
     sessionDetailPeople(session) {
       const people = [];
       for (const seat of session.seats || []) {
-        const accountName =
-          seat.confirmed_user_name ||
-          seat.user_nickname ||
-          seat.user_open_id ||
-          "";
+        if (!["confirmed", "locked"].includes(seat.status)) {
+          continue;
+        }
+        const refId = Number(seat.id);
+        const label = String(seat.role_name || "").trim() ||
+          String(seat.name || "").trim();
+        if (!label || !Number.isSafeInteger(refId) || refId <= 0) {
+          continue;
+        }
         people.push({
-          key: `seat:${seat.id}`,
-          tag_type: "seat",
-          seat_id: seat.id,
-          user_id: seat.confirmed_user_id || null,
-          label: seat.role_name || seat.name || "车友",
-          note: accountName,
-          role_gender: seat.role_gender || "unlimited",
-          role_name: seat.role_name || "",
-          seat_name: seat.name || "",
-          account_name: accountName
+          key: `role:${refId}`,
+          kind: "role",
+          ref_id: refId,
+          label
         });
       }
 
-      if (session.dm_user_id || session.dm_name_snapshot) {
+      for (const role of session.session_npc_roles || []) {
+        if (role.status !== "active") {
+          continue;
+        }
+        const refId = Number(role.id);
+        const label = String(role.name || "").trim();
+        if (!label || !Number.isSafeInteger(refId) || refId <= 0) {
+          continue;
+        }
         people.push({
-          key: "dm:session",
-          tag_type: "dm",
-          seat_id: null,
-          user_id: session.dm_user_id || null,
-          label: session.dm_name_snapshot || "DM",
-          note: "DM"
-        });
-      }
-      if (session.npc_user_id || session.npc_name_snapshot) {
-        people.push({
-          key: "npc:session",
-          tag_type: "npc",
-          seat_id: null,
-          user_id: session.npc_user_id || null,
-          label: session.npc_name_snapshot || "NPC",
-          note: "NPC"
+          key: `npc-role:${refId}`,
+          kind: "npc_role",
+          ref_id: refId,
+          label
         });
       }
 
       people.push({
-        key: "other:session",
-        tag_type: "other",
-        seat_id: null,
-        user_id: null,
-        label: "其他",
-        note: "风景/主线外照片"
+        key: "other",
+        kind: "other",
+        ref_id: null,
+        label: "其他"
       });
-
-      for (const role of session.session_npc_roles || []) {
-        const accountName = role.bound_user_name || "";
-        people.push({
-          key: `session-npc:${role.id}`,
-          tag_type: "session_npc_role",
-          seat_id: null,
-          session_npc_role_id: role.id,
-          user_id: role.bound_user_id || null,
-          label: role.name || "NPC角色",
-          role_gender: role.role_gender || "unlimited",
-          note: accountName,
-          account_name: accountName
-        });
-      }
 
       return people;
     },
     mergePeople(people) {
       const peopleByKey = new Map();
       for (const person of people) {
-        if (person?.key && !peopleByKey.has(person.key)) {
-          peopleByKey.set(person.key, person);
+        const key = this.albumTagKey(person);
+        const label = String(person?.label || "").trim();
+        if (key && label && !peopleByKey.has(key)) {
+          peopleByKey.set(key, {
+            key,
+            kind: person.kind,
+            ref_id: person.kind === "other" ? null : Number(person.ref_id),
+            label
+          });
         }
       }
       return [...peopleByKey.values()];
@@ -4587,7 +4492,9 @@ export default {
         return;
       }
       this.tagSheetPhoto = photo;
-      this.selectedTagKeys = (photo.tags || []).map((tag) => tag.key);
+      this.selectedTagKeys = (photo.tags || [])
+        .map((tag) => this.albumTagKey(tag))
+        .filter(Boolean);
     },
     openDownloadSelectionMode() {
       if (this.timelineMode || this.albumBusy) {

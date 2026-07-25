@@ -79,7 +79,7 @@ function publicUntaggedPhotoConnection(photo, snapshotTagVersion) {
       if (sql.includes("FROM session_seats") && sql.includes("confirmed_user_id")) {
         return [[{ id: 1000, confirmed_user_id: 100, status: "confirmed" }]];
       }
-      if (sql.includes("FROM session_album_photo_tags")) return [[]];
+      if (sql.includes("FROM session_album_media_tags tag")) return [[]];
       if (sql.includes("FROM session_album_privacy")) return [[]];
       throw new Error(`Unexpected public untagged photo query: ${sql}`);
     }
@@ -107,7 +107,7 @@ function untaggedShareConnection(photoRows) {
         return [[seat]];
       }
       if (sql.includes("FROM session_album_photos photo")) return [photoRows];
-      if (sql.includes("FROM session_album_photo_tags tag")) return [[]];
+      if (sql.includes("FROM session_album_media_tags tag")) return [[]];
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_public_shares") && sql.includes("snapshot_digest")) {
         return [[shares.find((share) => share.snapshot_digest === values[3])].filter(Boolean)];
@@ -146,10 +146,9 @@ function privacy(entries) {
 
 function sharerSeatTag() {
   return {
-    tag_type: "seat",
-    seat_id: 1000,
-    user_id: 100,
-    seat_user_id: 100
+    kind: "role",
+    ref_id: 1000,
+    label: "Sharer"
   };
 }
 

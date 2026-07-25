@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  listAlbumTagOptions,
+  normalizeAlbumTagKeys,
+  resolveAlbumTagPrivacySubjects,
+  resolveAlbumTags,
+  writeAlbumMediaTags,
+} from "../src/modules/core/album-tags.js";
 
 const migrationUrl = new URL(
   "../migrations/0035_album_tag_public_share_read_model.sql",
@@ -123,4 +130,246 @@ test("tag backfill is repeatable without duplicating normalized subjects", async
     /ON DUPLICATE KEY UPDATE[\s\S]*sort_order\s*=\s*LEAST\s*\(/,
   );
   assert.doesNotMatch(backfill, /VALUES\s*\(\s*sort_order\s*\)/);
+});
+
+test("normalizes only role, npc role, and other keys and rejects duplicates", () => {
+  assert.deepEqual(
+    normalizeAlbumTagKeys(["role:12", "npc-role:8", "other"]),
+    [
+      { kind: "role", refId: 12, key: "role:12" },
+      { kind: "npc_role", refId: 8, key: "npc-role:8" },
+      { kind: "other", refId: null, key: "other" },
+    ],
+  );
+
+  for (const invalid of [
+    "dm:session",
+    "npc:session",
+    "organizer:session",
+    "seat:12",
+    "session-npc:8",
+    "other:session",
+    "role:0",
+    "role:9007199254740992",
+  ]) {
+    assert.throws(
+      () => normalizeAlbumTagKeys([invalid]),
+      /invalid album tag/i,
+      invalid,
+    );
+  }
+  assert.throws(
+    () => normalizeAlbumTagKeys(["role:12", " role:12 "]),
+    /unique/i,
+  );
+  assert.throws(
+    () => normalizeAlbumTagKeys(["other", "other"]),
+    /unique/i,
+  );
+});
+
+test("lists only canonical role, npc role, and other options without account fields", async () => {
+  const sqlCalls = [];
+  const connection = {
+    async query(sql, params) {
+      sqlCalls.push({ sql, params });
+      if (sql.includes("FROM session_seats")) {
+        return [[
+          { id: 12, role_name: "  沈清商  ", name: "旧座位名" },
+          { id: 13, role_name: "   ", name: "顾南衣" },
+          { id: 14, role_name: "", name: "" },
+        ]];
+      }
+      if (sql.includes("FROM session_npc_roles")) {
+        return [[
+          { id: 8, name: "  阿离  " },
+          { id: 9, name: " " },
+        ]];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    },
+  };
+
+  const options = await listAlbumTagOptions(connection, 77);
+
+  assert.deepEqual(options, [
+    { key: "role:12", kind: "role", ref_id: 12, label: "沈清商" },
+    { key: "role:13", kind: "role", ref_id: 13, label: "顾南衣" },
+    { key: "npc-role:8", kind: "npc_role", ref_id: 8, label: "阿离" },
+    { key: "other", kind: "other", ref_id: null, label: "其他" },
+  ]);
+  assert.equal(sqlCalls.length, 2);
+  assert.deepEqual(sqlCalls.map((call) => call.params), [[77], [77]]);
+  const contract = JSON.stringify(options);
+  assert.doesNotMatch(contract, /user|nickname|open_id|account|tag_type/);
+  assert.match(sqlCalls[0].sql, /status IN \('confirmed', 'locked'\)/);
+  assert.match(sqlCalls[1].sql, /status = 'active'/);
+});
+
+test("resolves latest canonical labels into a safe DTO and ignores polluted stored text", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return [[
+        {
+          media_id: 41,
+          kind: "role",
+          seat_id: 12,
+          session_npc_role_id: null,
+          canonical_label: "  新角色名  ",
+          label: "旧自由文本",
+          user_id: 999,
+          nickname: "玩家昵称",
+        },
+        {
+          media_id: 41,
+          kind: "npc_role",
+          seat_id: null,
+          session_npc_role_id: 8,
+          canonical_label: "  新 NPC 名  ",
+        },
+        {
+          media_id: 41,
+          kind: "other",
+          seat_id: null,
+          session_npc_role_id: null,
+          canonical_label: "不应读取",
+        },
+        {
+          media_id: 42,
+          kind: "role",
+          seat_id: 13,
+          session_npc_role_id: null,
+          canonical_label: "   ",
+          label: "不得回退的旧角色名",
+        },
+      ]];
+    },
+  };
+
+  const tagsByMediaId = await resolveAlbumTags(connection, 77, [41, 42]);
+
+  assert.deepEqual(tagsByMediaId, new Map([
+    [41, [
+      { kind: "role", ref_id: 12, label: "新角色名" },
+      { kind: "npc_role", ref_id: 8, label: "新 NPC 名" },
+      { kind: "other", ref_id: null, label: "其他" },
+    ]],
+  ]));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].params, [77, 41, 42]);
+  assert.match(calls[0].sql, /FROM session_album_media_tags/);
+  assert.match(calls[0].sql, /JOIN session_album_photos/);
+  assert.match(calls[0].sql, /seat\.session_id = media\.session_id/);
+  assert.match(calls[0].sql, /npc_role\.session_id = media\.session_id/);
+  assert.doesNotMatch(
+    calls[0].sql,
+    /\busers\b|\bnickname\b|\bopen_id\b|legacy\.label|session_album_photo_tags/i,
+  );
+  assert.equal(JSON.stringify(tagsByMediaId).includes("玩家昵称"), false);
+});
+
+test("resolves privacy users separately from display tags", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      return [[
+        { media_id: 41, privacy_user_id: 101 },
+        { media_id: 41, privacy_user_id: 101 },
+        { media_id: 41, privacy_user_id: 202 },
+        { media_id: 42, privacy_user_id: null },
+      ]];
+    },
+  };
+
+  const subjects = await resolveAlbumTagPrivacySubjects(
+    connection,
+    77,
+    [41, 42],
+  );
+
+  assert.deepEqual(subjects, new Map([
+    [41, [101, 202]],
+    [42, []],
+  ]));
+  assert.match(calls[0].sql, /seat\.confirmed_user_id/);
+  assert.match(calls[0].sql, /npc_role\.bound_user_id/);
+  assert.match(calls[0].sql, /seat\.session_id = media\.session_id/);
+  assert.match(calls[0].sql, /npc_role\.session_id = media\.session_id/);
+  assert.doesNotMatch(calls[0].sql, /\busers\b|\bnickname\b|\bopen_id\b/i);
+});
+
+test("writes only validated same-session normalized references", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql.includes("FROM session_album_photos")) return [[{ id: 41 }]];
+      if (sql.includes("FROM session_seats")) return [[{ id: 12 }]];
+      if (sql.includes("FROM session_npc_roles")) return [[{ id: 8 }]];
+      if (sql.startsWith("DELETE ")) return [{ affectedRows: 0 }];
+      if (sql.includes("INSERT INTO session_album_media_tags")) {
+        return [{ affectedRows: 1 }];
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    },
+  };
+  const normalizedTags = normalizeAlbumTagKeys([
+    "role:12",
+    "npc-role:8",
+    "other",
+  ]);
+
+  await writeAlbumMediaTags(connection, {
+    mediaId: 41,
+    sessionId: 77,
+    normalizedTags,
+  });
+
+  assert.equal(
+    calls.filter((call) => call.sql.includes("INSERT INTO session_album_media_tags")).length,
+    3,
+  );
+  assert.deepEqual(
+    calls
+      .filter((call) => call.sql.includes("INSERT INTO session_album_media_tags"))
+      .map((call) => call.params),
+    [
+      [41, "role", 12, null, 0],
+      [41, "npc_role", null, 8, 1],
+      [41, "other", null, null, 2],
+    ],
+  );
+  const writeSql = calls.map((call) => call.sql).join("\n");
+  assert.doesNotMatch(
+    writeSql,
+    /session_album_photo_tags|\blabel\b|\buser_id\b|\bnickname\b|\bopen_id\b/i,
+  );
+});
+
+test("rejects a role reference outside the media session before replacing tags", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql.includes("FROM session_album_photos")) return [[{ id: 41 }]];
+      if (sql.includes("FROM session_seats")) return [[]];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    },
+  };
+
+  await assert.rejects(
+    writeAlbumMediaTags(connection, {
+      mediaId: 41,
+      sessionId: 77,
+      normalizedTags: normalizeAlbumTagKeys(["role:12"]),
+    }),
+    /invalid album tag reference/i,
+  );
+  assert.equal(
+    calls.some((call) => call.sql.startsWith("DELETE ")),
+    false,
+  );
 });

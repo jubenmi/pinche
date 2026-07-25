@@ -62,16 +62,23 @@ function publicSharePaginationConnection(mediaIds, options = {}) {
         }]];
       }
       if (sql.includes("FROM users account")) return [[{ nickname: "Sharer", avatar_url: "" }]];
-      if (sql.includes("FROM session_album_photo_tags")) {
-        return [values.map((photoId) => ({
+      if (sql.includes("FROM session_album_media_tags tag")) {
+        const rows = values.slice(1).map((photoId) => ({
           id: Number(photoId),
-          photo_id: Number(photoId),
-          tag_type: "seat",
+          media_id: Number(photoId),
+          kind: "role",
           seat_id: 1000,
-          user_id: 100,
-          seat_user_id: 100,
+          session_npc_role_id: null,
+          canonical_label: "Sharer",
+          privacy_user_id: 100,
           sort_order: 0
-        }))];
+        }));
+        return [sql.includes("AS privacy_user_id")
+          ? rows.map((row) => ({
+              media_id: row.media_id,
+              privacy_user_id: row.privacy_user_id
+            }))
+          : rows];
       }
       if (sql.includes("FROM session_album_privacy")) return [[]];
       if (sql.includes("FROM session_album_photos photo")) {
