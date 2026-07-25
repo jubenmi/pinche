@@ -10,6 +10,13 @@ import {
   parseBusinessDateTime
 } from "../src/beijingTime.js";
 
+let freshImportSequence = 0;
+
+function importFreshBeijingTime(scenario) {
+  freshImportSequence += 1;
+  return import(`../src/beijingTime.js?${scenario}-${Date.now()}-${freshImportSequence}`);
+}
+
 test("formats absolute timestamps in Beijing time", () => {
   assert.equal(BEIJING_TIME_ZONE, "Asia/Shanghai");
   assert.equal(formatBeijingDateTime("2026-07-18T05:00:00.000Z"), "2026-07-18 13:00");
@@ -27,6 +34,32 @@ test("treats legacy timezone-free timestamps as Beijing wall time", () => {
 test("uses Beijing calendar parts independent of process timezone", () => {
   assert.equal(beijingDateKey("2026-07-17T16:30:00.000Z"), "2026-07-18");
   assert.equal(beijingTimeText("2026-07-18T05:00:00.000Z"), "13:00");
+});
+
+test("formats Beijing calendar values when Intl is unavailable at module startup", async () => {
+  const originalIntl = globalThis.Intl;
+  try {
+    globalThis.Intl = undefined;
+    const module = await importFreshBeijingTime("without-intl");
+    assert.equal(module.beijingDateKey("2026-07-17T16:30:00.000Z"), "2026-07-18");
+    assert.equal(module.beijingTimeText("2026-07-18T05:00:00.000Z"), "13:00");
+  } finally {
+    globalThis.Intl = originalIntl;
+  }
+});
+
+test("formats Beijing date time when Intl.DateTimeFormat is incomplete", async () => {
+  const originalIntl = globalThis.Intl;
+  try {
+    globalThis.Intl = { DateTimeFormat: class DateTimeFormat {} };
+    const module = await importFreshBeijingTime("incomplete-intl");
+    assert.equal(
+      module.formatBeijingDateTime("2026-07-18T05:00:00.000Z"),
+      "2026-07-18 13:00"
+    );
+  } finally {
+    globalThis.Intl = originalIntl;
+  }
 });
 
 test("converts Beijing wall input to UTC transport", () => {
