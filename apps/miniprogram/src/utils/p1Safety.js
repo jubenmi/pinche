@@ -15,3 +15,11 @@ export function albumListPresentation({ loading, failed, count } = {}) {
   }
   return Number(count || 0) > 0 ? "content" : "empty";
 }
+
+export function hasPublicAlbumAccessCredentials(sessionId, shareToken) {
+  return Boolean(String(sessionId || "").trim() && String(shareToken || "").trim());
+}
+
+export function isUnavailablePublicAlbumError(error) {
+  return Number(error?.statusCode || 0) === 403;
+}
