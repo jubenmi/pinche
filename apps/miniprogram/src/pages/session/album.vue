@@ -751,7 +751,6 @@ import {
   albumShareAppMessageIntent,
   memberDefaultAlbumShareMediaFingerprint,
   memberDefaultAlbumShareState,
-  recruitmentSharePayload,
   createAlbumShareEntryAuthority
 } from "../../utils/albumShareEntry";
 import { albumListPresentation } from "../../utils/p1Safety.js";
@@ -819,10 +818,6 @@ export default {
       albumShareRequestVersion: 0,
       albumSharePreparing: false,
       albumShareReadyVisible: false,
-      recruitInviteToken: "",
-      recruitInviteGeneration: 0,
-      recruitInvitePromise: null,
-      recruitInviteAuthority: createAlbumShareEntryAuthority(),
       singleMediaShareRequested: false,
       focusedPublicMode: false,
       focusedPublicMediaUnavailable: false,
@@ -1279,7 +1274,7 @@ export default {
     }
     const auth = getCurrentUser();
     const accountChanged = this.handleAlbumAuthChange(auth);
-    if (this.sessionId && this.currentUserId && (!this.defaultAlbumShareToken || !this.recruitInviteToken)) {
+    if (this.sessionId && this.currentUserId && !this.defaultAlbumShareToken) {
       this.primeAlbumShareEntries();
     }
     const skipRefresh = this.consumePreviewReturnRefreshSkip();
@@ -1293,7 +1288,6 @@ export default {
   onHide() {
     if (!this.timelineMode) {
       this.invalidateDefaultAlbumShare();
-      this.invalidateRecruitInviteShare();
     }
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
@@ -1303,7 +1297,6 @@ export default {
   onUnload() {
     if (!this.timelineMode) {
       this.invalidateDefaultAlbumShare();
-      this.invalidateRecruitInviteShare();
     }
     this.resetSingleMediaShareState();
     this.cancelSelectionMode({ force: true });
@@ -1330,15 +1323,6 @@ export default {
     const intent = albumShareAppMessageIntent(options, {
       timelineMode: this.timelineMode
     });
-    if (intent.kind === ALBUM_SHARE_INTENT.RECRUIT) {
-      return (
-        recruitmentSharePayload({
-          sessionId: this.sessionId,
-          inviteToken: this.recruitInviteToken,
-          title: this.albumShareSessionTitle()
-        }) || singleMediaShareFailClosedPayload()
-      );
-    }
     if (intent.kind === ALBUM_SHARE_INTENT.ACTIVE) {
       return this.activeAlbumSharePayload();
     }
@@ -1831,7 +1815,6 @@ export default {
       if (accountChanged) {
         this.invalidateDefaultAlbumShare();
         this.invalidateAlbumShareState();
-        this.invalidateRecruitInviteShare();
         this.resetSingleMediaShareState();
         this.cancelSelectionMode({ force: true });
         this.clearActiveAlbumShareState({ hideMenus: true });
@@ -2142,7 +2125,6 @@ export default {
             if (error?.statusCode === 401 || error?.statusCode === 403) {
               if (!this.timelineMode) {
                 this.invalidateDefaultAlbumShare({ hideMenus: true });
-                this.invalidateRecruitInviteShare();
               }
               return {
                 photos: [],
@@ -2174,7 +2156,6 @@ export default {
         this.listThumbnailLoadedById = {};
         this.listThumbnailFailedById = {};
         this.mediaLoadSerial += 1;
-        this.invalidateRecruitInviteShare();
         this.invalidateDefaultAlbumShare({ hideMenus: true });
         this.photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
         this.pruneUnpublishedAlbumMediaState(this.photos);
@@ -2203,7 +2184,6 @@ export default {
         }
         if (error?.statusCode === 401 || error?.statusCode === 403) {
           this.invalidateDefaultAlbumShare({ hideMenus: true });
-          this.invalidateRecruitInviteShare();
           this.mediaLoadSerial += 1;
           this.photos = [];
           this.pruneUnpublishedAlbumMediaState(this.photos);
@@ -4593,90 +4573,6 @@ export default {
       this.selectedPhotoIds = [];
       this.topActionsFloating = false;
     },
-    beginRecruitInviteRequest() {
-      const authorityRequest = this.recruitInviteAuthority.begin({
-        sessionId: this.sessionId,
-        userId: this.currentUserId,
-        mediaVersion: this.mediaLoadSerial
-      });
-      if (!authorityRequest) {
-        return null;
-      }
-      return {
-        authorityRequest,
-        sessionId: String(this.sessionId || ""),
-        userId: String(this.currentUserId || ""),
-        generation: this.recruitInviteGeneration
-      };
-    },
-    isCurrentRecruitInviteRequest(requestContext) {
-      return Boolean(
-        requestContext &&
-          !this.timelineMode &&
-          requestContext.sessionId === String(this.sessionId || "") &&
-          requestContext.userId === String(this.currentUserId || "") &&
-          requestContext.generation === this.recruitInviteGeneration &&
-          this.recruitInviteAuthority.isCurrent(requestContext.authorityRequest)
-      );
-    },
-    invalidateRecruitInviteShare() {
-      this.recruitInviteGeneration += 1;
-      this.recruitInviteToken = "";
-      this.recruitInvitePromise = null;
-      this.recruitInviteAuthority.invalidate();
-    },
-    prepareRecruitInvite() {
-      if (
-        this.timelineMode ||
-        !this.sessionId ||
-        !this.currentUserId
-      ) {
-        return Promise.resolve("");
-      }
-      const requestContext = this.beginRecruitInviteRequest();
-      if (!requestContext) {
-        return Promise.resolve("");
-      }
-      if (this.recruitInviteToken) {
-        return Promise.resolve(this.recruitInviteToken);
-      }
-      if (this.recruitInvitePromise) {
-        return this.recruitInvitePromise;
-      }
-
-      let requestPromise;
-      requestPromise = request({
-        url: `/api/sessions/${this.sessionId}/join-invite-token`,
-        method: "POST",
-        data: {}
-      })
-        .then((response) => {
-          if (!this.isCurrentRecruitInviteRequest(requestContext)) {
-            return "";
-          }
-          const token = typeof dataOf(response)?.token === "string"
-            ? dataOf(response).token.trim()
-            : "";
-          this.recruitInviteToken = token;
-          return token;
-        })
-        .catch(() => {
-          if (this.isCurrentRecruitInviteRequest(requestContext)) {
-            this.recruitInviteToken = "";
-          }
-          return "";
-        })
-        .finally(() => {
-          if (
-            this.isCurrentRecruitInviteRequest(requestContext) &&
-            this.recruitInvitePromise === requestPromise
-          ) {
-            this.recruitInvitePromise = null;
-          }
-        });
-      this.recruitInvitePromise = requestPromise;
-      return requestPromise;
-    },
     beginDefaultAlbumShareRequest() {
       const authorityRequest = this.defaultAlbumShareAuthority.begin({
         sessionId: this.sessionId,
@@ -4720,7 +4616,6 @@ export default {
       if (this.timelineMode || !this.sessionId || !this.currentUserId) {
         return;
       }
-      this.prepareRecruitInvite();
       if (this.shareSelectableMedia.length === 0) {
         this.invalidateDefaultAlbumShare({ hideMenus: true });
         return;
@@ -4783,13 +4678,6 @@ export default {
         });
       this.defaultAlbumSharePromise = requestPromise;
       return requestPromise;
-    },
-    handleRecruitShareTap() {
-      if (this.timelineMode || !this.sessionId || this.recruitInviteToken) {
-        return;
-      }
-      this.prepareRecruitInvite();
-      showToast({ title: "正在准备招募分享，请稍后再点", icon: "none" });
     },
     openClaimShare() {
       if (this.timelineMode || this.albumBusy || !this.sessionId) {
