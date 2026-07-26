@@ -667,7 +667,7 @@
         </scroll-view>
 
         <view class="sheet-actions">
-          <t-button class="button secondary" :disabled="savingTags" @tap="closeTagSheet">取消</t-button>
+          <t-button class="button" :disabled="savingTags" @tap="closeTagSheet">取消</t-button>
           <t-button
             class="button"
             :class="{ disabled: savingTags }"
