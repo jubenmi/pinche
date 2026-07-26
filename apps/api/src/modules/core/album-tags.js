@@ -28,7 +28,16 @@ export function normalizeAlbumTagKeys(values = []) {
   }
   const seen = new Set();
   return values.map((value) => {
-    const key = String(value || "").trim();
+    const submittedKey = String(value || "").trim();
+    const legacyRoleMatch = /^seat:([1-9]\d*)$/.exec(submittedKey);
+    const legacyNpcRoleMatch = /^session-npc:([1-9]\d*)$/.exec(submittedKey);
+    const key = submittedKey === "other:session"
+      ? "other"
+      : legacyRoleMatch
+        ? `role:${legacyRoleMatch[1]}`
+        : legacyNpcRoleMatch
+          ? `npc-role:${legacyNpcRoleMatch[1]}`
+          : submittedKey;
     const match = /^(role|npc-role):([1-9]\d*)$/.exec(key);
     const matchedRefId = match ? positiveSafeId(match[2]) : null;
     const normalized = key === "other"

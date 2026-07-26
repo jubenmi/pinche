@@ -37,6 +37,19 @@ test("album tag actions stay outside the native scrolling role content", () => {
   );
 });
 
+test("album tag actions use the same primary green button treatment", () => {
+  const markup = tagSheetMarkup();
+  const actionsStart = markup.indexOf('<view class="sheet-actions">');
+  const actionsMarkup = markup.slice(actionsStart);
+
+  assert.equal(
+    (actionsMarkup.match(/class="button"/g) || []).length,
+    2,
+    "cancel and save must both use the primary green button class",
+  );
+  assert.doesNotMatch(actionsMarkup, /class="button secondary"/);
+});
+
 test("album tag sheet bounds scrolling and keeps the footer from shrinking", () => {
   const sheet = styleRule("tag-sheet");
   const scroll = styleRule("tag-sheet-scroll");

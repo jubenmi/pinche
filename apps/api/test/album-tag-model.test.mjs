@@ -218,9 +218,18 @@ test("tag backfill is repeatable without duplicating normalized subjects", async
   assert.doesNotMatch(backfill, /VALUES\s*\(\s*sort_order\s*\)/);
 });
 
-test("normalizes only role, npc role, and other keys and rejects duplicates", () => {
+test("normalizes canonical and legacy role, npc role, and other keys and rejects duplicates", () => {
   assert.deepEqual(
     normalizeAlbumTagKeys(["role:12", "npc-role:8", "other"]),
+    [
+      { kind: "role", refId: 12, key: "role:12" },
+      { kind: "npc_role", refId: 8, key: "npc-role:8" },
+      { kind: "other", refId: null, key: "other" },
+    ],
+  );
+
+  assert.deepEqual(
+    normalizeAlbumTagKeys(["seat:12", "session-npc:8", "other:session"]),
     [
       { kind: "role", refId: 12, key: "role:12" },
       { kind: "npc_role", refId: 8, key: "npc-role:8" },
@@ -232,9 +241,6 @@ test("normalizes only role, npc role, and other keys and rejects duplicates", ()
     "dm:session",
     "npc:session",
     "organizer:session",
-    "seat:12",
-    "session-npc:8",
-    "other:session",
     "role:0",
     "role:9007199254740992",
   ]) {
@@ -250,6 +256,10 @@ test("normalizes only role, npc role, and other keys and rejects duplicates", ()
   );
   assert.throws(
     () => normalizeAlbumTagKeys(["other", "other"]),
+    /unique/i,
+  );
+  assert.throws(
+    () => normalizeAlbumTagKeys(["other", "other:session"]),
     /unique/i,
   );
 });
