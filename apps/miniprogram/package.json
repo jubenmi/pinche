@@ -8,7 +8,7 @@
     "build:mp-weixin": "uni build -p mp-weixin",
     "test:home-cold-start": "node --test test/homeColdStart.test.mjs",
     "test:tdesign-runtime": "npm run build:mp-weixin && node --test test/homeStartupBuild.test.mjs test/tdesignRuntimeCompatibility.test.mjs",
-    "test:album-media": "npm run build:mp-weixin && node --test test/albumMediaSelection.test.mjs test/albumMediaOperation.test.mjs test/albumPhotoUpload.test.mjs test/cosSdkBundle.test.mjs",
+    "test:album-media": "npm run build:mp-weixin && node --test test/albumTagSheetLayout.test.mjs test/albumMediaSelection.test.mjs test/albumMediaOperation.test.mjs test/albumPhotoUpload.test.mjs test/cosSdkBundle.test.mjs",
     "test:content-moderation": "node --test test/contentModeration.test.mjs"
   },
   "dependencies": {

@@ -616,49 +616,55 @@
       @visible-change="handleTagSheetPopupVisibleChange"
     >
       <view class="tag-sheet" @tap.stop>
-        <view class="sheet-bar"></view>
-        <view class="sheet-title">
-          <text v-if="bulkTagging">给 {{ selectedTagTargetCount }} 张照片标注</text>
-          <text v-else>这张照片里有谁</text>
-        </view>
-        <view class="sheet-note">
-          {{
-            bulkTagging
-              ? "保存后，这些照片会替换成同一组标签。"
-              : "标注后只会展示给上传者和对应被标注成员。"
-          }}
-        </view>
-
-        <view class="selected-row">
-          <t-tag
-            v-for="person in selectedPeople"
-            :key="person.key"
-            class="selected-chip"
-            theme="primary"
-            variant="light"
-            size="small"
-            @tap="togglePerson(person.key)"
-          >
-            <text>{{ tagPersonTitle(person) }}</text>
-            <text>×</text>
-          </t-tag>
-          <t-empty
-            v-if="selectedPeople.length === 0"
-            class="selected-empty"
-            description="暂未标注，只有上传者可见"
-          />
+        <view class="tag-sheet-head">
+          <view class="sheet-bar"></view>
+          <view class="sheet-title">
+            <text v-if="bulkTagging">给 {{ selectedTagTargetCount }} 张照片标注</text>
+            <text v-else>这张照片里有谁</text>
+          </view>
+          <view class="sheet-note">
+            {{
+              bulkTagging
+                ? "保存后，这些照片会替换成同一组标签。"
+                : "标注后只会展示给上传者和对应被标注成员。"
+            }}
+          </view>
         </view>
 
-        <RoleSeatBoard
-          :surface="false"
-          :sections="albumTagSections"
-          empty-text="暂无可标注角色。"
-          @itemtap="handleAlbumTagTap"
-        />
+        <scroll-view scroll-y class="tag-sheet-scroll">
+          <view class="tag-sheet-scroll-content">
+            <view class="selected-row">
+              <t-tag
+                v-for="person in selectedPeople"
+                :key="person.key"
+                class="selected-chip"
+                theme="primary"
+                variant="light"
+                size="small"
+                @tap="togglePerson(person.key)"
+              >
+                <text>{{ tagPersonTitle(person) }}</text>
+                <text>×</text>
+              </t-tag>
+              <t-empty
+                v-if="selectedPeople.length === 0"
+                class="selected-empty"
+                description="暂未标注，只有上传者可见"
+              />
+            </view>
 
-        <view class="privacy-impact">
-          未标注只有上传者可见；标注角色后只展示给上传者和对应被标注成员。
-        </view>
+            <RoleSeatBoard
+              :surface="false"
+              :sections="albumTagSections"
+              empty-text="暂无可标注角色。"
+              @itemtap="handleAlbumTagTap"
+            />
+
+            <view class="privacy-impact">
+              未标注只有上传者可见；标注角色后只展示给上传者和对应被标注成员。
+            </view>
+          </view>
+        </scroll-view>
 
         <view class="sheet-actions">
           <t-button class="button secondary" :disabled="savingTags" @tap="closeTagSheet">取消</t-button>
@@ -3388,9 +3394,6 @@ export default {
     sessionDetailPeople(session) {
       const people = [];
       for (const seat of session.seats || []) {
-        if (!["confirmed", "locked"].includes(seat.status)) {
-          continue;
-        }
         const refId = Number(seat.id);
         const label = String(seat.role_name || "").trim() ||
           String(seat.name || "").trim();
@@ -5812,12 +5815,29 @@ export default {
 }
 
 .tag-sheet {
+  display: flex;
+  flex-direction: column;
   width: 100%;
+  height: 78vh;
   max-height: 78vh;
-  overflow-y: auto;
-  padding: 18rpx 30rpx 38rpx;
+  overflow: hidden;
   border-radius: 24rpx 24rpx 0 0;
   background: #fffefb;
+  box-sizing: border-box;
+}
+
+.tag-sheet-head {
+  flex: 0 0 auto;
+  padding: 18rpx 30rpx 0;
+}
+
+.tag-sheet-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.tag-sheet-scroll-content {
+  padding: 0 30rpx 24rpx;
   box-sizing: border-box;
 }
 
@@ -5893,8 +5913,11 @@ export default {
 
 .sheet-actions {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: 1fr 1fr;
   gap: 14rpx;
-  margin-top: 24rpx;
+  padding: 20rpx 30rpx 24rpx;
+  border-top: 1rpx solid #ece5d7;
+  background: #fffefb;
 }
 </style>
