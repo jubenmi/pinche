@@ -3394,9 +3394,6 @@ export default {
     sessionDetailPeople(session) {
       const people = [];
       for (const seat of session.seats || []) {
-        if (!["confirmed", "locked"].includes(seat.status)) {
-          continue;
-        }
         const refId = Number(seat.id);
         const label = String(seat.role_name || "").trim() ||
           String(seat.name || "").trim();

@@ -53,7 +53,6 @@ export async function listAlbumTagOptions(connection, sessionId) {
       SELECT id, role_name, name
       FROM session_seats
       WHERE session_id = ?
-        AND status IN ('confirmed', 'locked')
       ORDER BY id
     `,
     [sessionId],
@@ -123,7 +122,6 @@ async function selectAlbumTagReadRows(connection, sessionId, mediaIds) {
         ON tag.kind = 'role'
        AND seat.id = tag.seat_id
        AND seat.session_id = media.session_id
-       AND seat.status IN ('confirmed', 'locked')
       LEFT JOIN session_npc_roles npc_role
         ON tag.kind = 'npc_role'
        AND npc_role.id = tag.session_npc_role_id
@@ -244,7 +242,6 @@ async function assertAlbumTagReferences(
         SELECT id
         FROM session_seats
         WHERE session_id = ?
-          AND status IN ('confirmed', 'locked')
           AND id IN (${placeholders})
         FOR UPDATE
       `,

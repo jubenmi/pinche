@@ -31,13 +31,13 @@ test("album picker derives keys from the safe three-kind DTO", async () => {
   );
 });
 
-test("offline album tag fallback exposes roles, npc roles, and other without accounts", async () => {
+test("offline album tag fallback exposes every seat role, npc roles, and other without accounts", async () => {
   const source = await albumPageSource();
   const fallback = source.match(
     /sessionDetailPeople\(session\)\s*\{([\s\S]*?)\n    \},\n    mergePeople/,
   )?.[1] ?? "";
 
-  assert.match(fallback, /!\["confirmed", "locked"\]\.includes\(seat\.status\)/);
+  assert.doesNotMatch(fallback, /seat\.status|\["confirmed", "locked"\]/);
   assert.match(fallback, /key: `role:\$\{refId\}`/);
   assert.match(fallback, /kind: "role"/);
   assert.match(fallback, /role\.status !== "active"/);

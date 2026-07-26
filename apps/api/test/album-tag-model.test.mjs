@@ -254,7 +254,7 @@ test("normalizes only role, npc role, and other keys and rejects duplicates", ()
   );
 });
 
-test("lists only canonical role, npc role, and other options without account fields", async () => {
+test("lists every canonical seat role, npc role, and other option without account fields", async () => {
   const sqlCalls = [];
   const connection = {
     async query(sql, params) {
@@ -288,8 +288,38 @@ test("lists only canonical role, npc role, and other options without account fie
   assert.deepEqual(sqlCalls.map((call) => call.params), [[77], [77]]);
   const contract = JSON.stringify(options);
   assert.doesNotMatch(contract, /user|nickname|open_id|account|tag_type/);
-  assert.match(sqlCalls[0].sql, /status IN \('confirmed', 'locked'\)/);
+  assert.doesNotMatch(sqlCalls[0].sql, /seat\.status|status IN \('confirmed', 'locked'\)/);
   assert.match(sqlCalls[1].sql, /status = 'active'/);
+});
+
+test("accepts every same-session seat role regardless of claim status", async () => {
+  const calls = [];
+  const connection = {
+    async query(sql, params) {
+      calls.push({ sql, params });
+      if (sql.includes("SELECT media.id")) return [[{ id: 41 }]];
+      if (sql.includes("FROM session_seats")) return [[{ id: 12 }, { id: 13 }]];
+      if (sql.startsWith("DELETE FROM")) return [{ affectedRows: 0 }];
+      if (sql.includes("INSERT INTO")) return [{ affectedRows: 1 }];
+      throw new Error(`Unexpected SQL: ${sql}`);
+    },
+  };
+
+  await writeAlbumMediaTags(connection, {
+    mediaId: 41,
+    sessionId: 77,
+    normalizedTags: [
+      { key: "role:12" },
+      { key: "role:13" },
+    ],
+  });
+
+  const seatLookup = calls.find((call) => call.sql.includes("FROM session_seats"));
+  assert.ok(seatLookup);
+  assert.doesNotMatch(
+    seatLookup.sql,
+    /status IN \('confirmed', 'locked'\)/,
+  );
 });
 
 test("resolves latest canonical labels into a safe DTO and ignores polluted stored text", async () => {
@@ -348,6 +378,10 @@ test("resolves latest canonical labels into a safe DTO and ignores polluted stor
   assert.match(calls[0].sql, /FROM session_album_media_tags/);
   assert.match(calls[0].sql, /JOIN session_album_photos/);
   assert.match(calls[0].sql, /seat\.session_id = media\.session_id/);
+  assert.doesNotMatch(
+    calls[0].sql,
+    /seat\.status|status IN \('confirmed', 'locked'\)/,
+  );
   assert.match(calls[0].sql, /npc_role\.session_id = media\.session_id/);
   assert.doesNotMatch(
     calls[0].sql,
