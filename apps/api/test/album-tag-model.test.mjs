@@ -237,6 +237,16 @@ test("normalizes canonical and legacy role, npc role, and other keys and rejects
     ],
   );
 
+  assert.deepEqual(
+    normalizeAlbumTagKeys([null, "other:session"]),
+    [{ kind: "other", refId: null, key: "other" }],
+  );
+  assert.deepEqual(normalizeAlbumTagKeys([]), []);
+  assert.throws(
+    () => normalizeAlbumTagKeys([null]),
+    /invalid album tag/i,
+  );
+
   for (const invalid of [
     "dm:session",
     "npc:session",
