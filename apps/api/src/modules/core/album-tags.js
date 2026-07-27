@@ -26,8 +26,12 @@ export function normalizeAlbumTagKeys(values = []) {
   if (!Array.isArray(values)) {
     throw badRequest("Invalid album tag");
   }
+  const submittedValues = values.filter((value) => value != null);
+  if (values.length > 0 && submittedValues.length === 0) {
+    throw badRequest("Invalid album tag");
+  }
   const seen = new Set();
-  return values.map((value) => {
+  return submittedValues.map((value) => {
     const submittedKey = String(value || "").trim();
     const legacyRoleMatch = /^seat:([1-9]\d*)$/.exec(submittedKey);
     const legacyNpcRoleMatch = /^session-npc:([1-9]\d*)$/.exec(submittedKey);
