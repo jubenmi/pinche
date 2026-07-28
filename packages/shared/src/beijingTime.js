@@ -1,6 +1,7 @@
 export const BEIJING_TIME_ZONE = "Asia/Shanghai";
 
 const BEIJING_OFFSET_MILLISECONDS = 8 * 60 * 60 * 1000;
+const BEIJING_DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
 const WALL_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/;
 const EXPLICIT_TIME_ZONE_PATTERN =
@@ -134,4 +135,37 @@ export function beijingWallTimeToIso(value) {
     return null;
   }
   return new Date(beijingWallTimeIso(parts)).toISOString();
+}
+
+export function businessDateTimeToPickerValue(value) {
+  const date = parseBusinessDateTime(value);
+  if (!date) return null;
+  return {
+    date: beijingDateKey(date),
+    time: beijingTimeText(date, "")
+  };
+}
+
+export function formatBeijingShortDateTime(value, fallback = "时间待定") {
+  const parts = beijingDateParts(value);
+  return parts
+    ? `${pad(parts.month)}-${pad(parts.day)} ${pad(parts.hour)}:${pad(parts.minute)}`
+    : fallback;
+}
+
+export function isBusinessDateTimeReached(value, now = Date.now()) {
+  const date = parseBusinessDateTime(value);
+  const nowMs = now instanceof Date ? now.getTime() : Number(now);
+  return Boolean(date && Number.isFinite(nowMs) && date.getTime() <= nowMs);
+}
+
+export function beijingDayUtcRange(value) {
+  if (typeof value !== "string") return null;
+  const key = value.trim();
+  const start = parseBusinessDateTime(`${key} 00:00:00`);
+  if (!start || beijingDateKey(start) !== key) return null;
+  return {
+    start,
+    end: new Date(start.getTime() + BEIJING_DAY_MILLISECONDS)
+  };
 }
