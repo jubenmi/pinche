@@ -269,9 +269,14 @@ assert(
   "admin web dev server should proxy uploaded media paths"
 );
 assert(
-  adminNginxConfig.includes("location /uploads/") &&
-    adminNginxConfig.includes("proxy_pass http://api:3018/uploads/"),
+  adminNginxConfig.includes("location /uploads/"),
   "admin web nginx should proxy uploaded media paths"
+);
+assert(
+  adminNginxConfig.includes("resolver 127.0.0.11") &&
+    adminNginxConfig.includes("set $api_upstream http://api:3018;") &&
+    (adminNginxConfig.match(/proxy_pass \$api_upstream;/g) || []).length === 3,
+  "admin web nginx should re-resolve the API container after Docker replaces it"
 );
 const adminViteConfig = await import(
   pathToFileURL(path.join(root, "apps/admin-web/vite.config.js")).href
