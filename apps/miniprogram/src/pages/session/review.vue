@@ -156,7 +156,6 @@
 </template>
 
 <script>
-import { isModerationPublished } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { uploadAlbumPhoto } from "../../utils/albumPhotoUpload";
@@ -169,6 +168,7 @@ import {
 import {
   buildSessionReviewPhotoRequest,
   createSessionReviewPhotoState,
+  isSelectableSessionReviewAlbumPhoto,
   switchSessionReviewPhotoSource,
   toggleSessionReviewAlbumPhoto
 } from "../../utils/sessionReviewPhotos";
@@ -187,6 +187,7 @@ export default {
   data() {
     return {
       sessionId: "",
+      currentUserId: "",
       canReview: false,
       rating: 5,
       content: "",
@@ -259,6 +260,7 @@ export default {
       this.statusText = "登录后可继续写记录。";
       return;
     }
+    this.currentUserId = auth.user.id || "";
     await Promise.all([this.loadMyReview(), this.loadReviewAlbum()]);
   },
   methods: {
@@ -266,14 +268,7 @@ export default {
       this.content = String(event?.detail?.value ?? event?.detail ?? "").slice(0, 900);
     },
     isSelectableAlbumPhoto(photo) {
-      return Boolean(
-        photo &&
-        Number(photo.id) > 0 &&
-        photo.media_type !== "video" &&
-        String(photo.status || "active") === "active" &&
-        String(photo.processing_status || "ready") === "ready" &&
-        isModerationPublished(photo.moderation_status)
-      );
+      return isSelectableSessionReviewAlbumPhoto(photo, this.currentUserId);
     },
     albumPhotoUrl(photo) {
       const path = photo?.thumbnail_load_url || photo?.preview_load_url ||

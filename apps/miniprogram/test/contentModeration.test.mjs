@@ -32,6 +32,21 @@ function extractMethodBody(source, marker) {
   throw new Error(`unterminated method: ${marker}`);
 }
 
+test("review page binds author-private album eligibility to the authenticated user", async () => {
+  const source = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  assert.match(source, /currentUserId:\s*""/);
+  assert.match(source, /this\.currentUserId\s*=\s*auth\.user\.id/);
+  assert.match(source, /isSelectableSessionReviewAlbumPhoto\(photo,\s*this\.currentUserId\)/);
+});
+
+test("phone upload selects a previewable author-private photo instead of counting it pending", async () => {
+  const source = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  const uploadBody = extractMethodBody(source, "async uploadChosenPhotos(items)");
+  assert.match(uploadBody, /if \(this\.isSelectableAlbumPhoto\(photo\)\)/);
+  assert.match(uploadBody, /toggleSessionReviewAlbumPhoto/);
+  assert.match(uploadBody, /this\.pendingPhotoCount \+= 1/);
+});
+
 test("content moderation status presentation only exposes the three approved user messages", () => {
   for (const status of ["pending", "processing", "error", "review"]) {
     assert.equal(contentModerationStatusText(status), PENDING_TEXT);
@@ -863,7 +878,7 @@ test("stacked profile requests supersede only uploads started before their assoc
   assert.equal(toasts.at(-1)?.title, "图片已由已保存内容替代，请重新选择。");
 });
 
-test("review save blocks pending album photos without PUT and keeps legacy recovery available", async () => {
+test("review save still blocks unpreviewable ordinary pending album photos", async () => {
   const reviewSource = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
   const saveReviewBody = extractMethodBody(reviewSource, "async saveReview()");
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
