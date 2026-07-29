@@ -3913,13 +3913,6 @@ export async function createSessionWithConnection(connection, user, body) {
       assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
       assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
 
-      const store = await findById(connection, "stores", requireValue(body, "storeId"));
-      const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
-      assertCatalogUsableForSession(store, user, "Store");
-      assertCatalogUsableForSession(script, user, "Script");
-
-      await ensureRole(connection, user.user.id, "organizer");
-
       let normalizedStartAt;
       try {
         normalizedStartAt = normalizeSessionCreationStartAt(requireValue(body, "startAt"));
@@ -3929,6 +3922,13 @@ export async function createSessionWithConnection(connection, user, body) {
         }
         throw error;
       }
+
+      const store = await findById(connection, "stores", requireValue(body, "storeId"));
+      const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
+      assertCatalogUsableForSession(store, user, "Store");
+      assertCatalogUsableForSession(script, user, "Script");
+
+      await ensureRole(connection, user.user.id, "organizer");
 
       const [result] = await connection.query(
         `
