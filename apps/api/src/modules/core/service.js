@@ -67,6 +67,7 @@ import {
   normalizeSessionCreationIdempotencyKey,
   replaySessionCreation
 } from "./session-creation-idempotency.js";
+import { normalizeSessionCreationStartAt } from "./session-create-time.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
 import {
   findOwnedUserImageAssetById,
@@ -3919,6 +3920,16 @@ export async function createSessionWithConnection(connection, user, body) {
 
       await ensureRole(connection, user.user.id, "organizer");
 
+      let normalizedStartAt;
+      try {
+        normalizedStartAt = normalizeSessionCreationStartAt(requireValue(body, "startAt"));
+      } catch (error) {
+        if (error.code === "INVALID_START_AT") {
+          throw badRequest(error.message);
+        }
+        throw error;
+      }
+
       const [result] = await connection.query(
         `
           INSERT INTO sessions
@@ -3938,7 +3949,7 @@ export async function createSessionWithConnection(connection, user, body) {
           script.name,
           store.id,
           store.name,
-          requireValue(body, "startAt"),
+          normalizedStartAt,
           body.dmUserId || null,
           optionalText(body.dmNameSnapshot),
           body.npcUserId || null,
