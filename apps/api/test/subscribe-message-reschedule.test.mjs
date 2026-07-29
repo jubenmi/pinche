@@ -20,6 +20,10 @@ test("formats canonical and offset times in Asia/Shanghai with day rollover", ()
   assert.equal(formatSessionRescheduleTime("2026-07-13T18:30:00.000Z"), "2026-07-14 02:30:00");
 });
 
+test("preserves legacy Beijing wall times regardless of the process timezone", () => {
+  assert.equal(formatSessionRescheduleTime("2026-07-28 15:00:00"), "2026-07-28 15:00:00");
+});
+
 test("disabled reschedule messaging skips without network access", async () => {
   const originalFetch = globalThis.fetch;
   const originalEnabled = config.subscribeMessage.enabled;

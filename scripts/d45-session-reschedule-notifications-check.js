@@ -135,7 +135,8 @@ assertIncludes(
 assertIncludes(subscribeMessage, 'valueOrFallback(payload.scriptName, "拼车车局")');
 assertIncludes(subscribeMessage, 'formatSessionRescheduleTime(payload.oldStartAt, "原时间待定")');
 assertIncludes(subscribeMessage, 'formatSessionRescheduleTime(payload.newStartAt, "新时间待定")');
-assertIncludes(subscribeMessage, 'timeZone: "Asia/Shanghai"');
+assertIncludes(subscribeMessage, 'import { beijingDateParts } from "@pinche/shared";');
+assertIncludes(subscribeMessage, "const parts = beijingDateParts(value);");
 assertIncludes(subscribeMessage, "AbortSignal.timeout");
 assertIncludes(subscribeMessage, 'value: "车局已改期"');
 assertIncludes(subscribeMessage, "`/pages/session/detail?id=${payload.sessionId}`");

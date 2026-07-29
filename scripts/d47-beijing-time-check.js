@@ -291,7 +291,7 @@ const signupMessageSlice = sourceSlice(
 );
 const subscribeFormatterSlice = sourceSlice(
   subscribeMessageSource,
-  "export function formatSessionRescheduleTime",
+  'import { config } from "../../config/env.js";',
   "function rescheduleMessageData(payload)",
   "subscribe time formatters"
 );
@@ -302,8 +302,18 @@ assert.match(
 );
 assert.match(
   subscribeFormatterSlice,
-  /sessionTimeFormatter\.formatToParts/,
-  "subscribe formatters must use the explicit Shanghai formatter"
+  /import\s*\{\s*beijingDateParts\s*\}\s*from\s*["']@pinche\/shared["']/,
+  "subscribe formatters must import the shared Beijing-time kernel"
+);
+assert.match(
+  subscribeFormatterSlice,
+  /beijingDateParts\(value\)/,
+  "subscribe formatters must use shared Beijing date parts"
+);
+assert.doesNotMatch(
+  subscribeFormatterSlice,
+  /Intl\.DateTimeFormat|sessionTimeFormatter/,
+  "subscribe formatters must not duplicate Beijing timezone semantics"
 );
 
 const moderationQuerySlice = sourceSlice(
