@@ -4,10 +4,51 @@ import {
   classifyAlbumCosError,
   createSingleFlight,
   executeAlbumCosUpload,
+  isAuthorPrivateAlbumMediaProjection,
   mergeAlbumMediaUrls,
   shouldRefreshAlbumMedia
 } from "../src/albumMedia.js";
 import * as albumMediaModule from "../src/albumMedia.js";
+
+test("author-private album media projection requires the complete bounded DTO", () => {
+  const projection = {
+    media_type: "image",
+    moderation_status: "pending",
+    publication_state: "author_only",
+    is_mine: true,
+    can_preview: true,
+    uploader_user_id: 7
+  };
+
+  assert.equal(isAuthorPrivateAlbumMediaProjection(projection), true);
+  for (const moderationStatus of ["pending", "processing", "error", "review", "rejected"]) {
+    assert.equal(
+      isAuthorPrivateAlbumMediaProjection({
+        ...projection,
+        media_type: "video",
+        moderation_status: moderationStatus
+      }),
+      true
+    );
+  }
+  for (const invalidProjection of [
+    { ...projection, publication_state: "public" },
+    { ...projection, is_mine: false },
+    { ...projection, can_preview: false },
+    { ...projection, uploader_user_id: null },
+    { ...projection, uploader_user_id: true },
+    { ...projection, uploader_user_id: [1] },
+    { ...projection, uploader_user_id: {} },
+    { ...projection, uploader_user_id: "7" },
+    { ...projection, uploader_user_id: 7.5 },
+    { ...projection, uploader_user_id: 0 },
+    { ...projection, uploader_user_id: -7 },
+    { ...projection, moderation_status: "approved" },
+    { ...projection, media_type: "audio" }
+  ]) {
+    assert.equal(isAuthorPrivateAlbumMediaProjection(invalidProjection), false);
+  }
+});
 
 test("publication and image-download gates require an explicit approved state", () => {
   assert.equal(typeof albumMediaModule.isModerationPublished, "function");
@@ -240,4 +281,117 @@ test("authoritative refresh drops stale media fields when publication is revoked
     moderation_status: "rejected",
     tags: []
   }]);
+});
+
+test("author-private refresh renews preview URLs while preserving page-memory preview state", () => {
+  const merged = mergeAlbumMediaUrls(
+    {
+      photos: [{
+        id: 41,
+        media_type: "image",
+        moderation_status: "pending",
+        publication_state: "author_only",
+        is_mine: true,
+        can_preview: true,
+        uploader_user_id: 7,
+        preview_display_url: "https://old.example/preview.jpg",
+        thumbnail_display_url: "https://old.example/thumbnail.jpg",
+        media_url_expires_at: "2026-07-29T08:00:00.000Z",
+        local_preview_path: "wxfile://page-memory-preview",
+        download_url: "https://old.example/original.jpg"
+      }]
+    },
+    {
+      photos: [{
+        id: 41,
+        media_type: "image",
+        moderation_status: "processing",
+        publication_state: "author_only",
+        is_mine: true,
+        can_preview: true,
+        uploader_user_id: 7,
+        preview_display_url: "https://renewed.example/preview.jpg",
+        thumbnail_display_url: "https://renewed.example/thumbnail.jpg",
+        media_url_expires_at: "2026-07-29T08:01:00.000Z",
+        download_url: "https://must-strip.example/original.jpg"
+      }]
+    }
+  );
+
+  assert.deepEqual(merged.photos, [{
+    id: 41,
+    media_type: "image",
+    moderation_status: "processing",
+    publication_state: "author_only",
+    is_mine: true,
+    can_preview: true,
+    uploader_user_id: 7,
+    preview_display_url: "https://renewed.example/preview.jpg",
+    thumbnail_display_url: "https://renewed.example/thumbnail.jpg",
+    media_url_expires_at: "2026-07-29T08:01:00.000Z",
+    local_preview_path: "wxfile://page-memory-preview"
+  }]);
+});
+
+test("ordinary unpublished refresh strips URL and local fields for existing and new rows", () => {
+  const mediaFields = {
+    thumbnail_display_url: "https://private.example/thumbnail-display",
+    preview_display_url: "https://private.example/preview-display",
+    download_url: "https://private.example/download",
+    media_url_expires_at: "2026-07-29T08:01:00.000Z",
+    thumbnail_url: "https://private.example/thumbnail",
+    preview_url: "https://private.example/preview",
+    image_url: "https://private.example/image",
+    thumbnail_load_url: "https://private.example/thumbnail-load",
+    preview_load_url: "https://private.example/preview-load",
+    cover_url: "https://private.example/cover",
+    video_url: "https://private.example/video",
+    display_url: "wxfile://display",
+    video_display_url: "wxfile://video-display",
+    video_url_expires_at: "2026-07-29T08:01:00.000Z",
+    video_load_failed: true,
+    local_preview_path: "wxfile://local-preview"
+  };
+  const merged = mergeAlbumMediaUrls(
+    {
+      photos: [{ id: 1, moderation_status: "approved", ...mediaFields }]
+    },
+    {
+      photos: [
+        {
+          id: 1,
+          media_type: "image",
+          moderation_status: "pending",
+          publication_state: "public",
+          tags: [],
+          ...mediaFields
+        },
+        {
+          id: 2,
+          media_type: "video",
+          moderation_status: "rejected",
+          publication_state: "public",
+          tags: [],
+          ...mediaFields
+        }
+      ]
+    }
+  );
+
+  assert.deepEqual(merged.photos, [
+    {
+      id: 1,
+      media_type: "image",
+      moderation_status: "pending",
+      publication_state: "public",
+      tags: []
+    },
+    {
+      id: 2,
+      media_type: "video",
+      moderation_status: "rejected",
+      publication_state: "public",
+      tags: []
+    }
+  ]);
 });
