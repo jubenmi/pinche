@@ -126,7 +126,7 @@ assertIncludes(
 assertIncludes(subscribeMessage, 'phrase3: { value: resultText.slice(0, 5) }');
 assertIncludes(
   subscribeMessage,
-  'date4: { value: valueOrFallback(payload.startAt, "时间待定").slice(0, 20) }'
+  'date4: { value: formatSessionSignupTime(payload.startAt).slice(0, 20) }'
 );
 assertIncludes(
   subscribeMessage,
