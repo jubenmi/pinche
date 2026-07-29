@@ -1435,3 +1435,12 @@ Confirm all of the following in the handoff:
 - No migration or production data write was added or executed.
 - Every audited point is recorded as fixed-and-tested or correct-and-untouched.
 - The `packages/talk` gitlink commit exists locally and must be published before any superproject branch that references it is pushed.
+
+## Final whole-branch review corrections
+
+> 进度：已完成（2026-07-29）。整分支审查发现的三个跨任务合同缺口已按原设计补齐，完整验证与最终复审均已通过。
+
+- [x] 初次创建在 `startAt` 归一化成功前不得执行 `ensureRole` 或其他业务写语句，并增加连接调用顺序测试。
+- [x] 报名/改期订阅消息的时间拆分改为基于 `@pinche/shared`，移除独立 `Intl.DateTimeFormat` 时区内核。
+- [x] 只读历史审计补充可用的通知证据与跨北京日期影响字段，仍保持 SELECT-only、保守分类和无修复路径。
+- [x] 三项修正完成独立规格/质量复审，并重新运行三时区、真实 MySQL、构建与数据库安全验收。
