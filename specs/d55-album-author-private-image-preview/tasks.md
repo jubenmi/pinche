@@ -909,7 +909,7 @@ const [
 
 for (const document of [requirements, design]) {
   assert.match(document, /版本：v1\.0/);
-  assert.match(document, /状态：用户已确认，实施中/);
+  assert.match(document, /状态：实现完成，待部署与双账号验收/);
 }
 assert.match(tasks, /D55 相册作者私有图片预览恢复 Implementation Plan/);
 
