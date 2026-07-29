@@ -1,3 +1,5 @@
+import { isBusinessDateTimeReached } from '@pinche/shared'
+
 const PRESENTATIONS = Object.freeze({
   join: Object.freeze({
     pageTitle: '邀请上车',
@@ -15,13 +17,12 @@ const PRESENTATIONS = Object.freeze({
   }),
 })
 
-export function resolveSessionShareMode(session = {}) {
+export function resolveSessionShareMode(session = {}, now = Date.now()) {
   if (typeof session?.has_started === 'boolean') {
     return session.has_started ? 'claim' : 'join'
   }
 
-  const startAt = Date.parse(session?.start_at)
-  return Number.isFinite(startAt) && startAt <= Date.now() ? 'claim' : 'join'
+  return isBusinessDateTimeReached(session?.start_at, now) ? 'claim' : 'join'
 }
 
 export function sessionSharePresentation(mode) {

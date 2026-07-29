@@ -653,6 +653,7 @@ import {
   beijingTimeText,
   beijingWallTimeToIso,
   formatBeijingDateTime,
+  isBusinessDateTimeReached,
   parseBusinessDateTime
 } from "@pinche/shared";
 import { miniScreens, sessionBackedMiniScreens, writeAdminRoute } from "../adminRoute";
@@ -1082,8 +1083,10 @@ function isShareRoleClaimable(role, mine = false) {
 }
 
 function isShareSessionStarted() {
-  const startAtValue = Date.parse(String(shareSession.value.start_at || "").replace(" ", "T"));
-  return Number.isFinite(startAtValue) && startAtValue <= Date.now();
+  if (typeof shareSession.value.has_started === "boolean") {
+    return shareSession.value.has_started;
+  }
+  return isBusinessDateTimeReached(shareSession.value.start_at);
 }
 
 function roleDisplayText(role) {
@@ -2190,8 +2193,10 @@ function webAlbumPrimaryActionLabel(session) {
 }
 
 function isAlbumOpenForSession(session) {
-  const startAtValue = Date.parse(String(session?.start_at || "").replace(" ", "T"));
-  return Number.isFinite(startAtValue) && startAtValue <= Date.now();
+  if (typeof session?.has_started === "boolean") {
+    return session.has_started;
+  }
+  return isBusinessDateTimeReached(session?.start_at);
 }
 
 function canTransferToSeat(seat) {
