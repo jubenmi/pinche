@@ -1812,19 +1812,26 @@ if (!fs.existsSync(pagesJsonPath)) {
   const setupSource = fs.existsSync(firstFlowFiles["setup step"])
     ? fs.readFileSync(firstFlowFiles["setup step"], "utf8")
     : "";
+  const sessionCreationTimeSource = fs.readFileSync(
+    path.join(srcRoot, "utils/sessionCreationTime.js"),
+    "utf8"
+  );
   for (const requiredSetupText of [
     'mode="date"',
     ':mode="[\'hour\', \'minute\']"',
     "pinnedMessageText",
     "defaultPinnedMessage",
     "createPublishedSession",
-    'time: "14:00"',
+    "sessionCreationDefaults",
     "/api/sessions",
     "idempotencyKey: this.creationIdempotencyKey"
   ]) {
     if (!setupSource.includes(requiredSetupText)) {
       fail(`Setup step must collect and persist start time plus pinned chat info: ${requiredSetupText}`);
     }
+  }
+  if (!sessionCreationTimeSource.includes('time: "14:00"')) {
+    fail('Session creation defaults must keep the established time: "14:00"');
   }
   for (const forbiddenSetupExtraNpcText of [
     "本场额外NPC",

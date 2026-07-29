@@ -140,7 +140,7 @@ test("proposal stale has a stable moderation error code without expanding job st
   assert.equal(MODERATION_ERROR_CODES.proposalStale, "CONTENT_MODERATION_PROPOSAL_STALE");
 });
 
-test("administrator moderation queue filters review/error/rejected rows by exact provider/type/label and inclusive days", async () => {
+test("administrator moderation queue filters review/error/rejected rows by exact provider/type/label and Beijing calendar days", async () => {
   const calls = [];
   const connection = {
     async query(sql, params) {
@@ -154,8 +154,8 @@ test("administrator moderation queue filters review/error/rejected rows by exact
     subjectType: "album_image",
     status: "review",
     label: "100",
-    dateFrom: "2026-07-01",
-    dateTo: "2026-07-31",
+    dateFrom: new Date("2026-06-30T16:00:00.000Z"),
+    dateToExclusive: new Date("2026-07-31T16:00:00.000Z"),
     limit: 25
   });
 
@@ -165,7 +165,8 @@ test("administrator moderation queue filters review/error/rejected rows by exact
   assert.match(calls[0].sql, /job\.subject_type = \?/);
   assert.match(calls[0].sql, /job\.label = \?/);
   assert.match(calls[0].sql, /job\.created_at >= \?/);
-  assert.match(calls[0].sql, /job\.created_at < DATE_ADD\(\?, INTERVAL 1 DAY\)/);
+  assert.match(calls[0].sql, /job\.created_at < \?/);
+  assert.doesNotMatch(calls[0].sql, /DATE_ADD\(\?, INTERVAL 1 DAY\)/);
   assert.match(calls[0].sql, /proposal\.created_by_user_id/);
   assert.match(calls[0].sql, /media\.author_visibility_version/);
   assert.doesNotMatch(calls[0].sql, /proposal\.normalized_payload_json/);
@@ -174,10 +175,49 @@ test("administrator moderation queue filters review/error/rejected rows by exact
     "album_image",
     "review",
     "100",
-    "2026-07-01",
-    "2026-07-31",
+    new Date("2026-06-30T16:00:00.000Z"),
+    new Date("2026-07-31T16:00:00.000Z"),
     25
   ]);
+  assert.ok(calls[0].params[4] instanceof Date);
+  assert.equal(calls[0].params[4].toISOString(), "2026-06-30T16:00:00.000Z");
+  assert.ok(calls[0].params[5] instanceof Date);
+  assert.equal(calls[0].params[5].toISOString(), "2026-07-31T16:00:00.000Z");
+});
+
+test("administrator moderation queue binds one-sided UTC date ranges independently", async () => {
+  const cases = [
+    {
+      options: { dateFrom: new Date("2026-06-30T16:00:00.000Z") },
+      expectedIso: "2026-06-30T16:00:00.000Z",
+      includedPredicate: /job\.created_at >= \?/,
+      excludedPredicate: /job\.created_at < \?/
+    },
+    {
+      options: { dateToExclusive: new Date("2026-07-31T16:00:00.000Z") },
+      expectedIso: "2026-07-31T16:00:00.000Z",
+      includedPredicate: /job\.created_at < \?/,
+      excludedPredicate: /job\.created_at >= \?/
+    }
+  ];
+
+  for (const testCase of cases) {
+    const calls = [];
+    const connection = {
+      async query(sql, params) {
+        calls.push({ sql: String(sql), params });
+        return [[]];
+      }
+    };
+
+    await listAdminModerationJobs(connection, testCase.options);
+
+    assert.match(calls[0].sql, testCase.includedPredicate);
+    assert.doesNotMatch(calls[0].sql, testCase.excludedPredicate);
+    assert.ok(calls[0].params[0] instanceof Date);
+    assert.equal(calls[0].params[0].toISOString(), testCase.expectedIso);
+    assert.deepEqual(calls[0].params, [new Date(testCase.expectedIso), 100]);
+  }
 });
 
 test("administrator moderation detail retains only controlled internal fields for server-side preview and safe text projection", async () => {

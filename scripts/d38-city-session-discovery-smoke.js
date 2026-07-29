@@ -46,17 +46,14 @@ async function authorizePhone(auth, label) {
 }
 
 function startAt(hoursFromNow) {
-  return new Date(Date.now() + hoursFromNow * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 19)
-    .replace("T", " ");
+  return new Date(Date.now() + hoursFromNow * 60 * 60 * 1000).toISOString();
 }
 
 function startAtDay(dayOffset, hour, minute = 0) {
   const value = new Date();
   value.setUTCDate(value.getUTCDate() + dayOffset);
   value.setUTCHours(hour, minute, 0, 0);
-  return value.toISOString().slice(0, 19).replace("T", " ");
+  return value.toISOString();
 }
 
 async function createStore(admin, label, overrides = {}) {
@@ -173,6 +170,7 @@ async function main() {
   const filler = await authorizePhone(await login(`dev-d38-filler-${suffix}`), "d38-filler-phone");
   assert(admin.roles.includes("system_admin"), "D38 smoke requires a system admin");
 
+  const boundaryCity = `D38边界城-${suffix}`;
   const nearStore = await createStore(admin, "near");
   const farStore = await createStore(admin, "far", {
     latitude: 40.2042,
@@ -192,8 +190,18 @@ async function main() {
     latitude: 31.2304,
     longitude: 121.4737
   });
+  const boundaryNearStore = await createStore(admin, "boundary-near", {
+    city: boundaryCity
+  });
+  const boundaryFarStore = await createStore(admin, "boundary-far", {
+    city: boundaryCity,
+    latitude: 40.2042,
+    longitude: 116.8074
+  });
   const script = await createScript(admin);
   const sharedStart = startAtDay(3, 12);
+  const beijingBoundaryDay = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+  beijingBoundaryDay.setUTCHours(15, 30, 0, 0);
 
   const qualifying = await createSession(organizer, nearStore, script, "qualifying", {
     startAt: startAt(20)
@@ -216,6 +224,20 @@ async function main() {
     script,
     "no-coordinate",
     { startAt: startAtDay(3, 11) }
+  );
+  const beijingLateDay = await createSession(
+    organizer,
+    boundaryFarStore,
+    script,
+    "beijing-late-day",
+    { startAt: beijingBoundaryDay.toISOString() }
+  );
+  const beijingNextDay = await createSession(
+    organizer,
+    boundaryNearStore,
+    script,
+    "beijing-next-day",
+    { startAt: new Date(beijingBoundaryDay.getTime() + 60 * 60 * 1000).toISOString() }
   );
   const shareOnly = await createSession(organizer, nearStore, script, "share-only", {
     visibility: "share_only",
@@ -355,6 +377,32 @@ async function main() {
   for (const privateKey of ["organizer_open_id", "organizer_phone", "contact_text", "note"]) {
     assert(!(privateKey in qualifyingRow), `discovery should not return ${privateKey}`);
   }
+
+  const boundaryPayload = await request(
+    "POST",
+    "/api/sessions/discovery",
+    {
+      city: boundaryCity,
+      latitude: 39.9042,
+      longitude: 116.4074,
+      limit: 50
+    },
+    player.token
+  );
+  const boundaryRows = boundaryPayload.data.sessions;
+  assert(boundaryRows.length === 2, "boundary rows should contain only the isolated pair");
+  const beijingLateDayIndex = boundaryRows.findIndex(
+    (row) => Number(row.id) === Number(beijingLateDay.session.id)
+  );
+  const beijingNextDayIndex = boundaryRows.findIndex(
+    (row) => Number(row.id) === Number(beijingNextDay.session.id)
+  );
+  assert(
+    beijingLateDayIndex >= 0 &&
+      beijingNextDayIndex >= 0 &&
+      beijingLateDayIndex < beijingNextDayIndex,
+    "Beijing calendar day should sort before distance across midnight"
+  );
 
   const fallbackPayload = await request(
     "POST",

@@ -170,7 +170,7 @@
 </template>
 
 <script>
-import { formatBeijingDateTime } from "@pinche/shared";
+import { formatBeijingDateTime, isBusinessDateTimeReached } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -705,11 +705,13 @@ export default {
       uni.navigateTo({ url: `/pages/session/album?id=${id}` });
     },
     isAlbumOpen() {
+      if (typeof this.session.has_started === "boolean") {
+        return this.session.has_started;
+      }
       if (!this.session.start_at) {
         return false;
       }
-      const startAt = Date.parse(String(this.session.start_at).replace(" ", "T"));
-      return Number.isFinite(startAt) && startAt <= Date.now();
+      return isBusinessDateTimeReached(this.session.start_at);
     },
     starText(rating) {
       const value = Math.max(0, Math.min(5, Number(rating || 0)));

@@ -47,7 +47,7 @@ test("normalizes pending signup messages", () => {
       id: 12,
       script_name_snapshot: "雾都",
       store_name_snapshot: "山海店",
-      start_at: "2026-07-12 19:30:00",
+      start_at: "2026-07-28T07:00:00.000Z",
       pending_signup_count: 2
     }
   ]);
@@ -57,7 +57,7 @@ test("normalizes pending signup messages", () => {
     type: "pending_signup",
     key: "organizer-signups-12",
     title: "雾都",
-    subtitle: "山海店 / 2026-07-12 19:30:00",
+    subtitle: "山海店 / 2026-07-28 15:00",
     actionText: "去审核",
     sessionId: 12,
     notificationId: null,

@@ -1406,7 +1406,7 @@ export async function listMediaModerationJobsForReconciliation(
 
 export async function listAdminModerationJobs(
   connection,
-  { provider, status, subjectType, label, dateFrom, dateTo, limit = 100 } = {}
+  { provider, status, subjectType, label, dateFrom, dateToExclusive, limit = 100 } = {}
 ) {
   const where = ["job.status IN ('review', 'error', 'rejected')"];
   const values = [];
@@ -1415,7 +1415,7 @@ export async function listAdminModerationJobs(
   if (status) { where.push("job.status = ?"); values.push(String(status)); }
   if (label) { where.push("job.label = ?"); values.push(String(label)); }
   if (dateFrom) { where.push("job.created_at >= ?"); values.push(dateFrom); }
-  if (dateTo) { where.push("job.created_at < DATE_ADD(?, INTERVAL 1 DAY)"); values.push(dateTo); }
+  if (dateToExclusive) { where.push("job.created_at < ?"); values.push(dateToExclusive); }
   values.push(Math.max(1, Math.min(200, Number(limit) || 100)));
   const [rows] = await connection.query(
     `SELECT job.*, proposal.created_by_user_id,

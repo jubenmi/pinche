@@ -3,6 +3,10 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { parse as parseSfc } from "@vue/compiler-sfc";
+import {
+  isBusinessDateTimeReached,
+  parseBusinessDateTime
+} from "@pinche/shared";
 
 import {
   buildSessionSharePayload,
@@ -31,8 +35,12 @@ function loadSharePageComponent(overrides = {}) {
     .replace(/^import[\s\S]*?;\s*$/gm, "")
     .replace(/export default\s*\{/, "return {");
   const noop = () => {};
+  const runtimeDate = overrides.Date || globalThis.Date;
   const dependencies = {
     formatBeijingDateTime: (value) => String(value || ""),
+    isBusinessDateTimeReached: (value, now = runtimeDate.now()) =>
+      isBusinessDateTimeReached(value, now),
+    parseBusinessDateTime,
     AuthIdentityBar: {},
     RoleSeatBoard: {},
     FeedbackHost: {},
@@ -71,7 +79,7 @@ function loadSharePageComponent(overrides = {}) {
     },
     setTimeout,
     clearTimeout,
-    Date: globalThis.Date,
+    Date: runtimeDate,
     ...overrides
   };
   return Function(

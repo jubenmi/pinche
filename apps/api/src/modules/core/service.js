@@ -67,6 +67,7 @@ import {
   normalizeSessionCreationIdempotencyKey,
   replaySessionCreation
 } from "./session-creation-idempotency.js";
+import { normalizeSessionCreationStartAt } from "./session-create-time.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
 import {
   findOwnedUserImageAssetById,
@@ -3912,6 +3913,16 @@ export async function createSessionWithConnection(connection, user, body) {
       assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
       assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
 
+      let normalizedStartAt;
+      try {
+        normalizedStartAt = normalizeSessionCreationStartAt(requireValue(body, "startAt"));
+      } catch (error) {
+        if (error.code === "INVALID_START_AT") {
+          throw badRequest(error.message);
+        }
+        throw error;
+      }
+
       const store = await findById(connection, "stores", requireValue(body, "storeId"));
       const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
       assertCatalogUsableForSession(store, user, "Store");
@@ -3938,7 +3949,7 @@ export async function createSessionWithConnection(connection, user, body) {
           script.name,
           store.id,
           store.name,
-          requireValue(body, "startAt"),
+          normalizedStartAt,
           body.dmUserId || null,
           optionalText(body.dmNameSnapshot),
           body.npcUserId || null,
@@ -4395,7 +4406,7 @@ export async function listDiscoverableSessions(user, filters = {}) {
 
   const orderSql = city
     ? `
-        DATE(session.start_at) ASC,
+        DATE(DATE_ADD(session.start_at, INTERVAL 8 HOUR)) ASC,
         CASE WHEN distance_km IS NULL THEN 1 ELSE 0 END ASC,
         distance_km ASC,
         session.start_at ASC,

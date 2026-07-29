@@ -104,13 +104,44 @@ test("administrator moderation queue accepts one canonical value for every suppo
     subjectType: "album_image",
     status: "review",
     label: "100",
-    dateFrom: "2026-07-01",
-    dateTo: "2026-07-31",
+    dateFrom: new Date("2026-06-30T16:00:00.000Z"),
+    dateToExclusive: new Date("2026-07-31T16:00:00.000Z"),
     limit: 25
   });
   assert.equal(
     parseAdminModerationListQuery(new URLSearchParams({ status: "rejected" })).status,
     "rejected"
+  );
+});
+
+test("administrator moderation queue converts one-sided Beijing calendar filters to exact UTC bounds", () => {
+  const fromOnly = parseAdminModerationListQuery(new URLSearchParams({
+    dateFrom: "2026-07-01"
+  }));
+  assert.deepEqual(
+    { dateFrom: fromOnly.dateFrom, dateToExclusive: fromOnly.dateToExclusive },
+    {
+      dateFrom: new Date("2026-06-30T16:00:00.000Z"),
+      dateToExclusive: undefined
+    }
+  );
+
+  const toOnly = parseAdminModerationListQuery(new URLSearchParams({
+    dateTo: "2026-07-31"
+  }));
+  assert.deepEqual(
+    { dateFrom: toOnly.dateFrom, dateToExclusive: toOnly.dateToExclusive },
+    {
+      dateFrom: undefined,
+      dateToExclusive: new Date("2026-07-31T16:00:00.000Z")
+    }
+  );
+});
+
+test("administrator moderation queue rejects a calendar boundary that cannot become a UTC range", () => {
+  assert.throws(
+    () => parseAdminModerationListQuery(new URLSearchParams({ dateTo: "0099-12-31" })),
+    { code: "BAD_REQUEST", message: "invalid moderation filter: dateTo" }
   );
 });
 
@@ -169,7 +200,7 @@ test("administrator moderation queue validates date order and applies a bounded 
     status: undefined,
     label: undefined,
     dateFrom: undefined,
-    dateTo: undefined,
+    dateToExclusive: undefined,
     limit: 100
   });
 });
@@ -385,7 +416,7 @@ test("administrator moderation routes bind whitelist filters, short preview data
     status: undefined,
     label: undefined,
     dateFrom: undefined,
-    dateTo: undefined,
+    dateToExclusive: undefined,
     limit: 5
   }]);
   assert.equal(JSON.stringify(listed.data).includes("private.jpg"), false);

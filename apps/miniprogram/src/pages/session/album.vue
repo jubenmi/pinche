@@ -3601,22 +3601,7 @@ export default {
       return sizeText;
     },
     formatDate(value) {
-      if (!value) {
-        return "-";
-      }
-      const text = String(value);
-      const hasTimeZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
-      if (!hasTimeZone) {
-        return text.replace("T", " ").slice(0, 16);
-      }
-      const date = new Date(text);
-      if (!Number.isFinite(date.getTime())) {
-        return text;
-      }
-      const pad = (number) => String(number).padStart(2, "0");
-      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
-        date.getHours()
-      )}:${pad(date.getMinutes())}`;
+      return formatBeijingDateTime(value, "-");
     },
     chooseAlbumMedia() {
       if (this.timelineMode || !this.canUpload || this.albumBusy) {

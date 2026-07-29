@@ -98,6 +98,22 @@ services:
     networks: [d51]
     restart: "no"
 
+  business_time_acceptance:
+    <<: *api-image
+    entrypoint: ["node", "--test"]
+    working_dir: /app/apps/api
+    command: ["test/session-create-mysql-roundtrip.test.mjs"]
+    environment:
+      <<: *api-environment
+      D51_INTEGRATION_ISOLATED: "1"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+    networks: [d51]
+    restart: "no"
+
 networks:
   d51:
     internal: true

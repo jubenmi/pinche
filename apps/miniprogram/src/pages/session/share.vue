@@ -145,7 +145,11 @@
 </template>
 
 <script>
-import { formatBeijingDateTime } from "@pinche/shared";
+import {
+  formatBeijingDateTime,
+  isBusinessDateTimeReached,
+  parseBusinessDateTime
+} from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -254,7 +258,8 @@ export default {
       if (!this.sessionId || !this.sessionLoaded || this.session.has_started !== false) {
         return true;
       }
-      const startAtMs = Date.parse(this.session.start_at);
+      const startAt = parseBusinessDateTime(this.session.start_at);
+      const startAtMs = startAt?.getTime();
       return Number.isFinite(startAtMs) && startAtMs > Date.now();
     },
     shareReady() {
@@ -771,7 +776,8 @@ export default {
         this.lifecycleRetryAvailable = false;
         return;
       }
-      const startAtMs = Date.parse(this.session.start_at);
+      const startAt = parseBusinessDateTime(this.session.start_at);
+      const startAtMs = startAt?.getTime();
       if (!Number.isFinite(startAtMs)) {
         return;
       }
@@ -795,12 +801,10 @@ export default {
         if (!this.isShareActivityCurrent(activityGeneration)) {
           return;
         }
-        const currentStartAtMs = Date.parse(this.session.start_at);
         if (
           !this.shareUnavailableText &&
           this.session.has_started === false &&
-          Number.isFinite(currentStartAtMs) &&
-          currentStartAtMs <= Date.now()
+          isBusinessDateTimeReached(this.session.start_at)
         ) {
           return this.handleStartBoundaryRefresh(activityGeneration);
         }

@@ -163,23 +163,12 @@ import {
   selectedRolesFromFlow,
   writeCreateFlow
 } from "../../utils/createFlow";
-
-function pad(value) {
-  return String(value).padStart(2, "0");
-}
-
-function dateText(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function tomorrowAtDefaultTime() {
-  const date = new Date();
-  date.setDate(date.getDate() + 1);
-  return {
-    date: dateText(date),
-    time: "14:00"
-  };
-}
+import {
+  sessionCreationDefaults,
+  sessionCreationPickerValue,
+  sessionCreationTransportStartAt,
+  sessionCreationWallTime
+} from "../../utils/sessionCreationTime";
 
 function isNumericId(value) {
   return /^\d+$/.test(String(value || ""));
@@ -188,7 +177,7 @@ function isNumericId(value) {
 export default {
   components: { AuthIdentityBar, FeedbackHost },
   data() {
-    const defaults = tomorrowAtDefaultTime();
+    const defaults = sessionCreationDefaults();
     return {
       store: null,
       script: null,
@@ -199,7 +188,7 @@ export default {
       timeValue: defaults.time,
       datePickerVisible: false,
       timePickerVisible: false,
-      today: dateText(new Date()),
+      today: defaults.today,
       pinnedMessageText: "",
       joinPolicy: "review_required",
       joinPhoneRequired: true,
@@ -221,7 +210,10 @@ export default {
       return this.role?.name || this.selectedRoles[0]?.name || "待定";
     },
     startAt() {
-      return `${this.dateValue} ${this.timeValue}:00`;
+      return sessionCreationWallTime(this.dateValue, this.timeValue);
+    },
+    transportStartAt() {
+      return sessionCreationTransportStartAt(this.dateValue, this.timeValue);
     },
     startText() {
       return `${this.dateValue} ${this.timeValue}`;
@@ -236,7 +228,11 @@ export default {
       return this.pinnedMessageText.trim() || this.defaultPinnedMessage;
     },
     canSubmit() {
-      return isNumericId(this.store?.id) && isNumericId(this.script?.id);
+      return (
+        isNumericId(this.store?.id) &&
+        isNumericId(this.script?.id) &&
+        Boolean(this.transportStartAt)
+      );
     }
   },
   onLoad() {
@@ -255,9 +251,10 @@ export default {
       flow.joinPhoneRequired === undefined ? true : Boolean(flow.joinPhoneRequired);
     this.npcJoinEnabled = flow.npcJoinEnabled === undefined ? true : Boolean(flow.npcJoinEnabled);
     this.cityVisible = flow.cityVisible === undefined ? true : Boolean(flow.cityVisible);
-    if (flow.startAt) {
-      this.dateValue = String(flow.startAt).slice(0, 10) || this.dateValue;
-      this.timeValue = String(flow.startAt).slice(11, 16) || this.timeValue;
+    const savedPickerValue = sessionCreationPickerValue(flow.startAt);
+    if (savedPickerValue) {
+      this.dateValue = savedPickerValue.date;
+      this.timeValue = savedPickerValue.time;
     }
     if (!this.canSubmit) {
       this.statusText = "当前店家或剧本是演示数据，请连接后端后选择真实店家和剧本。";
@@ -351,7 +348,7 @@ export default {
             idempotencyKey: this.creationIdempotencyKey,
             storeId: Number(this.store.id),
             scriptId: Number(this.script.id),
-            startAt: this.startAt,
+            startAt: this.transportStartAt,
             depositAmount: 0,
             joinPolicy: this.joinPolicy,
             joinPhoneRequired: this.joinPhoneRequired,

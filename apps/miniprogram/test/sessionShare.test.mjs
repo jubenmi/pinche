@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
+
+import { isBusinessDateTimeReached } from '@pinche/shared'
 
 import {
   buildSessionSharePayload,
@@ -7,11 +10,103 @@ import {
   sessionSharePresentation,
 } from '../src/utils/sessionShare.js'
 
+const detailPageSource = readFileSync(
+  new URL('../src/pages/session/detail.vue', import.meta.url),
+  'utf8',
+)
+const adminWorkspaceSource = readFileSync(
+  new URL('../../admin-web/src/components/MiniProgramWorkspace.vue', import.meta.url),
+  'utf8',
+)
+
+function functionBody(source, signature) {
+  const signatureIndex = source.indexOf(signature)
+  assert.notEqual(signatureIndex, -1, `missing ${signature}`)
+  const openBraceIndex = source.indexOf('{', signatureIndex)
+  assert.notEqual(openBraceIndex, -1, `missing body for ${signature}`)
+  let depth = 1
+  for (let index = openBraceIndex + 1; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    if (source[index] === '}') depth -= 1
+    if (depth === 0) {
+      return source.slice(openBraceIndex + 1, index)
+    }
+  }
+  assert.fail(`unterminated body for ${signature}`)
+}
+
+const lifecycleCases = [
+  { has_started: true, start_at: '2026-07-28 15:00:01', expected: true },
+  { has_started: false, start_at: '2026-07-28 14:59:59', expected: false },
+  { start_at: '2026-07-28 15:00:00', expected: true },
+  { start_at: '2026-07-28 15:00:01', expected: false },
+]
+const lifecycleNow = Date.parse('2026-07-28T07:00:00.000Z')
+const reachedAtLifecycleNow = (value) => isBusinessDateTimeReached(value, lifecycleNow)
+
+function evaluateDetailAlbumOpen(session) {
+  const body = functionBody(detailPageSource, '    isAlbumOpen() {')
+  const method = Function(
+    'isBusinessDateTimeReached',
+    `"use strict"; return function () {${body}}`,
+  )(reachedAtLifecycleNow)
+  return method.call({ session })
+}
+
+function evaluateAdminLifecycleFunction(signature, session) {
+  const body = functionBody(adminWorkspaceSource, signature)
+  if (signature === 'function isShareSessionStarted()') {
+    return Function(
+      'isBusinessDateTimeReached',
+      'shareSession',
+      `"use strict"; return function () {${body}}`,
+    )(reachedAtLifecycleNow, { value: session })()
+  }
+  return Function(
+    'isBusinessDateTimeReached',
+    `"use strict"; return function (session) {${body}}`,
+  )(reachedAtLifecycleNow)(session)
+}
+
+function assertAuthoritativeLifecycle(evaluate) {
+  for (const session of lifecycleCases) {
+    assert.equal(evaluate(session), session.expected)
+  }
+}
+
 test('resolves the share mode from the server lifecycle state', () => {
   assert.equal(resolveSessionShareMode({ has_started: false }), 'join')
   assert.equal(resolveSessionShareMode({ has_started: true }), 'claim')
   assert.equal(resolveSessionShareMode({ start_at: '2000-01-01T00:00:00Z' }), 'claim')
   assert.equal(resolveSessionShareMode({ start_at: '2999-01-01T00:00:00Z' }), 'join')
+})
+
+test('legacy Beijing wall time resolves independently of process timezone', () => {
+  const now = Date.parse('2026-07-28T07:00:00.000Z')
+  assert.equal(
+    resolveSessionShareMode({ status: 'locked', start_at: '2026-07-28 15:00:00' }, now),
+    'claim',
+  )
+  assert.equal(
+    resolveSessionShareMode({ status: 'locked', start_at: '2026-07-28 15:00:01' }, now),
+    'join',
+  )
+})
+
+test('detail album lifecycle preserves exact server booleans before fallback parsing', () => {
+  assertAuthoritativeLifecycle(evaluateDetailAlbumOpen)
+})
+
+test('admin share lifecycle preserves exact server booleans before fallback parsing', () => {
+  assertAuthoritativeLifecycle((session) =>
+    evaluateAdminLifecycleFunction('function isShareSessionStarted()', session),
+  )
+})
+
+test('admin album lifecycle preserves exact server booleans before fallback parsing', () => {
+  assertAuthoritativeLifecycle((session) =>
+    evaluateAdminLifecycleFunction('function isAlbumOpenForSession(session)', session),
+  )
 })
 
 test('does not allow route or source data to override server lifecycle state', () => {
