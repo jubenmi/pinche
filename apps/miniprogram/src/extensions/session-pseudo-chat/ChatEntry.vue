@@ -103,6 +103,7 @@
 </template>
 
 <script>
+import { formatBeijingShortDateTime } from "@pinche/shared";
 import {
   authorPrivateMessageView,
   chatApi,
@@ -401,10 +402,7 @@ export default {
       }
     },
     timeText(value) {
-      if (!value) {
-        return "";
-      }
-      return String(value).slice(5, 16);
+      return formatBeijingShortDateTime(value, "");
     }
   }
 };

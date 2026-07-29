@@ -20,7 +20,7 @@ export function buildOrganizerSignupMessages(sessions = []) {
         title: session.script_name_snapshot || "未命名车局",
         subtitle: [
           session.store_name_snapshot || "店家待定",
-          session.start_at || "时间待定"
+          formatShanghaiTime(session.start_at, "时间待定")
         ].join(" / "),
         actionText: "去审核",
         targetUrl: `/pages/session/manage?id=${session.id}`
