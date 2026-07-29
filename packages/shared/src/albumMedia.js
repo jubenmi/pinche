@@ -73,7 +73,6 @@ export function isModerationPublished(status) {
 
 export function isAuthorPrivateAlbumMediaProjection(photo = {}) {
   return (
-    isPositiveInteger(photo?.id) &&
     ["image", "video"].includes(photo?.media_type) &&
     AUTHOR_PRIVATE_MEDIA_STATUSES.has(photo?.moderation_status) &&
     photo?.publication_state === "author_only" &&

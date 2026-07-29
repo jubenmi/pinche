@@ -12,7 +12,6 @@ import * as albumMediaModule from "../src/albumMedia.js";
 
 test("author-private album media projection requires the complete bounded DTO", () => {
   const projection = {
-    id: 41,
     media_type: "image",
     moderation_status: "pending",
     publication_state: "author_only",
@@ -33,7 +32,6 @@ test("author-private album media projection requires the complete bounded DTO", 
     );
   }
   for (const invalidProjection of [
-    { ...projection, id: 0 },
     { ...projection, publication_state: "public" },
     { ...projection, is_mine: false },
     { ...projection, can_preview: false },
