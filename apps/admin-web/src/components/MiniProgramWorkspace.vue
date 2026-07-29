@@ -651,7 +651,9 @@ import {
   beijingDateKey,
   beijingDateParts,
   beijingTimeText,
+  beijingWallTimeToIso,
   formatBeijingDateTime,
+  isBusinessDateTimeReached,
   parseBusinessDateTime
 } from "@pinche/shared";
 import { miniScreens, sessionBackedMiniScreens, writeAdminRoute } from "../adminRoute";
@@ -755,12 +757,18 @@ const createStepLabel = computed(
   () => createSteps.find((item) => item.value === createStep.value)?.label || "创建"
 );
 const startAt = computed(() => `${createDate.value} ${createTime.value}:00`);
+const transportStartAt = computed(() => beijingWallTimeToIso(startAt.value));
 const defaultPinnedMessage = computed(() => {
   const script = selectedScript.value?.name || "剧本";
   const store = selectedStore.value?.name || "店家";
   return `置顶：${script} ${createDate.value} ${createTime.value}，${store}集合。`;
 });
-const canCreate = computed(() => selectedStore.value?.id && selectedScript.value?.id && selectedRole.value);
+const canCreate = computed(() =>
+    selectedStore.value?.id &&
+    selectedScript.value?.id &&
+    selectedRole.value &&
+    transportStartAt.value
+);
 const currentUser = computed(() => getStoredAuth().user || {});
 const currentUserId = computed(() => currentUser.value.id || "");
 const currentUserGender = computed(() => currentUser.value.gender || "");
@@ -1074,8 +1082,10 @@ function isShareRoleClaimable(role, mine = false) {
 }
 
 function isShareSessionStarted() {
-  const startAtValue = Date.parse(String(shareSession.value.start_at || "").replace(" ", "T"));
-  return Number.isFinite(startAtValue) && startAtValue <= Date.now();
+  if (typeof shareSession.value.has_started === "boolean") {
+    return shareSession.value.has_started;
+  }
+  return isBusinessDateTimeReached(shareSession.value.start_at);
 }
 
 function roleDisplayText(role) {
@@ -1232,7 +1242,7 @@ async function createPublishedSession() {
     const session = await createUserSession({
       storeId: Number(selectedStore.value.id),
       scriptId: Number(selectedScript.value.id),
-      startAt: startAt.value,
+      startAt: transportStartAt.value,
       depositAmount: 0,
       extraNpcRoles: extraNpcRoles(),
       npcJoinEnabled: npcJoinEnabled.value,
@@ -2182,8 +2192,10 @@ function webAlbumPrimaryActionLabel(session) {
 }
 
 function isAlbumOpenForSession(session) {
-  const startAtValue = Date.parse(String(session?.start_at || "").replace(" ", "T"));
-  return Number.isFinite(startAtValue) && startAtValue <= Date.now();
+  if (typeof session?.has_started === "boolean") {
+    return session.has_started;
+  }
+  return isBusinessDateTimeReached(session?.start_at);
 }
 
 function canTransferToSeat(seat) {

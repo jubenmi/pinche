@@ -45,10 +45,7 @@ async function authorizePhone(auth, label) {
 }
 
 function startAt(hoursFromNow) {
-  return new Date(Date.now() + hoursFromNow * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 19)
-    .replace("T", " ");
+  return new Date(Date.now() + hoursFromNow * 60 * 60 * 1000).toISOString();
 }
 
 async function createStore(admin) {

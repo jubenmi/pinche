@@ -1,3 +1,4 @@
+import { beijingDayUtcRange } from "@pinche/shared";
 import { badRequest, notFound } from "../../http/errors.js";
 import {
   MODERATION_IMAGE_SUBJECT_TYPES,
@@ -182,6 +183,10 @@ export function parseAdminModerationListQuery(searchParams) {
   if (dateFrom && dateTo && dateFrom > dateTo) {
     throw badRequest("dateFrom must not be after dateTo");
   }
+  const fromRange = dateFrom ? beijingDayUtcRange(dateFrom) : null;
+  const toRange = dateTo ? beijingDayUtcRange(dateTo) : null;
+  if (dateFrom && !fromRange) throw badRequest("invalid moderation filter: dateFrom");
+  if (dateTo && !toRange) throw badRequest("invalid moderation filter: dateTo");
 
   const provider = parseEnum(
     optionalQueryValue(searchParams, "provider"),
@@ -210,8 +215,8 @@ export function parseAdminModerationListQuery(searchParams) {
       "status"
     ),
     label: parseLabel(optionalQueryValue(searchParams, "label")),
-    dateFrom,
-    dateTo,
+    dateFrom: fromRange?.start,
+    dateToExclusive: toRange?.end,
     limit: parseLimit(optionalQueryValue(searchParams, "limit"))
   };
 }

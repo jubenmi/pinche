@@ -1,19 +1,9 @@
 import { config } from "../../config/env.js";
+import { beijingDateParts } from "@pinche/shared";
 import {
   getWechatAccessTokenProvider,
   requestWithWechatAccessTokenRetry
 } from "./access-token.js";
-
-const sessionTimeFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Shanghai",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hourCycle: "h23"
-});
 
 function skipped(scene, reason) {
   return {
@@ -49,25 +39,32 @@ function truncateCodePoints(value, maxLength) {
   return Array.from(String(value)).slice(0, maxLength).join("");
 }
 
+function pad(value, size = 2) {
+  return String(value).padStart(size, "0");
+}
+
 function messageData(payload, resultText = "待审核") {
   return {
     thing1: { value: valueOrFallback(payload.scriptName, "拼车车局").slice(0, 20) },
     thing2: { value: valueOrFallback(payload.seatName, "角色位").slice(0, 20) },
     phrase3: { value: resultText.slice(0, 5) },
-    date4: { value: valueOrFallback(payload.startAt, "时间待定").slice(0, 20) },
+    date4: { value: formatSessionSignupTime(payload.startAt).slice(0, 20) },
     thing5: { value: valueOrFallback(payload.actorName, "新申请").slice(0, 20) }
   };
 }
 
 export function formatSessionRescheduleTime(value, fallback = "时间待定") {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) {
+  const parts = beijingDateParts(value);
+  if (!parts) {
     return fallback;
   }
-  const parts = Object.fromEntries(
-    sessionTimeFormatter.formatToParts(date).map(({ type, value: partValue }) => [type, partValue])
-  );
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+  return `${pad(parts.year, 4)}-${pad(parts.month)}-${pad(parts.day)} ${pad(parts.hour)}:${pad(
+    parts.minute
+  )}:${pad(parts.second)}`;
+}
+
+export function formatSessionSignupTime(value, fallback = "时间待定") {
+  return formatSessionRescheduleTime(value, fallback);
 }
 
 function rescheduleMessageData(payload) {

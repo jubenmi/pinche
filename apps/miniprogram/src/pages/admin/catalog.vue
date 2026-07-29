@@ -825,6 +825,7 @@
 
 <script setup>
 import { onLoad, onShow } from "@dcloudio/uni-app";
+import { formatBeijingDateTime } from "@pinche/shared";
 import { computed, ref } from "vue";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -1816,7 +1817,7 @@ function reviewItemMeta(item) {
 }
 
 function formatDate(value) {
-  return String(value || "").slice(0, 16).replace("T", " ");
+  return formatBeijingDateTime(value, "-");
 }
 
 function roleTemplateStatus(script) {

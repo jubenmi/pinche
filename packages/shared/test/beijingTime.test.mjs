@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 
 import {
   BEIJING_TIME_ZONE,
+  beijingDayUtcRange,
   beijingDateKey,
   beijingTimeText,
   beijingWallTimeToIso,
+  businessDateTimeToPickerValue,
   formatBeijingDateTime,
+  formatBeijingShortDateTime,
+  isBusinessDateTimeReached,
   parseBusinessDateTime
 } from "../src/beijingTime.js";
 
@@ -71,4 +75,30 @@ test("rejects invalid calendar values instead of normalizing them", () => {
   assert.equal(parseBusinessDateTime("not-a-date"), null);
   assert.equal(beijingWallTimeToIso("2026-02-30 13:00"), null);
   assert.equal(formatBeijingDateTime("not-a-date"), "时间待定");
+});
+
+test("converts business date times to picker values", () => {
+  const pickerValue = { date: "2026-07-28", time: "15:00" };
+  assert.deepEqual(businessDateTimeToPickerValue("2026-07-28T07:00:00.000Z"), pickerValue);
+  assert.deepEqual(businessDateTimeToPickerValue("2026-07-28 15:00:00"), pickerValue);
+  assert.equal(businessDateTimeToPickerValue("not-a-date"), null);
+});
+
+test("formats compact Beijing date times", () => {
+  assert.equal(formatBeijingShortDateTime("2026-07-28T07:00:00.000Z"), "07-28 15:00");
+  assert.equal(formatBeijingShortDateTime("not-a-date", ""), "");
+});
+
+test("checks whether business date times have been reached", () => {
+  const now = Date.parse("2026-07-28T07:00:00.000Z");
+  assert.equal(isBusinessDateTimeReached("2026-07-28T07:00:00.000Z", now), true);
+  assert.equal(isBusinessDateTimeReached("2026-07-28 15:00:01", now), false);
+  assert.equal(isBusinessDateTimeReached("not-a-date", now), false);
+});
+
+test("returns UTC boundaries for a Beijing calendar day", () => {
+  const range = beijingDayUtcRange("2026-07-29");
+  assert.equal(range.start.toISOString(), "2026-07-28T16:00:00.000Z");
+  assert.equal(range.end.toISOString(), "2026-07-29T16:00:00.000Z");
+  assert.equal(beijingDayUtcRange("2026-02-30"), null);
 });
