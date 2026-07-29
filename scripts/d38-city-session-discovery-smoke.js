@@ -46,17 +46,14 @@ async function authorizePhone(auth, label) {
 }
 
 function startAt(hoursFromNow) {
-  return new Date(Date.now() + hoursFromNow * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 19)
-    .replace("T", " ");
+  return new Date(Date.now() + hoursFromNow * 60 * 60 * 1000).toISOString();
 }
 
 function startAtDay(dayOffset, hour, minute = 0) {
   const value = new Date();
   value.setUTCDate(value.getUTCDate() + dayOffset);
   value.setUTCHours(hour, minute, 0, 0);
-  return value.toISOString().slice(0, 19).replace("T", " ");
+  return value.toISOString();
 }
 
 async function createStore(admin, label, overrides = {}) {

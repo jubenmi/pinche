@@ -35,7 +35,7 @@ async function authorizePhone(auth, label) {
 }
 
 function startAt() {
-  return new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
+  return new Date(Date.now() - 60 * 60 * 1000).toISOString();
 }
 
 async function database() {

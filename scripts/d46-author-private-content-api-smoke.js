@@ -313,10 +313,7 @@ async function unlinkTrackedLocalFile(localPath) {
 }
 
 function startAtBeforeNow() {
-  return new Date(Date.now() - 10 * 60 * 1000)
-    .toISOString()
-    .slice(0, 19)
-    .replace("T", " ");
+  return new Date(Date.now() - 10 * 60 * 1000).toISOString();
 }
 
 function createWechatEncryptedCallback(traceId, { suggestion } = {}) {
