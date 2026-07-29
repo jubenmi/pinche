@@ -763,8 +763,7 @@ const defaultPinnedMessage = computed(() => {
   const store = selectedStore.value?.name || "店家";
   return `置顶：${script} ${createDate.value} ${createTime.value}，${store}集合。`;
 });
-const canCreate = computed(
-  () =>
+const canCreate = computed(() =>
     selectedStore.value?.id &&
     selectedScript.value?.id &&
     selectedRole.value &&
