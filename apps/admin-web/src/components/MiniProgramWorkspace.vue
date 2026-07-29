@@ -651,6 +651,7 @@ import {
   beijingDateKey,
   beijingDateParts,
   beijingTimeText,
+  beijingWallTimeToIso,
   formatBeijingDateTime,
   parseBusinessDateTime
 } from "@pinche/shared";
@@ -755,12 +756,19 @@ const createStepLabel = computed(
   () => createSteps.find((item) => item.value === createStep.value)?.label || "创建"
 );
 const startAt = computed(() => `${createDate.value} ${createTime.value}:00`);
+const transportStartAt = computed(() => beijingWallTimeToIso(startAt.value));
 const defaultPinnedMessage = computed(() => {
   const script = selectedScript.value?.name || "剧本";
   const store = selectedStore.value?.name || "店家";
   return `置顶：${script} ${createDate.value} ${createTime.value}，${store}集合。`;
 });
-const canCreate = computed(() => selectedStore.value?.id && selectedScript.value?.id && selectedRole.value);
+const canCreate = computed(
+  () =>
+    selectedStore.value?.id &&
+    selectedScript.value?.id &&
+    selectedRole.value &&
+    transportStartAt.value
+);
 const currentUser = computed(() => getStoredAuth().user || {});
 const currentUserId = computed(() => currentUser.value.id || "");
 const currentUserGender = computed(() => currentUser.value.gender || "");
@@ -1232,7 +1240,7 @@ async function createPublishedSession() {
     const session = await createUserSession({
       storeId: Number(selectedStore.value.id),
       scriptId: Number(selectedScript.value.id),
-      startAt: startAt.value,
+      startAt: transportStartAt.value,
       depositAmount: 0,
       extraNpcRoles: extraNpcRoles(),
       npcJoinEnabled: npcJoinEnabled.value,
