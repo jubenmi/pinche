@@ -42,11 +42,13 @@
 
 ## Task 1: Extend the shared Beijing-time contract
 
+> 进度：已完成（2026-07-29）。三种进程时区测试均通过，并已通过规格与代码质量审查。
+
 **Files:**
 - Modify: `packages/shared/test/beijingTime.test.mjs`
 - Modify: `packages/shared/src/beijingTime.js`
 
-- [ ] **Step 1: Write failing tests for picker, short text, reached state, and UTC day range**
+- [x] **Step 1: Write failing tests for picker, short text, reached state, and UTC day range**
 
 Add the four imports and the following tests:
 
@@ -90,13 +92,13 @@ test("maps a Beijing calendar day to a UTC half-open range", () => {
 });
 ```
 
-- [ ] **Step 2: Run the shared tests and verify RED**
+- [x] **Step 2: Run the shared tests and verify RED**
 
 Run: `npm --workspace packages/shared run test:time`
 
 Expected: FAIL because the four exports do not exist.
 
-- [ ] **Step 3: Add the minimal pure helpers**
+- [x] **Step 3: Add the minimal pure helpers**
 
 Append to `packages/shared/src/beijingTime.js`:
 
@@ -137,7 +139,7 @@ export function beijingDayUtcRange(value) {
 }
 ```
 
-- [ ] **Step 4: Run the shared tests in three process timezones**
+- [x] **Step 4: Run the shared tests in three process timezones**
 
 Run:
 
@@ -149,7 +151,7 @@ TZ=America/New_York npm --workspace packages/shared run test:time
 
 Expected: all tests PASS with identical assertions.
 
-- [ ] **Step 5: Commit the shared contract**
+- [x] **Step 5: Commit the shared contract**
 
 ```bash
 git add packages/shared/src/beijingTime.js packages/shared/test/beijingTime.test.mjs
@@ -158,12 +160,14 @@ git commit -m "feat(time): extend shared Beijing business time helpers"
 
 ## Task 2: Normalize initial creation at the API boundary
 
+> 进度：已完成（2026-07-29）。创建归一化、幂等、改期和纠时测试均通过，并已通过规格与代码质量审查。
+
 **Files:**
 - Create: `apps/api/test/session-create-time.test.mjs`
 - Create: `apps/api/src/modules/core/session-create-time.js`
 - Modify: `apps/api/src/modules/core/service.js:61-70,3903-3953`
 
-- [ ] **Step 1: Write the failing normalization contract**
+- [x] **Step 1: Write the failing normalization contract**
 
 Create `apps/api/test/session-create-time.test.mjs`:
 
@@ -196,13 +200,13 @@ test("rejects missing and invalid creation values", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `node --test apps/api/test/session-create-time.test.mjs`
 
 Expected: FAIL with module-not-found.
 
-- [ ] **Step 3: Implement the isolated normalizer**
+- [x] **Step 3: Implement the isolated normalizer**
 
 Create `apps/api/src/modules/core/session-create-time.js`:
 
@@ -222,7 +226,7 @@ export function normalizeSessionCreationStartAt(value) {
 }
 ```
 
-- [ ] **Step 4: Wire the normalizer without changing reschedule or correction**
+- [x] **Step 4: Wire the normalizer without changing reschedule or correction**
 
 Import `normalizeSessionCreationStartAt` in `service.js`. Inside the `replaySessionCreation` callback, before the `INSERT`, calculate:
 
@@ -244,7 +248,7 @@ normalizedStartAt,
 
 Do not change `session-reschedule.js`, `session-time-correction.js`, the MySQL configuration, or migrations.
 
-- [ ] **Step 5: Run focused API contracts**
+- [x] **Step 5: Run focused API contracts**
 
 Run:
 
@@ -256,7 +260,7 @@ npm --workspace apps/api run test:session-time-correction
 
 Expected: all PASS.
 
-- [ ] **Step 6: Commit the API boundary**
+- [x] **Step 6: Commit the API boundary**
 
 ```bash
 git add apps/api/src/modules/core/session-create-time.js apps/api/src/modules/core/service.js apps/api/test/session-create-time.test.mjs
@@ -265,13 +269,15 @@ git commit -m "fix(api): normalize initial session start time"
 
 ## Task 3: Fix both creation clients and Beijing picker defaults
 
+> 进度：已完成（2026-07-29）。两个创建入口均发送显式 UTC ISO，草稿仍保留北京时间语义；测试、构建和双重审查通过。
+
 **Files:**
 - Create: `apps/miniprogram/src/utils/sessionCreationTime.js`
 - Create: `apps/miniprogram/test/sessionCreationTime.test.mjs`
 - Modify: `apps/miniprogram/src/pages/session/setup.vue:156-225,240-355`
 - Modify: `apps/admin-web/src/components/MiniProgramWorkspace.vue:650-757,915-916,1232-1236`
 
-- [ ] **Step 1: Write failing creation-page helper tests**
+- [x] **Step 1: Write failing creation-page helper tests**
 
 Create `apps/miniprogram/test/sessionCreationTime.test.mjs`:
 
@@ -311,13 +317,13 @@ test("fails closed for invalid picker values", () => {
 });
 ```
 
-- [ ] **Step 2: Run the helper test and verify RED**
+- [x] **Step 2: Run the helper test and verify RED**
 
 Run: `node --test apps/miniprogram/test/sessionCreationTime.test.mjs`
 
 Expected: FAIL with module-not-found.
 
-- [ ] **Step 3: Implement the creation helper**
+- [x] **Step 3: Implement the creation helper**
 
 Create `apps/miniprogram/src/utils/sessionCreationTime.js`:
 
@@ -352,7 +358,7 @@ export function sessionCreationDefaults(now = Date.now()) {
 }
 ```
 
-- [ ] **Step 4: Replace setup-page local date logic and request serialization**
+- [x] **Step 4: Replace setup-page local date logic and request serialization**
 
 Import the four helper functions. Remove `pad`, `dateText`, and `tomorrowAtDefaultTime`. Initialize `today`, `dateValue`, and `timeValue` from `sessionCreationDefaults()`.
 
@@ -385,7 +391,7 @@ startAt: this.transportStartAt,
 
 Continue persisting `this.startAt` so a draft retains Beijing wall-clock intent.
 
-- [ ] **Step 5: Fix the management-web creation transport only**
+- [x] **Step 5: Fix the management-web creation transport only**
 
 Add `beijingWallTimeToIso` to the existing `@pinche/shared` import. Keep the already-correct `defaultDate()` unchanged. Add:
 
@@ -399,7 +405,7 @@ Require `transportStartAt.value` in `canCreate`, and pass:
 startAt: transportStartAt.value,
 ```
 
-- [ ] **Step 6: Run creation tests and builds**
+- [x] **Step 6: Run creation tests and builds**
 
 Run:
 
@@ -412,7 +418,7 @@ npm run build:admin-web
 
 Expected: all PASS.
 
-- [ ] **Step 7: Commit both client entries**
+- [x] **Step 7: Commit both client entries**
 
 ```bash
 git add apps/miniprogram/src/utils/sessionCreationTime.js apps/miniprogram/test/sessionCreationTime.test.mjs apps/miniprogram/src/pages/session/setup.vue apps/admin-web/src/components/MiniProgramWorkspace.vue
@@ -421,6 +427,8 @@ git commit -m "fix(clients): serialize created sessions as UTC instants"
 
 ## Task 4: Fix confirmed-broken mini-program presentation paths
 
+> 进度：已完成（2026-07-29）。四个确认错误的展示点已接入共享格式化，测试、构建和双重审查通过。
+
 **Files:**
 - Modify: `apps/miniprogram/test/authMessages.test.mjs`
 - Modify: `apps/miniprogram/src/utils/authMessages.js`
@@ -428,7 +436,7 @@ git commit -m "fix(clients): serialize created sessions as UTC instants"
 - Modify: `apps/miniprogram/src/pages/admin/catalog.vue:1750-1820`
 - Modify: `apps/miniprogram/src/extensions/session-pseudo-chat/ChatEntry.vue:105-115,403-407`
 
-- [ ] **Step 1: Change the pending-signup test to protect canonical ISO display**
+- [x] **Step 1: Change the pending-signup test to protect canonical ISO display**
 
 Update the fixture and expected subtitle:
 
@@ -440,13 +448,13 @@ start_at: "2026-07-28T07:00:00.000Z",
 subtitle: "山海店 / 2026-07-28 15:00",
 ```
 
-- [ ] **Step 2: Run the auth-message test and verify RED**
+- [x] **Step 2: Run the auth-message test and verify RED**
 
 Run: `node --test apps/miniprogram/test/authMessages.test.mjs`
 
 Expected: FAIL because the raw ISO value is displayed.
 
-- [ ] **Step 3: Reuse the existing correct reschedule formatter in auth messages**
+- [x] **Step 3: Reuse the existing correct reschedule formatter in auth messages**
 
 Replace the pending subtitle time with:
 
@@ -456,7 +464,7 @@ formatShanghaiTime(session.start_at, "时间待定")
 
 Do not change the already-correct reschedule notification logic.
 
-- [ ] **Step 4: Replace album and mini-admin local formatting**
+- [x] **Step 4: Replace album and mini-admin local formatting**
 
 Add `formatBeijingDateTime` to each existing shared import and reduce the local functions to:
 
@@ -474,7 +482,7 @@ function formatDate(value) {
 }
 ```
 
-- [ ] **Step 5: Replace the application chat component formatter**
+- [x] **Step 5: Replace the application chat component formatter**
 
 Import `formatBeijingShortDateTime` and replace `timeText` with:
 
@@ -484,7 +492,7 @@ timeText(value) {
 }
 ```
 
-- [ ] **Step 6: Run presentation tests and the mini build**
+- [x] **Step 6: Run presentation tests and the mini build**
 
 Run:
 
@@ -496,7 +504,7 @@ npm run build:mp-weixin
 
 Expected: all PASS; generated chat and album output uses Beijing helpers.
 
-- [ ] **Step 7: Commit the mini-program presentation fixes**
+- [x] **Step 7: Commit the mini-program presentation fixes**
 
 ```bash
 git add apps/miniprogram/test/authMessages.test.mjs apps/miniprogram/src/utils/authMessages.js apps/miniprogram/src/pages/session/album.vue apps/miniprogram/src/pages/admin/catalog.vue apps/miniprogram/src/extensions/session-pseudo-chat/ChatEntry.vue
@@ -504,6 +512,8 @@ git commit -m "fix(miniprogram): format business timestamps in Beijing time"
 ```
 
 ## Task 5: Fix `talk` without duplicating timezone logic
+
+> 进度：已完成（2026-07-29）。talk 已复用宿主共享组件，子模块与主工程提交、测试和双重审查均完成；尚未推送。
 
 **Files in the `packages/talk` submodule:**
 - Modify: `package.json`
@@ -516,7 +526,7 @@ git commit -m "fix(miniprogram): format business timestamps in Beijing time"
 - Modify: `packages/talk` gitlink
 - Modify if generated: `package-lock.json`
 
-- [ ] **Step 1: Create an isolated submodule branch**
+- [x] **Step 1: Create an isolated submodule branch**
 
 Run from `packages/talk`:
 
@@ -526,7 +536,7 @@ git switch -c codex/business-time-consistency
 
 Expected: branch starts at the superproject-pinned `bb043d9d` commit.
 
-- [ ] **Step 2: Write failing talk time tests**
+- [x] **Step 2: Write failing talk time tests**
 
 Create `packages/talk/test/business-time.test.mjs`:
 
@@ -557,13 +567,13 @@ test("builds a Beijing-time default pinned message", () => {
 });
 ```
 
-- [ ] **Step 3: Run the talk test and verify RED**
+- [x] **Step 3: Run the talk test and verify RED**
 
 Run from the superproject root: `node --test packages/talk/test/business-time.test.mjs`
 
 Expected: FAIL with module-not-found.
 
-- [ ] **Step 4: Declare and consume the shared peer dependency**
+- [x] **Step 4: Declare and consume the shared peer dependency**
 
 Add to `packages/talk/package.json`:
 
@@ -591,7 +601,7 @@ export function defaultPinnedMessageForSession(session) {
 
 Import `defaultPinnedMessageForSession` in `api/service.js` and delete the local UTC-slicing functions. Import `formatBeijingShortDateTime` in `miniprogram/ChatEntry.vue` and use it in `timeText`.
 
-- [ ] **Step 5: Run talk tests and commit the submodule**
+- [x] **Step 5: Run talk tests and commit the submodule**
 
 Run:
 
@@ -603,7 +613,7 @@ git -C packages/talk commit -m "fix(time): use host Beijing business time helper
 
 Expected: talk tests PASS and the submodule has one new commit.
 
-- [ ] **Step 6: Refresh workspace metadata and commit the gitlink**
+- [x] **Step 6: Refresh workspace metadata and commit the gitlink**
 
 Run:
 
@@ -617,11 +627,13 @@ If `package-lock.json` is byte-for-byte unchanged, stage only `packages/talk`. D
 
 ## Task 6: Fix signup subscription-message time
 
+> 进度：已完成（2026-07-29）。报名消息复用现有上海时区格式化，测试和双重审查通过；改期消息未修改。
+
 **Files:**
 - Modify: `apps/api/test/subscribe-message-reschedule.test.mjs`
 - Modify: `apps/api/src/modules/wechat/subscribe-message.js:43-78`
 
-- [ ] **Step 1: Add a failing signup formatter test**
+- [x] **Step 1: Add a failing signup formatter test**
 
 Import `formatSessionSignupTime` and add:
 
@@ -635,13 +647,13 @@ test("formats signup Date payloads in Asia/Shanghai", () => {
 });
 ```
 
-- [ ] **Step 2: Run the subscription test and verify RED**
+- [x] **Step 2: Run the subscription test and verify RED**
 
 Run: `node --test apps/api/test/subscribe-message-reschedule.test.mjs`
 
 Expected: FAIL because the export does not exist.
 
-- [ ] **Step 3: Route signup date4 through the existing correct formatter**
+- [x] **Step 3: Route signup date4 through the existing correct formatter**
 
 Add:
 
@@ -659,7 +671,7 @@ date4: { value: formatSessionSignupTime(payload.startAt).slice(0, 20) },
 
 Do not change `sessionTimeFormatter` or reschedule template fields because they already have correct `Asia/Shanghai` behavior.
 
-- [ ] **Step 4: Run subscription and access-token tests**
+- [x] **Step 4: Run subscription and access-token tests**
 
 Run:
 
@@ -669,7 +681,7 @@ node --test apps/api/test/subscribe-message-reschedule.test.mjs apps/api/test/we
 
 Expected: all PASS.
 
-- [ ] **Step 5: Commit the notification fix**
+- [x] **Step 5: Commit the notification fix**
 
 ```bash
 git add apps/api/test/subscribe-message-reschedule.test.mjs apps/api/src/modules/wechat/subscribe-message.js
@@ -678,6 +690,12 @@ git commit -m "fix(notifications): format signup time in Beijing time"
 
 ## Task 7: Unify reachable lifecycle fallback parsing
 
+> 进度：已完成（2026-07-29）。历史无时区回退已统一，服务端精确布尔保持权威；三时区测试、构建和双重审查通过。
+>
+> 执行说明：现有 `sessionSharePage` 测试加载器会剥离 Vue import 并手工注入依赖；新增共享 helper 必须同步注入才能运行既有测试。允许仅修改该测试夹具，不改变测试期望或生产行为。
+>
+> 审查修正：详情页和管理端现已优先采用服务端精确布尔 `has_started`；仅在缺失时按 `start_at` 回退，并有冲突值测试保护。
+
 **Files:**
 - Modify: `apps/miniprogram/test/sessionShare.test.mjs`
 - Modify: `apps/miniprogram/src/utils/sessionShare.js`
@@ -685,7 +703,7 @@ git commit -m "fix(notifications): format signup time in Beijing time"
 - Modify: `apps/miniprogram/src/pages/session/share.vue:148,253-258,774-803`
 - Modify: `apps/admin-web/src/components/MiniProgramWorkspace.vue:650-656,1076-1078,2184-2186`
 
-- [ ] **Step 1: Add legacy wall-time fallback characterization**
+- [x] **Step 1: Add legacy wall-time fallback characterization**
 
 Add to `apps/miniprogram/test/sessionShare.test.mjs`:
 
@@ -703,13 +721,13 @@ test("legacy Beijing wall time resolves independently of process timezone", () =
 });
 ```
 
-- [ ] **Step 2: Run under a non-Beijing timezone and verify RED**
+- [x] **Step 2: Run under a non-Beijing timezone and verify RED**
 
 Run: `TZ=America/New_York node --test apps/miniprogram/test/sessionShare.test.mjs`
 
 Expected: FAIL because raw `Date.parse` treats the legacy value as New York local time.
 
-- [ ] **Step 3: Replace only business-time lifecycle parsing**
+- [x] **Step 3: Replace only business-time lifecycle parsing**
 
 Change `resolveSessionShareMode` to accept `now = Date.now()` as its optional second argument and use `isBusinessDateTimeReached(session.start_at, now)`. Existing callers remain compatible. Use `isBusinessDateTimeReached` in detail and the two admin helpers. In `share.vue`, use:
 
@@ -720,7 +738,7 @@ const startAtMs = startAt?.getTime();
 
 for timer scheduling, and `isBusinessDateTimeReached` for boolean started checks. Keep an exact server `has_started` value authoritative.
 
-- [ ] **Step 4: Run lifecycle tests in three timezones**
+- [x] **Step 4: Run lifecycle tests in three timezones**
 
 Run:
 
@@ -732,7 +750,7 @@ TZ=America/New_York npm run unified-share:unit
 
 Expected: all PASS; explicit ISO behavior remains unchanged.
 
-- [ ] **Step 5: Commit lifecycle compatibility**
+- [x] **Step 5: Commit lifecycle compatibility**
 
 ```bash
 git add apps/miniprogram/test/sessionShare.test.mjs apps/miniprogram/src/utils/sessionShare.js apps/miniprogram/src/pages/session/detail.vue apps/miniprogram/src/pages/session/share.vue apps/admin-web/src/components/MiniProgramWorkspace.vue
@@ -741,13 +759,17 @@ git commit -m "fix(time): parse lifecycle fallback with business time contract"
 
 ## Task 8: Convert Beijing moderation dates to UTC query bounds
 
+> 进度：已完成（2026-07-29）。筛选已使用 UTC 半开区间，无法转换的边界明确返回 400；测试和双重审查通过。
+>
+> 审查修正：任何通过文本校验但无法转换为 UTC 区间的日期必须返回 400，不能静默移除筛选条件；同时补充单边区间测试。
+
 **Files:**
 - Modify: `apps/api/test/content-moderation-admin-api.test.mjs`
 - Modify: `apps/api/test/content-moderation-repository.test.mjs`
 - Modify: `apps/api/src/modules/content-moderation/admin-api.js:178-215`
 - Modify: `apps/api/src/modules/content-moderation/repository.js:1407-1419`
 
-- [ ] **Step 1: Write failing DTO boundary expectations**
+- [x] **Step 1: Write failing DTO boundary expectations**
 
 Change the canonical filter assertion to expect:
 
@@ -767,7 +789,7 @@ In the repository test, assert the SQL contains:
 
 and that bound values are `Date` objects with the two exact ISO values. Assert the SQL does not contain `DATE_ADD(?, INTERVAL 1 DAY)`.
 
-- [ ] **Step 2: Run the two tests and verify RED**
+- [x] **Step 2: Run the two tests and verify RED**
 
 Run:
 
@@ -777,7 +799,7 @@ node --test apps/api/test/content-moderation-admin-api.test.mjs apps/api/test/co
 
 Expected: FAIL on string dates and the old `DATE_ADD` SQL.
 
-- [ ] **Step 3: Normalize calendar keys in the admin DTO**
+- [x] **Step 3: Normalize calendar keys in the admin DTO**
 
 Import `beijingDayUtcRange`. After validating `dateFrom <= dateTo`, calculate:
 
@@ -795,7 +817,7 @@ dateToExclusive: toRange?.end,
 
 The existing calendar validation remains the first line of defense.
 
-- [ ] **Step 4: Bind the UTC half-open range in the repository**
+- [x] **Step 4: Bind the UTC half-open range in the repository**
 
 Rename the repository option to `dateToExclusive` and use:
 
@@ -810,7 +832,7 @@ if (dateToExclusive) {
 }
 ```
 
-- [ ] **Step 5: Run the moderation suite**
+- [x] **Step 5: Run the moderation suite**
 
 Run:
 
@@ -821,7 +843,7 @@ npm run d45:unit
 
 Expected: all PASS.
 
-- [ ] **Step 6: Commit the filter boundary**
+- [x] **Step 6: Commit the filter boundary**
 
 ```bash
 git add apps/api/test/content-moderation-admin-api.test.mjs apps/api/test/content-moderation-repository.test.mjs apps/api/src/modules/content-moderation/admin-api.js apps/api/src/modules/content-moderation/repository.js
@@ -830,12 +852,16 @@ git commit -m "fix(admin): filter moderation jobs by Beijing calendar day"
 
 ## Task 9: Order city discovery by Beijing calendar day
 
+> 进度：已完成（2026-07-29）。北京跨午夜排序键与隔离烟测已完成，静态/语法检查和双重审查通过。
+>
+> 审查修正：跨午夜烟测使用本次运行唯一城市并单独查询，避免复用测试库时被历史样本挤出结果上限；静态检查精确限定到目标函数。
+
 **Files:**
 - Modify: `apps/api/src/modules/core/service.js:4390-4405`
 - Modify: `scripts/d38-city-session-discovery-check.js`
 - Modify: `scripts/d38-city-session-discovery-smoke.js`
 
-- [ ] **Step 1: Add a failing source contract**
+- [x] **Step 1: Add a failing source contract**
 
 In `scripts/d38-city-session-discovery-check.js`, require:
 
@@ -846,13 +872,13 @@ assert(
 );
 ```
 
-- [ ] **Step 2: Run the static check and verify RED**
+- [x] **Step 2: Run the static check and verify RED**
 
 Run: `node scripts/d38-city-session-discovery-check.js`
 
 Expected: FAIL because the query uses `DATE(session.start_at)`.
 
-- [ ] **Step 3: Change only the city date ordering expression**
+- [x] **Step 3: Change only the city date ordering expression**
 
 Replace:
 
@@ -868,7 +894,7 @@ DATE(DATE_ADD(session.start_at, INTERVAL 8 HOUR)) ASC,
 
 Keep `session.start_at > CURRENT_TIMESTAMP`, distance order, exact start time order, and ID tie-break unchanged.
 
-- [ ] **Step 4: Add an isolated Beijing-midnight smoke pair**
+- [x] **Step 4: Add an isolated Beijing-midnight smoke pair**
 
 Extend the D38 smoke fixture with two public sessions whose UTC values are `15:30:00Z` and `16:30:00Z` on the same UTC day, corresponding to Beijing 23:30 and next-day 00:30. Give the later Beijing day a shorter distance:
 
@@ -910,7 +936,7 @@ assert(
 
 Use the existing session/store fixture helpers and cleanup registration; do not add production calls.
 
-- [ ] **Step 5: Run D38 checks**
+- [x] **Step 5: Run D38 checks**
 
 Run:
 
@@ -921,7 +947,7 @@ node --check scripts/d38-city-session-discovery-smoke.js
 
 Expected: PASS. The live smoke remains reserved for the isolated test environment.
 
-- [ ] **Step 6: Commit the Beijing-day ordering**
+- [x] **Step 6: Commit the Beijing-day ordering**
 
 ```bash
 git add apps/api/src/modules/core/service.js scripts/d38-city-session-discovery-check.js scripts/d38-city-session-discovery-smoke.js
@@ -930,12 +956,16 @@ git commit -m "fix(discovery): group sessions by Beijing calendar day"
 
 ## Task 10: Add the real MySQL UTC round trip
 
+> 进度：已完成（2026-07-29）。真实 MySQL 闭环与加强后的隔离守卫均通过，隔离容器、网络和卷已清理。
+>
+> 审查修正：测试在连接前同时校验隔离标记、非生产环境、`MYSQL_HOST=mysql` 与 `MYSQL_DATABASE=pinche_d51_test`，避免单一标记误连其他数据库。
+
 **Files:**
 - Create: `apps/api/test/session-create-mysql-roundtrip.test.mjs`
 - Modify: `docker-compose.d51-test.yml`
 - Modify: `package.json`
 
-- [ ] **Step 1: Write a fail-closed real-MySQL test**
+- [x] **Step 1: Write a fail-closed real-MySQL test**
 
 Create `apps/api/test/session-create-mysql-roundtrip.test.mjs`:
 
@@ -971,7 +1001,7 @@ test("creation wall time survives a UTC DATETIME round trip", async () => {
 });
 ```
 
-- [ ] **Step 2: Add an isolated Compose test service**
+- [x] **Step 2: Add an isolated Compose test service**
 
 Add `business_time_acceptance` using `*api-image`, `*api-environment`, working directory `/app/apps/api`, and:
 
@@ -989,7 +1019,7 @@ depends_on:
 restart: "no"
 ```
 
-- [ ] **Step 3: Add an explicit root command**
+- [x] **Step 3: Add an explicit root command**
 
 Add this `package.json` script as one line:
 
@@ -997,19 +1027,19 @@ Add this `package.json` script as one line:
 "test:business-time-mysql": "docker compose -f docker-compose.d51-test.yml --project-name pinche-business-time-test up --build --abort-on-container-exit --exit-code-from business_time_acceptance business_time_acceptance"
 ```
 
-- [ ] **Step 4: Run the real database test**
+- [x] **Step 4: Run the real database test**
 
 Run: `npm run test:business-time-mysql`
 
 Expected: MySQL and migrate start in the isolated Compose network; the one test PASSes. The temporary table disappears with the connection. No production database is contacted.
 
-- [ ] **Step 5: Clean the isolated Compose project**
+- [x] **Step 5: Clean the isolated Compose project**
 
 Run: `docker compose -f docker-compose.d51-test.yml --project-name pinche-business-time-test down --volumes`
 
 Expected: isolated containers, network, and volumes are removed.
 
-- [ ] **Step 6: Commit the integration contract**
+- [x] **Step 6: Commit the integration contract**
 
 ```bash
 git add apps/api/test/session-create-mysql-roundtrip.test.mjs docker-compose.d51-test.yml package.json
@@ -1018,13 +1048,15 @@ git commit -m "test(time): cover UTC MySQL creation round trip"
 
 ## Task 11: Add a SELECT-only historical audit
 
+> 进度：已完成（2026-07-29）。只读审计、保守分类与安全检查完成并通过双重审查；未运行 CLI、未连接数据库。
+
 **Files:**
 - Create: `apps/api/test/session-time-audit.test.mjs`
 - Create: `apps/api/src/modules/core/session-time-audit.js`
 - Create: `scripts/session-time-audit.mjs`
 - Modify: `package.json`
 
-- [ ] **Step 1: Write conservative audit tests**
+- [x] **Step 1: Write conservative audit tests**
 
 Create `apps/api/test/session-time-audit.test.mjs`:
 
@@ -1069,13 +1101,13 @@ test("rows without provenance remain indeterminate", () => {
 });
 ```
 
-- [ ] **Step 2: Run the audit test and verify RED**
+- [x] **Step 2: Run the audit test and verify RED**
 
 Run: `node --test apps/api/test/session-time-audit.test.mjs`
 
 Expected: FAIL with module-not-found.
 
-- [ ] **Step 3: Implement the query and projection without an update path**
+- [x] **Step 3: Implement the query and projection without an update path**
 
 Create `apps/api/src/modules/core/session-time-audit.js` with a `SELECT` that reads sessions and the latest correction via a correlated maximum correction ID. Export a projector with this decision rule:
 
@@ -1119,7 +1151,7 @@ export function projectSessionTimeAuditRow(row) {
 
 Do not add a function that emits SQL, subtracts eight hours, or labels a row `evidence_wrong` from database digits alone.
 
-- [ ] **Step 4: Add the read-only CLI**
+- [x] **Step 4: Add the read-only CLI**
 
 Create `scripts/session-time-audit.mjs`:
 
@@ -1164,7 +1196,7 @@ Add:
 "audit:session-time": "node scripts/session-time-audit.mjs"
 ```
 
-- [ ] **Step 5: Test source safety without connecting to production**
+- [x] **Step 5: Test source safety without connecting to production**
 
 Run:
 
@@ -1175,7 +1207,7 @@ node --check scripts/session-time-audit.mjs
 
 Expected: PASS. Do not run the CLI against any external database during implementation.
 
-- [ ] **Step 6: Commit the read-only audit**
+- [x] **Step 6: Commit the read-only audit**
 
 ```bash
 git add apps/api/test/session-time-audit.test.mjs apps/api/src/modules/core/session-time-audit.js scripts/session-time-audit.mjs package.json
@@ -1183,6 +1215,8 @@ git commit -m "feat(time): add read-only session time audit"
 ```
 
 ## Task 12: Make smoke clients send explicit ISO timestamps
+
+> 进度：已完成（2026-07-29）。16 个烟测客户端均保留显式 ISO 时区，源码合同、语法检查和双重审查通过。
 
 **Files:**
 - Create: `scripts/business-time-smoke-contract.test.mjs`
@@ -1203,7 +1237,7 @@ git commit -m "feat(time): add read-only session time audit"
 - Modify: `scripts/d46-author-private-content-api-smoke.js`
 - Modify: `scripts/d53-album-four-action-selection-smoke.js`
 
-- [ ] **Step 1: Write a failing smoke-client contract**
+- [x] **Step 1: Write a failing smoke-client contract**
 
 Create `scripts/business-time-smoke-contract.test.mjs`:
 
@@ -1243,13 +1277,13 @@ test("API smoke clients retain the timezone on generated startAt values", async 
 });
 ```
 
-- [ ] **Step 2: Run the contract and verify RED**
+- [x] **Step 2: Run the contract and verify RED**
 
 Run: `node --test scripts/business-time-smoke-contract.test.mjs`
 
 Expected: FAIL on the first helper that strips `Z`.
 
-- [ ] **Step 3: Preserve explicit ISO in every API startAt fixture**
+- [x] **Step 3: Preserve explicit ISO in every API startAt fixture**
 
 For each listed helper, replace this pattern:
 
@@ -1268,7 +1302,7 @@ return new Date(targetMilliseconds).toISOString();
 
 For `startAtDay`, retain the UTC calendar setup and return `value.toISOString()`. Change only values sent as API `startAt`; leave diagnostic `checkedAt`, database cursor keys, and unrelated formatting untouched.
 
-- [ ] **Step 4: Run source syntax and contract checks**
+- [x] **Step 4: Run source syntax and contract checks**
 
 Run:
 
@@ -1294,7 +1328,7 @@ node --check scripts/d53-album-four-action-selection-smoke.js
 
 Expected: all PASS.
 
-- [ ] **Step 5: Commit the test-client correction**
+- [x] **Step 5: Commit the test-client correction**
 
 ```bash
 git add scripts/business-time-smoke-contract.test.mjs scripts/d2-smoke-test.js scripts/d4-smoke-test.js scripts/d5-smoke-test.js scripts/d6-smoke-test.js scripts/d7-smoke-test.js scripts/d8-qa-check.js scripts/d10-pseudo-chat-smoke.js scripts/d18-session-album-privacy-smoke.js scripts/d23-album-share-join-policy-smoke.js scripts/d30-current-signup-role-check.js scripts/d32-admin-album-video-smoke.js scripts/d34-store-location-smoke.js scripts/d38-city-session-discovery-smoke.js scripts/d40-guest-calendar-home-smoke.js scripts/d46-author-private-content-api-smoke.js scripts/d53-album-four-action-selection-smoke.js
@@ -1303,12 +1337,18 @@ git commit -m "test(time): keep timezone on smoke session inputs"
 
 ## Task 13: Expand source contracts and run the complete verification matrix
 
+> 进度：已完成（2026-07-29）。全仓合同、三时区矩阵、真实 MySQL、构建、迁移与数据库安全验收全部通过。
+>
+> 执行说明：完整矩阵发现 D45 报名消息源码契约仍要求旧的 `valueOrFallback` 路径。允许仅同步该断言到已批准的 `formatSessionSignupTime`，不改变生产行为或其他 D45 合同。
+>
+> 审查修正：D47 的小程序默认日期与草稿恢复断言限定到 `data()`/`onLoad()` 可执行区域，talk 置顶检查限定到函数体，避免 import 误满足或跨函数误报。
+
 **Files:**
 - Modify: `scripts/d47-beijing-time-check.js`
 - Modify: `package.json`
 - Modify: `docs/superpowers/specs/2026-07-28-business-time-consistency-design.md` only if implementation revealed a factual correction; do not rewrite approved scope.
 
-- [ ] **Step 1: Make D47 cover every confirmed-broken path**
+- [x] **Step 1: Make D47 cover every confirmed-broken path**
 
 Read these additional sources in `scripts/d47-beijing-time-check.js`:
 
@@ -1330,7 +1370,7 @@ packages/talk/miniprogram/ChatEntry.vue
 
 Add positive assertions for the named shared helpers and normalized `Date` binding. Add scoped negative assertions proving the target formatters no longer contain `toISOString().slice`, `String(value).slice(5, 16)`, local `getHours`, or raw `requireValue(body, "startAt")` in the INSERT values. Do not globally ban `Date.parse`, local getters, or ISO slicing in expiry, cache, build, and operational code.
 
-- [ ] **Step 2: Add one root verification command**
+- [x] **Step 2: Add one root verification command**
 
 Add:
 
@@ -1338,7 +1378,7 @@ Add:
 "business-time:verify": "npm --workspace packages/shared run test:time && node --test apps/api/test/session-create-time.test.mjs apps/api/test/session-time-audit.test.mjs apps/api/test/subscribe-message-reschedule.test.mjs apps/api/test/content-moderation-admin-api.test.mjs apps/api/test/content-moderation-repository.test.mjs apps/miniprogram/test/sessionCreationTime.test.mjs apps/miniprogram/test/authMessages.test.mjs apps/miniprogram/test/sessionShare.test.mjs scripts/business-time-smoke-contract.test.mjs && node scripts/d47-beijing-time-check.js && node scripts/d38-city-session-discovery-check.js && npm --workspace apps/api run test:mysql-timezone && npm run session-reschedule:verify && npm run session-time-correction:verify && npm --workspace @jubenmi/talk run test"
 ```
 
-- [ ] **Step 3: Run the cross-timezone focused matrix**
+- [x] **Step 3: Run the cross-timezone focused matrix**
 
 Run:
 
@@ -1350,7 +1390,7 @@ TZ=America/New_York npm run business-time:verify
 
 Expected: all commands PASS.
 
-- [ ] **Step 4: Run real MySQL, builds, and repository checks**
+- [x] **Step 4: Run real MySQL, builds, and repository checks**
 
 Run:
 
@@ -1366,7 +1406,7 @@ git diff origin/develop -- apps/api/migrations
 
 Expected: all tests and builds PASS; the migration diff is empty.
 
-- [ ] **Step 5: Inspect scope and database safety**
+- [x] **Step 5: Inspect scope and database safety**
 
 Run:
 
@@ -1379,14 +1419,14 @@ rg -n "\b(?:UPDATE|DELETE|INSERT|ALTER|DROP|TRUNCATE|CREATE)\b" scripts/session-
 
 Expected: only planned files are changed; diff check is clean; the only SQL mutation match permitted in the audit test is the negative-regex test itself, while the audit implementation contains none.
 
-- [ ] **Step 6: Commit verification wiring**
+- [x] **Step 6: Commit verification wiring**
 
 ```bash
 git add scripts/d47-beijing-time-check.js package.json package-lock.json
 git commit -m "test(time): enforce business time consistency contract"
 ```
 
-- [ ] **Step 7: Final review against the approved specification**
+- [x] **Step 7: Final review against the approved specification**
 
 Confirm all of the following in the handoff:
 
