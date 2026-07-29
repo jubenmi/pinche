@@ -1,4 +1,21 @@
+import { isModerationPublished } from "@pinche/shared";
+import { isAuthorPrivateAlbumMedia } from "./albumMediaUrls.js";
+
 export const MAX_SESSION_REVIEW_PHOTOS = 9;
+
+export function isSelectableSessionReviewAlbumPhoto(photo, viewerUserId) {
+  return Boolean(
+    photo &&
+    Number(photo.id) > 0 &&
+    photo.media_type !== "video" &&
+    String(photo.status || "active") === "active" &&
+    String(photo.processing_status || "ready") === "ready" &&
+    (
+      isModerationPublished(photo.moderation_status) ||
+      isAuthorPrivateAlbumMedia(photo, viewerUserId)
+    )
+  );
+}
 
 function photoIds(value) {
   const ids = (Array.isArray(value) ? value : []).map((entry) => Number(entry));

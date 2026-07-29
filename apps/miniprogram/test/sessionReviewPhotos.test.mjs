@@ -5,9 +5,73 @@ import {
   MAX_SESSION_REVIEW_PHOTOS,
   buildSessionReviewPhotoRequest,
   createSessionReviewPhotoState,
+  isSelectableSessionReviewAlbumPhoto,
   switchSessionReviewPhotoSource,
   toggleSessionReviewAlbumPhoto
 } from "../src/utils/sessionReviewPhotos.js";
+
+test("review picker accepts public images and the current uploader's author-private image", () => {
+  const base = {
+    id: 31,
+    media_type: "image",
+    status: "active",
+    processing_status: "ready"
+  };
+  assert.equal(
+    isSelectableSessionReviewAlbumPhoto({ ...base, moderation_status: "approved" }, 7),
+    true
+  );
+  assert.equal(isSelectableSessionReviewAlbumPhoto({
+    ...base,
+    moderation_status: "pending",
+    publication_state: "author_only",
+    is_mine: true,
+    can_preview: true,
+    uploader_user_id: 7
+  }, 7), true);
+});
+
+test("review picker rejects ordinary pending, unavailable, and ineligible author-private media", () => {
+  const pending = {
+    id: 31,
+    media_type: "image",
+    status: "active",
+    processing_status: "ready",
+    moderation_status: "pending"
+  };
+  assert.equal(isSelectableSessionReviewAlbumPhoto(pending, 7), false);
+  assert.equal(isSelectableSessionReviewAlbumPhoto({
+    ...pending,
+    publication_state: "author_only",
+    is_mine: true,
+    can_preview: true,
+    uploader_user_id: 8
+  }, 7), false);
+  assert.equal(isSelectableSessionReviewAlbumPhoto({
+    ...pending,
+    media_type: "video",
+    publication_state: "author_only",
+    is_mine: true,
+    can_preview: true,
+    uploader_user_id: 7
+  }, 7), false);
+  assert.equal(isSelectableSessionReviewAlbumPhoto({
+    ...pending,
+    status: "inactive",
+    publication_state: "author_only",
+    is_mine: true,
+    can_preview: true,
+    uploader_user_id: 7
+  }, 7), false);
+  assert.equal(isSelectableSessionReviewAlbumPhoto({
+    ...pending,
+    processing_status: "processing",
+    publication_state: "author_only",
+    is_mine: true,
+    can_preview: true,
+    uploader_user_id: 7
+  }, 7), false);
+});
 
 test("review photos start from either album references or legacy urls", () => {
   assert.deepEqual(createSessionReviewPhotoState({

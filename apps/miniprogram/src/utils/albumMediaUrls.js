@@ -1,22 +1,14 @@
 import {
   createSingleFlight,
+  isAuthorPrivateAlbumMediaProjection,
   isModerationPublished,
   mergeAlbumMediaUrls,
   shouldRefreshAlbumMedia
 } from "@pinche/shared";
 
-const AUTHOR_PRIVATE_MEDIA_STATUSES = new Set([
-  "pending",
-  "processing",
-  "error",
-  "review",
-  "rejected"
-]);
-
 const DEFAULT_ALBUM_MEDIA_RETRY_DELAY_MS = 30_000;
 const MIN_ALBUM_MEDIA_RETRY_DELAY_MS = 1_000;
 const MAX_ALBUM_MEDIA_RETRY_DELAY_MS = 2_147_483_647;
-
 function samePositiveUserId(left, right) {
   const leftId = Number(left);
   const rightId = Number(right);
@@ -29,11 +21,7 @@ function samePositiveUserId(left, right) {
 
 export function isAuthorPrivateAlbumMedia(photo = {}, viewerUserId) {
   return (
-    photo?.publication_state === "author_only" &&
-    photo?.is_mine === true &&
-    photo?.can_preview === true &&
-    !isModerationPublished(photo?.moderation_status) &&
-    AUTHOR_PRIVATE_MEDIA_STATUSES.has(String(photo?.moderation_status || "")) &&
+    isAuthorPrivateAlbumMediaProjection(photo) &&
     samePositiveUserId(photo?.uploader_user_id, viewerUserId)
   );
 }

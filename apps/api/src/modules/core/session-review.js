@@ -1,5 +1,6 @@
 import { badRequest } from "../../http/errors.js";
 import { beijingDateKey, isModerationPublished } from "@pinche/shared";
+import { resolveAuthorVisibility } from "../content-moderation/author-visibility.js";
 
 export const MAX_SESSION_REVIEW_PHOTOS = 9;
 
@@ -39,6 +40,70 @@ export function serializePublicSessionReview(row, photos = []) {
     store_name: String(row.store_name_snapshot || ""),
     played_on: beijingDateKey(row.start_at)
   };
+}
+
+function isReadySessionReviewAlbumImage(row, prefix = "") {
+  const field = (name) => row?.[`${prefix}${name}`];
+  return Boolean(
+    String(field("status") || "") === "active" &&
+    String(field("media_type") || "image") === "image" &&
+    String(field("processing_status") || "ready") === "ready"
+  );
+}
+
+export function isAuthorPrivateSessionReviewAlbumPhoto(photo, viewerUserId) {
+  if (!isReadySessionReviewAlbumImage(photo)) return false;
+  return resolveAuthorVisibility({
+    viewerUserId,
+    authorUserId: photo?.uploader_user_id,
+    moderationStatus: photo?.moderation_status,
+    authorVisibilityVersion: photo?.author_visibility_version,
+    recordStatus: photo?.status,
+    contentKind: "image"
+  }).scope === "author_only";
+}
+
+export function isAssociableSessionReviewAlbumPhoto(photo, viewerUserId, visibleToViewer) {
+  if (!isReadySessionReviewAlbumImage(photo)) return false;
+  if (isModerationPublished(photo?.moderation_status)) return visibleToViewer === true;
+  return isAuthorPrivateSessionReviewAlbumPhoto(photo, viewerUserId);
+}
+
+export function projectSessionReviewPhotoRows(rows = [], options = {}) {
+  const ownerUserId = Number(options.ownerUserId || 0);
+  const photosByReview = new Map();
+  for (const row of rows) {
+    const reviewId = Number(row.review_id);
+    const state = photosByReview.get(reviewId) || { photos: [], albumPhotoIds: [] };
+    const albumPhotoId = Number(row.album_photo_id || 0);
+    if (albumPhotoId > 0) {
+      const photo = {
+        id: albumPhotoId,
+        status: row.album_photo_status,
+        moderation_status: row.album_photo_moderation_status,
+        media_type: row.album_photo_media_type,
+        processing_status: row.album_photo_processing_status,
+        uploader_user_id: row.album_photo_uploader_user_id,
+        author_visibility_version: row.album_photo_author_visibility_version
+      };
+      if (isReadySessionReviewAlbumImage(photo) &&
+          isModerationPublished(photo.moderation_status)) {
+        state.photos.push(`/api/session-reviews/${reviewId}/photos/${albumPhotoId}/image`);
+        state.albumPhotoIds.push(albumPhotoId);
+      } else if (ownerUserId > 0 &&
+          isAuthorPrivateSessionReviewAlbumPhoto(photo, ownerUserId)) {
+        state.albumPhotoIds.push(albumPhotoId);
+      }
+    } else if (
+      row.photo_url &&
+      String(row.image_asset_status || "") === "active" &&
+      isModerationPublished(row.image_asset_moderation_status)
+    ) {
+      state.photos.push(row.photo_url);
+    }
+    photosByReview.set(reviewId, state);
+  }
+  return photosByReview;
 }
 
 export function isPublishableSessionReviewAlbumPhoto(row, reviewId, albumPhotoId) {

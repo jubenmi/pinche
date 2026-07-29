@@ -32,6 +32,342 @@ function extractMethodBody(source, marker) {
   throw new Error(`unterminated method: ${marker}`);
 }
 
+test("review page binds author-private album eligibility to the authenticated user", async () => {
+  const source = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  assert.match(source, /currentUserId:\s*""/);
+  assert.match(source, /this\.bindReviewAuth\(auth\)/);
+  assert.match(source, /isSelectableSessionReviewAlbumPhoto\(photo,\s*this\.currentUserId\)/);
+});
+
+test("phone upload selects a previewable author-private photo instead of counting it pending", async () => {
+  const source = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  const uploadBody = extractMethodBody(source, "async uploadChosenPhotos(items)");
+  assert.match(uploadBody, /if \(this\.isSelectableAlbumPhoto\(photo\)\)/);
+  assert.match(uploadBody, /toggleSessionReviewAlbumPhoto/);
+  assert.match(uploadBody, /this\.pendingPhotoCount \+= 1/);
+});
+
+test("review page keeps the author-private moderation label on the real photo preview", async () => {
+  const source = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  assert.match(source, /authorPrivateContentModerationStatusText/);
+  assert.match(source, /moderationText:\s*this\.albumPhotoModerationText\(photo\)/);
+  assert.match(
+    source,
+    /<t-image class="photo-image"[\s\S]*?class="photo-moderation-badge"[\s\S]*?\{\{ photo\.moderationText \}\}/
+  );
+  assert.match(
+    source,
+    /<t-image class="album-picker-image"[\s\S]*?class="album-picker-moderation-badge"[\s\S]*?albumPhotoModerationText\(photo\)/
+  );
+  assert.match(
+    source,
+    /albumPhotoModerationText\(photo\) \{\s*return authorPrivateContentModerationStatusText\(photo\?\.moderation_status\)/
+  );
+});
+
+test("review page clears private capabilities across hide and account changes", async () => {
+  const source = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  assert.match(source, /AUTH_CHANGE_EVENT/);
+  assert.match(source, /getCurrentUser/);
+
+  const onShowBody = extractMethodBody(source, "async onShow()");
+  assert.match(onShowBody, /this\.reviewPageVisible = true/);
+  assert.match(onShowBody, /this\.bindReviewAuth\(getCurrentUser\(\)\)/);
+  assert.match(onShowBody, /this\.loadReviewAlbum\(\)/);
+
+  const onHideBody = extractMethodBody(source, "onHide()");
+  assert.match(onHideBody, /this\.reviewPageVisible = false/);
+  assert.match(onHideBody, /this\.authGeneration \+= 1/);
+  assert.match(onHideBody, /this\.requireReviewReload\(false\)/);
+  assert.doesNotMatch(onHideBody, /this\.saving = false/);
+  assert.match(onHideBody, /this\.invalidateReviewRequests\(\)/);
+  assert.match(onHideBody, /this\.clearAuthorPrivateReviewAlbumState\(\)/);
+
+  const onUnloadBody = extractMethodBody(source, "onUnload()");
+  assert.match(onUnloadBody, /this\.unobserveReviewAuthChanges\(\)/);
+  assert.match(onUnloadBody, /this\.clearAuthorPrivateReviewAlbumState\(\)/);
+
+  assert.match(
+    source,
+    /bindReviewAuth\(auth\) \{[\s\S]*?this\.authGeneration \+= 1[\s\S]*?this\.resetReviewStateForAccountChange\(\)/
+  );
+
+  const albumBody = extractMethodBody(source, "async loadReviewAlbum()");
+  assert.match(albumBody, /const authGeneration = this\.authGeneration/);
+  assert.match(albumBody, /const viewerUserId = this\.currentUserId/);
+  assert.match(
+    albumBody,
+    /this\.isCurrentReviewAuth\(authGeneration,\s*viewerUserId\)/
+  );
+
+  const uploadBody = extractMethodBody(source, "async uploadChosenPhotos(items)");
+  assert.match(uploadBody, /const authGeneration = this\.authGeneration/);
+  assert.match(
+    uploadBody,
+    /this\.isCurrentReviewAuth\(authGeneration,\s*viewerUserId\)/
+  );
+});
+
+test("review page lifecycle helpers retain only published rows and reject stale identities", async () => {
+  const source = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  const clearBody = extractMethodBody(source, "    clearAuthorPrivateReviewAlbumState() {");
+  const clearPrivateRows = new Function(
+    "isModerationPublished",
+    `return function clearAuthorPrivateReviewAlbumState() {${clearBody}};`
+  )((status) => status === "approved" || status === "approved_legacy");
+  const page = {
+    albumPhotos: [
+      { id: 1, moderation_status: "approved" },
+      {
+        id: 2,
+        moderation_status: "pending",
+        publication_state: "author_only",
+        preview_display_url: "private-capability"
+      }
+    ]
+  };
+  clearPrivateRows.call(page);
+  assert.deepEqual(page.albumPhotos, [{ id: 1, moderation_status: "approved" }]);
+
+  const currentBody = extractMethodBody(source, "isCurrentReviewAuth(authGeneration, viewerUserId)");
+  const isCurrentReviewAuth = new Function(
+    `return function isCurrentReviewAuth(authGeneration, viewerUserId) {${currentBody}};`
+  )();
+  const currentPage = {
+    reviewPageVisible: true,
+    authGeneration: 3,
+    currentUserId: 7
+  };
+  assert.equal(isCurrentReviewAuth.call(currentPage, 3, 7), true);
+  assert.equal(isCurrentReviewAuth.call(currentPage, 2, 7), false);
+  assert.equal(isCurrentReviewAuth.call(currentPage, 3, 8), false);
+  assert.equal(isCurrentReviewAuth.call({ ...currentPage, reviewPageVisible: false }, 3, 7), false);
+
+  const onHideBody = extractMethodBody(source, "onHide()");
+  const onHide = new Function(`return function onHide() {${onHideBody}};`)();
+  const resumedPage = {
+    reviewPageVisible: true,
+    authGeneration: 3,
+    reviewAuthNeedsReload: false,
+    saving: true,
+    currentUserId: 7,
+    albumPhotos: [
+      {
+        id: 2,
+        moderation_status: "pending",
+        publication_state: "author_only",
+        preview_display_url: "private-capability"
+      }
+    ],
+    invalidateReviewRequests() {},
+    requireReviewReload() {
+      this.reviewAuthNeedsReload = true;
+    },
+    clearAuthorPrivateReviewAlbumState: clearPrivateRows
+  };
+  const hiddenOperationGeneration = resumedPage.authGeneration;
+  onHide.call(resumedPage);
+  resumedPage.reviewPageVisible = true;
+  assert.equal(
+    isCurrentReviewAuth.call(resumedPage, hiddenOperationGeneration, 7),
+    false,
+    "an operation started before hide must remain stale after a fast show"
+  );
+  assert.equal(resumedPage.reviewAuthNeedsReload, true);
+  assert.equal(resumedPage.saving, true);
+  assert.deepEqual(resumedPage.albumPhotos, []);
+
+  const bindBody = extractMethodBody(source, "    bindReviewAuth(auth) {");
+  const bindReviewAuth = new Function(
+    `return function bindReviewAuth(auth) {${bindBody}};`
+  )();
+  let clearedForUserId = null;
+  const switchingPage = {
+    currentUserId: 7,
+    authGeneration: 3,
+    reviewAuthNeedsReload: false,
+    resetReviewStateForAccountChange() {
+      clearedForUserId = this.currentUserId;
+    },
+    requireReviewReload(requireFull) {
+      this.reviewAuthNeedsReload = true;
+      if (requireFull) this.reviewFullReloadRequired = true;
+    }
+  };
+  assert.equal(bindReviewAuth.call(switchingPage, { user: { id: 8 } }), true);
+  assert.equal(clearedForUserId, 7);
+  assert.equal(switchingPage.currentUserId, 8);
+  assert.equal(switchingPage.authGeneration, 4);
+  assert.equal(switchingPage.reviewAuthNeedsReload, true);
+  assert.equal(bindReviewAuth.call(switchingPage, { user: { id: 8 } }), false);
+  assert.equal(switchingPage.authGeneration, 4);
+});
+
+test("review mutations stay locked until a scoped late result is authoritatively reconciled", async () => {
+  const source = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
+  assert.match(source, /beginReviewMutation\(viewerUserId, reloadScope = "all"\)/);
+  assert.match(source, /async finishReviewMutation\(mutationId, viewerUserId\)/);
+  assert.match(source, /releaseSettledReviewMutation\(\)/);
+
+  for (const [marker, scope] of [
+    ["async uploadChosenPhotos(items)", "album"],
+    ["async saveReview()", "all"],
+    ["async cancelDraft()", "all"]
+  ]) {
+    const body = extractMethodBody(source, marker);
+    assert.match(
+      body,
+      new RegExp(`const mutationId = this\\.beginReviewMutation\\(viewerUserId, "${scope}"\\)`)
+    );
+    assert.match(body, /await this\.finishReviewMutation\(mutationId, viewerUserId\)/);
+  }
+
+  const finishBody = extractMethodBody(
+    source,
+    "    async finishReviewMutation(mutationId, viewerUserId) {"
+  );
+  const finishReviewMutation = new Function(
+    `return async function finishReviewMutation(mutationId, viewerUserId) {${finishBody}};`
+  )();
+  let resolveReload;
+  const reloadStarted = new Promise((resolve) => {
+    resolveReload = resolve;
+  });
+  let releaseCalls = 0;
+  const page = {
+    activeReviewMutationId: 11,
+    activeReviewMutationViewerUserId: 7,
+    activeReviewMutationReloadScope: "album",
+    reviewMutationSettled: false,
+    reviewAuthNeedsReload: false,
+    reviewPageVisible: true,
+    currentUserId: 7,
+    saving: true,
+    isActiveReviewMutation(id, userId) {
+      return id === this.activeReviewMutationId &&
+        String(userId) === String(this.activeReviewMutationViewerUserId) &&
+        String(userId) === String(this.currentUserId);
+    },
+    requireReviewReload(requireFull) {
+      this.reviewAuthNeedsReload = true;
+      if (requireFull) this.reviewFullReloadRequired = true;
+    },
+    async reloadRequiredReviewState() {
+      await reloadStarted;
+      this.reviewAuthNeedsReload = false;
+    },
+    releaseSettledReviewMutation() {
+      releaseCalls += 1;
+      this.activeReviewMutationId = 0;
+      this.activeReviewMutationViewerUserId = "";
+      this.reviewMutationSettled = false;
+      this.saving = false;
+    }
+  };
+
+  const finishing = finishReviewMutation.call(page, 11, 7);
+  await Promise.resolve();
+  assert.equal(page.reviewMutationSettled, true);
+  assert.equal(page.reviewAuthNeedsReload, true);
+  assert.equal(page.saving, true, "late mutation must remain locked while reload is pending");
+  assert.equal(releaseCalls, 0);
+  resolveReload();
+  await finishing;
+  assert.equal(releaseCalls, 1);
+  assert.equal(page.saving, false);
+
+  const hiddenPage = {
+    ...page,
+    activeReviewMutationId: 12,
+    activeReviewMutationViewerUserId: 7,
+    activeReviewMutationReloadScope: "all",
+    reviewMutationSettled: false,
+    reviewAuthNeedsReload: false,
+    reviewPageVisible: false,
+    saving: true,
+    releaseSettledReviewMutation() {
+      throw new Error("hidden page must wait for onShow reconciliation");
+    }
+  };
+  await finishReviewMutation.call(hiddenPage, 12, 7);
+  assert.equal(hiddenPage.reviewMutationSettled, true);
+  assert.equal(hiddenPage.reviewAuthNeedsReload, true);
+  assert.equal(hiddenPage.saving, true);
+
+  const reloadBody = extractMethodBody(source, "    async reloadRequiredReviewState() {");
+  const reloadRequiredReviewState = new Function(
+    `return async function reloadRequiredReviewState() {${reloadBody}};`
+  )();
+  const selectedState = { selectedAlbumPhotoIds: [44], photosTouched: true };
+  const albumOnlyPage = {
+    authGeneration: 4,
+    currentUserId: 7,
+    reviewReloadGeneration: 9,
+    reviewFullReloadRequired: false,
+    reviewAuthNeedsReload: true,
+    photoState: selectedState,
+    async loadMyReview() {
+      throw new Error("album-scoped reconciliation must preserve the local editor draft");
+    },
+    async loadReviewAlbum() {
+      this.albumPhotos = [{ id: 44, moderation_status: "pending" }];
+      return true;
+    },
+    isCurrentReviewAuth(generation, viewerUserId) {
+      return generation === this.authGeneration && viewerUserId === this.currentUserId;
+    }
+  };
+  await reloadRequiredReviewState.call(albumOnlyPage);
+  assert.equal(albumOnlyPage.photoState, selectedState);
+  assert.equal(albumOnlyPage.reviewAuthNeedsReload, false);
+
+  const supersededReloadPage = {
+    ...albumOnlyPage,
+    reviewReloadGeneration: 10,
+    reviewFullReloadRequired: false,
+    reviewAuthNeedsReload: true,
+    async loadReviewAlbum() {
+      this.reviewReloadGeneration += 1;
+      this.reviewFullReloadRequired = true;
+      return true;
+    }
+  };
+  await reloadRequiredReviewState.call(supersededReloadPage);
+  assert.equal(supersededReloadPage.reviewAuthNeedsReload, true);
+  assert.equal(supersededReloadPage.reviewFullReloadRequired, true);
+
+  const failedReloadPage = {
+    ...albumOnlyPage,
+    reviewReloadGeneration: 12,
+    reviewFullReloadRequired: false,
+    reviewAuthNeedsReload: true,
+    async loadReviewAlbum() {
+      return false;
+    }
+  };
+  assert.equal(await reloadRequiredReviewState.call(failedReloadPage), false);
+  assert.equal(
+    failedReloadPage.reviewAuthNeedsReload,
+    true,
+    "failed authoritative reload must keep mutation reconciliation pending"
+  );
+
+  const partialFullReloadPage = {
+    ...albumOnlyPage,
+    reviewReloadGeneration: 13,
+    reviewFullReloadRequired: true,
+    reviewAuthNeedsReload: true,
+    async loadMyReview() {
+      return false;
+    },
+    async loadReviewAlbum() {
+      return true;
+    }
+  };
+  assert.equal(await reloadRequiredReviewState.call(partialFullReloadPage), false);
+  assert.equal(partialFullReloadPage.reviewAuthNeedsReload, true);
+});
+
 test("content moderation status presentation only exposes the three approved user messages", () => {
   for (const status of ["pending", "processing", "error", "review"]) {
     assert.equal(contentModerationStatusText(status), PENDING_TEXT);
@@ -863,7 +1199,7 @@ test("stacked profile requests supersede only uploads started before their assoc
   assert.equal(toasts.at(-1)?.title, "图片已由已保存内容替代，请重新选择。");
 });
 
-test("review save blocks pending album photos without PUT and keeps legacy recovery available", async () => {
+test("review save still blocks unpreviewable ordinary pending album photos", async () => {
   const reviewSource = await readFile(new URL("../src/pages/session/review.vue", import.meta.url), "utf8");
   const saveReviewBody = extractMethodBody(reviewSource, "async saveReview()");
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;

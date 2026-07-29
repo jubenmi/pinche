@@ -31,6 +31,78 @@ test("signed fields win while old and local paths remain compatible", () => {
   });
 });
 
+test("author-private album media additionally requires the current viewer id", () => {
+  const photo = {
+    id: 17,
+    media_type: "image",
+    moderation_status: "pending",
+    publication_state: "author_only",
+    is_mine: true,
+    can_preview: true,
+    uploader_user_id: 7
+  };
+  assert.equal(albumMediaUrlHelpers.isAuthorPrivateAlbumMedia(photo, 7), true);
+  assert.equal(albumMediaUrlHelpers.isAuthorPrivateAlbumMedia(photo, 8), false);
+  assert.equal(
+    albumMediaUrlHelpers.isAuthorPrivateAlbumMedia({ ...photo, can_preview: false }, 7),
+    false
+  );
+  assert.equal(
+    albumMediaUrlHelpers.isAuthorPrivateAlbumMedia({ ...photo, uploader_user_id: "7" }, 7),
+    false
+  );
+});
+
+test("author-private viewer binding reuses the shared projection contract", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../src/utils/albumMediaUrls.js", import.meta.url), "utf8")
+  );
+  const authorPrivateBlock = source.slice(
+    source.indexOf("export function isAuthorPrivateAlbumMedia"),
+    source.indexOf("export function isPreviewableAlbumMedia")
+  );
+  assert.match(authorPrivateBlock, /isAuthorPrivateAlbumMediaProjection\(photo\)/);
+  assert.match(
+    authorPrivateBlock,
+    /samePositiveUserId\(photo\?\.uploader_user_id,\s*viewerUserId\)/
+  );
+  assert.doesNotMatch(source, /AUTHOR_PRIVATE_MEDIA_STATUSES/);
+});
+
+test("refresh controller keeps renewed author-private preview capabilities", async () => {
+  let album = {
+    photos: [{
+      id: 17,
+      media_type: "image",
+      moderation_status: "pending",
+      publication_state: "author_only",
+      is_mine: true,
+      can_preview: true,
+      uploader_user_id: 7,
+      preview_display_url: "old"
+    }]
+  };
+  const controller = createAlbumMediaRefreshController({
+    readAlbum: () => album,
+    writeAlbum: (next) => { album = next; },
+    reloadAlbum: async () => ({
+      photos: [{
+        ...album.photos[0],
+        preview_display_url: "new",
+        thumbnail_display_url: "new-thumb",
+        media_url_expires_at: "2026-07-29T12:00:00.000Z"
+      }]
+    }),
+    setTimer: () => 1,
+    clearTimer: () => {}
+  });
+  await controller.refresh();
+  assert.equal(album.photos.length, 1);
+  assert.equal(album.photos[0].preview_display_url, "new");
+  assert.equal(album.photos[0].thumbnail_display_url, "new-thumb");
+  assert.equal(album.photos[0].media_url_expires_at, "2026-07-29T12:00:00.000Z");
+});
+
 test("concurrent refreshes cause one full-album reload and preserve page state", async () => {
   let loads = 0;
   let album = {

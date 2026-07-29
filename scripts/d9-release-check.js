@@ -48,7 +48,11 @@ async function assertProductionApiReady() {
   const health = await readReleaseJson("/health");
   assert(health.ok === true, "/health should report ok");
   assert(
-    health.config?.wechatMockLogin === false,
+    health.capabilities?.production === true,
+    "/health should report production mode"
+  );
+  assert(
+    health.capabilities?.wechatMockLogin === false,
     "/health should report production WeChat login"
   );
 

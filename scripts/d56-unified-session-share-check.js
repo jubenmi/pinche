@@ -301,15 +301,19 @@ for (const requiredText of [
   "join: Object.freeze({",
   "claim: Object.freeze({",
   "imageUrl: '/static/art/photo-claim-share.jpg'",
+  "import { isBusinessDateTimeReached } from '@pinche/shared'",
   "typeof session?.has_started === 'boolean'",
-  "return session.has_started ? 'claim' : 'join'"
+  "return session.has_started ? 'claim' : 'join'",
+  "isBusinessDateTimeReached(session?.start_at, now)"
 ]) {
   if (!helperSource.includes(requiredText)) {
     fail(`Session share helper is missing: ${requiredText}`);
   }
 }
 const booleanPriorityIndex = helperSource.indexOf("typeof session?.has_started === 'boolean'");
-const dateFallbackIndex = helperSource.indexOf("Date.parse(session?.start_at)");
+const dateFallbackIndex = helperSource.indexOf(
+  "isBusinessDateTimeReached(session?.start_at, now)"
+);
 if (
   booleanPriorityIndex < 0 ||
   dateFallbackIndex < 0 ||
