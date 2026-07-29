@@ -54,8 +54,31 @@ const LOCAL_MEDIA_FIELDS = Object.freeze([
   "local_preview_path"
 ]);
 
+const AUTHOR_PRIVATE_MEDIA_STATUSES = new Set([
+  "pending",
+  "processing",
+  "error",
+  "review",
+  "rejected"
+]);
+
+function isPositiveInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 export function isModerationPublished(status) {
   return status === "approved" || status === "approved_legacy";
+}
+
+export function isAuthorPrivateAlbumMediaProjection(photo = {}) {
+  return (
+    ["image", "video"].includes(photo?.media_type) &&
+    AUTHOR_PRIVATE_MEDIA_STATUSES.has(photo?.moderation_status) &&
+    photo?.publication_state === "author_only" &&
+    photo?.is_mine === true &&
+    photo?.can_preview === true &&
+    isPositiveInteger(photo?.uploader_user_id)
+  );
 }
 
 export function isApprovedAlbumImageDownloadCandidate(photo = {}, normalizedDownloadUrl = "") {
@@ -221,11 +244,10 @@ function mergeMediaCollection(currentItems = [], refreshedItems = []) {
   const currentById = new Map(currentItems.map((item) => [Number(item.id), item]));
   return refreshedItems.map((refreshed) => {
     const current = currentById.get(Number(refreshed.id));
-    if (!current) {
-      return refreshed;
-    }
-    const next = { ...current, ...refreshed };
-    if (!isModerationPublished(refreshed.moderation_status)) {
+    const next = { ...(current || {}), ...refreshed };
+    if (isAuthorPrivateAlbumMediaProjection(refreshed)) {
+      delete next.download_url;
+    } else if (!isModerationPublished(refreshed.moderation_status)) {
       for (const field of [...URL_FIELDS, ...LOCAL_MEDIA_FIELDS]) {
         delete next[field];
       }

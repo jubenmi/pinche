@@ -76,6 +76,9 @@
       <view v-if="displayPhotos.length" class="photo-grid">
         <view v-for="(photo, index) in displayPhotos" :key="photo.key" class="photo-cell">
           <t-image class="photo-image" :src="photo.url" mode="aspectFill" />
+          <view v-if="photo.moderationText" class="photo-moderation-badge">
+            {{ photo.moderationText }}
+          </view>
           <t-button
             v-if="!photo.legacy"
             class="photo-remove"
@@ -145,6 +148,12 @@
               @tap="toggleAlbumPhoto(photo.id)"
             >
               <t-image class="album-picker-image" :src="albumPhotoUrl(photo)" mode="aspectFill" />
+              <view
+                v-if="albumPhotoModerationText(photo)"
+                class="album-picker-moderation-badge"
+              >
+                {{ albumPhotoModerationText(photo) }}
+              </view>
               <view v-if="isAlbumPhotoSelected(photo.id)" class="selected-mark">已选</view>
             </view>
           </view>
@@ -161,18 +170,22 @@ import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import { uploadAlbumPhoto } from "../../utils/albumPhotoUpload";
 import {
+  AUTH_CHANGE_EVENT,
   apiUrl,
   dataOf,
   ensureLoggedIn,
+  getCurrentUser,
   request
 } from "../../utils/api";
 import {
   buildSessionReviewPhotoRequest,
   createSessionReviewPhotoState,
+  isSelectableSessionReviewAlbumPhoto,
   switchSessionReviewPhotoSource,
   toggleSessionReviewAlbumPhoto
 } from "../../utils/sessionReviewPhotos";
 import {
+  authorPrivateContentModerationStatusText,
   contentModerationErrorText,
   contentModerationStatusText
 } from "../../utils/contentModeration";
@@ -187,6 +200,19 @@ export default {
   data() {
     return {
       sessionId: "",
+      currentUserId: "",
+      authGeneration: 0,
+      reviewLoadGeneration: 0,
+      albumLoadGeneration: 0,
+      reviewPageVisible: false,
+      reviewAuthNeedsReload: true,
+      reviewReloadGeneration: 0,
+      reviewFullReloadRequired: true,
+      reviewMutationSequence: 0,
+      activeReviewMutationId: 0,
+      activeReviewMutationViewerUserId: "",
+      activeReviewMutationReloadScope: "",
+      reviewMutationSettled: false,
       canReview: false,
       rating: 5,
       content: "",
@@ -231,6 +257,7 @@ export default {
           id: Number(photo.id),
           key: `album-${photo.id}`,
           url: this.albumPhotoUrl(photo),
+          moderationText: this.albumPhotoModerationText(photo),
           legacy: false
         }));
       }
@@ -238,6 +265,7 @@ export default {
         id: null,
         key: `legacy-${index}-${url}`,
         url: apiUrl(url),
+        moderationText: "",
         legacy: true
       }));
     },
@@ -252,28 +280,201 @@ export default {
   },
   async onLoad(options) {
     this.sessionId = options.id || "";
+    this.observeReviewAuthChanges();
     const auth = await ensureLoggedIn({
       content: "登录后可以写自己的车局记录。"
     });
-    if (!auth) {
+    if (!auth?.user) {
+      this.bindReviewAuth({});
       this.statusText = "登录后可继续写记录。";
       return;
     }
-    await Promise.all([this.loadMyReview(), this.loadReviewAlbum()]);
+    this.bindReviewAuth(auth);
+    await this.reloadCurrentReviewState();
+  },
+  async onShow() {
+    this.reviewPageVisible = true;
+    const accountChanged = this.bindReviewAuth(getCurrentUser());
+    if (!this.sessionId || !this.currentUserId) {
+      if (!this.currentUserId) this.statusText = "登录后可继续写记录。";
+      return;
+    }
+    if (accountChanged) {
+      await this.reloadCurrentReviewState();
+      this.releaseSettledReviewMutation();
+      return;
+    }
+    if (this.reviewAuthNeedsReload) {
+      await this.reloadRequiredReviewState();
+      this.releaseSettledReviewMutation();
+      return;
+    }
+    await this.loadReviewAlbum();
+  },
+  onHide() {
+    this.reviewPageVisible = false;
+    this.authGeneration += 1;
+    this.requireReviewReload(false);
+    this.invalidateReviewRequests();
+    this.clearAuthorPrivateReviewAlbumState();
+  },
+  onUnload() {
+    this.reviewPageVisible = false;
+    this.authGeneration += 1;
+    this.invalidateReviewRequests();
+    this.clearAuthorPrivateReviewAlbumState();
+    this.unobserveReviewAuthChanges();
   },
   methods: {
+    observeReviewAuthChanges() {
+      if (typeof uni !== "undefined" && typeof uni.$on === "function") {
+        uni.$on(AUTH_CHANGE_EVENT, this.handleReviewAuthChange);
+      }
+    },
+    unobserveReviewAuthChanges() {
+      if (typeof uni !== "undefined" && typeof uni.$off === "function") {
+        uni.$off(AUTH_CHANGE_EVENT, this.handleReviewAuthChange);
+      }
+    },
+    invalidateReviewRequests() {
+      this.reviewLoadGeneration += 1;
+      this.albumLoadGeneration += 1;
+    },
+    isCurrentReviewAuth(authGeneration, viewerUserId) {
+      return Boolean(
+        this.reviewPageVisible &&
+        authGeneration === this.authGeneration &&
+        String(viewerUserId || "") === String(this.currentUserId || "")
+      );
+    },
+    clearAuthorPrivateReviewAlbumState() {
+      this.albumPhotos = (this.albumPhotos || []).filter((photo) =>
+        isModerationPublished(photo?.moderation_status)
+      );
+    },
+    resetReviewStateForAccountChange() {
+      this.invalidateReviewRequests();
+      this.reviewMutationSequence += 1;
+      this.activeReviewMutationId = 0;
+      this.activeReviewMutationViewerUserId = "";
+      this.activeReviewMutationReloadScope = "";
+      this.reviewMutationSettled = false;
+      this.albumPhotos = [];
+      this.photoState = createSessionReviewPhotoState();
+      this.albumPickerVisible = false;
+      this.pendingPhotoCount = 0;
+      this.activeDraft = null;
+      this.canReview = false;
+      this.rating = 5;
+      this.content = "";
+      this.statusText = "";
+      this.saving = false;
+    },
+    requireReviewReload(requireFull) {
+      this.reviewReloadGeneration += 1;
+      this.reviewAuthNeedsReload = true;
+      if (requireFull) this.reviewFullReloadRequired = true;
+    },
+    beginReviewMutation(viewerUserId, reloadScope = "all") {
+      const mutationId = ++this.reviewMutationSequence;
+      this.activeReviewMutationId = mutationId;
+      this.activeReviewMutationViewerUserId = viewerUserId;
+      this.activeReviewMutationReloadScope = reloadScope === "album" ? "album" : "all";
+      this.reviewMutationSettled = false;
+      this.saving = true;
+      return mutationId;
+    },
+    isActiveReviewMutation(mutationId, viewerUserId) {
+      return Boolean(
+        Number(mutationId) > 0 &&
+        mutationId === this.activeReviewMutationId &&
+        String(viewerUserId || "") === String(this.activeReviewMutationViewerUserId || "") &&
+        String(viewerUserId || "") === String(this.currentUserId || "")
+      );
+    },
+    releaseSettledReviewMutation() {
+      if (
+        !this.reviewMutationSettled ||
+        !this.reviewPageVisible ||
+        this.reviewAuthNeedsReload ||
+        !this.isActiveReviewMutation(
+          this.activeReviewMutationId,
+          this.activeReviewMutationViewerUserId
+        )
+      ) return false;
+      this.activeReviewMutationId = 0;
+      this.activeReviewMutationViewerUserId = "";
+      this.activeReviewMutationReloadScope = "";
+      this.reviewMutationSettled = false;
+      this.saving = false;
+      return true;
+    },
+    async finishReviewMutation(mutationId, viewerUserId) {
+      if (!this.isActiveReviewMutation(mutationId, viewerUserId)) return;
+      const requireFull = this.activeReviewMutationReloadScope === "all";
+      this.reviewMutationSettled = true;
+      this.requireReviewReload(requireFull);
+      if (!this.reviewPageVisible) return;
+      await this.reloadRequiredReviewState();
+      if (
+        !this.reviewPageVisible ||
+        !this.isActiveReviewMutation(mutationId, viewerUserId)
+      ) return;
+      this.releaseSettledReviewMutation();
+    },
+    bindReviewAuth(auth) {
+      const nextUserId = auth?.user?.id || "";
+      const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
+      if (accountChanged) {
+        this.authGeneration += 1;
+        this.resetReviewStateForAccountChange();
+        this.requireReviewReload(true);
+      }
+      this.currentUserId = nextUserId;
+      return accountChanged;
+    },
+    async handleReviewAuthChange(auth = {}) {
+      const accountChanged = this.bindReviewAuth(auth);
+      if (!accountChanged || !this.reviewPageVisible) return;
+      if (!this.currentUserId) {
+        this.statusText = "登录后可继续写记录。";
+        return;
+      }
+      await this.reloadCurrentReviewState();
+    },
+    async reloadCurrentReviewState() {
+      this.requireReviewReload(true);
+      return this.reloadRequiredReviewState();
+    },
+    async reloadRequiredReviewState() {
+      const authGeneration = this.authGeneration;
+      const viewerUserId = this.currentUserId;
+      const reloadGeneration = this.reviewReloadGeneration;
+      let reloadSucceeded = false;
+      if (this.reviewFullReloadRequired) {
+        const results = await Promise.all([this.loadMyReview(), this.loadReviewAlbum()]);
+        reloadSucceeded = results.every((result) => result === true);
+      } else {
+        reloadSucceeded = await this.loadReviewAlbum() === true;
+      }
+      const reloadIsCurrent = Boolean(
+        this.isCurrentReviewAuth(authGeneration, viewerUserId) &&
+        reloadGeneration === this.reviewReloadGeneration
+      );
+      if (reloadSucceeded && reloadIsCurrent) {
+        this.reviewAuthNeedsReload = false;
+        this.reviewFullReloadRequired = false;
+      }
+      return reloadSucceeded && reloadIsCurrent;
+    },
     onContentChange(event) {
       this.content = String(event?.detail?.value ?? event?.detail ?? "").slice(0, 900);
     },
     isSelectableAlbumPhoto(photo) {
-      return Boolean(
-        photo &&
-        Number(photo.id) > 0 &&
-        photo.media_type !== "video" &&
-        String(photo.status || "active") === "active" &&
-        String(photo.processing_status || "ready") === "ready" &&
-        isModerationPublished(photo.moderation_status)
-      );
+      return isSelectableSessionReviewAlbumPhoto(photo, this.currentUserId);
+    },
+    albumPhotoModerationText(photo) {
+      return authorPrivateContentModerationStatusText(photo?.moderation_status);
     },
     albumPhotoUrl(photo) {
       const path = photo?.thumbnail_load_url || photo?.preview_load_url ||
@@ -284,17 +485,24 @@ export default {
     async loadMyReview() {
       if (!this.sessionId) {
         this.statusText = "请从车详情或我的车局进入记录页。";
-        return;
+        return false;
       }
+      const authGeneration = this.authGeneration;
+      const viewerUserId = this.currentUserId;
+      const requestGeneration = ++this.reviewLoadGeneration;
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/review` });
+        if (
+          !this.isCurrentReviewAuth(authGeneration, viewerUserId) ||
+          requestGeneration !== this.reviewLoadGeneration
+        ) return false;
         const data = dataOf(response) || {};
         this.canReview = Boolean(data.can_review);
         this.statusText = this.canReview ? "" : "到发车时间后，已上车玩家可以写记录。";
         if (!data.review) {
           this.activeDraft = null;
           this.photoState = createSessionReviewPhotoState();
-          return;
+          return true;
         }
         this.rating = Number(data.review.rating || 5);
         this.content = String(data.review.content || "").slice(0, 900);
@@ -306,18 +514,41 @@ export default {
           ? data.review.author_private
           : null;
         if (this.activeDraft) this.statusText = authorPrivateStatusText(this.activeDraft);
+        return true;
       } catch (error) {
-        this.statusText = "记录加载失败，请稍后重试。";
+        if (
+          this.isCurrentReviewAuth(authGeneration, viewerUserId) &&
+          requestGeneration === this.reviewLoadGeneration
+        ) {
+          this.statusText = "记录加载失败，请稍后重试。";
+        }
+        return false;
       }
     },
     async loadReviewAlbum() {
-      if (!this.sessionId) return;
+      if (!this.sessionId) return false;
+      const authGeneration = this.authGeneration;
+      const viewerUserId = this.currentUserId;
+      const requestGeneration = ++this.albumLoadGeneration;
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album` });
+        if (
+          !this.isCurrentReviewAuth(authGeneration, viewerUserId) ||
+          requestGeneration !== this.albumLoadGeneration
+        ) return false;
         const data = dataOf(response) || {};
-        this.albumPhotos = (data.photos || []).filter((photo) => this.isSelectableAlbumPhoto(photo));
+        this.albumPhotos = (data.photos || []).filter((photo) =>
+          isSelectableSessionReviewAlbumPhoto(photo, viewerUserId)
+        );
+        return true;
       } catch (error) {
-        this.albumPhotos = [];
+        if (
+          this.isCurrentReviewAuth(authGeneration, viewerUserId) &&
+          requestGeneration === this.albumLoadGeneration
+        ) {
+          this.albumPhotos = [];
+        }
+        return false;
       }
     },
     hasCurrentPhotoSelection() {
@@ -351,6 +582,7 @@ export default {
       }
     },
     openCurrentPhotoAction() {
+      if (this.saving || !this.canEditDraft) return;
       if (this.photoState.source === "album") this.albumPickerVisible = true;
       if (this.photoState.source === "upload") this.choosePhonePhotos();
     },
@@ -409,22 +641,28 @@ export default {
       });
     },
     async uploadChosenPhotos(items) {
-      if (!items.length) return;
-      this.saving = true;
+      if (!items.length || this.saving) return;
+      const authGeneration = this.authGeneration;
+      const viewerUserId = this.currentUserId;
+      if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
+      const mutationId = this.beginReviewMutation(viewerUserId, "album");
       this.pendingPhotoCount = 0;
       let failedCount = 0;
       try {
         for (const [index, item] of items.entries()) {
+          if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
           if (this.photoState.selectedAlbumPhotoIds.length >= 9) break;
           this.statusText = `正在上传照片 ${index + 1}/${items.length}...`;
           try {
             const prepared = await this.photoFileInfo(item);
             if (!prepared.filePath || !prepared.fileSize) throw new Error("photo size unavailable");
+            if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
             const result = await uploadAlbumPhoto({
               sessionId: this.sessionId,
               ...prepared
             });
             const photo = result?.photo;
+            if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
             if (this.isSelectableAlbumPhoto(photo)) {
               const photoId = Number(photo.id);
               this.albumPhotos = [
@@ -438,9 +676,11 @@ export default {
               this.pendingPhotoCount += 1;
             }
           } catch (error) {
+            if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
             failedCount += 1;
           }
         }
+        if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
         if (this.pendingPhotoCount > 0) {
           this.statusText = contentModerationStatusText("review");
         } else if (failedCount > 0) {
@@ -448,9 +688,8 @@ export default {
         } else {
           this.statusText = "";
         }
-        await this.loadReviewAlbum();
       } finally {
-        this.saving = false;
+        await this.finishReviewMutation(mutationId, viewerUserId);
       }
     },
     async saveReview() {
@@ -459,7 +698,9 @@ export default {
         this.statusText = contentModerationStatusText("review");
         return;
       }
-      this.saving = true;
+      const authGeneration = this.authGeneration;
+      const viewerUserId = this.currentUserId;
+      const mutationId = this.beginReviewMutation(viewerUserId, "all");
       this.statusText = "正在发布记录...";
       try {
         const response = await request({
@@ -474,6 +715,7 @@ export default {
               : {})
           }
         });
+        if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
         const result = dataOf(response);
         if (isAuthorPrivateText(result)) {
           this.activeDraft = result;
@@ -492,6 +734,7 @@ export default {
           this.statusText = "记录已发布，可从车局详情查看。";
         }
       } catch (error) {
+        if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
         const moderationMessage = contentModerationErrorText(error);
         if (moderationMessage) {
           this.statusText = moderationMessage;
@@ -505,24 +748,30 @@ export default {
           this.statusText = "记录发布失败，请稍后重试。";
         }
       } finally {
-        this.saving = false;
+        await this.finishReviewMutation(mutationId, viewerUserId);
       }
     },
     async cancelDraft() {
       if (!this.activeDraft || this.saving) return;
-      this.saving = true;
+      const authGeneration = this.authGeneration;
+      const viewerUserId = this.currentUserId;
+      const mutationId = this.beginReviewMutation(viewerUserId, "all");
       try {
         await request({
           url: `/api/content-moderation/author-drafts/${this.activeDraft.draft_id}`,
           method: "DELETE"
         });
+        if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
         this.activeDraft = null;
         await this.loadMyReview();
+        if (!this.isCurrentReviewAuth(authGeneration, viewerUserId)) return;
         showToast({ title: "已取消这版内容", icon: "none" });
       } catch (error) {
-        this.statusText = error?.userMessage || "取消失败，请稍后重试。";
+        if (this.isCurrentReviewAuth(authGeneration, viewerUserId)) {
+          this.statusText = error?.userMessage || "取消失败，请稍后重试。";
+        }
       } finally {
-        this.saving = false;
+        await this.finishReviewMutation(mutationId, viewerUserId);
       }
     }
   }
@@ -715,6 +964,21 @@ export default {
 .album-picker-image {
   width: 100%;
   height: 100%;
+}
+
+.photo-moderation-badge,
+.album-picker-moderation-badge {
+  position: absolute;
+  top: 8rpx;
+  right: 8rpx;
+  left: 8rpx;
+  padding: 5rpx 8rpx;
+  border-radius: 8rpx;
+  background: rgba(18, 56, 47, 0.82);
+  color: #ffffff;
+  font-size: 18rpx;
+  line-height: 1.35;
+  text-align: center;
 }
 
 .photo-remove {

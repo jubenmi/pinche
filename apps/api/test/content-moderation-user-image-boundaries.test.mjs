@@ -148,6 +148,93 @@ function reviewConnection({ published = true } = {}) {
   };
 }
 
+function reviewAlbumConnection({
+  uploaderUserId = 7,
+  authorVisibilityVersion = 1,
+  moderationStatus = "pending"
+} = {}) {
+  const calls = [];
+  return {
+    calls,
+    async query(sql, params = []) {
+      const text = String(sql);
+      calls.push({ sql: text, params });
+      if (text.includes("review_eligible_at") && text.includes("FROM signups")) {
+        return [[{
+          id: 4,
+          seat_id: 5,
+          review_eligible_at: "2026-07-17T00:00:00.000Z",
+          session_start_at: "2026-07-16T00:00:00.000Z",
+          signup_status: "confirmed",
+          seat_status: "occupied"
+        }]];
+      }
+      if (text.includes("SELECT * FROM sessions WHERE id = ?")) {
+        return [[{ id: 9, created_by_user_id: 7, status: "published" }]];
+      }
+      if (text.includes("FROM session_album_photos") && text.includes("WHERE id IN")) {
+        return [[{
+          id: 31,
+          session_id: 9,
+          uploader_user_id: uploaderUserId,
+          author_visibility_version: authorVisibilityVersion,
+          moderation_status: moderationStatus,
+          status: "active",
+          media_type: "image",
+          processing_status: "ready"
+        }]];
+      }
+      if (text.includes("INSERT INTO session_reviews")) return [{ insertId: 61 }];
+      if (text.includes("SELECT *") && text.includes("FROM session_reviews")) {
+        return [[{ id: 61, session_id: 9, user_id: 7 }]];
+      }
+      if (text.includes("SELECT image_asset_id") && text.includes("session_review_photos")) {
+        return [[]];
+      }
+      if (/^\s*SELECT\b/i.test(text)) return [[]];
+      return [{ affectedRows: 1, insertId: 1 }];
+    }
+  };
+}
+
+test("review may associate the current user's version-one author-private album photo", async () => {
+  const connection = reviewAlbumConnection({ uploaderUserId: 7, authorVisibilityVersion: 1 });
+  const result = await upsertMySessionReviewWithConnection(
+    connection,
+    { user: { id: 7 } },
+    9,
+    { rating: 5, content: "", albumPhotoIds: [31] }
+  );
+  const insert = connection.calls.find((call) =>
+    call.sql.includes("INSERT INTO session_review_photos")
+  );
+  assert.deepEqual(insert.params, [61, 31, 0]);
+  assert.deepEqual(result.photos, []);
+  assert.deepEqual(result.album_photo_ids, [31]);
+});
+
+test("review rejects another user's or version-zero pending album photo before business write", async () => {
+  for (const options of [
+    { uploaderUserId: 8, authorVisibilityVersion: 1 },
+    { uploaderUserId: 7, authorVisibilityVersion: 0 }
+  ]) {
+    const connection = reviewAlbumConnection(options);
+    await assert.rejects(
+      upsertMySessionReviewWithConnection(
+        connection,
+        { user: { id: 7 } },
+        9,
+        { rating: 5, content: "", albumPhotoIds: [31] }
+      ),
+      { code: "BAD_REQUEST" }
+    );
+    assert.equal(
+      connection.calls.some((call) => call.sql.includes("INSERT INTO session_reviews")),
+      false
+    );
+  }
+});
+
 test("review photo association stores only the current user's published review asset id", async () => {
   const connection = reviewConnection();
 
@@ -381,8 +468,10 @@ test("review and user serialization boundaries retain only explicitly bound publ
   ]);
   const reviewPhotos = core.slice(core.indexOf("async function reviewPhotos"), core.indexOf("export async function listSessionReviews"));
   assert.match(reviewPhotos, /JOIN user_image_assets/);
-  assert.match(reviewPhotos, /isModerationPublished/);
+  assert.match(reviewPhotos, /projectSessionReviewPhotoRows\(rows, options\)/);
   assert.match(reviewPhotos, /album_photo_moderation_status/);
+  assert.match(reviewPhotos, /album_photo_uploader_user_id/);
+  assert.match(reviewPhotos, /album_photo_author_visibility_version/);
   assert.match(reviewPhotos, /image_asset_moderation_status/);
   assert.doesNotMatch(reviewPhotos, /image_asset_id IS NULL/);
   assert.match(users, /findOwnedPublishedUserImageAsset/);
