@@ -924,11 +924,26 @@ assert.equal(
 );
 assert.match(sharedMedia, /isAuthorPrivateAlbumMediaProjection\(refreshed\)/);
 assert.match(sharedMedia, /delete next\.download_url/);
-assert.match(reviewPage, /this\.currentUserId\s*=\s*auth\.user\.id/);
+assert.match(reviewPage, /this\.bindReviewAuth\(auth\)/);
 assert.match(
   reviewPage,
   /isSelectableSessionReviewAlbumPhoto\(photo,\s*this\.currentUserId\)/
 );
+assert.match(reviewPage, /authorPrivateContentModerationStatusText/);
+assert.match(reviewPage, /AUTH_CHANGE_EVENT/);
+assert.match(
+  reviewPage,
+  /onHide\(\)[\s\S]*authGeneration \+= 1[\s\S]*requireReviewReload\(false\)[\s\S]*clearAuthorPrivateReviewAlbumState\(\)/
+);
+assert.match(
+  reviewPage,
+  /isCurrentReviewAuth\(authGeneration,\s*viewerUserId\)/
+);
+assert.match(reviewPage, /beginReviewMutation\(viewerUserId, reloadScope = "all"\)/);
+assert.match(reviewPage, /beginReviewMutation\(viewerUserId, "album"\)/);
+assert.match(reviewPage, /finishReviewMutation\(mutationId, viewerUserId\)/);
+assert.match(reviewPage, /reloadRequiredReviewState\(\)/);
+assert.match(reviewPage, /reloadSucceeded && reloadIsCurrent/);
 assert.match(coreService, /isAssociableSessionReviewAlbumPhoto\(/);
 assert.match(
   coreService,
@@ -954,7 +969,7 @@ Expected: PASS。
 在 `package.json` scripts 增加：
 
 ```json
-"d55:unit": "node --test packages/shared/test/albumMedia.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs apps/miniprogram/test/sessionReviewPhotos.test.mjs apps/api/test/session-review-album-photos.test.mjs apps/api/test/content-moderation-user-image-boundaries.test.mjs",
+"d55:unit": "node --test packages/shared/test/albumMedia.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs apps/miniprogram/test/sessionReviewPhotos.test.mjs apps/miniprogram/test/contentModeration.test.mjs apps/api/test/session-review-album-photos.test.mjs apps/api/test/content-moderation-user-image-boundaries.test.mjs",
 "d55:check": "node scripts/d55-album-author-private-image-preview-check.js"
 ```
 
@@ -1109,7 +1124,7 @@ Expected: D55 文件无 whitespace 错误；原有 `package-lock.json`、D48 和
 
 - `npm run d46:unit`：170/170 PASS；`npm run d46:check`：3/3 与两项静态检查 PASS。
 - `npm run d49:unit`：17/17 PASS；`npm run d49:check`：PASS。
-- `npm run d55:unit`：63/63 PASS；`npm run d55:check`：PASS。
+- `npm run d55:unit`：终审修正后 85/85 PASS；`npm run d55:check`：PASS。
 - 补充隐私与泄漏回归：57/57 PASS，覆盖相册未审核 URL、作者 capability、公共泄漏门、评价公共字节门和小程序审核行为。
 - `npm --workspace apps/miniprogram run build:mp-weixin`：exit 0；仅有既存 Sass legacy API / `@import` 弃用警告。
 - `npm run check`：未完成为 GREEN。D55 precheck 与前序测试均通过，随后在既有小程序包体积门禁失败：
@@ -1120,3 +1135,45 @@ Expected: D55 文件无 whitespace 错误；原有 `package-lock.json`、D48 和
   `CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED` 从 `false` 改为 `true`；`.env.example` 与
   `.env.production.example` 仍为 `false`，配置解析验证 PASS。该本地状态不代表线上已经部署或重启。
 - 尚未执行：真实审核 provider、API/Worker 同配置滚动重启、双账号及匿名端到端验收、审核通过/拒绝回调后的线上验证。
+
+### Task 9：终审修正评价页状态与 capability 生命周期
+
+**Files:**
+
+- Modify: `apps/miniprogram/src/pages/session/review.vue`
+- Modify: `apps/miniprogram/test/contentModeration.test.mjs`
+- Modify: `scripts/d55-album-author-private-image-preview-check.js`
+- Modify: `package.json`
+
+- [x] **Step 1：补作者私有状态文案 RED/GREEN**
+
+终审确认评价页虽显示并自动选择真实图片，但没有在已选图片区和相册 picker 持续显示
+“仅自己可见 · 审核中 / 进一步审核 / 未通过”。先增加失败契约，再复用
+`authorPrivateContentModerationStatusText` 将安全文案叠加在真实图片上；公开图片不显示该 badge。
+
+- [x] **Step 2：补账号切换、页面隐藏与过期返回保护**
+
+评价页监听 `AUTH_CHANGE_EVENT`；账号改变时同步清空上一账号的相册、评价草稿和选择状态。
+`onHide`/`onUnload` 清除未公开媒体 DTO 与 capability，`onShow` 使用当前认证身份权威刷新。
+相册、本人评价、上传、保存与取消操作均绑定认证 generation；隐藏、切换账号或新请求会使旧响应失效。
+终审复核另覆盖“隐藏后快速重新显示”竞态：`onHide` 推进 generation 并标记相册权威刷新，
+所以隐藏前读取即使在页面重新显示后才返回，也无法重新通过身份校验或回写旧 capability。
+不可取消的 mutation 不在隐藏时解锁；上传落定后只刷新相册以保留刚自动选中的图片和本地编辑，
+评价保存/取消落定后才全量刷新，避免旧请求与第二次提交并发覆盖。所需权威刷新若失败，
+继续保留 mutation 锁与待重试标记，后续成功刷新后才解锁。
+
+- [x] **Step 3：把终审回归接入 D55 命令**
+
+`d55:unit` 加入 `contentModeration.test.mjs`，静态检查增加状态 badge、认证事件、页面隐藏清理和
+异步身份二次验证契约。
+
+- [x] **Step 4：执行终审修正验证**
+
+- 首次页面契约：18/20 PASS，缺少状态呈现与认证生命周期的两个测试按预期 RED。
+- 快速隐藏/显示竞态契约：19/21 PASS，缺少页面 generation 推进与 mutation 锁跨隐藏保护的两个断言按预期 RED。
+- mutation 范围契约：20/22 PASS，缺少上传仅刷新相册与保存/取消全量刷新的两个契约按预期 RED。
+- 权威刷新失败契约：21/22 PASS，loader 吞错后误清重载标记的契约按预期 RED。
+- 修正后小程序定向回归：48/48 PASS。
+- 修正后 `npm run d55:unit`：85/85 PASS；`npm run d55:check`：PASS。
+- 修正后小程序构建：exit 0；仅有既存 Sass 弃用警告。
+- 最终规范、质量与隐私三路只读复核均为 PASS，未发现剩余 Critical/Important。

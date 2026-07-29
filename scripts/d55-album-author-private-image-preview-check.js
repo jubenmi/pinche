@@ -40,11 +40,26 @@ assert.equal(
 );
 assert.match(sharedMedia, /isAuthorPrivateAlbumMediaProjection\(refreshed\)/);
 assert.match(sharedMedia, /delete next\.download_url/);
-assert.match(reviewPage, /this\.currentUserId\s*=\s*auth\.user\.id/);
+assert.match(reviewPage, /this\.bindReviewAuth\(auth\)/);
 assert.match(
   reviewPage,
   /isSelectableSessionReviewAlbumPhoto\(photo,\s*this\.currentUserId\)/
 );
+assert.match(reviewPage, /authorPrivateContentModerationStatusText/);
+assert.match(reviewPage, /AUTH_CHANGE_EVENT/);
+assert.match(
+  reviewPage,
+  /onHide\(\)[\s\S]*authGeneration \+= 1[\s\S]*requireReviewReload\(false\)[\s\S]*clearAuthorPrivateReviewAlbumState\(\)/
+);
+assert.match(
+  reviewPage,
+  /isCurrentReviewAuth\(authGeneration,\s*viewerUserId\)/
+);
+assert.match(reviewPage, /beginReviewMutation\(viewerUserId, reloadScope = "all"\)/);
+assert.match(reviewPage, /beginReviewMutation\(viewerUserId, "album"\)/);
+assert.match(reviewPage, /finishReviewMutation\(mutationId, viewerUserId\)/);
+assert.match(reviewPage, /reloadRequiredReviewState\(\)/);
+assert.match(reviewPage, /reloadSucceeded && reloadIsCurrent/);
 assert.match(coreService, /isAssociableSessionReviewAlbumPhoto\(/);
 assert.match(
   coreService,

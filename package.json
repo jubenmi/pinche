@@ -44,7 +44,7 @@
     "d53:unit": "node --test apps/api/test/album-share-selection.test.mjs apps/api/test/request-body-limits.test.mjs",
     "d53:check": "node scripts/d53-album-four-action-selection-check.js",
     "d53:smoke": "node scripts/d53-album-four-action-selection-smoke.js",
-    "d55:unit": "node --test packages/shared/test/albumMedia.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs apps/miniprogram/test/sessionReviewPhotos.test.mjs apps/api/test/session-review-album-photos.test.mjs apps/api/test/content-moderation-user-image-boundaries.test.mjs",
+    "d55:unit": "node --test packages/shared/test/albumMedia.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs apps/miniprogram/test/sessionReviewPhotos.test.mjs apps/miniprogram/test/contentModeration.test.mjs apps/api/test/session-review-album-photos.test.mjs apps/api/test/content-moderation-user-image-boundaries.test.mjs",
     "d55:check": "node scripts/d55-album-author-private-image-preview-check.js",
     "d8:qa": "node scripts/d8-qa-check.js",
     "d9:release-check": "node scripts/d9-release-check.js",
