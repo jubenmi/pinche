@@ -36,7 +36,7 @@
 - Modify: `packages/shared/test/albumMedia.test.mjs`
 - Modify: `packages/shared/src/albumMedia.js`
 
-- [ ] **Step 1：先写完整作者投影失败测试**
+- [x] **Step 1：先写完整作者投影失败测试**
 
 在 `packages/shared/test/albumMedia.test.mjs` 的 import 中加入
 `isAuthorPrivateAlbumMediaProjection`，并增加：
@@ -66,7 +66,7 @@ test("author-private projection requires the complete owner-only capability cont
 });
 ```
 
-- [ ] **Step 2：运行测试并确认按预期失败**
+- [x] **Step 2：运行测试并确认按预期失败**
 
 Run:
 
@@ -76,7 +76,7 @@ node --test packages/shared/test/albumMedia.test.mjs
 
 Expected: FAIL，指出 `isAuthorPrivateAlbumMediaProjection` 尚未导出。
 
-- [ ] **Step 3：写最小共享投影实现**
+- [x] **Step 3：写最小共享投影实现**
 
 在 `isModerationPublished` 后加入：
 
@@ -104,7 +104,7 @@ export function isAuthorPrivateAlbumMediaProjection(photo = {}) {
 }
 ```
 
-- [ ] **Step 4：增加 URL 合并失败测试**
+- [x] **Step 4：增加 URL 合并失败测试**
 
 增加以下两个测试：
 
@@ -170,7 +170,7 @@ test("authoritative refresh strips unpublished URLs from new and existing ordina
 });
 ```
 
-- [ ] **Step 5：运行测试并确认第二个 RED**
+- [x] **Step 5：运行测试并确认第二个 RED**
 
 Run:
 
@@ -180,7 +180,7 @@ node --test packages/shared/test/albumMedia.test.mjs
 
 Expected: FAIL；合法 `author_only` URL 被删除，且新普通 pending 行仍保留 URL。
 
-- [ ] **Step 6：实现关闭式合并**
+- [x] **Step 6：实现关闭式合并**
 
 将 `mergeMediaCollection` 改为始终清洗每个 refreshed 行：
 
@@ -204,7 +204,7 @@ function mergeMediaCollection(currentItems = [], refreshedItems = []) {
 }
 ```
 
-- [ ] **Step 7：运行共享测试并确认 GREEN**
+- [x] **Step 7：运行共享测试并确认 GREEN**
 
 Run:
 
@@ -221,7 +221,7 @@ Expected: PASS，原公开撤销测试与新增作者刷新测试全部通过。
 - Modify: `apps/miniprogram/src/utils/albumMediaUrls.js`
 - Modify: `apps/miniprogram/test/albumMediaUrls.test.mjs`
 
-- [ ] **Step 1：写共享投影复用与身份失败测试**
+- [x] **Step 1：写共享投影复用与身份失败测试**
 
 在 `albumMediaUrls.test.mjs` 增加：
 
@@ -277,7 +277,7 @@ test("refresh controller keeps renewed author-private preview capabilities", asy
 });
 ```
 
-- [ ] **Step 2：运行测试并确认当前实现未复用共享契约**
+- [x] **Step 2：运行测试并确认当前实现未复用共享契约**
 
 Run:
 
@@ -287,7 +287,7 @@ node --test apps/miniprogram/test/albumMediaUrls.test.mjs
 
 Expected: 至少刷新 capability 测试 FAIL。
 
-- [ ] **Step 3：复用共享投影**
+- [x] **Step 3：复用共享投影**
 
 把 import 改为：
 
@@ -312,7 +312,7 @@ export function isAuthorPrivateAlbumMedia(photo = {}, viewerUserId) {
 }
 ```
 
-- [ ] **Step 4：运行小程序媒体测试并确认 GREEN**
+- [x] **Step 4：运行小程序媒体测试并确认 GREEN**
 
 Run:
 
@@ -331,7 +331,7 @@ Expected: PASS。
 - Modify: `apps/miniprogram/src/pages/session/review.vue`
 - Modify: `apps/miniprogram/test/contentModeration.test.mjs`
 
-- [ ] **Step 1：写评价图片资格 RED**
+- [x] **Step 1：写评价图片资格 RED**
 
 在 `sessionReviewPhotos.test.mjs` import
 `isSelectableSessionReviewAlbumPhoto` 并加入：
@@ -385,7 +385,7 @@ test("review picker rejects ordinary pending and another user's author-private i
 });
 ```
 
-- [ ] **Step 2：运行并确认导出缺失**
+- [x] **Step 2：运行并确认导出缺失**
 
 Run:
 
@@ -395,7 +395,7 @@ node --test apps/miniprogram/test/sessionReviewPhotos.test.mjs
 
 Expected: FAIL，指出 helper 尚未导出。
 
-- [ ] **Step 3：实现纯资格 helper**
+- [x] **Step 3：实现纯资格 helper**
 
 在 `sessionReviewPhotos.js` 增加 imports：
 
@@ -422,7 +422,7 @@ export function isSelectableSessionReviewAlbumPhoto(photo, viewerUserId) {
 }
 ```
 
-- [ ] **Step 4：运行 helper 测试并确认 GREEN**
+- [x] **Step 4：运行 helper 测试并确认 GREEN**
 
 Run:
 
@@ -432,7 +432,7 @@ node --test apps/miniprogram/test/sessionReviewPhotos.test.mjs
 
 Expected: PASS。
 
-- [ ] **Step 5：先写页面接线 RED 契约**
+- [x] **Step 5：先写页面接线 RED 契约**
 
 在 `contentModeration.test.mjs` 将旧测试名调整为：
 
@@ -459,7 +459,7 @@ test("phone upload selects a previewable author-private photo instead of countin
 });
 ```
 
-- [ ] **Step 6：运行页面契约并确认 RED**
+- [x] **Step 6：运行页面契约并确认 RED**
 
 Run:
 
@@ -469,7 +469,7 @@ node --test apps/miniprogram/test/contentModeration.test.mjs
 
 Expected: FAIL，缺少 `currentUserId` 与新 helper 接线。
 
-- [ ] **Step 7：修改 `review.vue`**
+- [x] **Step 7：修改 `review.vue`**
 
 将 shared import 删除，改为从 `sessionReviewPhotos` 引入：
 
@@ -499,7 +499,7 @@ isSelectableAlbumPhoto(photo) {
 
 保留现有上传循环结构，使完整作者图片进入成功分支并自动选中；普通 pending 仍增加 `pendingPhotoCount`。
 
-- [ ] **Step 8：运行评价小程序测试并确认 GREEN**
+- [x] **Step 8：运行评价小程序测试并确认 GREEN**
 
 Run:
 
@@ -518,7 +518,7 @@ Expected: PASS。
 - Modify: `apps/api/src/modules/core/session-review.js`
 - Modify: `apps/api/test/session-review-album-photos.test.mjs`
 
-- [ ] **Step 1：写服务端纯契约 RED**
+- [x] **Step 1：写服务端纯契约 RED**
 
 扩充 import：
 
@@ -588,7 +588,7 @@ test("public review image byte gate still rejects author-private associations", 
 });
 ```
 
-- [ ] **Step 2：运行并确认 RED**
+- [x] **Step 2：运行并确认 RED**
 
 Run:
 
@@ -598,7 +598,7 @@ node --test apps/api/test/session-review-album-photos.test.mjs
 
 Expected: FAIL，三个新 helper 尚未导出。
 
-- [ ] **Step 3：实现最小服务端纯契约**
+- [x] **Step 3：实现最小服务端纯契约**
 
 在 `session-review.js` import：
 
@@ -676,7 +676,7 @@ export function projectSessionReviewPhotoRows(rows = [], options = {}) {
 
 公开图片同时加入 URL 和 ID；作者私有图片只在 `ownerUserId` 匹配时加入 ID。旧 `photo_url + image_asset` 分支保持不变。
 
-- [ ] **Step 4：运行纯契约测试并确认 GREEN**
+- [x] **Step 4：运行纯契约测试并确认 GREEN**
 
 Run:
 
@@ -693,7 +693,7 @@ Expected: PASS。
 - Modify: `apps/api/src/modules/core/service.js`
 - Modify: `apps/api/test/content-moderation-user-image-boundaries.test.mjs`
 
-- [ ] **Step 1：写 service 写入 RED**
+- [x] **Step 1：写 service 写入 RED**
 
 在 `content-moderation-user-image-boundaries.test.mjs` 增加：
 
@@ -790,7 +790,7 @@ test("review rejects another user's or version-zero pending album photo before b
 });
 ```
 
-- [ ] **Step 2：运行并确认 approved-only 校验导致 RED**
+- [x] **Step 2：运行并确认 approved-only 校验导致 RED**
 
 Run:
 
@@ -800,7 +800,7 @@ node --test apps/api/test/content-moderation-user-image-boundaries.test.mjs
 
 Expected: FAIL，当前错误为 `albumPhotoIds must reference visible approved photos`。
 
-- [ ] **Step 3：接线写入资格**
+- [x] **Step 3：接线写入资格**
 
 从 `session-review.js` import：
 
@@ -834,7 +834,7 @@ photos: albumPhotos
 albumPhotoIds: albumPhotos.map((photo) => Number(photo.id))
 ```
 
-- [ ] **Step 4：接线本人/公共读取**
+- [x] **Step 4：接线本人/公共读取**
 
 `reviewPhotos` SELECT 增加：
 
@@ -857,7 +857,7 @@ getPublicSessionReview              reviewPhotos(connection, ids)
 getMySessionReview                  reviewPhotos(connection, ids, { ownerUserId: user.user.id })
 ```
 
-- [ ] **Step 5：运行 API 定向测试并确认 GREEN**
+- [x] **Step 5：运行 API 定向测试并确认 GREEN**
 
 Run:
 
@@ -877,7 +877,7 @@ Expected: PASS；公共字节门仍拒绝 pending。
 - Create: `scripts/d55-album-author-private-image-preview-check.js`
 - Modify: `package.json`
 
-- [ ] **Step 1：创建静态检查**
+- [x] **Step 1：创建静态检查**
 
 创建：
 
@@ -939,7 +939,7 @@ assert.match(reviewPhotos, /isPublishableSessionReviewAlbumPhoto[\s\S]*isModerat
 console.log("D55 album author-private image preview checks passed");
 ```
 
-- [ ] **Step 2：运行检查并确认 GREEN**
+- [x] **Step 2：运行检查并确认 GREEN**
 
 Run:
 
@@ -949,7 +949,7 @@ node scripts/d55-album-author-private-image-preview-check.js
 
 Expected: PASS。
 
-- [ ] **Step 3：接入根命令**
+- [x] **Step 3：接入根命令**
 
 在 `package.json` scripts 增加：
 
@@ -960,7 +960,7 @@ Expected: PASS。
 
 将 `npm run d55:unit && npm run d55:check` 接入 `precheck`，并让 `check` 保持经 `precheck` 运行该契约。
 
-- [ ] **Step 4：运行 D55 命令**
+- [x] **Step 4：运行 D55 命令**
 
 Run:
 
@@ -980,7 +980,7 @@ Expected: 全部 PASS。
 - Verify only: `.env.production.example`
 - Verify only: `docker-compose.prod.example.yml`
 
-- [ ] **Step 1：确认目标文件被 gitignore 且只改目标键**
+- [x] **Step 1：确认目标文件被 gitignore 且只改目标键**
 
 Run:
 
@@ -991,7 +991,7 @@ rg -n "^CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED=" .env.production
 
 Expected: `.env.production` 被 `.gitignore` 忽略，当前值为 false。
 
-- [ ] **Step 2：把实际工作区生产配置改为 true**
+- [x] **Step 2：把实际工作区生产配置改为 true**
 
 仅修改：
 
@@ -1001,7 +1001,7 @@ CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED=true
 
 不修改其他凭证、provider、intake、文本或视频 gate。
 
-- [ ] **Step 3：验证默认模板仍关闭**
+- [x] **Step 3：验证默认模板仍关闭**
 
 Run:
 
@@ -1012,7 +1012,7 @@ rg -n "^CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED=false$" \
 
 Expected: 两个模板仍为 false；默认安全策略未改变。
 
-- [ ] **Step 4：验证配置解析**
+- [x] **Step 4：验证配置解析**
 
 Run:
 
@@ -1038,7 +1038,7 @@ Expected: exit 0。
 
 - Modify: `specs/d55-album-author-private-image-preview/tasks.md`
 
-- [ ] **Step 1：运行 D46/D49/D55 定向回归**
+- [x] **Step 1：运行 D46/D49/D55 定向回归**
 
 Run:
 
@@ -1053,7 +1053,7 @@ npm run d55:check
 
 Expected: 全部 PASS。
 
-- [ ] **Step 2：运行补充隐私与泄漏回归**
+- [x] **Step 2：运行补充隐私与泄漏回归**
 
 Run:
 
@@ -1070,7 +1070,7 @@ node --test \
 
 Expected: 全部 PASS。
 
-- [ ] **Step 3：运行小程序构建**
+- [x] **Step 3：运行小程序构建**
 
 Run:
 
@@ -1090,7 +1090,7 @@ npm run check
 
 Expected: exit 0。
 
-- [ ] **Step 5：检查 diff 与用户改动隔离**
+- [x] **Step 5：检查 diff 与用户改动隔离**
 
 Run:
 
@@ -1101,6 +1101,22 @@ git status --short
 
 Expected: D55 文件无 whitespace 错误；原有 `package-lock.json`、D48 和未跟踪设计/证据文件保持不变。
 
-- [ ] **Step 6：记录验证证据**
+- [x] **Step 6：记录验证证据**
 
 在本文件末尾追加日期、命令、测试数量、构建结果、未执行的双账号/真实 provider 验收和实际环境 gate 状态。不得把尚未执行的线上验收标为完成。
+
+## 验证证据（2026-07-29）
+
+- `npm run d46:unit`：170/170 PASS；`npm run d46:check`：3/3 与两项静态检查 PASS。
+- `npm run d49:unit`：17/17 PASS；`npm run d49:check`：PASS。
+- `npm run d55:unit`：63/63 PASS；`npm run d55:check`：PASS。
+- 补充隐私与泄漏回归：57/57 PASS，覆盖相册未审核 URL、作者 capability、公共泄漏门、评价公共字节门和小程序审核行为。
+- `npm --workspace apps/miniprogram run build:mp-weixin`：exit 0；仅有既存 Sass legacy API / `@import` 弃用警告。
+- `npm run check`：未完成为 GREEN。D55 precheck 与前序测试均通过，随后在既有小程序包体积门禁失败：
+  `apps/miniprogram/src/static/art/photo-claim-share.jpg` 为 287.5 KB（阈值 200 KB），构建主包为
+  1760.6 KB（阈值 1.5 MB）。该源图片来自早期提交 `2719b555`，D55 diff 未修改此文件；本次不越权压缩用户视觉资产。
+- `git diff --check`：PASS。D55 实现在隔离 worktree 完成，原工作区既有 `package-lock.json`、D48 与未跟踪设计/证据文件未被 D55 实现覆盖。
+- 实际工作区 `.env.production` 已确认受 `.gitignore` 忽略，且仅将
+  `CONTENT_MODERATION_AUTHOR_PRIVATE_IMAGE_ENABLED` 从 `false` 改为 `true`；`.env.example` 与
+  `.env.production.example` 仍为 `false`，配置解析验证 PASS。该本地状态不代表线上已经部署或重启。
+- 尚未执行：真实审核 provider、API/Worker 同配置滚动重启、双账号及匿名端到端验收、审核通过/拒绝回调后的线上验证。
