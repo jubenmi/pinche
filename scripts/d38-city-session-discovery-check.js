@@ -78,8 +78,15 @@ for (const token of [
   assert(service.includes(token), `Core service should include D38 discovery rule: ${token}`);
 }
 const discoveryServiceStart = service.indexOf("export async function listDiscoverableSessions");
-const discoveryServiceEnd = service.indexOf("export async function listAdminSessions", discoveryServiceStart);
+const discoveryServiceEnd = service.indexOf(
+  "export async function listPublicUpcomingSessions",
+  discoveryServiceStart
+);
 const discoveryService = service.slice(discoveryServiceStart, discoveryServiceEnd);
+assert(
+  discoveryService.includes("DATE(DATE_ADD(session.start_at, INTERVAL 8 HOUR)) ASC"),
+  "city discovery should group results by Beijing calendar date"
+);
 assert(!discoveryService.includes("ROUND("), "Discovery should sort by unrounded distance");
 assert(
   discoveryService.includes("Number(Number(row.distance_km).toFixed(1))"),
@@ -165,6 +172,13 @@ for (const token of [
   "cancelled session should not be discoverable",
   "store without coordinates should sort after measured stores",
   "distance ordering should use unrounded precision",
+  'const boundaryCity = `D38边界城-${suffix}`',
+  "const boundaryNearStore = await createStore",
+  "const boundaryFarStore = await createStore",
+  "const boundaryPayload = await request",
+  "const boundaryRows = boundaryPayload.data.sessions",
+  "boundary rows should contain only the isolated pair",
+  "Beijing calendar day should sort before distance across midnight",
   "fallback should return at most five sessions",
   "discovery should reject invalid coordinates",
   "discovery should require login"

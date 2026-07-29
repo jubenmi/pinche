@@ -4406,7 +4406,7 @@ export async function listDiscoverableSessions(user, filters = {}) {
 
   const orderSql = city
     ? `
-        DATE(session.start_at) ASC,
+        DATE(DATE_ADD(session.start_at, INTERVAL 8 HOUR)) ASC,
         CASE WHEN distance_km IS NULL THEN 1 ELSE 0 END ASC,
         distance_km ASC,
         session.start_at ASC,
