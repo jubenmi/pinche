@@ -3,10 +3,16 @@ import test from "node:test";
 
 import { config } from "../src/config/env.js";
 import {
+  formatSessionSignupTime,
   formatSessionRescheduleTime,
   notifySessionRescheduled
 } from "../src/modules/wechat/subscribe-message.js";
 import { createWechatAccessTokenProvider } from "../src/modules/wechat/access-token.js";
+
+test("formats signup times in Asia/Shanghai with a fallback for invalid values", () => {
+  assert.equal(formatSessionSignupTime(new Date("2026-07-28T07:00:00.000Z")), "2026-07-28 15:00:00");
+  assert.equal(formatSessionSignupTime("invalid"), "时间待定");
+});
 
 test("formats canonical and offset times in Asia/Shanghai with day rollover", () => {
   assert.equal(formatSessionRescheduleTime("2026-07-13T10:00:00.000Z"), "2026-07-13 18:00:00");

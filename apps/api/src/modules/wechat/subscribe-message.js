@@ -54,7 +54,7 @@ function messageData(payload, resultText = "待审核") {
     thing1: { value: valueOrFallback(payload.scriptName, "拼车车局").slice(0, 20) },
     thing2: { value: valueOrFallback(payload.seatName, "角色位").slice(0, 20) },
     phrase3: { value: resultText.slice(0, 5) },
-    date4: { value: valueOrFallback(payload.startAt, "时间待定").slice(0, 20) },
+    date4: { value: formatSessionSignupTime(payload.startAt).slice(0, 20) },
     thing5: { value: valueOrFallback(payload.actorName, "新申请").slice(0, 20) }
   };
 }
@@ -68,6 +68,10 @@ export function formatSessionRescheduleTime(value, fallback = "时间待定") {
     sessionTimeFormatter.formatToParts(date).map(({ type, value: partValue }) => [type, partValue])
   );
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+export function formatSessionSignupTime(value, fallback = "时间待定") {
+  return formatSessionRescheduleTime(value, fallback);
 }
 
 function rescheduleMessageData(payload) {
