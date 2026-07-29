@@ -36,6 +36,13 @@ test("author-private album media projection requires the complete bounded DTO", 
     { ...projection, is_mine: false },
     { ...projection, can_preview: false },
     { ...projection, uploader_user_id: null },
+    { ...projection, uploader_user_id: true },
+    { ...projection, uploader_user_id: [1] },
+    { ...projection, uploader_user_id: {} },
+    { ...projection, uploader_user_id: "7" },
+    { ...projection, uploader_user_id: 7.5 },
+    { ...projection, uploader_user_id: 0 },
+    { ...projection, uploader_user_id: -7 },
     { ...projection, moderation_status: "approved" },
     { ...projection, media_type: "audio" }
   ]) {

@@ -63,8 +63,7 @@ const AUTHOR_PRIVATE_MEDIA_STATUSES = new Set([
 ]);
 
 function isPositiveInteger(value) {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 export function isModerationPublished(status) {
