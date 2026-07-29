@@ -71,8 +71,10 @@ import {
 import { cosStorageEnabled } from "../../storage/cos.js";
 import {
   MAX_SESSION_REVIEW_PHOTOS,
+  isAssociableSessionReviewAlbumPhoto,
   isPublishableSessionReviewAlbumPhoto,
   normalizeSessionReviewAlbumPhotoIds,
+  projectSessionReviewPhotoRows,
   serializePublicSessionReview
 } from "./session-review.js";
 
@@ -8047,7 +8049,7 @@ export async function getPublicSessionAlbumVideoForPlayback(claims, mediaId, opt
   });
 }
 
-async function reviewPhotos(connection, reviewIds) {
+async function reviewPhotos(connection, reviewIds, options = {}) {
   if (reviewIds.length === 0) {
     return new Map();
   }
@@ -8064,7 +8066,9 @@ async function reviewPhotos(connection, reviewIds) {
         album.status AS album_photo_status,
         album.moderation_status AS album_photo_moderation_status,
         album.media_type AS album_photo_media_type,
-        album.processing_status AS album_photo_processing_status
+        album.processing_status AS album_photo_processing_status,
+        album.uploader_user_id AS album_photo_uploader_user_id,
+        album.author_visibility_version AS album_photo_author_visibility_version
       FROM session_review_photos AS photo
       LEFT JOIN user_image_assets AS asset ON asset.id = photo.image_asset_id
       LEFT JOIN session_album_photos AS album ON album.id = photo.album_photo_id
@@ -8073,31 +8077,7 @@ async function reviewPhotos(connection, reviewIds) {
     `,
     reviewIds
   );
-  const photosByReview = new Map();
-  for (const row of rows) {
-    const reviewId = Number(row.review_id);
-    const state = photosByReview.get(reviewId) || { photos: [], albumPhotoIds: [] };
-    const albumPhotoId = Number(row.album_photo_id || 0);
-    if (albumPhotoId > 0) {
-      if (
-        String(row.album_photo_status || "") === "active" &&
-        isModerationPublished(row.album_photo_moderation_status) &&
-        albumMediaType({ media_type: row.album_photo_media_type }) === "image" &&
-        albumMediaProcessingStatus({ processing_status: row.album_photo_processing_status }) === "ready"
-      ) {
-        state.photos.push(`/api/session-reviews/${reviewId}/photos/${albumPhotoId}/image`);
-        state.albumPhotoIds.push(albumPhotoId);
-      }
-    } else if (
-      row.photo_url &&
-      String(row.image_asset_status || "") === "active" &&
-      isModerationPublished(row.image_asset_moderation_status)
-    ) {
-      state.photos.push(row.photo_url);
-    }
-    photosByReview.set(reviewId, state);
-  }
-  return photosByReview;
+  return projectSessionReviewPhotoRows(rows, options);
 }
 
 export async function listSessionReviews(sessionId) {
@@ -8226,7 +8206,7 @@ export async function getMySessionReview(user, sessionId, options = {}) {
     );
     const review = rows[0] || null;
     const photosByReview = review
-      ? await reviewPhotos(connection, [Number(review.id)])
+      ? await reviewPhotos(connection, [Number(review.id)], { ownerUserId: user.user.id })
       : new Map();
     const reviewMedia = review
       ? photosByReview.get(Number(review.id)) || { photos: [], albumPhotoIds: [] }
@@ -8308,17 +8288,19 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
     const personalScope = await sessionAlbumPersonalScope(connection, session, user.user.id);
     albumPhotos = albumPhotoIds.map((albumPhotoId) => {
       const photo = photosById.get(albumPhotoId);
+      if (!photo || Number(photo.session_id) !== id) {
+        throw badRequest("albumPhotoIds must reference usable photos from this session album");
+      }
       const tags = tagsMap.get(albumPhotoId) || [];
-      if (
-        !photo ||
-        Number(photo.session_id) !== id ||
-        String(photo.status || "") !== "active" ||
-        albumMediaType(photo) !== "image" ||
-        albumMediaProcessingStatus(photo) !== "ready" ||
-        !isModerationPublished(photo.moderation_status) ||
-        !isAlbumPhotoVisibleToUser(photo, tags, privacyByUser, user.user.id, personalScope)
-      ) {
-        throw badRequest("albumPhotoIds must reference visible approved photos from this session album");
+      const visibleToViewer = isAlbumPhotoVisibleToUser(
+        photo,
+        tags,
+        privacyByUser,
+        user.user.id,
+        personalScope
+      );
+      if (!isAssociableSessionReviewAlbumPhoto(photo, user.user.id, visibleToViewer)) {
+        throw badRequest("albumPhotoIds must reference usable photos from this session album");
       }
       return photo;
     });
@@ -8423,13 +8405,17 @@ export async function upsertMySessionReviewWithConnection(connection, user, sess
   const updatedMedia = shouldReplacePhotos
     ? (albumPhotoIds !== undefined
       ? {
-          photos: albumPhotos.map((photo) =>
-            `/api/session-reviews/${Number(review.id)}/photos/${Number(photo.id)}/image`
-          ),
+          photos: albumPhotos
+            .filter((photo) => isModerationPublished(photo.moderation_status))
+            .map((photo) =>
+              `/api/session-reviews/${Number(review.id)}/photos/${Number(photo.id)}/image`
+            ),
           albumPhotoIds: albumPhotos.map((photo) => Number(photo.id))
         }
       : { photos: [...(photoUrls || [])], albumPhotoIds: [] })
-    : ((await reviewPhotos(connection, [Number(review.id)])).get(Number(review.id)) || {
+    : ((await reviewPhotos(connection, [Number(review.id)], {
+        ownerUserId: user.user.id
+      })).get(Number(review.id)) || {
         photos: [],
         albumPhotoIds: []
       });
