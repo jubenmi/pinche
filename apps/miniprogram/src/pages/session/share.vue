@@ -97,6 +97,8 @@ import {
   request
 } from "../../utils/api";
 import {
+  CREATE_FLOW_KEY,
+  clearCreateFlow,
   displayTags,
   flowToQuery,
   isCrossCast,
@@ -111,10 +113,21 @@ import {
 } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import {
+  authPrincipalOf,
+  beginRoleSelectionOperation as captureRoleSelectionOperation,
+  drainLatestAuthRefresh,
+  finishRoleSelectionOperation as releaseRoleSelectionOperation,
   historicalClaimRequest,
+  historicalInviteRecoveryAllowed,
   historicalRoleClaimable,
+  identitySafeCreateFlow,
   inviteQuery,
-  inviteTokenState
+  inviteTokenState,
+  pageRequestIsCurrent,
+  pageRequestSnapshot,
+  rebaseRoleSelectionOperation as rebaseCapturedRoleSelectionOperation,
+  roleSelectionOperationIsCurrent as capturedRoleSelectionOperationIsCurrent,
+  sessionShareReady
 } from "../../utils/sessionShareInvite";
 import {
   isConfirmedSessionMember,
@@ -142,12 +155,21 @@ export default {
       historicalInviteToken: "",
       historicalCapabilitySupplied: false,
       invalidInviteLink: false,
+      malformedInviteLink: false,
+      sessionLoadReady: false,
       session: {},
       navigatingAlbum: false,
       currentUserId: "",
       currentUserGender: "",
       confirmedCrossCastRoleKey: "",
       roleSelectionSubmitting: false,
+      roleSelectionOperationId: 0,
+      activeRoleSelectionOperationId: 0,
+      authRefreshPromise: null,
+      pageActive: false,
+      pageGeneration: 0,
+      authRevision: 0,
+      currentAuthPrincipal: "guest",
       statusText: "",
       startText: "",
       note: ""
@@ -170,13 +192,15 @@ export default {
       return Boolean(this.role || this.currentUserNpcRole);
     },
     canShareCurrentSession() {
-      if (this.invalidInviteLink) {
-        return false;
-      }
-      if (this.historicalCapabilitySupplied || this.isHistorical) {
-        return Boolean(this.isHistorical && this.historicalInviteToken);
-      }
-      return true;
+      return sessionShareReady({
+        sessionId: this.sessionId,
+        sessionLoadReady: this.sessionLoadReady,
+        invalidInviteLink: this.invalidInviteLink,
+        isHistorical: this.isHistorical,
+        historicalInviteToken: this.historicalInviteToken,
+        accessScope: this.session.access_scope,
+        inviteToken: this.inviteToken
+      });
     },
     pageTitle() {
       if (this.isHistorical) {
@@ -234,6 +258,9 @@ export default {
           roleGender: this.currentUserNpcRole.role_gender || "unlimited"
         })}`;
       }
+      if (this.isHistorical) {
+        return "待补认";
+      }
       return this.roleDisplayText(this.selectedRoles[0]);
     },
     availableCount() {
@@ -269,6 +296,8 @@ export default {
         const claimable = this.isHistorical
           ? historicalRoleClaimable({
               hasHistoricalToken: Boolean(this.historicalInviteToken),
+              invalidInviteLink: this.invalidInviteLink,
+              malformedInviteLink: this.malformedInviteLink,
               occupied,
               viewerHasRole: this.historicalViewerHasRole,
               viewerIsOrganizer: this.viewerIsOrganizer
@@ -403,6 +432,8 @@ export default {
           const claimable = this.isHistorical
             ? historicalRoleClaimable({
                 hasHistoricalToken: Boolean(this.historicalInviteToken),
+                invalidInviteLink: this.invalidInviteLink,
+                malformedInviteLink: this.malformedInviteLink,
                 occupied: taken,
                 viewerHasRole: this.historicalViewerHasRole,
                 viewerIsOrganizer: this.viewerIsOrganizer
@@ -486,9 +517,11 @@ export default {
     },
   },
   async onLoad(options) {
+    this.pageGeneration += 1;
+    this.pageActive = true;
     const stored = readCreateFlow();
     const currentAuth = getCurrentUser();
-    this.currentUserId = currentAuth.user?.id || "";
+    this.currentAuthPrincipal = authPrincipalOf(currentAuth, getToken());
     this.bindAuthChangeListener();
     this.refreshCurrentUserGender(currentAuth);
     const fromQuery = queryToFlow(options);
@@ -502,13 +535,19 @@ export default {
       this.hideShareMenus();
     }
     if (tokenState.invalid) {
+      this.inviteToken = "";
+      this.historicalInviteToken = "";
+      this.malformedInviteLink = true;
       this.invalidInviteLink = true;
       this.statusText = "邀请链接无效。";
       this.hideShareMenus();
       return;
     }
     if (this.sessionId) {
-      await this.loadPublishedSession(this.sessionId);
+      const loaded = await this.loadPublishedSession(this.sessionId);
+      if (!loaded || !this.pageActive || this.navigatingAlbum) {
+        return;
+      }
       if (options.seatId && !this.isHistorical) {
         const seatRole = this.roleOptions.find(
           (role) => Number(role.seatId || role.id) === Number(options.seatId)
@@ -519,7 +558,10 @@ export default {
           this.statusText = `你已选择 ${this.role.name}，确认后会释放原角色。`;
         }
       }
-      await this.prepareJoinInviteToken();
+      const inviteReady = await this.prepareJoinInviteToken();
+      if (!inviteReady || !this.pageActive || this.navigatingAlbum) {
+        return;
+      }
       this.showShareMenus();
       return;
     }
@@ -562,10 +604,12 @@ export default {
     this.showShareMenus();
   },
   onUnload() {
+    this.pageActive = false;
+    this.pageGeneration += 1;
     this.unbindAuthChangeListener();
   },
   onShareAppMessage() {
-    if (this.invalidInviteLink) {
+    if (!this.canShareCurrentSession) {
       return undefined;
     }
     const flow = this.persistFlow();
@@ -632,23 +676,114 @@ export default {
     },
     bindAuthChangeListener() {
       if (typeof uni.$on === "function") {
-        uni.$on(AUTH_CHANGE_EVENT, this.refreshCurrentUserGender);
+        uni.$on(AUTH_CHANGE_EVENT, this.handleAuthChange);
       }
     },
     unbindAuthChangeListener() {
       if (typeof uni.$off === "function") {
-        uni.$off(AUTH_CHANGE_EVENT, this.refreshCurrentUserGender);
+        uni.$off(AUTH_CHANGE_EVENT, this.handleAuthChange);
       }
     },
+    handleAuthChange(auth = null) {
+      const currentAuth = auth && Object.prototype.hasOwnProperty.call(auth, "user")
+        ? auth
+        : getCurrentUser();
+      const nextPrincipal = authPrincipalOf(currentAuth, getToken());
+      this.refreshCurrentUserGender(currentAuth);
+      if (nextPrincipal === this.currentAuthPrincipal) {
+        return Promise.resolve(false);
+      }
+      this.currentAuthPrincipal = nextPrincipal;
+      this.authRevision += 1;
+      if (this.malformedInviteLink) {
+        return Promise.resolve(false);
+      }
+      if (!this.pageActive || !this.sessionId) {
+        return Promise.resolve(false);
+      }
+      this.clearIdentityBoundProjection();
+      return this.reloadSessionAfterAuth();
+    },
     refreshCurrentUserGender(auth = null) {
-      const currentAuth = auth?.user ? auth : getCurrentUser();
-      this.currentUserId = currentAuth.user?.id || "";
-      const nextGender = currentAuth.user?.gender || "";
+      const hasExplicitAuth = Boolean(
+        auth && Object.prototype.hasOwnProperty.call(auth, "user")
+      );
+      const currentAuth = hasExplicitAuth ? auth : getCurrentUser();
+      const authenticatedUser = authPrincipalOf(currentAuth, getToken()) === "guest"
+        ? null
+        : currentAuth.user;
+      this.currentUserId = authenticatedUser?.id || "";
+      const nextGender = authenticatedUser?.gender || "";
       if (nextGender !== this.currentUserGender) {
         this.confirmedCrossCastRoleKey = "";
       }
       this.currentUserGender = nextGender;
       this.clearSeatSelectionWhenLoggedOut();
+    },
+    clearIdentityBoundProjection() {
+      const sessionPurpose = this.session.session_purpose || "";
+      this.session = {
+        session_purpose: sessionPurpose
+      };
+      this.store = null;
+      this.script = null;
+      this.role = null;
+      this.roleOptions = [];
+      this.selectedRoles = [];
+      this.pendingRole = null;
+      this.confirmedCrossCastRoleKey = "";
+      this.startText = "";
+      this.note = "";
+      this.statusText = "正在重新加载车局…";
+      this.sessionLoadReady = false;
+      try {
+        clearCreateFlow();
+      } catch (error) {
+        // Continue with an explicit neutral write if removal is unavailable.
+      }
+      try {
+        uni.setStorageSync(
+          CREATE_FLOW_KEY,
+          identitySafeCreateFlow({
+            sessionId: this.sessionId,
+            sessionPurpose
+          })
+        );
+      } catch (error) {
+        // Storage failures must not retain an identity-bound in-memory projection.
+      }
+      this.hideShareMenus();
+    },
+    async reloadSessionAfterAuth() {
+      if (this.malformedInviteLink || !this.pageActive || !this.sessionId) {
+        return false;
+      }
+      return drainLatestAuthRefresh({
+        capture: () => ({
+          ...pageRequestSnapshot(this),
+          sessionId: this.sessionId
+        }),
+        getActive: () => this.authRefreshPromise,
+        setActive: (promise) => {
+          this.authRefreshPromise = promise;
+        },
+        refresh: async (snapshot) => {
+          const loaded = await this.loadPublishedSession(this.sessionId);
+          if (!loaded || !pageRequestIsCurrent(this, snapshot) || this.navigatingAlbum) {
+            return false;
+          }
+          const inviteReady = await this.prepareJoinInviteToken();
+          if (
+            !inviteReady ||
+            !pageRequestIsCurrent(this, snapshot) ||
+            this.navigatingAlbum
+          ) {
+            return false;
+          }
+          this.showShareMenus();
+          return true;
+        }
+      });
     },
     clearSeatSelectionWhenLoggedOut() {
       if (this.currentUserId) {
@@ -656,6 +791,34 @@ export default {
       }
       this.pendingRole = null;
       this.confirmedCrossCastRoleKey = "";
+    },
+    beginRoleSelectionOperation() {
+      const operation = captureRoleSelectionOperation(this);
+      if (!operation) {
+        return null;
+      }
+      this.roleSelectionOperationId = operation.operationId;
+      this.activeRoleSelectionOperationId = operation.operationId;
+      this.roleSelectionSubmitting = true;
+      return operation;
+    },
+    rebaseRoleSelectionOperation(operation, auth) {
+      const actualAuth = getCurrentUser();
+      const authenticated = getToken();
+      return rebaseCapturedRoleSelectionOperation({
+        operation,
+        state: this,
+        returnedPrincipal: authPrincipalOf(auth),
+        actualPrincipal: authPrincipalOf(actualAuth, authenticated)
+      });
+    },
+    roleSelectionOperationIsCurrent(operation) {
+      return capturedRoleSelectionOperationIsCurrent(this, operation);
+    },
+    finishRoleSelectionOperation(operationId) {
+      const released = releaseRoleSelectionOperation(this, operationId);
+      this.activeRoleSelectionOperationId = released.activeRoleSelectionOperationId;
+      this.roleSelectionSubmitting = released.roleSelectionSubmitting;
     },
     roleOccupantAvatarUrl(role) {
       const auth = getCurrentUser();
@@ -710,6 +873,10 @@ export default {
       return role.bound_user_gender || role.pending_signup_user_gender || role.role_gender || "unlimited";
     },
     async ensureSeatSelectionLogin(options = {}) {
+      if (!this.pageActive) {
+        return null;
+      }
+      const pageGeneration = this.pageGeneration;
       const wasLoggedIn = this.hasSeatSelectionLogin();
       const auth = await ensureLoggedIn({
         content: this.isHistorical
@@ -717,7 +884,20 @@ export default {
           : "登录后可以选择角色并锁定你的位置。",
         ...options
       });
-      if (!auth?.user) {
+      if (!this.pageActive || this.pageGeneration !== pageGeneration) {
+        return null;
+      }
+      const actualAuth = getCurrentUser();
+      const authenticated = getToken();
+      const returnedPrincipal = authPrincipalOf(auth);
+      const actualPrincipal = authPrincipalOf(actualAuth, authenticated);
+      if (
+        returnedPrincipal !== actualPrincipal ||
+        actualPrincipal !== this.currentAuthPrincipal
+      ) {
+        return null;
+      }
+      if (returnedPrincipal === "guest" || !auth?.user) {
         this.statusText = this.isHistorical
           ? "登录后可继续补认角色。"
           : "登录后可继续选择角色。";
@@ -727,7 +907,14 @@ export default {
       this.refreshCurrentUserGender(auth);
       if (options.refreshAfterFreshLogin === true && !wasLoggedIn) {
         if (this.sessionId) {
-          await this.loadPublishedSession(this.sessionId);
+          const loaded = await this.reloadSessionAfterAuth();
+          if (
+            !loaded ||
+            !this.pageActive ||
+            this.pageGeneration !== pageGeneration
+          ) {
+            return null;
+          }
           if (this.navigatingAlbum) {
             return null;
           }
@@ -736,23 +923,57 @@ export default {
           }
         }
       }
+      const latestAuth = getCurrentUser();
+      const latestAuthenticated = getToken();
+      if (
+        authPrincipalOf(auth) !==
+          authPrincipalOf(latestAuth, latestAuthenticated) ||
+        authPrincipalOf(latestAuth, latestAuthenticated) !== this.currentAuthPrincipal
+      ) {
+        return null;
+      }
       return auth;
     },
     async loadPublishedSession(sessionId) {
+      if (this.malformedInviteLink) {
+        return false;
+      }
+      const requestSnapshot = pageRequestSnapshot(this);
+      if (!pageRequestIsCurrent(this, requestSnapshot)) {
+        return false;
+      }
       const historicalRequest = Boolean(
         this.historicalCapabilitySupplied ||
         this.historicalInviteToken ||
         this.isHistorical
       );
+      this.sessionLoadReady = false;
+      this.hideShareMenus();
       try {
         const query = this.historicalInviteToken
           ? inviteQuery({ mode: "historical", token: this.historicalInviteToken })
           : inviteQuery({ mode: "normal", token: this.inviteToken });
         const response = await request({ url: `/api/sessions/${sessionId}${query}` });
+        if (!pageRequestIsCurrent(this, requestSnapshot)) {
+          return false;
+        }
         const session = dataOf(response) || {};
         this.session = session;
         if (this.isHistorical) {
           this.inviteToken = "";
+          if (historicalInviteRecoveryAllowed({
+            malformedInviteLink: this.malformedInviteLink,
+            sessionLoaded: true,
+            historicalInviteToken: this.historicalInviteToken
+          })) {
+            this.invalidInviteLink = false;
+            if ([
+              "补认邀请已失效",
+              "补认邀请加载失败，请稍后重试"
+            ].includes(this.statusText)) {
+              this.statusText = "";
+            }
+          }
           if (typeof uni.setNavigationBarTitle === "function") {
             uni.setNavigationBarTitle({ title: this.pageTitle });
           }
@@ -792,20 +1013,28 @@ export default {
         this.note = this.isHistorical
           ? "历史车局补录"
           : "剧本迷·拼车，一起沉浸好本。";
-        writeCreateFlow({
-          store: this.store,
-          script: this.script,
-          role: this.role,
-          roleOptions: this.roleOptions,
-          selectedRoles: this.selectedRoles,
-          sessionId,
-          sessionPurpose: session.session_purpose,
-          startAt: session.start_at,
-          startText: this.startText,
-          note: this.note
-        });
+        try {
+          writeCreateFlow({
+            store: this.store,
+            script: this.script,
+            role: this.role,
+            roleOptions: this.roleOptions,
+            selectedRoles: this.selectedRoles,
+            sessionId,
+            sessionPurpose: session.session_purpose,
+            startAt: session.start_at,
+            startText: this.startText,
+            note: this.note
+          });
+        } catch (error) {
+          // A storage failure must not turn a successful session GET into a load failure.
+        }
+        this.sessionLoadReady = true;
+        if (this.statusText === "正在重新加载车局…") {
+          this.statusText = "";
+        }
         if (this.redirectHistoricalMemberIfNeeded()) {
-          return;
+          return true;
         }
         this.redirectAlbumMemberIfNeeded();
         if (
@@ -820,7 +1049,15 @@ export default {
               ? "选择角色后会直接进入相册。"
               : "选择角色提交申请，车头确认后可进入相册。";
         }
+        if (!this.navigatingAlbum) {
+          this.showShareMenus();
+        }
+        return true;
       } catch (error) {
+        if (!pageRequestIsCurrent(this, requestSnapshot)) {
+          return false;
+        }
+        this.sessionLoadReady = false;
         if (historicalRequest) {
           this.invalidInviteLink = true;
           this.historicalInviteToken = "";
@@ -829,19 +1066,28 @@ export default {
             : "补认邀请加载失败，请稍后重试";
           this.hideShareMenus();
           showToast({ title: this.statusText, icon: "none" });
-          return;
+          return false;
         }
-        showToast({ title: "车局加载失败", icon: "none" });
+        this.statusText = "车局加载失败，请稍后重试";
+        showToast({ title: this.statusText, icon: "none" });
+        return false;
       }
     },
     async prepareJoinInviteToken() {
+      const requestSnapshot = pageRequestSnapshot(this);
+      if (!pageRequestIsCurrent(this, requestSnapshot)) {
+        return false;
+      }
       if (this.isHistorical) {
+        if (this.malformedInviteLink) {
+          return false;
+        }
         if (
           this.historicalInviteToken ||
           !this.sessionId ||
           !this.viewerIsOrganizer
         ) {
-          return;
+          return true;
         }
         try {
           const response = await request({
@@ -849,18 +1095,38 @@ export default {
             method: "POST",
             data: {}
           });
+          if (!pageRequestIsCurrent(this, requestSnapshot)) {
+            return false;
+          }
           this.historicalInviteToken = dataOf(response)?.token || "";
+          if (historicalInviteRecoveryAllowed({
+            malformedInviteLink: this.malformedInviteLink,
+            organizerTokenMinted: true,
+            historicalInviteToken: this.historicalInviteToken
+          })) {
+            this.invalidInviteLink = false;
+            if ([
+              "补认邀请已失效",
+              "补认邀请加载失败，请稍后重试"
+            ].includes(this.statusText)) {
+              this.statusText = "";
+            }
+          }
           if (!this.historicalInviteToken) {
             this.statusText = "补认邀请生成失败，请稍后重试。";
           }
+          return Boolean(this.historicalInviteToken);
         } catch (error) {
+          if (!pageRequestIsCurrent(this, requestSnapshot)) {
+            return false;
+          }
           this.historicalInviteToken = "";
           this.statusText = "补认邀请生成失败，请稍后重试。";
+          return false;
         }
-        return;
       }
       if (this.inviteToken || !this.sessionId || this.session.access_scope !== "member") {
-        return;
+        return true;
       }
       try {
         const response = await request({
@@ -868,9 +1134,17 @@ export default {
           method: "POST",
           data: {}
         });
+        if (!pageRequestIsCurrent(this, requestSnapshot)) {
+          return false;
+        }
         this.inviteToken = dataOf(response)?.token || "";
+        return Boolean(this.inviteToken);
       } catch (error) {
+        if (!pageRequestIsCurrent(this, requestSnapshot)) {
+          return false;
+        }
         this.inviteToken = "";
+        return false;
       }
     },
     redirectHistoricalMemberIfNeeded() {
@@ -980,28 +1254,32 @@ export default {
         });
       });
     },
-    async chooseRole(role) {
-      if (this.roleSelectionSubmitting) {
+    async chooseHistoricalRole(role) {
+      const operationEntry = this.beginRoleSelectionOperation();
+      if (!operationEntry) {
         return;
       }
       const selectedRoleKey = this.roleKey(role);
-      const auth = await this.ensureSeatSelectionLogin({
-        refreshAfterFreshLogin: true
-      });
-      if (!auth) {
-        return;
-      }
-      const targetRole =
-        this.sessionId
-          ? this.roleCards.find((item) => this.roleKey(item) === selectedRoleKey) || role
-          : role;
-      if (this.isAlbumEntry && !this.currentUserId) {
-        await this.loadPublishedSession(this.sessionId);
-        if (this.redirectAlbumMemberIfNeeded()) {
+      const selectedBoardType = role?.boardType === "npc" ? "npc" : "seat";
+      let operation = operationEntry;
+      try {
+        const auth = await this.ensureSeatSelectionLogin({
+          refreshAfterFreshLogin: true
+        });
+        if (!auth) {
           return;
         }
-      }
-      if (this.isHistorical) {
+        operation = this.rebaseRoleSelectionOperation(operationEntry, auth);
+        if (!operation || !this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
+        const roleCards = selectedBoardType === "npc" ? this.npcRoleCards : this.roleCards;
+        const targetRole = roleCards.find(
+          (item) => this.roleKey(item) === selectedRoleKey
+        );
+        if (!targetRole) {
+          return;
+        }
         if (!targetRole.claimable) {
           showToast({
             title: targetRole.stateKind === "taken"
@@ -1011,46 +1289,87 @@ export default {
           });
           return;
         }
-        this.roleSelectionSubmitting = true;
-        try {
-          const confirmed = await this.confirmCrossCastRole(targetRole);
-          if (!confirmed) {
-            return;
-          }
-          await this.claimHistoricalRole(targetRole);
-        } finally {
-          this.roleSelectionSubmitting = false;
+        const confirmed = await this.confirmCrossCastRole(targetRole);
+        if (!this.roleSelectionOperationIsCurrent(operation) || !confirmed) {
+          return;
         }
+        const confirmedRoleCards = selectedBoardType === "npc"
+          ? this.npcRoleCards
+          : this.roleCards;
+        const confirmedTargetRole = confirmedRoleCards.find(
+          (item) => this.roleKey(item) === selectedRoleKey
+        );
+        if (!confirmedTargetRole || !confirmedTargetRole.claimable) {
+          return;
+        }
+        await this.claimHistoricalRole(confirmedTargetRole, operation);
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
+      } finally {
+        this.finishRoleSelectionOperation(operationEntry.operationId);
+      }
+    },
+    async chooseRole(role) {
+      if (this.invalidInviteLink || this.malformedInviteLink) {
         return;
       }
-      if (targetRole.taken && !targetRole.mine) {
-        showToast({ title: "这个角色已被选择", icon: "none" });
+      if (this.isHistorical) {
+        return this.chooseHistoricalRole(role);
+      }
+      const operationEntry = this.beginRoleSelectionOperation();
+      if (!operationEntry) {
         return;
       }
-      if (!targetRole.claimable && !targetRole.mine) {
-        showToast({ title: "这个角色暂不可选择", icon: "none" });
-        return;
-      }
-      if (targetRole.taken && targetRole.mine) {
-        showToast({ title: "这是你当前选择的角色", icon: "none" });
-        return;
-      }
-      this.roleSelectionSubmitting = true;
+      const selectedRoleKey = this.roleKey(role);
+      let operation = operationEntry;
       try {
+        const auth = await this.ensureSeatSelectionLogin({
+          refreshAfterFreshLogin: true
+        });
+        if (!auth) {
+          return;
+        }
+        operation = this.rebaseRoleSelectionOperation(operationEntry, auth);
+        if (!operation || !this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
+        const targetRole = this.sessionId
+          ? this.roleCards.find((item) => this.roleKey(item) === selectedRoleKey)
+          : role;
+        if (!targetRole) {
+          return;
+        }
+        if (targetRole.taken && !targetRole.mine) {
+          showToast({ title: "这个角色已被选择", icon: "none" });
+          return;
+        }
+        if (!targetRole.claimable && !targetRole.mine) {
+          showToast({ title: "这个角色暂不可选择", icon: "none" });
+          return;
+        }
+        if (targetRole.taken && targetRole.mine) {
+          showToast({ title: "这是你当前选择的角色", icon: "none" });
+          return;
+        }
         const switchConfirmed = await this.confirmSwitchRole(targetRole);
-        if (!switchConfirmed) {
+        if (!this.roleSelectionOperationIsCurrent(operation) || !switchConfirmed) {
           return;
         }
         const confirmed = await this.confirmCrossCastRole(targetRole);
-        if (!confirmed) {
+        if (!this.roleSelectionOperationIsCurrent(operation) || !confirmed) {
           return;
         }
         this.confirmedCrossCastRoleKey = this.roleKey(targetRole);
         await this.confirmRole(targetRole, {
-          revealPending: !this.sessionId
+          revealPending: !this.sessionId,
+          operation
         });
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
       } finally {
-        this.roleSelectionSubmitting = false;
+        this.finishRoleSelectionOperation(operationEntry.operationId);
       }
     },
     handleSharedRoleTap(payload) {
@@ -1072,6 +1391,8 @@ export default {
       if (this.isHistorical) {
         return historicalRoleClaimable({
           hasHistoricalToken: Boolean(this.historicalInviteToken),
+          invalidInviteLink: this.invalidInviteLink,
+          malformedInviteLink: this.malformedInviteLink,
           occupied: ["confirmed", "locked", "cancelled"].includes(role.status),
           viewerHasRole: this.historicalViewerHasRole,
           viewerIsOrganizer: this.viewerIsOrganizer
@@ -1098,23 +1419,39 @@ export default {
       return `${role.name}${symbol ? ` ${symbol}` : ""}${suffix}`;
     },
     async confirmRole(role = null, options = {}) {
-      const targetRole = role || this.pendingRole;
+      const operation = options.operation;
+      if (!this.roleSelectionOperationIsCurrent(operation)) {
+        return;
+      }
+      const selectedRole = role || this.pendingRole;
       const revealPending = options.revealPending !== false;
-      if (!targetRole) {
+      if (!selectedRole) {
         showToast({ title: "先选择一个可选角色", icon: "none" });
         return;
       }
+      const selectedRoleKey = this.roleKey(selectedRole);
+      const selectedBoardType = selectedRole.boardType === "npc" ? "npc" : "seat";
       if (this.isHistorical) {
         const auth = await this.ensureSeatSelectionLogin({
           refreshAfterFreshLogin: true
         });
-        if (!auth) {
-          if (revealPending) {
+        if (!auth || !this.roleSelectionOperationIsCurrent(operation)) {
+          if (this.roleSelectionOperationIsCurrent(operation) && revealPending) {
             this.pendingRole = null;
           }
           return;
         }
-        await this.claimHistoricalRole(targetRole);
+        const roleCards = selectedBoardType === "npc" ? this.npcRoleCards : this.roleCards;
+        const targetRole = roleCards.find(
+          (item) => this.roleKey(item) === selectedRoleKey
+        );
+        if (!targetRole) {
+          return;
+        }
+        await this.claimHistoricalRole(targetRole, operation);
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         return;
       }
       const auth = await this.ensureSeatSelectionLogin({
@@ -1123,10 +1460,16 @@ export default {
         phoneRequiredTitle: "授权手机号后上车",
         phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
       });
-      if (!auth) {
-        if (revealPending) {
+      if (!auth || !this.roleSelectionOperationIsCurrent(operation)) {
+        if (this.roleSelectionOperationIsCurrent(operation) && revealPending) {
           this.pendingRole = null;
         }
+        return;
+      }
+      const targetRole = this.sessionId
+        ? this.roleCards.find((item) => this.roleKey(item) === selectedRoleKey)
+        : selectedRole;
+      if (!targetRole) {
         return;
       }
       const pendingRoleKey = this.roleKey(targetRole);
@@ -1135,6 +1478,9 @@ export default {
         this.confirmedCrossCastRoleKey !== pendingRoleKey
       ) {
         const confirmed = await this.confirmCrossCastRole(targetRole);
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         if (!confirmed) {
           if (revealPending) {
             this.pendingRole = null;
@@ -1144,7 +1490,13 @@ export default {
         this.confirmedCrossCastRoleKey = pendingRoleKey;
       }
       if (this.sessionId) {
-        await this.claimSeat(targetRole);
+        await this.claimSeat(targetRole, operation);
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
+        return;
+      }
+      if (!this.roleSelectionOperationIsCurrent(operation)) {
         return;
       }
       const previousRole = this.role;
@@ -1157,21 +1509,49 @@ export default {
       this.persistFlow();
       showToast({ title: "角色已选择", icon: "none" });
     },
-    async claimHistoricalRole(role) {
+    async claimHistoricalRole(role, operation) {
+      if (
+        !this.roleSelectionOperationIsCurrent(operation) ||
+        !this.isHistorical ||
+        this.invalidInviteLink ||
+        this.malformedInviteLink ||
+        !String(this.historicalInviteToken || "").trim()
+      ) {
+        return;
+      }
       try {
         await request(historicalClaimRequest({
           sessionId: this.sessionId,
           inviteToken: this.historicalInviteToken,
           role
         }));
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         this.pendingRole = null;
         this.statusText = "已补认角色";
         showToast({ title: "已补认角色", icon: "none" });
-        await this.loadPublishedSession(this.sessionId);
+        const loaded = await this.loadPublishedSession(this.sessionId);
+        if (!loaded || !this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
       } catch (error) {
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         if (error?.statusCode === 409) {
-          this.statusText = "角色刚被其他人补认";
-          await this.loadPublishedSession(this.sessionId);
+          const conflictText = "角色刚被其他人补认";
+          this.statusText = conflictText;
+          const loaded = await this.loadPublishedSession(this.sessionId);
+          if (!this.roleSelectionOperationIsCurrent(operation)) {
+            return;
+          }
+          if (!loaded) {
+            return;
+          }
+          this.statusText = conflictText;
+          showToast({ title: this.statusText, icon: "none" });
+          return;
         } else if (error?.statusCode === 403) {
           this.statusText = "补认邀请已失效";
           this.invalidInviteLink = true;
@@ -1185,7 +1565,15 @@ export default {
         showToast({ title: this.statusText, icon: "none" });
       }
     },
-    async claimSeat(role) {
+    async claimSeat(role, operation) {
+      if (
+        !this.roleSelectionOperationIsCurrent(operation) ||
+        this.invalidInviteLink ||
+        this.malformedInviteLink ||
+        this.isHistorical
+      ) {
+        return;
+      }
       try {
         const seatId = role.seatId || role.id;
         if (this.session.join_policy === "direct") {
@@ -1197,6 +1585,9 @@ export default {
               note: this.isAlbumEntry ? "相册分享页直接上车" : "分享页选择角色上车"
             }
           });
+          if (!this.roleSelectionOperationIsCurrent(operation)) {
+            return;
+          }
           const joinResult = dataOf(claimResponse)?.join_result;
           await requestSubscriptionAfterConfirmedJoin(
             wasConfirmedMember,
@@ -1204,8 +1595,14 @@ export default {
             "joined",
             requestSessionRescheduledSubscription
           );
+          if (!this.roleSelectionOperationIsCurrent(operation)) {
+            return;
+          }
+          const loaded = await this.loadPublishedSession(this.sessionId);
+          if (!loaded || !this.roleSelectionOperationIsCurrent(operation)) {
+            return;
+          }
           this.pendingRole = null;
-          await this.loadPublishedSession(this.sessionId);
           if (joinResult !== "joined") {
             this.statusText = "上车结果异常，请刷新后确认角色状态。";
             showToast({ title: "上车结果异常，请稍后确认", icon: "none" });
@@ -1232,15 +1629,27 @@ export default {
             note: this.isAlbumEntry ? "相册分享页申请上车" : "分享页选择角色申请上车"
           }
         });
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
+        const loaded = await this.loadPublishedSession(this.sessionId);
+        if (!loaded || !this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
+        await requestSignupReviewedSubscription();
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         this.pendingRole = null;
-        await this.loadPublishedSession(this.sessionId);
         this.statusText = "已提交申请，等待车头审核。";
         showToast({
           title: "已提交申请",
           icon: "none"
         });
-        requestSignupReviewedSubscription();
       } catch (error) {
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         if (error?.statusCode === 409) {
           this.statusText = "你已经申请过这个角色，请等待车头审核。";
         } else if (error?.statusCode === 401) {
@@ -1251,71 +1660,65 @@ export default {
       }
     },
     async chooseNpcRole(npcRole) {
-      if (this.roleSelectionSubmitting) {
+      if (this.invalidInviteLink || this.malformedInviteLink) {
+        return;
+      }
+      if (this.isHistorical) {
+        return this.chooseHistoricalRole(npcRole);
+      }
+      const operationEntry = this.beginRoleSelectionOperation();
+      if (!operationEntry) {
         return;
       }
       const selectedRoleKey = this.roleKey(npcRole);
-      const loginAuth = await this.ensureSeatSelectionLogin({
-        refreshAfterFreshLogin: true
-      });
-      if (!loginAuth) {
-        return;
-      }
-      const targetRole = this.npcRoleCards.find((item) => this.roleKey(item) === selectedRoleKey) || npcRole;
-      if (this.isHistorical) {
-        if (!targetRole.claimable) {
-          showToast({
-            title: targetRole.stateKind === "taken"
-              ? "角色刚被其他人补认"
-              : "这个角色暂不可补认",
-            icon: "none"
-          });
+      let operation = operationEntry;
+      try {
+        const loginAuth = await this.ensureSeatSelectionLogin({
+          refreshAfterFreshLogin: true
+        });
+        if (!loginAuth) {
           return;
         }
-        this.roleSelectionSubmitting = true;
-        try {
-          const confirmed = await this.confirmCrossCastRole(targetRole);
-          if (!confirmed) {
+        operation = this.rebaseRoleSelectionOperation(operationEntry, loginAuth);
+        if (!operation || !this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
+        const targetRole = this.npcRoleCards.find(
+          (item) => this.roleKey(item) === selectedRoleKey
+        );
+        if (!targetRole) {
+          return;
+        }
+        if (!targetRole.mine) {
+          if (targetRole.stateKind === "pendingReview") {
+            this.statusText = "已提交NPC角色申请，等待车头审核。";
             return;
           }
-          await this.claimHistoricalRole(targetRole);
-        } finally {
-          this.roleSelectionSubmitting = false;
+          if (!this.npcSelfJoinEnabled) {
+            this.statusText = "本场NPC由车头安排。";
+            return;
+          }
+          if (!targetRole.claimable) {
+            showToast({ title: "这个NPC角色已被选择", icon: "none" });
+            return;
+          }
         }
-        return;
-      }
-      if (!targetRole.mine) {
-        if (targetRole.stateKind === "pendingReview") {
-          this.statusText = "已提交NPC角色申请，等待车头审核。";
-          return;
-        }
-        if (!this.npcSelfJoinEnabled) {
-          this.statusText = "本场NPC由车头安排。";
-          return;
-        }
-        if (!targetRole.claimable) {
-          showToast({ title: "这个NPC角色已被选择", icon: "none" });
-          return;
-        }
-      }
 
-      if (targetRole.mine) {
-        if (this.isAlbumEntry) {
-          uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
-        } else {
-          showToast({ title: "这是你的NPC角色", icon: "none" });
+        if (targetRole.mine) {
+          if (this.isAlbumEntry) {
+            uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
+          } else {
+            showToast({ title: "这是你的NPC角色", icon: "none" });
+          }
+          return;
         }
-        return;
-      }
 
-      this.roleSelectionSubmitting = true;
-      try {
         const switchConfirmed = await this.confirmSwitchRole(targetRole);
-        if (!switchConfirmed) {
+        if (!this.roleSelectionOperationIsCurrent(operation) || !switchConfirmed) {
           return;
         }
         const confirmed = await this.confirmCrossCastRole(targetRole);
-        if (!confirmed) {
+        if (!this.roleSelectionOperationIsCurrent(operation) || !confirmed) {
           return;
         }
         this.confirmedCrossCastRoleKey = this.roleKey(targetRole);
@@ -1325,17 +1728,32 @@ export default {
           phoneRequiredTitle: "授权手机号后上车",
           phoneRequiredContent: "上车前需要授权手机号，方便车头沟通和审核。"
         });
-        if (!auth) {
+        if (
+          !this.roleSelectionOperationIsCurrent(operation) ||
+          !auth ||
+          this.invalidInviteLink ||
+          this.malformedInviteLink ||
+          this.isHistorical
+        ) {
+          return;
+        }
+        const confirmedTargetRole = this.npcRoleCards.find(
+          (item) => this.roleKey(item) === selectedRoleKey
+        );
+        if (!confirmedTargetRole) {
           return;
         }
         const wasConfirmedMember = isConfirmedSessionMember(this.session, this.currentUserId);
         const response = await request({
-          url: `/api/session-npc-roles/${targetRole.id}/claim`,
+          url: `/api/session-npc-roles/${confirmedTargetRole.id}/claim`,
           method: "POST",
           data: {
             note: this.isAlbumEntry ? "相册分享页选择NPC角色" : "分享页选择NPC角色"
           }
         });
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         const result = dataOf(response) || {};
         if (result.join_result === "npc_joined") {
           await requestSubscriptionAfterConfirmedJoin(
@@ -1344,7 +1762,13 @@ export default {
             "npc_joined",
             requestSessionRescheduledSubscription
           );
-          await this.loadPublishedSession(this.sessionId);
+          if (!this.roleSelectionOperationIsCurrent(operation)) {
+            return;
+          }
+          const loaded = await this.loadPublishedSession(this.sessionId);
+          if (!loaded || !this.roleSelectionOperationIsCurrent(operation)) {
+            return;
+          }
           this.statusText = "已选择NPC角色。";
           if (this.isAlbumEntry && !this.navigatingAlbum) {
             uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
@@ -1354,16 +1778,28 @@ export default {
           return;
         }
         if (result.join_result === "pending_review") {
-          await this.loadPublishedSession(this.sessionId);
+          const loaded = await this.loadPublishedSession(this.sessionId);
+          if (!loaded || !this.roleSelectionOperationIsCurrent(operation)) {
+            return;
+          }
+          await requestSignupReviewedSubscription();
+          if (!this.roleSelectionOperationIsCurrent(operation)) {
+            return;
+          }
           this.statusText = "已提交NPC角色申请，等待车头审核。";
           showToast({ title: "已提交申请", icon: "none" });
-          requestSignupReviewedSubscription();
           return;
         }
-        await this.loadPublishedSession(this.sessionId);
+        const loaded = await this.loadPublishedSession(this.sessionId);
+        if (!loaded || !this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         this.statusText = "上车结果异常，请刷新后确认NPC角色状态。";
         showToast({ title: "上车结果异常，请稍后确认", icon: "none" });
       } catch (error) {
+        if (!this.roleSelectionOperationIsCurrent(operation)) {
+          return;
+        }
         if (error?.statusCode === 403) {
           this.statusText = "本场NPC由车头安排。";
         } else if (error?.statusCode === 409) {
@@ -1374,7 +1810,7 @@ export default {
           this.statusText = "NPC角色申请失败，请稍后重试。";
         }
       } finally {
-        this.roleSelectionSubmitting = false;
+        this.finishRoleSelectionOperation(operationEntry.operationId);
       }
     },
     hideShareMenus() {
@@ -1383,11 +1819,19 @@ export default {
       }
     },
     showShareMenus() {
-      if (!this.canShareCurrentSession) {
+      if (!this.pageActive || this.navigatingAlbum || !this.canShareCurrentSession) {
         this.hideShareMenus();
         return;
       }
+      const requestSnapshot = pageRequestSnapshot(this);
       const showFriendShareMenu = () => {
+        if (
+          !this.pageActive || this.navigatingAlbum ||
+          !pageRequestIsCurrent(this, requestSnapshot) ||
+          !this.canShareCurrentSession
+        ) {
+          return;
+        }
         showWechatShareMenus({
           withShareTicket: true,
           menus: ["shareAppMessage"]
