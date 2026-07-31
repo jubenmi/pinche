@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import mysql from "mysql2/promise";
@@ -874,7 +875,77 @@ test("historical creation key validation is strict and future creation never ent
   assert.equal(futureConnection.state.operations.size, 0);
 });
 
-test("moderated historical session proposal retains the business creation key for apply", async () => {
+test("core rejects a body hash unless it matches the trusted proposal option", async () => {
+  const historicalCreationKeyHash = crypto
+    .createHash("sha256")
+    .update("hs_0123456789abcdef0123456789abcdef0123456789abcdef")
+    .digest("hex");
+  const connection = idempotentHistoricalCreationConnection();
+
+  await assert.rejects(
+    () => createSessionWithConnection(connection, ACTOR, baseBody({
+      historicalCreationKeyHash
+    })),
+    { statusCode: 400 }
+  );
+  assert.equal(connection.state.sessionInsertCount, 0);
+  assert.equal(connection.state.operations.size, 0);
+});
+
+test("direct raw key and approved hash proposal replay one historical creation", async () => {
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const historicalCreationKeyHash = crypto
+    .createHash("sha256")
+    .update(historicalCreationKey)
+    .digest("hex");
+  const moderationIdentity = `hsc_${historicalCreationKeyHash}`;
+  const descriptor = buildTextModerationDescriptor({
+    action: "create_session",
+    subjectId: "session-create:7",
+    actorUserId: ACTOR.user.id,
+    openid: "openid-7",
+    baseVersion: expectedTextCreationBase(ACTOR.user.id),
+    idempotencyKey: moderationIdentity,
+    idempotencyExplicit: true,
+    body: baseBody({
+      historicalCreationKey,
+      note: "审核中的补录",
+      pinnedMessageText: "补录说明"
+    })
+  });
+
+  assert.equal(descriptor.idempotencyKey, moderationIdentity);
+  assert.equal(descriptor.payload.body.historicalCreationKey, undefined);
+  assert.equal(
+    descriptor.payload.body.historicalCreationKeyHash,
+    historicalCreationKeyHash
+  );
+  assert.equal(JSON.stringify(descriptor).includes(historicalCreationKey), false);
+
+  const connection = idempotentHistoricalCreationConnection();
+  const created = await createSessionWithConnection(
+    connection,
+    ACTOR,
+    baseBody({
+      historicalCreationKey,
+      note: "审核中的补录",
+      pinnedMessageText: "补录说明"
+    })
+  );
+  const replay = await applyApprovedSessionProposal(
+    connection,
+    descriptor.payload.body,
+    moderationIdentity
+  );
+  assert.equal(replay.id, created.id);
+  assert.equal(connection.state.sessionInsertCount, 1);
+  assert.equal(connection.state.chatRoomInsertCount, 1);
+  assert.equal(connection.state.messageInsertCount, 1);
+  assert.equal(connection.state.operations.size, 1);
+});
+
+test("approved historical proposal rejects a moderation identity that mismatches its payload hash", async () => {
   const historicalCreationKey =
     "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
   const descriptor = buildTextModerationDescriptor({
@@ -883,30 +954,19 @@ test("moderated historical session proposal retains the business creation key fo
     actorUserId: ACTOR.user.id,
     openid: "openid-7",
     baseVersion: expectedTextCreationBase(ACTOR.user.id),
-    idempotencyKey: historicalCreationKey,
+    idempotencyKey: "hsc_placeholder",
     idempotencyExplicit: true,
-    body: baseBody({
-      historicalCreationKey,
-      note: "审核中的补录"
-    })
+    body: baseBody({ historicalCreationKey, note: "审核中的补录" })
   });
 
-  assert.equal(descriptor.idempotencyKey, historicalCreationKey);
-  assert.equal(descriptor.payload.body.historicalCreationKey, historicalCreationKey);
-
-  const connection = idempotentHistoricalCreationConnection();
-  const created = await applyApprovedSessionProposal(
-    connection,
-    descriptor.payload.body,
-    historicalCreationKey
+  await assert.rejects(
+    () => applyApprovedSessionProposal(
+      idempotentHistoricalCreationConnection(),
+      descriptor.payload.body,
+      `hsc_${"0".repeat(64)}`
+    ),
+    { code: "CONTENT_MODERATION_PROPOSAL_STALE" }
   );
-  const replay = await applyApprovedSessionProposal(
-    connection,
-    descriptor.payload.body,
-    historicalCreationKey
-  );
-  assert.equal(replay.id, created.id);
-  assert.equal(connection.state.sessionInsertCount, 1);
 });
 
 test("publish validation failures stop at the expected lock boundary without mutation", async (t) => {

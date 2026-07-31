@@ -280,12 +280,24 @@ test("setup submission is single-flight before deferred login and runs one creat
 
 test("prepared setup must still match the form after deferred authentication", () => {
   const descriptor = historicalSetupDescriptor(historicalSnapshot());
+  const creationData = {
+    storeId: 7,
+    scriptId: 9,
+    startAt: "2099-01-01 19:30:00",
+    sessionPurpose: "future_carpool",
+    joinPolicy: "review_required",
+    joinPhoneRequired: false,
+    npcJoinEnabled: true,
+    visibility: "public"
+  };
   assert.equal(
     sessionSetupSubmissionMatches({
       preparedPurpose: "historical_record",
       currentPurpose: "historical_record",
       preparedDescriptor: descriptor,
-      currentDescriptor: { ...descriptor }
+      currentDescriptor: { ...descriptor },
+      preparedCreationData: creationData,
+      currentCreationData: { ...creationData }
     }),
     true
   );
@@ -294,7 +306,9 @@ test("prepared setup must still match the form after deferred authentication", (
       preparedPurpose: "historical_record",
       currentPurpose: "future_carpool",
       preparedDescriptor: descriptor,
-      currentDescriptor: descriptor
+      currentDescriptor: descriptor,
+      preparedCreationData: creationData,
+      currentCreationData: creationData
     }),
     false
   );
@@ -303,10 +317,32 @@ test("prepared setup must still match the form after deferred authentication", (
       preparedPurpose: "historical_record",
       currentPurpose: "historical_record",
       preparedDescriptor: descriptor,
-      currentDescriptor: { ...descriptor, fingerprint: "changed-during-login" }
+      currentDescriptor: { ...descriptor, fingerprint: "changed-during-login" },
+      preparedCreationData: creationData,
+      currentCreationData: creationData
     }),
     false
   );
+
+  for (const [field, changedValue] of [
+    ["joinPolicy", "direct"],
+    ["joinPhoneRequired", true],
+    ["npcJoinEnabled", false],
+    ["visibility", "share_only"]
+  ]) {
+    assert.equal(
+      sessionSetupSubmissionMatches({
+        preparedPurpose: "future_carpool",
+        currentPurpose: "future_carpool",
+        preparedDescriptor: descriptor,
+        currentDescriptor: descriptor,
+        preparedCreationData: creationData,
+        currentCreationData: { ...creationData, [field]: changedValue }
+      }),
+      false,
+      `${field} changed during login`
+    );
+  }
 });
 
 test("historical creation persists a stable key before POST and reuses it after response loss", async () => {
@@ -367,34 +403,51 @@ test("historical creation persists a stable key before POST and reuses it after 
   assert.equal(persisted[0].sessionId, null, "marker must be written before the first POST");
 });
 
-test("pending storage prewrite failure prevents historical POST while retaining in-memory key", async () => {
+test("every null-session retry persists the same historical marker before POST", async () => {
   const snapshot = historicalSnapshot();
   const descriptor = historicalSetupDescriptor(snapshot);
   const state = { pendingHistoricalDraft: null };
+  let keyFactoryCalls = 0;
+  let persistAttempts = 0;
   let posts = 0;
+  const persistedKeys = [];
 
-  await assert.rejects(
-    () => createOrRecoverHistoricalDraft({
-      pendingHistoricalDraft: null,
-      descriptor,
-      createKey: () => "hs_0123456789abcdef0123456789abcdef0123456789abcdef",
-      persistPending(pending) {
-        persistPendingHistoricalDraftState(state, pending, () => {
-          throw new Error("storage unavailable");
-        });
-      },
-      async createSession() {
-        posts += 1;
-        return { id: 101 };
-      },
-      recoverSession: async () => null
-    }),
-    /storage unavailable/
-  );
+  const run = () => createOrRecoverHistoricalDraft({
+    pendingHistoricalDraft: state.pendingHistoricalDraft,
+    descriptor,
+    createKey: () => {
+      keyFactoryCalls += 1;
+      return "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+    },
+    persistPending(pending) {
+      persistPendingHistoricalDraftState(state, pending, (value) => {
+        persistAttempts += 1;
+        persistedKeys.push(value.historicalCreationKey);
+        if (persistAttempts <= 2) throw new Error("storage unavailable");
+      });
+    },
+    async createSession() {
+      posts += 1;
+      return { id: 101 };
+    },
+    recoverSession: async () => null
+  });
+
+  await assert.rejects(run, /storage unavailable/);
+  const retainedKey = state.pendingHistoricalDraft.historicalCreationKey;
+  await assert.rejects(run, /storage unavailable/);
 
   assert.equal(posts, 0);
+  assert.equal(persistAttempts, 2);
+  assert.equal(keyFactoryCalls, 1);
   assert.equal(state.pendingHistoricalDraft.sessionId, null);
-  assert.match(state.pendingHistoricalDraft.historicalCreationKey, /^hs_/);
+  assert.equal(state.pendingHistoricalDraft.historicalCreationKey, retainedKey);
+
+  const created = await run();
+  assert.equal(created.session.id, 101);
+  assert.equal(posts, 1);
+  assert.equal(keyFactoryCalls, 1);
+  assert.equal(persistedKeys.every((key) => key === retainedKey), true);
 });
 
 test("pending cleanup clears memory first and storage failure cannot block redirect", () => {

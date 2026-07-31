@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 
 import {
@@ -84,6 +85,66 @@ test("text boundary excludes system text and redacts phone numbers before WeChat
   assert.deepEqual(descriptor.fields, { note: "联系 [phone]" });
   assert.equal("system_message" in descriptor.fields, false);
   assert.equal("review_note" in descriptor.fields, false);
+});
+
+test("historical session moderation canonicalizes the raw operation key to a one-way hash", () => {
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const historicalCreationKeyHash = crypto
+    .createHash("sha256")
+    .update(historicalCreationKey)
+    .digest("hex");
+  const descriptor = buildTextModerationDescriptor(input("create_session", {
+    storeId: 3,
+    scriptId: 4,
+    startAt: "2020-01-01 13:00:00",
+    sessionPurpose: "historical_record",
+    historicalCreationKey,
+    note: "历史补录"
+  }));
+
+  assert.equal(descriptor.payload.body.historicalCreationKey, undefined);
+  assert.equal(
+    descriptor.payload.body.historicalCreationKeyHash,
+    historicalCreationKeyHash
+  );
+  assert.equal(JSON.stringify(descriptor).includes(historicalCreationKey), false);
+
+  const rehydrated = buildTextModerationDescriptor(input("create_session", {
+    ...descriptor.payload.body
+  }, {
+    idempotencyKey: `hsc_${historicalCreationKeyHash}`
+  }));
+  assert.equal(
+    rehydrated.payload.body.historicalCreationKeyHash,
+    historicalCreationKeyHash
+  );
+
+  assert.throws(
+    () => buildTextModerationDescriptor(input("create_session", {
+      storeId: 3,
+      scriptId: 4,
+      startAt: "2020-01-01 13:00:00",
+      sessionPurpose: "historical_record",
+      historicalCreationKeyHash,
+      note: "外部伪造 hash"
+    })),
+    { statusCode: 400 }
+  );
+
+  for (const historicalCreationKeyHash of [null, undefined]) {
+    assert.throws(
+      () => buildTextModerationDescriptor(input("create_session", {
+        storeId: 3,
+        scriptId: 4,
+        startAt: "2020-01-01 13:00:00",
+        sessionPurpose: "historical_record",
+        historicalCreationKeyHash,
+        note: "无效 hash"
+      })),
+      { statusCode: 400 }
+    );
+  }
 });
 
 test("NPC canonicalization mirrors every persisted role spelling, string form, and fallback", () => {

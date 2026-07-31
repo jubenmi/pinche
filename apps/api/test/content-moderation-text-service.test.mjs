@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 
 import { forbidden } from "../src/http/errors.js";
@@ -10,7 +11,14 @@ import {
 } from "../src/modules/content-moderation/text-profile-patch.js";
 import { createContentModerationService } from "../src/modules/content-moderation/service.js";
 import { textProposalPayloadDigest } from "../src/modules/content-moderation/text-proposal-digest.js";
-import { textMutationSubjectVersion } from "../src/modules/content-moderation/text-request-identity.js";
+import {
+  createTextMutationIdentity,
+  textMutationSubjectVersion
+} from "../src/modules/content-moderation/text-request-identity.js";
+import {
+  buildTextModerationDescriptor,
+  buildTextProposalPayload
+} from "../src/modules/content-moderation/text-boundaries.js";
 
 function textHarness({
   suggestion = "pass",
@@ -416,6 +424,59 @@ test("text pass uses the fixed scene, persists a proposal, and applies it atomic
     fromStatus: "pending",
     leaseDurationMs: 90_000
   }]);
+});
+
+test("historical moderation storage contains only a hash-derived operation identity", async () => {
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const historicalCreationKeyHash = crypto
+    .createHash("sha256")
+    .update(historicalCreationKey)
+    .digest("hex");
+  const payload = buildTextProposalPayload("create_session", {
+    body: {
+      storeId: 3,
+      scriptId: 4,
+      startAt: "2020-01-01 13:00:00",
+      sessionPurpose: "historical_record",
+      historicalCreationKey,
+      note: "审核中的历史补录"
+    },
+    context: { targetSubjectId: "creation:create_session:7" }
+  });
+  const identity = createTextMutationIdentity({
+    rawBody: { historicalCreationKey, idempotencyKey: historicalCreationKey },
+    action: "create_session",
+    actorUserId: 7,
+    subjectId: "",
+    baseVersion: "session-create-v1",
+    payload
+  });
+  const descriptor = buildTextModerationDescriptor({
+    action: "create_session",
+    actorUserId: 7,
+    openid: "openid-7",
+    subjectId: "text-op:historical",
+    baseVersion: "session-create-v1",
+    idempotencyKey: identity.idempotencyKey,
+    idempotencyExplicit: identity.explicit,
+    body: payload.body,
+    context: payload.context
+  });
+  const { service, state } = textHarness({ suggestion: "review" });
+
+  await assert.rejects(
+    service.moderateTextMutation(descriptor),
+    { code: "CONTENT_MODERATION_REVIEW_PENDING" }
+  );
+
+  const storedProposal = state.proposals[0];
+  assert.equal(storedProposal.idempotencyKey, `hsc_${historicalCreationKeyHash}`);
+  assert.equal(
+    storedProposal.normalizedPayload.body.historicalCreationKeyHash,
+    historicalCreationKeyHash
+  );
+  assert.equal(JSON.stringify(storedProposal).includes(historicalCreationKey), false);
 });
 
 test("a mixed profile patch applies only after nickname text passes moderation", async () => {

@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import {
   FUTURE_CARPOOL,
   HISTORICAL_RECORD,
@@ -20,6 +22,7 @@ const NPC_MEMBER_ALIASES = Object.freeze([
   "user_id"
 ]);
 const HISTORICAL_CREATION_KEY = /^[A-Za-z0-9_-]{32,128}$/;
+const HISTORICAL_CREATION_KEY_HASH = /^[a-f0-9]{64}$/;
 
 function hasExplicitNonNullAlias(value, aliases) {
   if (!value || typeof value !== "object") return false;
@@ -64,6 +67,29 @@ export function normalizeHistoricalSessionCreationKey(body = {}, sessionPurpose)
       400,
       "INVALID_HISTORICAL_CREATION_KEY",
       "historicalCreationKey must contain 32 to 128 URL-safe characters"
+    );
+  }
+  return value;
+}
+
+export function hashHistoricalSessionCreationKey(value) {
+  return crypto.createHash("sha256").update(String(value), "utf8").digest("hex");
+}
+
+export function normalizeHistoricalSessionCreationKeyHash(value, sessionPurpose) {
+  if (value === undefined || value === null) return null;
+  if (normalizeSessionPurpose(sessionPurpose) !== HISTORICAL_RECORD) {
+    throw new AppError(
+      400,
+      "INVALID_HISTORICAL_CREATION_KEY_HASH",
+      "historical creation key hash is only valid for historical sessions"
+    );
+  }
+  if (typeof value !== "string" || !HISTORICAL_CREATION_KEY_HASH.test(value)) {
+    throw new AppError(
+      400,
+      "INVALID_HISTORICAL_CREATION_KEY_HASH",
+      "historical creation key hash must be 64 lowercase hexadecimal characters"
     );
   }
   return value;

@@ -833,7 +833,9 @@ export default {
             preparedPurpose: sessionPurpose,
             currentPurpose: this.sessionPurpose,
             preparedDescriptor: descriptor,
-            currentDescriptor: this.historicalDraftDescriptor()
+            currentDescriptor: this.historicalDraftDescriptor(),
+            preparedCreationData: creationData,
+            currentCreationData: this.sessionCreationData(this.effectivePinnedMessage)
           })) {
             this.statusText = "登录期间开本设置已变化，请再次点击确认创建。";
             return null;

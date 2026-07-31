@@ -247,14 +247,30 @@ export function sessionSetupSubmissionMatches({
   preparedPurpose,
   currentPurpose,
   preparedDescriptor,
-  currentDescriptor
+  currentDescriptor,
+  preparedCreationData,
+  currentCreationData
 } = {}) {
+  const creationDataMatches =
+    (preparedCreationData === undefined && currentCreationData === undefined) ||
+    stableSetupJson(preparedCreationData) === stableSetupJson(currentCreationData);
   return Boolean(
     preparedPurpose &&
       preparedPurpose === currentPurpose &&
       preparedDescriptor?.fingerprint &&
-      preparedDescriptor.fingerprint === currentDescriptor?.fingerprint
+      preparedDescriptor.fingerprint === currentDescriptor?.fingerprint &&
+      creationDataMatches
   );
+}
+
+function stableSetupJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSetupJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => (
+      `${JSON.stringify(key)}:${stableSetupJson(value[key])}`
+    )).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
 }
 
 export function persistPendingHistoricalDraftState(state, pendingHistoricalDraft, persist) {
@@ -301,7 +317,6 @@ export async function createOrRecoverHistoricalDraft({
     if (!isHistoricalCreationKey(pending.historicalCreationKey)) {
       throw new TypeError("historical creation key is invalid");
     }
-    await persistPending(pending);
   }
 
   if (pending.sessionId !== null) {
@@ -311,6 +326,7 @@ export async function createOrRecoverHistoricalDraft({
     };
   }
 
+  await persistPending(pending);
   const session = await createSession({
     historicalCreationKey: pending.historicalCreationKey,
     idempotencyKey: pending.historicalCreationKey

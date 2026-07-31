@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 
 import {
@@ -90,6 +91,41 @@ test("an explicit idempotency key remains stable across baseline changes", () =>
     textMutationSubjectVersion({ normalizedText: "[name]NPC", baseVersion: "v1", explicit: true }),
     textMutationSubjectVersion({ normalizedText: "[name]NPC", baseVersion: "v2", explicit: true })
   );
+});
+
+test("historical session identity ignores raw explicit keys and namespaces the canonical hash", () => {
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const historicalCreationKeyHash = crypto
+    .createHash("sha256")
+    .update(historicalCreationKey)
+    .digest("hex");
+  const payload = buildTextProposalPayload("create_session", {
+    body: {
+      storeId: 3,
+      scriptId: 4,
+      startAt: "2020-01-01 13:00:00",
+      sessionPurpose: "historical_record",
+      historicalCreationKey,
+      note: "历史补录"
+    }
+  });
+
+  const identity = createTextMutationIdentity({
+    request: { headers: { "idempotency-key": historicalCreationKey } },
+    rawBody: { historicalCreationKey, idempotencyKey: historicalCreationKey },
+    action: "create_session",
+    actorUserId: 7,
+    subjectId: "",
+    baseVersion: "v1",
+    payload
+  });
+
+  assert.deepEqual(identity, {
+    idempotencyKey: `hsc_${historicalCreationKeyHash}`,
+    explicit: true
+  });
+  assert.equal(identity.idempotencyKey.includes(historicalCreationKey), false);
 });
 
 test("operation subject identity separates new keys while retaining a pure text subject version", () => {

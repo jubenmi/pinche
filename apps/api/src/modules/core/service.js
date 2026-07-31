@@ -64,6 +64,8 @@ import {
 } from "./session-reschedule.js";
 import {
   assertHistoricalSessionMemberPrebindAllowed,
+  hashHistoricalSessionCreationKey,
+  normalizeHistoricalSessionCreationKeyHash,
   normalizeHistoricalSessionCreationKey,
   normalizeSessionCreationStartAt
 } from "./session-purpose.js";
@@ -4150,9 +4152,8 @@ function historicalCreationPayloadHash(payload) {
 
 async function lockHistoricalCreationOperation(
   connection,
-  { organizerUserId, historicalCreationKey, payloadHash }
+  { organizerUserId, creationKeyHash, payloadHash }
 ) {
-  const creationKeyHash = crypto.createHash("sha256").update(historicalCreationKey).digest();
   await connection.query(
     `
       INSERT INTO historical_session_creation_operations
@@ -4212,7 +4213,12 @@ async function bindHistoricalCreationOperation(
   }
 }
 
-export async function createSessionWithConnection(connection, user, body) {
+export async function createSessionWithConnection(
+  connection,
+  user,
+  body,
+  { trustedHistoricalCreationKeyHash = null } = {}
+) {
   requireVerifiedPhone(user);
 
   const normalizedCreation = normalizeSessionCreationStartAt(
@@ -4224,15 +4230,44 @@ export async function createSessionWithConnection(connection, user, body) {
     body,
     normalizedCreation.sessionPurpose
   );
+  const trustedCreationKeyHash = normalizeHistoricalSessionCreationKeyHash(
+    trustedHistoricalCreationKeyHash,
+    normalizedCreation.sessionPurpose
+  );
+  if (Object.prototype.hasOwnProperty.call(body, "historicalCreationKeyHash")) {
+    const bodyCreationKeyHash = normalizeHistoricalSessionCreationKeyHash(
+      body.historicalCreationKeyHash,
+      normalizedCreation.sessionPurpose
+    );
+    if (!bodyCreationKeyHash || bodyCreationKeyHash !== trustedCreationKeyHash) {
+      throw new AppError(
+        400,
+        "UNTRUSTED_HISTORICAL_CREATION_KEY_HASH",
+        "historical creation key hash is only accepted from an approved proposal"
+      );
+    }
+  }
+  if (historicalCreationKey && trustedCreationKeyHash) {
+    throw new AppError(
+      400,
+      "AMBIGUOUS_HISTORICAL_CREATION_KEY",
+      "Provide only one historical creation key identity"
+    );
+  }
+  const historicalCreationKeyHash = trustedCreationKeyHash || (
+    historicalCreationKey
+      ? hashHistoricalSessionCreationKey(historicalCreationKey)
+      : null
+  );
 
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
   const creation = normalizedSessionCreationPayload(body, normalizedCreation);
   let historicalOperation = null;
-  if (historicalCreationKey) {
+  if (historicalCreationKeyHash) {
     historicalOperation = await lockHistoricalCreationOperation(connection, {
       organizerUserId: user.user.id,
-      historicalCreationKey,
+      creationKeyHash: Buffer.from(historicalCreationKeyHash, "hex"),
       payloadHash: historicalCreationPayloadHash(creation)
     });
     if (historicalOperation.sessionId !== null) {
