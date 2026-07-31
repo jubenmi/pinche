@@ -18,6 +18,12 @@ import {
   unauthorized
 } from "./http/errors.js";
 import {
+  signSignedPayload as signNamespacedPayload,
+  signedPayloadSignature as namespacedPayloadSignature,
+  tokenPositiveInteger as parseTokenPositiveInteger,
+  verifySignedPayload as verifyNamespacedPayload
+} from "./modules/security/signed-payload.js";
+import {
   publicUser,
   updateUserPhone,
   updateUserProfile,
@@ -3207,52 +3213,32 @@ function buildAuthorAlbumImageUrls(photo, options = {}) {
 }
 
 function signedPayloadSignature(purpose, payloadText) {
-  return crypto
-    .createHmac("sha256", config.sessionSecret)
-    .update(`${purpose}:${payloadText}`)
-    .digest("hex");
+  return namespacedPayloadSignature({
+    secret: config.sessionSecret,
+    namespace: purpose,
+    payloadText
+  });
 }
 
 function tokenPositiveInteger(value, label) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw forbidden(`${label} is invalid`);
-  }
-  return parsed;
+  return parseTokenPositiveInteger(value, label);
 }
 
 function signSignedPayload(purpose, payload) {
-  const payloadText = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = signedPayloadSignature(purpose, payloadText);
-  return `${payloadText}.${signature}`;
+  return signNamespacedPayload({
+    secret: config.sessionSecret,
+    namespace: purpose,
+    payload
+  });
 }
 
 function verifySignedPayload(purpose, token, label) {
-  const [payloadText, signature, extra] = String(token || "").split(".");
-  if (!payloadText || !signature || extra !== undefined) {
-    throw forbidden(`${label} is required`);
-  }
-
-  const expected = signedPayloadSignature(purpose, payloadText);
-  const signatureBuffer = Buffer.from(signature, "hex");
-  const expectedBuffer = Buffer.from(expected, "hex");
-  if (
-    signatureBuffer.length !== expectedBuffer.length ||
-    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
-  ) {
-    throw forbidden(`${label} is invalid`);
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(Buffer.from(payloadText, "base64url").toString("utf8"));
-  } catch (error) {
-    throw forbidden(`${label} is invalid`);
-  }
-  if (tokenPositiveInteger(payload.exp, "exp") < Math.floor(Date.now() / 1000)) {
-    throw forbidden(`${label} expired`);
-  }
-  return payload;
+  return verifyNamespacedPayload({
+    secret: config.sessionSecret,
+    namespace: purpose,
+    token,
+    label
+  });
 }
 
 function normalizeSessionAlbumShareClaims(payload) {
