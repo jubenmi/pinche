@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { createSessionWithConnection } from "../src/modules/core/service.js";
+import {
+  createSessionWithConnection,
+  publishSessionWithConnection
+} from "../src/modules/core/service.js";
 import { buildTextModerationDescriptor } from "../src/modules/content-moderation/text-boundaries.js";
 import {
   createProductionTextProposalHandlers,
@@ -98,6 +101,105 @@ function createConnection() {
       }
       if (normalized.includes("FROM session_messages message")) {
         return [[]];
+      }
+
+      throw new Error(`Unexpected query: ${normalized}`);
+    }
+  };
+}
+
+function createPublishConnection({
+  session = {},
+  seats = [],
+  seatUpdateAffectedRows = 1
+} = {}) {
+  const currentSession = {
+    id: 101,
+    organizer_user_id: ACTOR.user.id,
+    status: "draft",
+    session_purpose: "historical_record",
+    visibility: "share_only",
+    join_policy: "review_required",
+    join_phone_required: 0,
+    npc_join_enabled: 0,
+    ...session
+  };
+  const currentSeats = seats.map((seat) => ({
+    session_id: currentSession.id,
+    adjustment: 0,
+    payable_price: 100,
+    status: "open",
+    confirmed_user_id: null,
+    ...seat
+  }));
+  const state = {
+    queries: [],
+    mutations: [],
+    session: currentSession,
+    seats: currentSeats
+  };
+
+  return {
+    state,
+    async query(sql, values = []) {
+      const normalized = compactSql(sql);
+      state.queries.push({ sql: normalized, values });
+      if (/^(INSERT|UPDATE|DELETE) /i.test(normalized)) {
+        state.mutations.push({ sql: normalized, values });
+      }
+
+      if (normalized === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+        return [[currentSession]];
+      }
+      if (
+        normalized ===
+        "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE"
+      ) {
+        return [[...currentSeats].sort((left, right) => Number(left.id) - Number(right.id))];
+      }
+      if (
+        normalized ===
+        "UPDATE session_seats SET status = 'confirmed', confirmed_user_id = ? WHERE id = ? AND session_id = ? AND status = 'open' AND confirmed_user_id IS NULL"
+      ) {
+        if (seatUpdateAffectedRows === 1) {
+          const target = currentSeats.find((seat) =>
+            Number(seat.id) === Number(values[1]) &&
+            Number(seat.session_id) === Number(values[2]) &&
+            seat.status === "open" &&
+            seat.confirmed_user_id === null
+          );
+          if (target) {
+            target.status = "confirmed";
+            target.confirmed_user_id = values[0];
+          }
+        }
+        return [{ affectedRows: seatUpdateAffectedRows }];
+      }
+      if (
+        normalized ===
+        "INSERT INTO signups (session_id, seat_id, session_npc_role_id, signup_type, user_id, note, status, review_eligible_at) VALUES (?, ?, NULL, 'seat', ?, '车头创建历史补录时选择角色', 'approved', CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE status = 'approved', review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP), user_hidden_at = NULL"
+      ) {
+        return [{ affectedRows: 1 }];
+      }
+      if (
+        normalized ===
+        "UPDATE sessions SET status = 'locked', visibility = 'share_only', join_policy = 'review_required', join_phone_required = 0, npc_join_enabled = 0 WHERE id = ?"
+      ) {
+        Object.assign(currentSession, {
+          status: "locked",
+          visibility: "share_only",
+          join_policy: "review_required",
+          join_phone_required: 0,
+          npc_join_enabled: 0
+        });
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized === "UPDATE sessions SET status = 'recruiting' WHERE id = ?") {
+        currentSession.status = "recruiting";
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized === "SELECT * FROM sessions WHERE id = ?") {
+        return [[currentSession]];
       }
 
       throw new Error(`Unexpected query: ${normalized}`);
@@ -205,6 +307,164 @@ test("future creation retains requested public visibility and recruitment settin
   assert.equal(values.join_policy, "direct");
   assert.equal(values.join_phone_required, 1);
   assert.equal(values.npc_join_enabled, 1);
+});
+
+test("historical publish requires creatorSeatId before any mutation", async () => {
+  const connection = createPublishConnection({ seats: [{ id: 11 }] });
+
+  await assert.rejects(
+    () => publishSessionWithConnection(connection, ACTOR, 101),
+    { statusCode: 400 }
+  );
+
+  assert.deepEqual(
+    connection.state.queries.slice(0, 2).map((query) => query.sql),
+    [
+      "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
+      "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE"
+    ]
+  );
+  assert.deepEqual(connection.state.mutations, []);
+});
+
+test("historical publish rejects creatorSeatId outside the locked session seats", async () => {
+  const connection = createPublishConnection({ seats: [{ id: 11 }, { id: 12 }] });
+
+  await assert.rejects(
+    () => publishSessionWithConnection(connection, ACTOR, 101, { creatorSeatId: 99 }),
+    { statusCode: 400 }
+  );
+
+  assert.deepEqual(connection.state.mutations, []);
+});
+
+test("historical publish rejects an occupied or non-open creator seat before mutation", async (t) => {
+  const cases = [
+    ["occupied", { id: 11, confirmed_user_id: 8 }],
+    ["non-open", { id: 11, status: "applied" }]
+  ];
+
+  for (const [name, seat] of cases) {
+    await t.test(name, async () => {
+      const connection = createPublishConnection({ seats: [seat] });
+
+      await assert.rejects(
+        () => publishSessionWithConnection(connection, ACTOR, 101, { creatorSeatId: 11 }),
+        { statusCode: 409 }
+      );
+
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("historical publish stops after a lost creator-seat update race", async () => {
+  const connection = createPublishConnection({
+    seats: [{ id: 11 }],
+    seatUpdateAffectedRows: 0
+  });
+
+  await assert.rejects(
+    () => publishSessionWithConnection(connection, ACTOR, 101, { creatorSeatId: 11 }),
+    { statusCode: 409 }
+  );
+
+  assert.equal(connection.state.mutations.length, 1);
+  assert.equal(
+    connection.state.mutations[0].sql,
+    "UPDATE session_seats SET status = 'confirmed', confirmed_user_id = ? WHERE id = ? AND session_id = ? AND status = 'open' AND confirmed_user_id IS NULL"
+  );
+  assert.deepEqual(connection.state.mutations[0].values, [ACTOR.user.id, 11, 101]);
+});
+
+test("historical publish atomically binds organizer signup and locks safe settings", async () => {
+  const connection = createPublishConnection({
+    seats: [{ id: 12, adjustment: -20 }, { id: 11, adjustment: 20 }]
+  });
+
+  const session = await publishSessionWithConnection(connection, ACTOR, 101, {
+    creatorSeatId: 11
+  });
+
+  assert.deepEqual(
+    connection.state.queries.slice(0, 2).map((query) => query.sql),
+    [
+      "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
+      "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE"
+    ]
+  );
+  assert.deepEqual(
+    connection.state.mutations,
+    [
+      {
+        sql: "UPDATE session_seats SET status = 'confirmed', confirmed_user_id = ? WHERE id = ? AND session_id = ? AND status = 'open' AND confirmed_user_id IS NULL",
+        values: [ACTOR.user.id, 11, 101]
+      },
+      {
+        sql: "INSERT INTO signups (session_id, seat_id, session_npc_role_id, signup_type, user_id, note, status, review_eligible_at) VALUES (?, ?, NULL, 'seat', ?, '车头创建历史补录时选择角色', 'approved', CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE status = 'approved', review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP), user_hidden_at = NULL",
+        values: [101, 11, ACTOR.user.id]
+      },
+      {
+        sql: "UPDATE sessions SET status = 'locked', visibility = 'share_only', join_policy = 'review_required', join_phone_required = 0, npc_join_enabled = 0 WHERE id = ?",
+        values: [101]
+      }
+    ]
+  );
+  assert.equal(connection.state.seats[1].status, "confirmed");
+  assert.equal(connection.state.seats[1].confirmed_user_id, ACTOR.user.id);
+  assert.equal(session.status, "locked");
+  assert.equal(session.visibility, "share_only");
+  assert.equal(session.join_policy, "review_required");
+  assert.equal(session.join_phone_required, 0);
+  assert.equal(session.npc_join_enabled, 0);
+});
+
+test("future publish retains recruiting behavior without creatorSeatId", async () => {
+  const connection = createPublishConnection({
+    session: { session_purpose: "future_carpool" },
+    seats: [{ id: 11 }]
+  });
+
+  const session = await publishSessionWithConnection(connection, ACTOR, 101);
+
+  assert.equal(session.status, "recruiting");
+  assert.deepEqual(connection.state.mutations, [{
+    sql: "UPDATE sessions SET status = 'recruiting' WHERE id = ?",
+    values: [101]
+  }]);
+});
+
+test("future publish rejects creatorSeatId before mutation", async () => {
+  const connection = createPublishConnection({
+    session: { session_purpose: "future_carpool" },
+    seats: [{ id: 11 }]
+  });
+
+  await assert.rejects(
+    () => publishSessionWithConnection(connection, ACTOR, 101, { creatorSeatId: 11 }),
+    { statusCode: 400 }
+  );
+
+  assert.deepEqual(connection.state.mutations, []);
+});
+
+test("published session cannot be published twice", async () => {
+  const connection = createPublishConnection({
+    session: { session_purpose: "future_carpool" },
+    seats: [{ id: 11 }]
+  });
+
+  await publishSessionWithConnection(connection, ACTOR, 101);
+  await assert.rejects(
+    () => publishSessionWithConnection(connection, ACTOR, 101),
+    { statusCode: 409 }
+  );
+
+  assert.equal(connection.state.mutations.length, 1);
+  assert.equal(
+    connection.state.queries.at(-1).sql,
+    "SELECT * FROM sessions WHERE id = ? FOR UPDATE"
+  );
 });
 
 test("historical creation rejects every direct-member and pre-bound NPC alias before session INSERT", async (t) => {
@@ -353,4 +613,15 @@ test("historical stale snapshots select immutable purpose for NPC-role and pinne
     assert.match(helper, /session\.session_purpose/);
     assert.match(helper, /sessionTextSnapshot/);
   }
+});
+
+test("publish route forwards the parsed request body", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const routeStart = source.indexOf(
+    "const publishSessionId = idMatch(url.pathname, /^\\/api\\/sessions\\/(\\d+)\\/publish$/);"
+  );
+  const routeEnd = source.indexOf("const sessionSeatSessionId", routeStart);
+  const route = source.slice(routeStart, routeEnd);
+
+  assert.match(route, /publishSession\(user, publishSessionId, body\)/);
 });

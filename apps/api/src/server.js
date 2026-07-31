@@ -6394,7 +6394,7 @@ async function route(request, response, options = {}) {
     const user = await getAuthUser(request);
     jsonResponse(response, 200, {
       ok: true,
-      data: await publishSession(user, publishSessionId)
+      data: await publishSession(user, publishSessionId, body)
     });
     return;
   }

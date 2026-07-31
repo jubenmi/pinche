@@ -5230,33 +5230,101 @@ export async function updateSeat(user, seatId, body) {
   });
 }
 
-export async function publishSession(user, sessionId) {
-  return withTransaction(async (connection) => {
-    await requireSessionOwner(connection, sessionId, user);
-    const [seats] = await connection.query(
-      "SELECT * FROM session_seats WHERE session_id = ? FOR UPDATE",
+export async function publishSessionWithConnection(connection, user, sessionId, body = {}) {
+  const [sessionRows] = await connection.query(
+    "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
+    [sessionId]
+  );
+  const session = sessionRows[0];
+  if (!session) {
+    throw notFound("Session not found");
+  }
+  if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the session organizer can perform this action");
+  }
+  if (session.status !== "draft") {
+    throw conflict("Only draft sessions can be published");
+  }
+
+  const [seats] = await connection.query(
+    "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE",
+    [sessionId]
+  );
+  if (seats.length === 0) {
+    throw badRequest("At least one seat is required before publish");
+  }
+
+  const adjustmentSum = seats.reduce((sum, seat) => sum + Number(seat.adjustment), 0);
+  if (adjustmentSum !== 0) {
+    throw badRequest("Seat adjustments must sum to 0");
+  }
+
+  const negativeSeat = seats.find((seat) => Number(seat.payable_price) < 0);
+  if (negativeSeat) {
+    throw badRequest("Seat payable price cannot be negative");
+  }
+
+  if (session.session_purpose === "historical_record") {
+    const creatorSeatId = positiveId(requireValue(body, "creatorSeatId"), "creatorSeatId");
+    const creatorSeat = seats.find((seat) => Number(seat.id) === creatorSeatId);
+    if (!creatorSeat) {
+      throw badRequest("creatorSeatId must belong to this session");
+    }
+    if (creatorSeat.status !== "open" || creatorSeat.confirmed_user_id !== null) {
+      throw conflict("Creator seat must be open and unoccupied");
+    }
+
+    const [seatUpdate] = await connection.query(
+      `
+        UPDATE session_seats
+        SET status = 'confirmed', confirmed_user_id = ?
+        WHERE id = ? AND session_id = ? AND status = 'open' AND confirmed_user_id IS NULL
+      `,
+      [user.user.id, creatorSeatId, sessionId]
+    );
+    if (Number(seatUpdate.affectedRows) !== 1) {
+      throw conflict("Creator seat changed before publish");
+    }
+
+    await connection.query(
+      `
+        INSERT INTO signups
+          (session_id, seat_id, session_npc_role_id, signup_type, user_id, note, status, review_eligible_at)
+        VALUES (?, ?, NULL, 'seat', ?, '车头创建历史补录时选择角色', 'approved', CURRENT_TIMESTAMP)
+        ON DUPLICATE KEY UPDATE
+          status = 'approved',
+          review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
+          user_hidden_at = NULL
+      `,
+      [sessionId, creatorSeatId, user.user.id]
+    );
+    await connection.query(
+      `
+        UPDATE sessions
+        SET status = 'locked', visibility = 'share_only',
+            join_policy = 'review_required', join_phone_required = 0,
+            npc_join_enabled = 0
+        WHERE id = ?
+      `,
       [sessionId]
     );
-    if (seats.length === 0) {
-      throw badRequest("At least one seat is required before publish");
+  } else {
+    if (body.creatorSeatId !== undefined) {
+      throw badRequest("creatorSeatId is only valid for historical sessions");
     }
-
-    const adjustmentSum = seats.reduce((sum, seat) => sum + Number(seat.adjustment), 0);
-    if (adjustmentSum !== 0) {
-      throw badRequest("Seat adjustments must sum to 0");
-    }
-
-    const negativeSeat = seats.find((seat) => Number(seat.payable_price) < 0);
-    if (negativeSeat) {
-      throw badRequest("Seat payable price cannot be negative");
-    }
-
     await connection.query(
       "UPDATE sessions SET status = 'recruiting' WHERE id = ?",
       [sessionId]
     );
-    return findById(connection, "sessions", sessionId);
-  });
+  }
+
+  return findById(connection, "sessions", sessionId);
+}
+
+export async function publishSession(user, sessionId, body = {}) {
+  return withTransaction((connection) =>
+    publishSessionWithConnection(connection, user, sessionId, body)
+  );
 }
 
 async function signupNotificationPayload(connection, signupId) {
