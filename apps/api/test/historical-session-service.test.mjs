@@ -421,9 +421,9 @@ function createPublishConnection({
       }
       if (
         normalized ===
-          "SELECT id FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+          "SELECT * FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
         normalized ===
-          "SELECT id FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+          "SELECT * FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
       ) {
         return [[]];
       }
@@ -947,7 +947,10 @@ test("historical sessions reject every ordinary recruitment path before mutation
         if (sql === "SELECT session_id FROM session_seats WHERE id = ?") {
           return [[{ session_id: 101 }]];
         }
-        if (sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+        if (
+          sql ===
+          "SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ? FOR UPDATE"
+        ) {
           return [[{
             id: 101,
             session_purpose: "historical_record",
@@ -964,7 +967,10 @@ test("historical sessions reject every ordinary recruitment path before mutation
         if (sql === "SELECT session_id FROM session_seats WHERE id = ?") {
           return [[{ session_id: 101 }]];
         }
-        if (sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+        if (
+          sql ===
+          "SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ? FOR UPDATE"
+        ) {
           return [[{
             id: 101,
             session_purpose: "historical_record",
@@ -981,7 +987,10 @@ test("historical sessions reject every ordinary recruitment path before mutation
         if (sql === "SELECT session_id FROM session_npc_roles WHERE id = ?") {
           return [[{ session_id: 101 }]];
         }
-        if (sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+        if (
+          sql ===
+          "SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ? FOR UPDATE"
+        ) {
           return [[{
             id: 101,
             session_purpose: "historical_record",
@@ -1007,9 +1016,9 @@ test("historical sessions reject every ordinary recruitment path before mutation
           }]];
         }
         if (
-          sql === "SELECT id FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE" ||
-          sql === "SELECT id FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
-          sql === "SELECT id FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+          sql === "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+          sql === "SELECT * FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+          sql === "SELECT * FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
         ) {
           return [[]];
         }
@@ -1162,9 +1171,9 @@ test("child-id mutation paths lock session before re-locking the child", async (
         }]];
       }
       if (
-        sql === "SELECT id FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE" ||
-        sql === "SELECT id FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
-        sql === "SELECT id FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+        sql === "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+        sql === "SELECT * FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+        sql === "SELECT * FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
       ) {
         return [[]];
       }
@@ -1193,9 +1202,9 @@ test("child-id mutation paths lock session before re-locking the child", async (
         .slice(0, 4),
       [
         "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
-        "SELECT id FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE",
-        "SELECT id FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE",
-        "SELECT id FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+        "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE",
+        "SELECT * FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE",
+        "SELECT * FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
       ]
     );
     assert.deepEqual(connection.state.mutations, []);
