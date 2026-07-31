@@ -1966,3 +1966,48 @@ test("historical invitation preview is dedicated, locked-only, and sanitized", a
     });
   }
 });
+
+test("public session availability requires a future carpool", async () => {
+  const source = await readFile(
+    new URL("../src/modules/core/service.js", import.meta.url),
+    "utf8"
+  );
+  const helperStart = source.indexOf("function publicSessionAvailable(session)");
+  const helperEnd = source.indexOf("function publicSeatResponse", helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+
+  assert.match(helper, /session\.session_purpose === "future_carpool"/);
+  assert.match(helper, /session\.visibility === "public"/);
+  assert.match(helper, /session\.status === "recruiting"/);
+  assert.match(helper, /startAt > Date\.now\(\)/);
+});
+
+test("discoverable session SQL requires a public recruiting future carpool", async () => {
+  const source = await readFile(
+    new URL("../src/modules/core/service.js", import.meta.url),
+    "utf8"
+  );
+  const listStart = source.indexOf("export async function listDiscoverableSessions");
+  const listEnd = source.indexOf("export async function listPublicUpcomingSessions", listStart);
+  const list = source.slice(listStart, listEnd);
+
+  assert.match(list, /session\.session_purpose = 'future_carpool'/);
+  assert.match(list, /session\.visibility = 'public'/);
+  assert.match(list, /session\.status = 'recruiting'/);
+  assert.match(list, /session\.start_at > CURRENT_TIMESTAMP/);
+});
+
+test("public upcoming session SQL requires a public recruiting future carpool", async () => {
+  const source = await readFile(
+    new URL("../src/modules/core/service.js", import.meta.url),
+    "utf8"
+  );
+  const listStart = source.indexOf("export async function listPublicUpcomingSessions");
+  const listEnd = source.indexOf("export async function listAdminSessions", listStart);
+  const list = source.slice(listStart, listEnd);
+
+  assert.match(list, /session\.session_purpose = 'future_carpool'/);
+  assert.match(list, /session\.visibility = 'public'/);
+  assert.match(list, /session\.status = 'recruiting'/);
+  assert.match(list, /session\.start_at > CURRENT_TIMESTAMP/);
+});

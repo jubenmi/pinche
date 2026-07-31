@@ -4173,6 +4173,7 @@ export async function createSession(user, body) {
 function publicSessionAvailable(session) {
   const startAt = new Date(session.start_at).getTime();
   return (
+    session.session_purpose === "future_carpool" &&
     session.visibility === "public" &&
     session.status === "recruiting" &&
     Number.isFinite(startAt) &&
@@ -4929,6 +4930,7 @@ export async function listDiscoverableSessions(user, filters = {}) {
       `
     : "NULL";
   const where = [
+    "session.session_purpose = 'future_carpool'",
     "session.status = 'recruiting'",
     "session.start_at > CURRENT_TIMESTAMP",
     "session.visibility = 'public'",
@@ -5058,7 +5060,8 @@ export async function listPublicUpcomingSessions(filters = {}) {
           ) AS available_npc_count
         FROM sessions session
         JOIN stores store ON store.id = session.store_id
-        WHERE session.visibility = 'public'
+        WHERE session.session_purpose = 'future_carpool'
+          AND session.visibility = 'public'
           AND session.status = 'recruiting'
           AND session.start_at > CURRENT_TIMESTAMP
           AND (
