@@ -23,6 +23,7 @@ import {
   tokenPositiveInteger as parseTokenPositiveInteger,
   verifySignedPayload as verifyNamespacedPayload
 } from "./modules/security/signed-payload.js";
+import { createHistoricalInviteTokenCodec } from "./modules/core/historical-invite-token.js";
 import {
   publicUser,
   updateUserPhone,
@@ -69,11 +70,13 @@ import {
 } from "./modules/album-video/multipart-stream.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
+  assertHistoricalSessionInviteAllowed,
   assertSessionAlbumImageUploadAllowed,
   assertSessionJoinInviteAllowed,
   assertSessionAlbumUploadAllowed,
   approveSignup,
   cancelSession,
+  claimHistoricalSessionRole,
   claimSessionNpcRole,
   claimSessionSeat,
   createOrReuseSessionAlbumPublicShare,
@@ -356,6 +359,7 @@ export const JSON_BODY_MAX_BYTES = 1024 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
+const HISTORICAL_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_PUBLIC_COVER_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE = "session-album-public-video-file";
@@ -364,6 +368,9 @@ const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   time: "1",
   format: "jpg"
 };
+const historicalInviteTokenCodec = createHistoricalInviteTokenCodec({
+  secret: config.sessionSecret
+});
 const resolveContentSecurityIntake = createContentSecurityIntakeResolver({
   moderationConfig: config.contentModeration,
   withDatabaseConnection
@@ -5794,14 +5801,30 @@ async function route(request, response, options = {}) {
   const sessionId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)$/);
   if (request.method === "GET" && sessionId) {
     const viewer = await optionalAuthUser(request);
+    const hasInviteToken = url.searchParams.has("inviteToken");
+    const hasHistoricalInviteToken = url.searchParams.has("historicalInviteToken");
     const inviteToken = url.searchParams.get("inviteToken") || "";
+    const historicalInviteToken = url.searchParams.get("historicalInviteToken") || "";
+    if (hasInviteToken && hasHistoricalInviteToken) {
+      throw badRequest("Provide either inviteToken or historicalInviteToken, not both");
+    }
     const inviteClaims = inviteToken ? verifySessionJoinInviteToken(inviteToken) : null;
+    const historicalInviteClaims = historicalInviteToken
+      ? historicalInviteTokenCodec.verify(historicalInviteToken)
+      : null;
     if (inviteClaims && Number(inviteClaims.sessionId) !== Number(sessionId)) {
       throw forbidden("session join invite token is invalid");
+    }
+    if (
+      historicalInviteClaims &&
+      Number(historicalInviteClaims.sessionId) !== Number(sessionId)
+    ) {
+      throw forbidden("historical invite token is invalid");
     }
     const session = await getSessionForViewer(sessionId, {
       viewer,
       inviteClaims,
+      historicalInviteClaims,
       authorTextReader: authorTextProjectionReader
     });
     jsonResponse(response, 200, {
@@ -5824,6 +5847,47 @@ async function route(request, response, options = {}) {
       ok: true,
       data: moderated ?? await updateSession(user, sessionId, body)
     }, moderatedTextHeaders(moderated));
+    return;
+  }
+
+  const historicalInviteTokenSessionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/historical-invite-token$/
+  );
+  if (request.method === "POST" && historicalInviteTokenSessionId) {
+    const user = await getAuthUser(request);
+    const invitation = await assertHistoricalSessionInviteAllowed(user, historicalInviteTokenSessionId);
+    const exp = Math.floor(Date.now() / 1000) + HISTORICAL_INVITE_TOKEN_SECONDS;
+    jsonResponse(response, 201, {
+      ok: true,
+      data: {
+        token: historicalInviteTokenCodec.sign({
+          sessionId: Number(historicalInviteTokenSessionId),
+          inviterUserId: Number(invitation.organizerUserId),
+          exp
+        }),
+        expires_at: new Date(exp * 1000).toISOString()
+      }
+    });
+    return;
+  }
+
+  const historicalClaimSessionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/historical-claims$/
+  );
+  if (request.method === "POST" && historicalClaimSessionId) {
+    const user = await getAuthUser(request);
+    const historicalInviteClaims = historicalInviteTokenCodec.verify(body.inviteToken);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await claimHistoricalSessionRole(
+        user,
+        historicalClaimSessionId,
+        body,
+        historicalInviteClaims
+      )
+    });
     return;
   }
 

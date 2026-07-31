@@ -4408,6 +4408,10 @@ export async function getSessionForViewer(id, options = {}) {
   const sessionId = positiveId(id, "sessionId");
   const viewer = options.viewer || null;
   const inviteClaims = options.inviteClaims || null;
+  const historicalInviteClaims = options.historicalInviteClaims || null;
+  if (inviteClaims && historicalInviteClaims) {
+    throw badRequest("Provide either inviteToken or historicalInviteToken, not both");
+  }
   return withTransaction(async (connection) => {
     const currentSession = await requireLockedSession(connection, sessionId);
     const initiallyMemberAllowed = Boolean(
@@ -4450,11 +4454,36 @@ export async function getSessionForViewer(id, options = {}) {
     if (
       inviteClaims &&
       Number(inviteClaims.sessionId) === sessionId &&
+      currentSession.session_purpose === "future_carpool" &&
       currentSession.status !== "cancelled"
     ) {
       return publicSessionPreview(connection, currentSession, "invite_preview", {
         membershipRows: currentMembershipRows
       });
+    }
+    if (
+      historicalInviteClaims &&
+      historicalInviteClaims.purpose === "historical_session_claim" &&
+      historicalInviteClaims.sessionPurpose === "historical_record" &&
+      Number(historicalInviteClaims.sessionId) === sessionId &&
+      Number(historicalInviteClaims.inviterUserId) === Number(currentSession.organizer_user_id) &&
+      currentSession.session_purpose === "historical_record" &&
+      currentSession.status === "locked" &&
+      !currentSession.cancelled_by_user_id
+    ) {
+      const preview = await publicSessionPreview(
+        connection,
+        currentSession,
+        "historical_invite_preview",
+        { membershipRows: currentMembershipRows }
+      );
+      const {
+        join_policy: _joinPolicy,
+        join_phone_required: _joinPhoneRequired,
+        npc_join_enabled: _npcJoinEnabled,
+        ...historicalPreview
+      } = preview;
+      return historicalPreview;
     }
     throw notFound("Session not found");
   });
@@ -4473,6 +4502,254 @@ export async function assertSessionJoinInviteAllowed(user, sessionId) {
     }
     return { session_id: id };
   });
+}
+
+export async function assertHistoricalSessionInviteAllowed(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await findById(connection, "sessions", id);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    if (
+      session.session_purpose !== "historical_record" ||
+      session.status !== "locked" ||
+      Boolean(session.cancelled_by_user_id) ||
+      Number(session.organizer_user_id) !== Number(user.user.id)
+    ) {
+      throw forbidden("Only the current organizer can invite historical role claims");
+    }
+    return {
+      sessionId: Number(session.id),
+      organizerUserId: Number(session.organizer_user_id)
+    };
+  });
+}
+
+function historicalClaimTarget(body = {}) {
+  const hasSeatId = body.seatId !== undefined && body.seatId !== null && body.seatId !== "";
+  const hasNpcRoleId =
+    body.npcRoleId !== undefined && body.npcRoleId !== null && body.npcRoleId !== "";
+  if (hasSeatId === hasNpcRoleId) {
+    throw badRequest("Exactly one of seatId and npcRoleId is required");
+  }
+  if (hasSeatId) {
+    return { type: "seat", id: positiveId(body.seatId, "seatId") };
+  }
+  return { type: "npc_role", id: positiveId(body.npcRoleId, "npcRoleId") };
+}
+
+function assertHistoricalClaimInvitation(session, sessionId, inviteClaims) {
+  if (
+    inviteClaims?.purpose !== "historical_session_claim" ||
+    inviteClaims?.sessionPurpose !== "historical_record" ||
+    Number(inviteClaims?.sessionId) !== Number(sessionId) ||
+    Number(inviteClaims?.inviterUserId) !== Number(session.organizer_user_id) ||
+    session.session_purpose !== "historical_record" ||
+    session.status !== "locked" ||
+    Boolean(session.cancelled_by_user_id)
+  ) {
+    throw forbidden("Historical invitation is no longer valid");
+  }
+}
+
+function historicalSignupMatchesTarget(signup, target) {
+  if (target.type === "seat") {
+    return Number(signup.seat_id) === target.id && !Number(signup.session_npc_role_id || 0);
+  }
+  return (
+    Number(signup.session_npc_role_id) === target.id &&
+    !Number(signup.seat_id || 0)
+  );
+}
+
+function assertNoOtherHistoricalRole({ seats, npcRoles, activeSignups }, userId, target) {
+  const ownsOtherSeat = seats.some((seat) =>
+    Number(seat.confirmed_user_id) === userId &&
+    ["confirmed", "locked"].includes(seat.status) &&
+    !(target.type === "seat" && Number(seat.id) === target.id)
+  );
+  const ownsOtherNpcRole = npcRoles.some((role) =>
+    Number(role.bound_user_id) === userId &&
+    role.status === "active" &&
+    !(target.type === "npc_role" && Number(role.id) === target.id)
+  );
+  const hasOtherActiveSignup = activeSignups.some(
+    (signup) => !historicalSignupMatchesTarget(signup, target)
+  );
+  if (ownsOtherSeat || ownsOtherNpcRole || hasOtherActiveSignup) {
+    throw conflict("User already has another role in this session");
+  }
+}
+
+async function lockHistoricalClaimSignups(connection, sessionId, userId) {
+  const [rows] = await connection.query(
+    `
+      SELECT *
+      FROM signups
+      WHERE session_id = ?
+        AND user_id = ?
+        AND status IN ('pending', 'approved')
+      ORDER BY id
+      FOR UPDATE
+    `,
+    [sessionId, userId]
+  );
+  return rows;
+}
+
+async function upsertHistoricalSeatSignup(connection, sessionId, seatId, userId) {
+  await connection.query(
+    `
+      INSERT INTO signups
+        (
+          session_id, seat_id, session_npc_role_id, signup_type,
+          user_id, note, status, review_eligible_at
+        )
+      VALUES (
+        ?, ?, NULL, 'seat', ?,
+        '玩家通过历史邀请认领角色', 'approved', CURRENT_TIMESTAMP
+      )
+      ON DUPLICATE KEY UPDATE
+        seat_id = VALUES(seat_id),
+        session_npc_role_id = NULL,
+        signup_type = 'seat',
+        status = 'approved',
+        review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
+        user_hidden_at = NULL
+    `,
+    [sessionId, seatId, userId]
+  );
+}
+
+async function upsertHistoricalNpcRoleSignup(connection, sessionId, npcRoleId, userId) {
+  await connection.query(
+    `
+      INSERT INTO signups
+        (
+          session_id, seat_id, session_npc_role_id, signup_type,
+          user_id, note, status, review_eligible_at
+        )
+      VALUES (
+        ?, NULL, ?, 'session_npc_role', ?,
+        '玩家通过历史邀请认领角色', 'approved', CURRENT_TIMESTAMP
+      )
+      ON DUPLICATE KEY UPDATE
+        seat_id = NULL,
+        session_npc_role_id = VALUES(session_npc_role_id),
+        signup_type = 'session_npc_role',
+        status = 'approved',
+        review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
+        user_hidden_at = NULL
+    `,
+    [sessionId, npcRoleId, userId]
+  );
+}
+
+export async function claimHistoricalSessionRoleWithConnection(
+  connection,
+  user,
+  sessionId,
+  body,
+  inviteClaims
+) {
+  const id = positiveId(sessionId, "sessionId");
+  const target = historicalClaimTarget(body);
+  const userId = positiveId(user?.user?.id, "userId");
+  const session = await requireLockedSession(connection, id);
+  const seats = await lockSessionSeats(connection, id);
+  const npcRoles = await lockSessionNpcRoles(connection, id);
+  const activeSignups = await lockHistoricalClaimSignups(connection, id, userId);
+
+  assertHistoricalClaimInvitation(session, id, inviteClaims);
+  await assertUserCanJoinSession(connection, id, userId);
+  assertNoOtherHistoricalRole({ seats, npcRoles, activeSignups }, userId, target);
+
+  if (target.type === "seat") {
+    const seat = seats.find((candidate) => Number(candidate.id) === target.id);
+    if (!seat) {
+      throw notFound("Seat not found");
+    }
+    const alreadyClaimed =
+      Number(seat.confirmed_user_id) === userId &&
+      ["confirmed", "locked"].includes(seat.status);
+    if (!alreadyClaimed && (seat.status !== "open" || seat.confirmed_user_id)) {
+      throw conflict("Seat is not available for historical claim");
+    }
+    if (!alreadyClaimed) {
+      const [result] = await connection.query(
+        `
+          UPDATE session_seats
+          SET status = 'confirmed', confirmed_user_id = ?
+          WHERE id = ?
+            AND session_id = ?
+            AND status = 'open'
+            AND confirmed_user_id IS NULL
+        `,
+        [userId, target.id, id]
+      );
+      if (Number(result.affectedRows) !== 1) {
+        throw conflict("Seat is not available for historical claim");
+      }
+      seat.status = "confirmed";
+      seat.confirmed_user_id = userId;
+    }
+    await upsertHistoricalSeatSignup(connection, id, target.id, userId);
+    return {
+      claim_result: "historical_claimed",
+      claim_type: "seat",
+      seat
+    };
+  }
+
+  const npcRole = npcRoles.find((candidate) => Number(candidate.id) === target.id);
+  if (!npcRole) {
+    throw notFound("Session NPC role not found");
+  }
+  const alreadyClaimed = Number(npcRole.bound_user_id) === userId;
+  if (npcRole.status !== "active" || (!alreadyClaimed && npcRole.bound_user_id)) {
+    throw conflict("NPC role is not available for historical claim");
+  }
+  if (!alreadyClaimed) {
+    const [result] = await connection.query(
+      `
+        UPDATE session_npc_roles
+        SET bound_user_id = ?
+        WHERE id = ?
+          AND session_id = ?
+          AND status = 'active'
+          AND bound_user_id IS NULL
+      `,
+      [userId, target.id, id]
+    );
+    if (Number(result.affectedRows) !== 1) {
+      throw conflict("NPC role is not available for historical claim");
+    }
+    npcRole.bound_user_id = userId;
+  }
+  await upsertHistoricalNpcRoleSignup(connection, id, target.id, userId);
+  return {
+    claim_result: "historical_claimed",
+    claim_type: "npc_role",
+    npc_role: npcRole
+  };
+}
+
+export async function claimHistoricalSessionRole(
+  user,
+  sessionId,
+  body,
+  inviteClaims
+) {
+  return withTransaction((connection) =>
+    claimHistoricalSessionRoleWithConnection(
+      connection,
+      user,
+      sessionId,
+      body,
+      inviteClaims
+    )
+  );
 }
 
 export async function getSessionShareStats(sessionId) {

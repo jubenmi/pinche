@@ -5,13 +5,17 @@ import mysql from "mysql2/promise";
 
 import {
   approveSignup,
+  assertHistoricalSessionInviteAllowed,
   assertSessionJoinInviteAllowed,
+  claimHistoricalSessionRole,
+  claimHistoricalSessionRoleWithConnection,
   claimSessionNpcRole,
   claimSessionSeat,
   createSessionNpcRole,
   createSessionNpcRoleWithConnection,
   createSessionWithConnection,
   createSignup,
+  getSessionForViewer,
   publishSessionWithConnection,
   updateSession,
   updateSessionNpcRole,
@@ -43,6 +47,21 @@ const ADMIN = {
     phoneVerifiedAt: new Date("2026-01-01T00:00:00.000Z")
   },
   roles: ["system_admin"]
+};
+
+const CLAIMANT = {
+  user: {
+    id: 12
+  },
+  roles: ["player"]
+};
+
+const HISTORICAL_INVITE_CLAIMS = {
+  purpose: "historical_session_claim",
+  sessionPurpose: "historical_record",
+  sessionId: 101,
+  inviterUserId: ACTOR.user.id,
+  exp: 4_102_444_800
 };
 
 function compactSql(sql) {
@@ -178,6 +197,102 @@ function historicalRoleManagementConnection(options = {}) {
     async end() {
       state.events.push("END");
     }
+  };
+}
+
+function historicalClaimConnection(options = {}) {
+  const session = {
+    id: 101,
+    organizer_user_id: ACTOR.user.id,
+    session_purpose: "historical_record",
+    status: "locked",
+    cancelled_by_user_id: null,
+    visibility: "share_only",
+    join_policy: "review_required",
+    join_phone_required: 0,
+    npc_join_enabled: 0,
+    dm_user_id: null,
+    npc_user_id: null,
+    ...(options.session || {})
+  };
+  const seats = (options.seats || [{
+    id: 11,
+    session_id: session.id,
+    name: "角色 A",
+    status: "open",
+    confirmed_user_id: null
+  }]).map((seat) => ({ session_id: session.id, ...seat }));
+  const npcRoles = (options.npcRoles || [{
+    id: 31,
+    session_id: session.id,
+    name: "NPC A",
+    status: "active",
+    bound_user_id: null
+  }]).map((role) => ({ session_id: session.id, ...role }));
+  const activeSignups = (options.activeSignups || []).map((signup, index) => ({
+    id: 80 + index,
+    session_id: session.id,
+    user_id: CLAIMANT.user.id,
+    status: "approved",
+    ...signup
+  }));
+  const state = { queries: [], mutations: [], session, seats, npcRoles, activeSignups };
+  return {
+    state,
+    async query(sql, values = []) {
+      const normalized = compactSql(sql);
+      state.queries.push({ sql: normalized, values });
+      if (normalized === "SET time_zone = '+00:00'") return [{ affectedRows: 0 }];
+      if (/^(INSERT|UPDATE|DELETE) /i.test(normalized)) {
+        state.mutations.push({ sql: normalized, values });
+      }
+      if (
+        normalized ===
+        "SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ? FOR UPDATE" ||
+        normalized === "SELECT * FROM sessions WHERE id = ? FOR UPDATE"
+      ) {
+        return options.sessionExists === false ? [[]] : [[session]];
+      }
+      if (normalized === "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE") {
+        return [seats];
+      }
+      if (
+        normalized ===
+        "SELECT * FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE"
+      ) {
+        return [npcRoles];
+      }
+      if (
+        normalized ===
+        "SELECT * FROM signups WHERE session_id = ? AND user_id = ? AND status IN ('pending', 'approved') ORDER BY id FOR UPDATE"
+      ) {
+        return [activeSignups];
+      }
+      if (normalized.startsWith("SELECT id FROM session_member_removal_reports")) {
+        return options.blockRejoin ? [[{ id: 501 }]] : [[]];
+      }
+      if (normalized.startsWith("UPDATE session_seats SET")) {
+        const seat = seats.find((candidate) => Number(candidate.id) === Number(values[1]));
+        if (seat) {
+          seat.status = "confirmed";
+          seat.confirmed_user_id = values[0];
+        }
+        return [{ affectedRows: options.targetUpdateAffectedRows ?? 1 }];
+      }
+      if (normalized.startsWith("UPDATE session_npc_roles SET")) {
+        const role = npcRoles.find((candidate) => Number(candidate.id) === Number(values[1]));
+        if (role) role.bound_user_id = values[0];
+        return [{ affectedRows: options.targetUpdateAffectedRows ?? 1 }];
+      }
+      if (normalized.startsWith("INSERT INTO signups")) {
+        return [{ insertId: 91, affectedRows: 1 }];
+      }
+      throw new Error(`Unexpected query: ${normalized}`);
+    },
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    async end() {}
   };
 }
 
@@ -1440,4 +1555,390 @@ test("publish wrapper delegates the connection-bound call inside withTransaction
     wrapper,
     "exportasyncfunctionpublishSession(user,sessionId,body={}){returnwithTransaction((connection)=>publishSessionWithConnection(connection,user,sessionId,body));}"
   );
+});
+
+test("historical invitation issuance is limited to the current organizer of a locked record", async (t) => {
+  const allowedConnection = recruitmentGuardConnection((sql) => {
+    if (sql === "SELECT * FROM sessions WHERE id = ?") {
+      return [[{
+        id: 101,
+        organizer_user_id: ACTOR.user.id,
+        session_purpose: "historical_record",
+        status: "locked",
+        cancelled_by_user_id: null
+      }]];
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+  const allowed = await withMockMysqlConnection(allowedConnection, () =>
+    assertHistoricalSessionInviteAllowed(ACTOR, 101)
+  );
+  assert.deepEqual(allowed, { sessionId: 101, organizerUserId: ACTOR.user.id });
+
+  const cases = [
+    ["system admin who is not organizer", ADMIN, {}],
+    ["ordinary member", CLAIMANT, {}],
+    ["draft historical session", ACTOR, { status: "draft" }],
+    ["future session", ACTOR, { session_purpose: "future_carpool" }],
+    ["cancelled session", ACTOR, { status: "cancelled", cancelled_by_user_id: ACTOR.user.id }]
+  ];
+  for (const [name, user, sessionOverride] of cases) {
+    await t.test(name, async () => {
+      const connection = recruitmentGuardConnection((sql) => {
+        if (sql === "SELECT * FROM sessions WHERE id = ?") {
+          return [[{
+            id: 101,
+            organizer_user_id: ACTOR.user.id,
+            session_purpose: "historical_record",
+            status: "locked",
+            cancelled_by_user_id: null,
+            ...sessionOverride
+          }]];
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      });
+      await withMockMysqlConnection(connection, () =>
+        assert.rejects(
+          () => assertHistoricalSessionInviteAllowed(user, 101),
+          { statusCode: 403 }
+        )
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("historical claims require exactly one positive seatId or npcRoleId", async (t) => {
+  for (const [name, body] of [
+    ["neither target", {}],
+    ["both targets", { seatId: 11, npcRoleId: 31 }],
+    ["invalid seat", { seatId: 0 }],
+    ["invalid npc role", { npcRoleId: "nope" }]
+  ]) {
+    await t.test(name, async () => {
+      const connection = historicalClaimConnection();
+      await assert.rejects(
+        () => claimHistoricalSessionRoleWithConnection(
+          connection,
+          CLAIMANT,
+          101,
+          body,
+          HISTORICAL_INVITE_CLAIMS
+        ),
+        { statusCode: 400 }
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("historical claims reject invalid lifecycle and stale invitation claims before mutation", async (t) => {
+  const cases = [
+    ["session is not historical", { session: { session_purpose: "future_carpool" } }, HISTORICAL_INVITE_CLAIMS],
+    ["session is not locked", { session: { status: "draft" } }, HISTORICAL_INVITE_CLAIMS],
+    ["session is cancelled", { session: { status: "cancelled", cancelled_by_user_id: 7 } }, HISTORICAL_INVITE_CLAIMS],
+    ["token path mismatch", {}, { ...HISTORICAL_INVITE_CLAIMS, sessionId: 102 }],
+    ["inviter is no longer organizer", { session: { organizer_user_id: 88 } }, HISTORICAL_INVITE_CLAIMS],
+    ["wrong token purpose", {}, { ...HISTORICAL_INVITE_CLAIMS, purpose: "session_join_invite" }],
+    ["wrong token session purpose", {}, { ...HISTORICAL_INVITE_CLAIMS, sessionPurpose: "future_carpool" }]
+  ];
+  for (const [name, connectionOptions, claims] of cases) {
+    await t.test(name, async () => {
+      const connection = historicalClaimConnection(connectionOptions);
+      await assert.rejects(
+        () => claimHistoricalSessionRoleWithConnection(
+          connection,
+          CLAIMANT,
+          101,
+          { seatId: 11 },
+          claims
+        ),
+        { statusCode: 403 }
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("historical claims reject cross-session, occupied, and second-role targets", async (t) => {
+  const cases = [
+    ["seat outside locked session", {}, { seatId: 999 }, 404],
+    ["NPC outside locked session", {}, { npcRoleId: 999 }, 404],
+    ["occupied seat", { seats: [{ id: 11, status: "confirmed", confirmed_user_id: 88 }] }, { seatId: 11 }, 409],
+    ["occupied NPC", { npcRoles: [{ id: 31, status: "active", bound_user_id: 88 }] }, { npcRoleId: 31 }, 409],
+    [
+      "claimant already owns another seat",
+      { seats: [
+        { id: 11, status: "open", confirmed_user_id: null },
+        { id: 12, status: "confirmed", confirmed_user_id: CLAIMANT.user.id }
+      ] },
+      { seatId: 11 },
+      409
+    ],
+    [
+      "claimant already owns another NPC role",
+      { npcRoles: [
+        { id: 31, status: "active", bound_user_id: null },
+        { id: 32, status: "active", bound_user_id: CLAIMANT.user.id }
+      ] },
+      { npcRoleId: 31 },
+      409
+    ],
+    [
+      "claimant has another active signup",
+      { activeSignups: [{ seat_id: 12, session_npc_role_id: null, signup_type: "seat" }] },
+      { seatId: 11 },
+      409
+    ]
+  ];
+  for (const [name, connectionOptions, body, statusCode] of cases) {
+    await t.test(name, async () => {
+      const connection = historicalClaimConnection(connectionOptions);
+      await assert.rejects(
+        () => claimHistoricalSessionRoleWithConnection(
+          connection,
+          CLAIMANT,
+          101,
+          body,
+          HISTORICAL_INVITE_CLAIMS
+        ),
+        { statusCode }
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("removed historical member cannot reuse an invitation and causes no writes", async () => {
+  const connection = historicalClaimConnection({ blockRejoin: true });
+  await assert.rejects(
+    () => claimHistoricalSessionRoleWithConnection(
+      connection,
+      CLAIMANT,
+      101,
+      { seatId: 11 },
+      HISTORICAL_INVITE_CLAIMS
+    ),
+    { statusCode: 403, code: "FORBIDDEN" }
+  );
+  assert.deepEqual(connection.state.mutations, []);
+  assert.equal(
+    connection.state.queries.some(({ sql }) => /^(UPDATE|INSERT) /.test(sql)),
+    false
+  );
+});
+
+test("historical claim locks the whole role namespace before the claimant signups", async () => {
+  const connection = historicalClaimConnection();
+  await claimHistoricalSessionRoleWithConnection(
+    connection,
+    CLAIMANT,
+    101,
+    { seatId: 11 },
+    HISTORICAL_INVITE_CLAIMS
+  );
+  assert.deepEqual(
+    connection.state.queries
+      .map(({ sql }) => sql)
+      .filter((sql) => /FOR UPDATE/.test(sql))
+      .slice(0, 4),
+    [
+      "SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ? FOR UPDATE",
+      "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE",
+      "SELECT * FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE",
+      "SELECT * FROM signups WHERE session_id = ? AND user_id = ? AND status IN ('pending', 'approved') ORDER BY id FOR UPDATE"
+    ]
+  );
+});
+
+test("historical seat claims approve review-eligible membership and are replay-safe", async (t) => {
+  await t.test("new claim", async () => {
+    const connection = historicalClaimConnection();
+    const result = await claimHistoricalSessionRoleWithConnection(
+      connection,
+      CLAIMANT,
+      101,
+      { seatId: 11 },
+      HISTORICAL_INVITE_CLAIMS
+    );
+    assert.equal(result.claim_result, "historical_claimed");
+    assert.equal(result.claim_type, "seat");
+    assert.equal(
+      connection.state.queries.some((call) =>
+        /review_eligible_at/.test(call.sql) && call.values.includes(CLAIMANT.user.id)
+      ),
+      true
+    );
+    const signupInsert = connection.state.mutations.find(({ sql }) =>
+      sql.startsWith("INSERT INTO signups")
+    );
+    assert.match(signupInsert.sql, /ON DUPLICATE KEY UPDATE[\s\S]*session_npc_role_id = NULL/);
+    assert.equal(connection.state.seats[0].confirmed_user_id, CLAIMANT.user.id);
+  });
+
+  await t.test("same seat replay", async () => {
+    const connection = historicalClaimConnection({
+      seats: [{ id: 11, status: "confirmed", confirmed_user_id: CLAIMANT.user.id }],
+      activeSignups: [{ seat_id: 11, session_npc_role_id: null, signup_type: "seat" }]
+    });
+    const result = await claimHistoricalSessionRoleWithConnection(
+      connection,
+      CLAIMANT,
+      101,
+      { seatId: 11 },
+      HISTORICAL_INVITE_CLAIMS
+    );
+    assert.equal(result.claim_result, "historical_claimed");
+    assert.equal(result.claim_type, "seat");
+    assert.equal(
+      connection.state.mutations.some(({ sql }) => sql.startsWith("UPDATE session_seats")),
+      false
+    );
+  });
+});
+
+test("historical NPC claims bind the user and approve a session_npc_role signup", async (t) => {
+  await t.test("new claim", async () => {
+    const connection = historicalClaimConnection();
+    const result = await claimHistoricalSessionRoleWithConnection(
+      connection,
+      CLAIMANT,
+      101,
+      { npcRoleId: 31 },
+      HISTORICAL_INVITE_CLAIMS
+    );
+    assert.equal(result.claim_result, "historical_claimed");
+    assert.equal(result.claim_type, "npc_role");
+    assert.equal(connection.state.npcRoles[0].bound_user_id, CLAIMANT.user.id);
+    const signupInsert = connection.state.mutations.find(({ sql }) =>
+      sql.startsWith("INSERT INTO signups")
+    );
+    assert.ok(signupInsert);
+    assert.match(signupInsert.sql, /'session_npc_role'/);
+    assert.match(signupInsert.sql, /review_eligible_at/);
+    assert.match(signupInsert.sql, /ON DUPLICATE KEY UPDATE[\s\S]*seat_id = NULL/);
+    assert.equal(signupInsert.values.includes(CLAIMANT.user.id), true);
+  });
+
+  await t.test("same NPC replay", async () => {
+    const connection = historicalClaimConnection({
+      npcRoles: [{ id: 31, status: "active", bound_user_id: CLAIMANT.user.id }],
+      activeSignups: [{ seat_id: null, session_npc_role_id: 31, signup_type: "session_npc_role" }]
+    });
+    const result = await claimHistoricalSessionRoleWithConnection(
+      connection,
+      CLAIMANT,
+      101,
+      { npcRoleId: 31 },
+      HISTORICAL_INVITE_CLAIMS
+    );
+    assert.equal(result.claim_result, "historical_claimed");
+    assert.equal(result.claim_type, "npc_role");
+    assert.equal(
+      connection.state.mutations.some(({ sql }) => sql.startsWith("UPDATE session_npc_roles")),
+      false
+    );
+  });
+});
+
+test("historical claim wrapper owns the transaction", async () => {
+  const connection = historicalClaimConnection();
+  await withMockMysqlConnection(connection, () =>
+    claimHistoricalSessionRole(
+      CLAIMANT,
+      101,
+      { seatId: 11 },
+      HISTORICAL_INVITE_CLAIMS
+    )
+  );
+  assert.equal(connection.state.mutations.length > 0, true);
+});
+
+function historicalPreviewConnection(sessionOverride = {}) {
+  const session = {
+    id: 101,
+    organizer_user_id: ACTOR.user.id,
+    session_purpose: "historical_record",
+    status: "locked",
+    visibility: "share_only",
+    start_at: new Date("2026-07-01T05:00:00.000Z"),
+    session_started: 1,
+    dm_user_id: 8,
+    npc_user_id: 9,
+    note: "private organizer note",
+    ...sessionOverride
+  };
+  return recruitmentGuardConnection((sql) => {
+    if (
+      sql ===
+      "SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ? FOR UPDATE"
+    ) {
+      return [[session]];
+    }
+    if (sql === "SELECT seat.* FROM session_seats seat WHERE seat.session_id = ? ORDER BY seat.id") {
+      return [[{
+        id: 11,
+        session_id: 101,
+        name: "A",
+        status: "confirmed",
+        confirmed_user_id: 88,
+        confirmed_user_nickname: "private player"
+      }]];
+    }
+    if (sql.includes("FROM session_npc_roles role")) {
+      return [[{
+        id: 31,
+        session_id: 101,
+        name: "NPC",
+        status: "active",
+        bound_user_id: 89,
+        bound_user_name: "private NPC player",
+        pending_signup_id: 90
+      }]];
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+}
+
+test("historical invitation preview is dedicated, locked-only, and sanitized", async (t) => {
+  const connection = historicalPreviewConnection();
+  const preview = await withMockMysqlConnection(connection, () =>
+    getSessionForViewer(101, { historicalInviteClaims: HISTORICAL_INVITE_CLAIMS })
+  );
+  assert.equal(preview.access_scope, "historical_invite_preview");
+  for (const privateField of [
+    "organizer_user_id",
+    "dm_user_id",
+    "npc_user_id",
+    "note",
+    "join_policy",
+    "join_phone_required",
+    "npc_join_enabled",
+    "album",
+    "reviews"
+  ]) {
+    assert.equal(Object.hasOwn(preview, privateField), false);
+  }
+  assert.equal(Object.hasOwn(preview.seats[0], "confirmed_user_id"), false);
+  assert.equal(Object.hasOwn(preview.session_npc_roles[0], "bound_user_id"), false);
+  assert.equal(Object.hasOwn(preview.session_npc_roles[0], "pending_signup_id"), false);
+
+  const denied = [
+    ["ordinary token on historical", {}, { inviteClaims: { sessionId: 101 } }],
+    ["historical token on future", { session_purpose: "future_carpool" }, { historicalInviteClaims: HISTORICAL_INVITE_CLAIMS }],
+    ["historical session is not locked", { status: "recruiting" }, { historicalInviteClaims: HISTORICAL_INVITE_CLAIMS }],
+    ["path id does not match", {}, { historicalInviteClaims: { ...HISTORICAL_INVITE_CLAIMS, sessionId: 102 } }],
+    ["inviter is no longer organizer", { organizer_user_id: 88 }, { historicalInviteClaims: HISTORICAL_INVITE_CLAIMS }]
+  ];
+  for (const [name, sessionOverride, viewOptions] of denied) {
+    await t.test(name, async () => {
+      const deniedConnection = historicalPreviewConnection(sessionOverride);
+      await withMockMysqlConnection(deniedConnection, () =>
+        assert.rejects(
+          () => getSessionForViewer(101, viewOptions),
+          { statusCode: 404, message: "Session not found" }
+        )
+      );
+    });
+  }
 });
