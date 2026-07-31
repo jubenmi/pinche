@@ -416,6 +416,84 @@ test("organizer cancel and admin delete prelock the full membership tree", async
   }
 });
 
+test("historical cancel rejects an active non-organizer NPC from the locked membership rows", async () => {
+  const connection = traceConnection((sql) => {
+    if (sql === SESSION_LOCK) {
+      return [[{ ...SESSION, session_purpose: "historical_record", status: "locked" }]];
+    }
+    if (sql === SEAT_RANGE_LOCK || sql === SIGNUP_RANGE_LOCK) return [[]];
+    if (sql === NPC_RANGE_LOCK) {
+      return [[{
+        id: 31,
+        session_id: SESSION.id,
+        status: "active",
+        bound_user_id: MEMBER.user.id
+      }]];
+    }
+    if (sql === ACTIVE_PHOTO_RANGE_LOCK) return [[{ id: 71 }]];
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+
+  await withMockMysqlConnection(connection, () =>
+    assert.rejects(() => cancelSession(ACTOR, SESSION.id), {
+      statusCode: 409,
+      code: "SESSION_HAS_ONBOARD_MEMBERS"
+    })
+  );
+
+  assert.deepEqual(lockingQueries(connection), [
+    SESSION_LOCK,
+    SEAT_RANGE_LOCK,
+    NPC_RANGE_LOCK,
+    SIGNUP_RANGE_LOCK
+  ]);
+  assert.equal(
+    connection.state.queries.some(({ sql }) => sql === ACTIVE_PHOTO_RANGE_LOCK),
+    false
+  );
+  assert.deepEqual(connection.state.mutations, []);
+});
+
+test("historical cancel ignores unbound, inactive, and organizer-bound NPC rows", async (t) => {
+  const cases = [
+    ["unbound", "historical_record", { status: "active", bound_user_id: null }],
+    ["inactive", "historical_record", { status: "inactive", bound_user_id: MEMBER.user.id }],
+    ["organizer-bound", "historical_record", {
+      status: "active",
+      bound_user_id: ACTOR.user.id
+    }],
+    ["future member", "future_carpool", {
+      status: "active",
+      bound_user_id: MEMBER.user.id
+    }]
+  ];
+
+  for (const [name, purpose, npcRole] of cases) {
+    await t.test(name, async () => {
+      const connection = traceConnection((sql) => {
+        if (sql === SESSION_LOCK) {
+          return [[{ ...SESSION, session_purpose: purpose, status: "locked" }]];
+        }
+        if (sql === SEAT_RANGE_LOCK || sql === SIGNUP_RANGE_LOCK) return [[]];
+        if (sql === NPC_RANGE_LOCK) {
+          return [[{ id: 31, session_id: SESSION.id, ...npcRole }]];
+        }
+        if (sql === ACTIVE_PHOTO_RANGE_LOCK) return [[{ id: 71 }]];
+        throw new Error(`Unexpected query: ${sql}`);
+      });
+
+      await withMockMysqlConnection(connection, () =>
+        assert.rejects(() => cancelSession(ACTOR, SESSION.id), {
+          statusCode: 409,
+          code: "SESSION_HAS_ALBUM_PHOTOS"
+        })
+      );
+      assertCanonicalPrefix(connection, `cancelSession ${name}`);
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
 test("member detail locks the parent and full membership before legacy cleanup writes", async () => {
   const connection = traceConnection((sql) => {
     if (

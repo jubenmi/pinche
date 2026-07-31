@@ -17,6 +17,7 @@ import {
   createSessionWithConnection,
   createSignup,
   getSessionForViewer,
+  kickSessionSeat,
   publishSessionWithConnection,
   updateSession,
   updateSessionNpcRole,
@@ -137,7 +138,17 @@ function historicalRoleManagementConnection(options = {}) {
   };
   role.organizer_user_id = session.organizer_user_id;
   role.session_purpose = session.session_purpose;
-  const state = { events: [], mutations: [], session, role };
+  const signups = (options.signups || [{
+    id: 81,
+    session_id: session.id,
+    session_npc_role_id: role.id,
+    signup_type: "session_npc_role",
+    user_id: role.bound_user_id,
+    status: "approved",
+    review_eligible_at: new Date("2026-01-01T00:00:00.000Z")
+  }]).map((signup) => ({ ...signup }));
+  const state = { events: [], mutations: [], session, role, signups };
+  let transactionSnapshot = null;
   return {
     state,
     async query(sql, values = []) {
@@ -156,6 +167,12 @@ function historicalRoleManagementConnection(options = {}) {
       ) {
         return [[role]];
       }
+      if (
+        normalized ===
+        "SELECT * FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+      ) {
+        return [[...signups]];
+      }
       if (normalized === "SELECT * FROM sessions WHERE id = ?") return [[session]];
       if (normalized.includes("SELECT role.*, session.organizer_user_id")) return [[role]];
       if (normalized.startsWith("INSERT INTO session_npc_roles")) {
@@ -169,8 +186,35 @@ function historicalRoleManagementConnection(options = {}) {
         return [[role]];
       }
       if (normalized.startsWith("UPDATE session_npc_roles SET")) {
-        role.bound_user_id = values[0];
+        if (options.failRoleUpdate) {
+          throw new Error("NPC_ROLE_UPDATE_FAILED");
+        }
+        if (normalized.includes("bound_user_id = ?")) {
+          role.bound_user_id = values[0];
+        }
+        if (normalized.includes("status = ?")) {
+          role.status = values[0];
+        }
         return [{ affectedRows: 1 }];
+      }
+      if (
+        normalized ===
+        "UPDATE signups SET status = 'cancelled', review_eligible_at = NULL WHERE session_id = ? AND session_npc_role_id = ? AND user_id = ? AND status IN ('pending', 'approved')"
+      ) {
+        let affectedRows = 0;
+        for (const signup of signups) {
+          if (
+            Number(signup.session_id) === Number(values[0]) &&
+            Number(signup.session_npc_role_id) === Number(values[1]) &&
+            Number(signup.user_id) === Number(values[2]) &&
+            ["pending", "approved"].includes(signup.status)
+          ) {
+            signup.status = "cancelled";
+            signup.review_eligible_at = null;
+            affectedRows += 1;
+          }
+        }
+        return [{ affectedRows }];
       }
       if (normalized === "SELECT * FROM session_npc_roles WHERE id = ?") return [[role]];
       if (
@@ -188,12 +232,26 @@ function historicalRoleManagementConnection(options = {}) {
     },
     async beginTransaction() {
       state.events.push("BEGIN");
+      transactionSnapshot = {
+        role: { ...role },
+        signups: signups.map((signup) => ({ ...signup }))
+      };
     },
     async commit() {
       state.events.push("COMMIT");
+      transactionSnapshot = null;
     },
     async rollback() {
       state.events.push("ROLLBACK");
+      if (transactionSnapshot) {
+        Object.assign(role, transactionSnapshot.role);
+        signups.splice(
+          0,
+          signups.length,
+          ...transactionSnapshot.signups.map((signup) => ({ ...signup }))
+        );
+      }
+      transactionSnapshot = null;
     },
     async end() {
       state.events.push("END");
@@ -295,6 +353,81 @@ function historicalClaimConnection(options = {}) {
     async rollback() {},
     async end() {}
   };
+}
+
+function seatKickConnection(sessionPurpose) {
+  const session = {
+    id: 101,
+    organizer_user_id: ACTOR.user.id,
+    session_purpose: sessionPurpose,
+    status: "locked",
+    start_at: new Date("2020-01-01T05:00:00.000Z"),
+    session_started: 1
+  };
+  const seat = {
+    id: 11,
+    session_id: session.id,
+    name: "角色 A",
+    status: "confirmed",
+    confirmed_user_id: CLAIMANT.user.id
+  };
+  return recruitmentGuardConnection((sql) => {
+    if (sql === "SELECT session_id FROM session_seats WHERE id = ?") {
+      return [[{ session_id: session.id }]];
+    }
+    if (
+      sql ===
+      "SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ? FOR UPDATE"
+    ) {
+      return [[session]];
+    }
+    if (sql === "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE") {
+      return [[seat]];
+    }
+    if (
+      sql === "SELECT * FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE"
+    ) {
+      return [[]];
+    }
+    if (sql === "SELECT * FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE") {
+      return [[{
+        id: 81,
+        session_id: session.id,
+        seat_id: seat.id,
+        signup_type: "seat",
+        user_id: CLAIMANT.user.id,
+        status: "approved",
+        review_eligible_at: new Date("2026-01-01T00:00:00.000Z")
+      }]];
+    }
+    if (sql === "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE") {
+      return [[seat]];
+    }
+    if (sql.startsWith("UPDATE session_seats SET status = ?")) {
+      seat.status = "open";
+      seat.confirmed_user_id = null;
+      return [{ affectedRows: 1 }];
+    }
+    if (/^UPDATE signups /.test(sql)) return [{ affectedRows: 1 }];
+    if (sql === "SELECT * FROM session_chat_rooms WHERE session_id = ? LIMIT 1") {
+      return [[{ id: 201, session_id: session.id, status: "active" }]];
+    }
+    if (sql.startsWith("INSERT INTO session_messages")) {
+      return [{ insertId: 301, affectedRows: 1 }];
+    }
+    if (sql.includes("FROM session_messages message")) {
+      return [[{
+        id: 301,
+        room_id: 201,
+        session_id: session.id,
+        sender_user_id: ACTOR.user.id,
+        message_type: "system",
+        content: "removed"
+      }]];
+    }
+    if (sql === "SELECT * FROM session_seats WHERE id = ?") return [[seat]];
+    throw new Error(`Unexpected query: ${sql}`);
+  });
 }
 
 function transferredOwnerConnection() {
@@ -2037,10 +2170,165 @@ test("historical NPC role update permits explicit null unbinding through every a
     await t.test(field, async () => {
       const connection = historicalRoleManagementConnection();
       await updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { [field]: null });
-      assert.equal(connection.state.mutations.length, 1);
-      assert.equal(connection.state.mutations[0].values[0], null);
+      assert.equal(connection.state.mutations.length, 2);
+      assert.match(connection.state.mutations[0].sql, /^UPDATE signups SET/);
+      assert.deepEqual(connection.state.mutations[0].values, [101, 31, 8]);
+      assert.equal(connection.state.signups[0].status, "cancelled");
+      assert.equal(connection.state.signups[0].review_eligible_at, null);
+      assert.equal(connection.state.mutations[1].values[0], null);
     });
   }
+});
+
+test("historical NPC unbinding locks signups, cancels the exact claim, and permits a new claim", async () => {
+  const connection = historicalRoleManagementConnection({
+    role: { bound_user_id: CLAIMANT.user.id },
+    signups: [{
+      id: 81,
+      session_id: 101,
+      session_npc_role_id: 31,
+      signup_type: "session_npc_role",
+      user_id: CLAIMANT.user.id,
+      status: "approved",
+      review_eligible_at: new Date("2026-01-01T00:00:00.000Z")
+    }]
+  });
+
+  await updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { boundUserId: null });
+
+  assert.equal(connection.state.role.bound_user_id, null);
+  assert.equal(connection.state.signups[0].status, "cancelled");
+  assert.equal(connection.state.signups[0].review_eligible_at, null);
+  const sessionLock = connection.state.events.indexOf(
+    "SELECT * FROM sessions WHERE id = ? FOR UPDATE"
+  );
+  const roleLock = connection.state.events.indexOf(
+    "SELECT * FROM session_npc_roles WHERE id = ? AND session_id = ? FOR UPDATE"
+  );
+  const signupLock = connection.state.events.indexOf(
+    "SELECT * FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+  );
+  const cleanup = connection.state.events.indexOf(
+    "UPDATE signups SET status = 'cancelled', review_eligible_at = NULL WHERE session_id = ? AND session_npc_role_id = ? AND user_id = ? AND status IN ('pending', 'approved')"
+  );
+  assert.ok(sessionLock >= 0);
+  assert.ok(roleLock > sessionLock);
+  assert.ok(signupLock > roleLock);
+  assert.ok(cleanup > signupLock);
+
+  const reclaimConnection = historicalClaimConnection({
+    npcRoles: [
+      { id: 31, status: "active", bound_user_id: null },
+      { id: 32, status: "active", bound_user_id: null }
+    ],
+    activeSignups: connection.state.signups.filter((signup) =>
+      ["pending", "approved"].includes(signup.status)
+    )
+  });
+  const claim = await claimHistoricalSessionRoleWithConnection(
+    reclaimConnection,
+    CLAIMANT,
+    101,
+    { npcRoleId: 32 },
+    HISTORICAL_INVITE_CLAIMS
+  );
+  assert.equal(claim.claim_type, "npc_role");
+  assert.equal(reclaimConnection.state.npcRoles[1].bound_user_id, CLAIMANT.user.id);
+});
+
+test("historical NPC unbinding rolls back signup cleanup when role mutation fails", async () => {
+  const connection = historicalRoleManagementConnection({
+    role: { bound_user_id: CLAIMANT.user.id },
+    signups: [{
+      id: 81,
+      session_id: 101,
+      session_npc_role_id: 31,
+      signup_type: "session_npc_role",
+      user_id: CLAIMANT.user.id,
+      status: "approved",
+      review_eligible_at: new Date("2026-01-01T00:00:00.000Z")
+    }],
+    failRoleUpdate: true
+  });
+
+  await withMockMysqlConnection(connection, () =>
+    assert.rejects(
+      () => updateSessionNpcRole(ACTOR, 31, { boundUserId: null }),
+      { message: "NPC_ROLE_UPDATE_FAILED" }
+    )
+  );
+
+  assert.ok(connection.state.events.includes("ROLLBACK"));
+  assert.equal(connection.state.role.bound_user_id, CLAIMANT.user.id);
+  assert.equal(connection.state.signups[0].status, "approved");
+  assert.notEqual(connection.state.signups[0].review_eligible_at, null);
+  assert.equal(
+    connection.state.mutations.some(({ sql }) => sql.startsWith("UPDATE signups SET")),
+    true
+  );
+});
+
+test("historical NPC generic PATCH rejects every explicit status before mutation", async (t) => {
+  for (const status of ["inactive", "active"]) {
+    await t.test(status, async () => {
+      const connection = historicalRoleManagementConnection();
+      await assert.rejects(
+        () => updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { status }),
+        { statusCode: 400, code: "BAD_REQUEST" }
+      );
+      assert.equal(connection.state.role.status, "active");
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("future NPC unbinding preserves the existing role-only mutation", async () => {
+  const connection = historicalRoleManagementConnection({
+    session: { session_purpose: "future_carpool", status: "recruiting" }
+  });
+  await updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { boundUserId: null });
+  assert.equal(connection.state.mutations.length, 1);
+  assert.match(connection.state.mutations[0].sql, /^UPDATE session_npc_roles SET/);
+  assert.equal(connection.state.signups[0].status, "approved");
+  assert.notEqual(connection.state.signups[0].review_eligible_at, null);
+});
+
+test("future NPC generic PATCH still permits status changes", async () => {
+  const connection = historicalRoleManagementConnection({
+    session: { session_purpose: "future_carpool", status: "recruiting" }
+  });
+  await updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { status: "inactive" });
+  assert.equal(connection.state.role.status, "inactive");
+  assert.equal(connection.state.mutations.length, 1);
+  assert.match(connection.state.mutations[0].sql, /^UPDATE session_npc_roles SET status = \?/);
+});
+
+test("historical seat removal revokes review eligibility in both active cancellation ranges", async () => {
+  const connection = seatKickConnection("historical_record");
+  await withMockMysqlConnection(connection, () => kickSessionSeat(ACTOR, 11));
+
+  const cancellationUpdates = connection.state.mutations.filter(({ sql }) =>
+    sql.startsWith("UPDATE signups SET status = 'cancelled'")
+  );
+  assert.equal(cancellationUpdates.length, 2);
+  assert.equal(
+    cancellationUpdates.every(({ sql }) => /review_eligible_at = NULL/.test(sql)),
+    true
+  );
+});
+
+test("future seat removal preserves review eligibility in its active cancellation ranges", async () => {
+  const connection = seatKickConnection("future_carpool");
+  await withMockMysqlConnection(connection, () => kickSessionSeat(ACTOR, 11));
+
+  const cancellationUpdates = connection.state.mutations.filter(({ sql }) =>
+    sql.startsWith("UPDATE signups SET status = 'cancelled'")
+  );
+  assert.equal(cancellationUpdates.length, 2);
+  assert.equal(
+    cancellationUpdates.every(({ sql }) => !/review_eligible_at = NULL/.test(sql)),
+    true
+  );
 });
 
 test("historical generic PATCH rejects every non-null direct-member alias before mutation", async (t) => {

@@ -6174,6 +6174,12 @@ export async function createSessionNpcRole(user, sessionId, body = {}) {
 export async function updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body = {}) {
   const id = positiveId(npcRoleId, "npcRoleId");
   const current = await requireSessionNpcRoleOwner(connection, id, user);
+  if (
+    current.session_purpose === "historical_record" &&
+    body.status !== undefined
+  ) {
+    throw badRequest("Historical NPC role status cannot be changed");
+  }
   assertHistoricalSessionMemberPrebindAllowed(
     { extraNpcRoles: [body] },
     current.session_purpose
@@ -6205,6 +6211,25 @@ export async function updateSessionNpcRoleWithConnection(connection, user, npcRo
         : nonNegativeIntValue(body.sortOrder ?? body.sort_order, "sortOrder"),
     status: normalizeNpcRoleStatus(body.status)
   };
+  if (
+    current.session_purpose === "historical_record" &&
+    Number(current.bound_user_id) > 0 &&
+    boundUserId === null
+  ) {
+    await lockSessionSignups(connection, current.session_id);
+    await connection.query(
+      `
+        UPDATE signups
+        SET status = 'cancelled',
+            review_eligible_at = NULL
+        WHERE session_id = ?
+          AND session_npc_role_id = ?
+          AND user_id = ?
+          AND status IN ('pending', 'approved')
+      `,
+      [current.session_id, current.id, current.bound_user_id]
+    );
+  }
   const updated = await updateAllowed(connection, "session_npc_roles", id, normalized, [
     ["name", "name"],
     ["description", "description"],
@@ -7417,6 +7442,7 @@ export async function kickSessionSeat(user, seatId, body = {}) {
     const reason = optionalText(body.reason);
     assertMessageTextSafe("reason", reason);
     const removedUserId = seat.confirmed_user_id ? Number(seat.confirmed_user_id) : null;
+    const historicalRemoval = seat.session_purpose === "historical_record";
     if (
       report &&
       (!removedUserId || !["confirmed", "locked"].includes(seat.status))
@@ -7424,10 +7450,13 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       throw conflict("Reported removal requires an onboard member");
     }
 
+    const historicalReviewReset = historicalRemoval
+      ? ", review_eligible_at = NULL"
+      : "";
     await connection.query(
       `
         UPDATE signups
-        SET status = 'cancelled'
+        SET status = 'cancelled'${historicalReviewReset}
         WHERE seat_id = ? AND status IN ('pending', 'approved')
       `,
       [seatId]
@@ -7436,7 +7465,7 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       await connection.query(
         `
           UPDATE signups
-          SET status = 'cancelled'
+          SET status = 'cancelled'${historicalReviewReset}
           WHERE session_id = ?
             AND user_id = ?
             AND COALESCE(signup_type, 'seat') = 'seat'
@@ -7486,7 +7515,6 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       );
     }
 
-    const historicalRemoval = seat.session_purpose === "historical_record";
     const content = historicalRemoval
       ? `车头已移除「${seat.name}」的补认成员`
       : report
@@ -7523,12 +7551,19 @@ export async function cancelSession(user, sessionId, body = {}) {
       throw forbidden("Only the session organizer can cancel this session");
     }
     const membershipRows = await lockSessionMembershipRows(connection, id);
-    const hasOtherOnboardMembers = (membershipRows.seats || []).some((seat) =>
+    const hasOtherOnboardSeatMembers = (membershipRows.seats || []).some((seat) =>
       Number(seat.confirmed_user_id) > 0 &&
       Number(seat.confirmed_user_id) !== Number(user.user.id) &&
       ["confirmed", "locked"].includes(seat.status)
     );
-    if (hasOtherOnboardMembers) {
+    const hasOtherHistoricalNpcMembers =
+      session.session_purpose === "historical_record" &&
+      (membershipRows.npcRoles || []).some((role) =>
+        Number(role.bound_user_id) > 0 &&
+        Number(role.bound_user_id) !== Number(user.user.id) &&
+        role.status === "active"
+      );
+    if (hasOtherOnboardSeatMembers || hasOtherHistoricalNpcMembers) {
       throw new AppError(
         409,
         "SESSION_HAS_ONBOARD_MEMBERS",
