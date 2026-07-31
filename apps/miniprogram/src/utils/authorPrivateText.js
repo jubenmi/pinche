@@ -96,6 +96,7 @@ export function authorPrivateSessionItem(projection) {
     id: null,
     draft_id: projection.draft_id,
     start_at: content.startAt,
+    session_purpose: content.sessionPurpose,
     note: content.note,
     pinned_message_text: content.pinnedMessageText,
     script_name_snapshot: "待审车局",
