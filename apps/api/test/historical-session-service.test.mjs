@@ -924,6 +924,27 @@ test("historical NPC role creation rejects every non-null binding alias before m
   }
 });
 
+test("historical NPC role creation rejects raw empty, malformed, and undefined aliases", async (t) => {
+  const values = [["empty", ""], ["malformed", "abc"], ["undefined", undefined]];
+  for (const field of ["boundUserId", "bound_user_id", "userId", "user_id"]) {
+    for (const [label, value] of values) {
+      await t.test(`${field} ${label}`, async () => {
+        const connection = historicalRoleManagementConnection();
+        await assert.rejects(
+          () => createSessionNpcRoleWithConnection(
+            connection,
+            ACTOR,
+            101,
+            { name: "NPC", [field]: value }
+          ),
+          HISTORICAL_PREBIND_ERROR
+        );
+        assert.deepEqual(connection.state.mutations, []);
+      });
+    }
+  }
+});
+
 test("historical NPC role creation permits an explicitly unbound role", async () => {
   const connection = historicalRoleManagementConnection();
 
@@ -946,6 +967,22 @@ test("historical NPC role update rejects every non-null binding alias before mut
       );
       assert.deepEqual(connection.state.mutations, []);
     });
+  }
+});
+
+test("historical NPC role update rejects raw empty, malformed, and undefined aliases", async (t) => {
+  const values = [["empty", ""], ["malformed", "abc"], ["undefined", undefined]];
+  for (const field of ["boundUserId", "bound_user_id", "userId", "user_id"]) {
+    for (const [label, value] of values) {
+      await t.test(`${field} ${label}`, async () => {
+        const connection = historicalRoleManagementConnection();
+        await assert.rejects(
+          () => updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { [field]: value }),
+          HISTORICAL_PREBIND_ERROR
+        );
+        assert.deepEqual(connection.state.mutations, []);
+      });
+    }
   }
 });
 

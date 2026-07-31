@@ -5189,6 +5189,10 @@ export async function listSessionNpcRoles(user, sessionId, options = {}) {
 export async function createSessionNpcRoleWithConnection(connection, user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
   const session = await requireSessionOwner(connection, id, user);
+  assertHistoricalSessionMemberPrebindAllowed(
+    { extraNpcRoles: [body] },
+    session.session_purpose
+  );
   const [role] = normalizeNpcRoles([body], { source: "session" });
   if (!role) {
     throw badRequest("npc role name is required");
@@ -5215,6 +5219,10 @@ export async function createSessionNpcRole(user, sessionId, body = {}) {
 export async function updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body = {}) {
   const id = positiveId(npcRoleId, "npcRoleId");
   const current = await requireSessionNpcRoleOwner(connection, id, user);
+  assertHistoricalSessionMemberPrebindAllowed(
+    { extraNpcRoles: [body] },
+    current.session_purpose
+  );
   assertPublicTextSafe("npcRoleName", body.name);
   assertPublicTextSafe("npcRoleDescription", body.description || body.note);
   const boundUserId = nullableBoundUserId(body);
