@@ -1410,6 +1410,51 @@ async function requireSignupOwner(connection, signupId, user) {
   return signup;
 }
 
+async function requireLockedSessionOwner(
+  connection,
+  sessionId,
+  user,
+  ownerError = "Only the session organizer can perform this action"
+) {
+  const session = await findById(connection, "sessions", sessionId, { forUpdate: true });
+  if (!session) {
+    throw notFound("Session not found");
+  }
+  if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+    throw forbidden(ownerError);
+  }
+  return session;
+}
+
+async function requireLockedSignupOwner(connection, signupId, user) {
+  const [signupRefs] = await connection.query(
+    "SELECT session_id FROM signups WHERE id = ?",
+    [signupId]
+  );
+  const signupRef = signupRefs[0];
+  if (!signupRef) {
+    throw notFound("Signup not found");
+  }
+  const session = await requireLockedSessionOwner(
+    connection,
+    signupRef.session_id,
+    user
+  );
+  const [rows] = await connection.query(
+    "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE",
+    [signupId, session.id]
+  );
+  const signup = rows[0];
+  if (!signup) {
+    throw notFound("Signup not found");
+  }
+  return {
+    ...signup,
+    organizer_user_id: session.organizer_user_id,
+    session_purpose: session.session_purpose
+  };
+}
+
 function assertOrdinaryHistoricalRoleClaimAllowed(session) {
   if (session?.session_purpose === "historical_record") {
     throw new AppError(
@@ -4890,7 +4935,7 @@ export function assertSessionPatchLifecycle(currentSession = {}, body = {}) {
 }
 
 export async function updateSessionWithConnection(connection, user, id, body) {
-  const currentSession = await requireSessionOwner(connection, id, user);
+  const currentSession = await requireLockedSessionOwner(connection, id, user);
   const validatedStatus = assertSessionPatchLifecycle(currentSession, body);
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
@@ -4936,7 +4981,7 @@ export async function updateSessionWithConnection(connection, user, id, body) {
 }
 
 export async function updateSession(user, id, body) {
-  return withDatabaseConnection((connection) =>
+  return withTransaction((connection) =>
     updateSessionWithConnection(connection, user, id, body)
   );
 }
@@ -5122,37 +5167,46 @@ export async function rescheduleSessionInTransaction(connection, user, id, body 
 }
 
 async function requireSessionNpcRoleOwner(connection, npcRoleId, user) {
-  const [rows] = await connection.query(
-    `
-      SELECT role.*, session.organizer_user_id, session.session_purpose
-      FROM session_npc_roles role
-      JOIN sessions session ON session.id = role.session_id
-      WHERE role.id = ?
-    `,
+  const [roleRefs] = await connection.query(
+    "SELECT session_id FROM session_npc_roles WHERE id = ?",
     [npcRoleId]
+  );
+  const roleRef = roleRefs[0];
+  if (!roleRef) {
+    throw notFound("Session NPC role not found");
+  }
+  const session = await requireLockedSessionOwner(
+    connection,
+    roleRef.session_id,
+    user,
+    "Only the session organizer can manage NPC roles"
+  );
+  const [rows] = await connection.query(
+    "SELECT * FROM session_npc_roles WHERE id = ? AND session_id = ? FOR UPDATE",
+    [npcRoleId, session.id]
   );
   const role = rows[0];
   if (!role) {
     throw notFound("Session NPC role not found");
   }
-  if (!isAdmin(user) && Number(role.organizer_user_id) !== Number(user.user.id)) {
-    throw forbidden("Only the session organizer can manage NPC roles");
-  }
-  return role;
+  return {
+    ...role,
+    organizer_user_id: session.organizer_user_id,
+    session_purpose: session.session_purpose
+  };
 }
 
 function nullableBoundUserId(body = {}) {
-  const aliases = ["boundUserId", "bound_user_id", "userId", "user_id"];
-  const values = aliases
-    .filter((alias) => Object.prototype.hasOwnProperty.call(body, alias))
-    .map((alias) => body[alias]);
-  if (values.length === 0 || values.every((value) => value === undefined)) {
+  if (
+    body.boundUserId === undefined &&
+    body.bound_user_id === undefined &&
+    body.userId === undefined &&
+    body.user_id === undefined
+  ) {
     return undefined;
   }
-  const value = values.find((candidate) => (
-    candidate !== undefined && candidate !== null && candidate !== ""
-  ));
-  if (value === undefined) {
+  const value = body.boundUserId ?? body.bound_user_id ?? body.userId ?? body.user_id;
+  if (value === undefined || value === null || value === "") {
     return null;
   }
   return positiveId(value, "boundUserId");
@@ -5188,7 +5242,7 @@ export async function listSessionNpcRoles(user, sessionId, options = {}) {
 
 export async function createSessionNpcRoleWithConnection(connection, user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
-  const session = await requireSessionOwner(connection, id, user);
+  const session = await requireLockedSessionOwner(connection, id, user);
   assertHistoricalSessionMemberPrebindAllowed(
     { extraNpcRoles: [body] },
     session.session_purpose
@@ -5277,7 +5331,7 @@ export async function updateSessionNpcRoleWithConnection(connection, user, npcRo
 }
 
 export async function updateSessionNpcRole(user, npcRoleId, body = {}) {
-  return withDatabaseConnection((connection) =>
+  return withTransaction((connection) =>
     updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body)
   );
 }
@@ -6143,7 +6197,7 @@ export async function listSessionSignups(user, sessionId) {
 
 export async function approveSignup(user, signupId) {
   const { signup, notification } = await withTransaction(async (connection) => {
-    const signup = await requireSignupOwner(connection, signupId, user);
+    const signup = await requireLockedSignupOwner(connection, signupId, user);
     assertOrdinaryHistoricalRoleClaimAllowed(signup);
     if (signup.status !== "pending") {
       throw badRequest("Only pending signup can be approved");

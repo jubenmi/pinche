@@ -8,10 +8,13 @@ import {
   assertSessionJoinInviteAllowed,
   claimSessionNpcRole,
   claimSessionSeat,
+  createSessionNpcRole,
   createSessionNpcRoleWithConnection,
   createSessionWithConnection,
   createSignup,
   publishSessionWithConnection,
+  updateSession,
+  updateSessionNpcRole,
   updateSessionNpcRoleWithConnection,
   updateSessionWithConnection
 } from "../src/modules/core/service.js";
@@ -69,11 +72,12 @@ async function withMockMysqlConnection(connection, work) {
 }
 
 function recruitmentGuardConnection(queryResult) {
-  const state = { mutations: [] };
+  const state = { mutations: [], queries: [] };
   return {
     state,
     async query(sql, values = []) {
       const normalized = compactSql(sql);
+      state.queries.push({ sql: normalized, values });
       if (normalized === "SET time_zone = '+00:00'") return [{ affectedRows: 0 }];
       if (/^(INSERT|UPDATE|DELETE) /i.test(normalized)) {
         state.mutations.push({ sql: normalized, values });
@@ -87,7 +91,7 @@ function recruitmentGuardConnection(queryResult) {
   };
 }
 
-function historicalRoleManagementConnection() {
+function historicalRoleManagementConnection(options = {}) {
   const session = {
     id: 101,
     organizer_user_id: ACTOR.user.id,
@@ -98,7 +102,8 @@ function historicalRoleManagementConnection() {
     join_phone_required: 0,
     npc_join_enabled: 0,
     dm_user_id: 8,
-    npc_user_id: 9
+    npc_user_id: 9,
+    ...(options.session || {})
   };
   const role = {
     id: 31,
@@ -107,15 +112,29 @@ function historicalRoleManagementConnection() {
     session_purpose: session.session_purpose,
     name: "NPC",
     status: "active",
-    bound_user_id: 8
+    bound_user_id: 8,
+    ...(options.role || {})
   };
-  const state = { mutations: [], session, role };
+  role.organizer_user_id = session.organizer_user_id;
+  role.session_purpose = session.session_purpose;
+  const state = { events: [], mutations: [], session, role };
   return {
     state,
     async query(sql, values = []) {
       const normalized = compactSql(sql);
+      state.events.push(normalized);
+      if (normalized === "SET time_zone = '+00:00'") return [{ affectedRows: 0 }];
       if (/^(INSERT|UPDATE|DELETE) /i.test(normalized)) {
         state.mutations.push({ sql: normalized, values });
+      }
+      if (normalized === "SELECT session_id FROM session_npc_roles WHERE id = ?") {
+        return [[{ session_id: role.session_id }]];
+      }
+      if (
+        normalized ===
+        "SELECT * FROM session_npc_roles WHERE id = ? AND session_id = ? FOR UPDATE"
+      ) {
+        return [[role]];
       }
       if (normalized === "SELECT * FROM sessions WHERE id = ?") return [[session]];
       if (normalized.includes("SELECT role.*, session.organizer_user_id")) return [[role]];
@@ -146,6 +165,127 @@ function historicalRoleManagementConnection() {
       }
       if (normalized === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") return [[session]];
       throw new Error(`Unexpected query: ${normalized}`);
+    },
+    async beginTransaction() {
+      state.events.push("BEGIN");
+    },
+    async commit() {
+      state.events.push("COMMIT");
+    },
+    async rollback() {
+      state.events.push("ROLLBACK");
+    },
+    async end() {
+      state.events.push("END");
+    }
+  };
+}
+
+function transferredOwnerConnection() {
+  const staleSession = {
+    id: 101,
+    organizer_user_id: ACTOR.user.id,
+    session_purpose: "future_carpool",
+    status: "recruiting",
+    visibility: "public",
+    join_policy: "direct",
+    join_phone_required: 1,
+    npc_join_enabled: 1,
+    note: "stale"
+  };
+  const lockedSession = {
+    ...staleSession,
+    organizer_user_id: 88,
+    session_purpose: "historical_record",
+    status: "locked",
+    visibility: "share_only",
+    join_policy: "review_required",
+    join_phone_required: 0,
+    npc_join_enabled: 0,
+    note: "current"
+  };
+  const role = {
+    id: 31,
+    session_id: 101,
+    organizer_user_id: ACTOR.user.id,
+    session_purpose: "future_carpool",
+    name: "NPC",
+    status: "active",
+    bound_user_id: null
+  };
+  const signup = {
+    id: 41,
+    session_id: 101,
+    organizer_user_id: ACTOR.user.id,
+    session_purpose: "future_carpool",
+    status: "rejected",
+    signup_type: "seat",
+    seat_id: 11,
+    user_id: 12
+  };
+  const state = { lifecycle: [], lockedRead: false, mutations: [], queries: [] };
+  return {
+    state,
+    async query(sql, values = []) {
+      const normalized = compactSql(sql);
+      state.queries.push({ sql: normalized, values });
+      if (normalized === "SET time_zone = '+00:00'") return [{ affectedRows: 0 }];
+      if (/^(INSERT|UPDATE|DELETE) /i.test(normalized)) {
+        state.mutations.push({ sql: normalized, values });
+      }
+      if (normalized === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+        state.lockedRead = true;
+        return [[lockedSession]];
+      }
+      if (normalized === "SELECT * FROM sessions WHERE id = ?") {
+        return [[state.lockedRead ? lockedSession : staleSession]];
+      }
+      if (normalized === "SELECT session_id FROM session_npc_roles WHERE id = ?") {
+        return [[{ session_id: role.session_id }]];
+      }
+      if (normalized.includes("SELECT role.*, session.organizer_user_id")) return [[role]];
+      if (
+        normalized ===
+        "SELECT * FROM session_npc_roles WHERE id = ? AND session_id = ? FOR UPDATE"
+      ) {
+        return [[role]];
+      }
+      if (normalized === "SELECT session_id FROM signups WHERE id = ?") {
+        return [[{ session_id: signup.session_id }]];
+      }
+      if (normalized.includes("SELECT signup.*, session.organizer_user_id")) return [[signup]];
+      if (normalized === "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE") {
+        return [[signup]];
+      }
+      if (normalized.startsWith("INSERT INTO session_npc_roles")) return [{ insertId: role.id }];
+      if (
+        normalized.includes("FROM session_npc_roles role") &&
+        normalized.includes("WHERE role.session_id = ?")
+      ) {
+        return [[role]];
+      }
+      if (normalized.startsWith("UPDATE session_npc_roles SET")) return [{ affectedRows: 1 }];
+      if (normalized === "SELECT * FROM session_npc_roles WHERE id = ?") return [[role]];
+      if (
+        normalized.includes("FROM session_npc_roles role") &&
+        normalized.includes("WHERE role.id = ?")
+      ) {
+        return [[role]];
+      }
+      if (normalized.startsWith("UPDATE sessions SET")) return [{ affectedRows: 1 }];
+      throw new Error(`Unexpected query: ${normalized}`);
+    },
+    async beginTransaction() {
+      state.lifecycle.push("BEGIN");
+    },
+    async commit() {
+      state.lifecycle.push("COMMIT");
+    },
+    async rollback() {
+      state.lifecycle.push("ROLLBACK");
+    },
+    async end() {
+      state.lifecycle.push("END");
     }
   };
 }
@@ -862,6 +1002,24 @@ test("historical sessions reject every ordinary recruitment path before mutation
       "approveSignup",
       () => approveSignup(ACTOR, 41),
       (sql) => {
+        if (sql === "SELECT session_id FROM signups WHERE id = ?") {
+          return [[{ session_id: 101 }]];
+        }
+        if (sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+          return [[{
+            id: 101,
+            organizer_user_id: ACTOR.user.id,
+            session_purpose: "historical_record",
+            status: "locked"
+          }]];
+        }
+        if (sql === "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE") {
+          return [[{
+            id: 41,
+            session_id: 101,
+            status: "rejected"
+          }]];
+        }
         if (sql.includes("SELECT signup.*, session.organizer_user_id")) {
           return [[{
             id: 41,
@@ -898,6 +1056,189 @@ test("historical sessions reject every ordinary recruitment path before mutation
         assert.rejects(invoke, HISTORICAL_CLAIM_ERROR)
       );
       assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("locked session ownership rejects stale organizers before Task 5 mutations", async (t) => {
+  const cases = [
+    [
+      "generic PATCH",
+      (connection) => updateSessionWithConnection(connection, ACTOR, 101, { note: "stale write" }),
+      "Only the session organizer can perform this action"
+    ],
+    [
+      "NPC create",
+      (connection) => createSessionNpcRoleWithConnection(
+        connection,
+        ACTOR,
+        101,
+        { name: "stale role" }
+      ),
+      "Only the session organizer can perform this action"
+    ],
+    [
+      "NPC update",
+      (connection) => updateSessionNpcRoleWithConnection(
+        connection,
+        ACTOR,
+        31,
+        { name: "stale role" }
+      ),
+      "Only the session organizer can manage NPC roles"
+    ],
+    [
+      "signup approval",
+      (connection) => withMockMysqlConnection(connection, () => approveSignup(ACTOR, 41)),
+      "Only the session organizer can perform this action"
+    ]
+  ];
+
+  for (const [name, invoke, message] of cases) {
+    await t.test(name, async () => {
+      const connection = transferredOwnerConnection();
+      await assert.rejects(
+        () => invoke(connection),
+        { statusCode: 403, code: "FORBIDDEN", message }
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("generic PATCH lifecycle uses the locked current status instead of a stale pre-read", async () => {
+  const connection = transferredOwnerConnection();
+
+  const session = await updateSessionWithConnection(connection, ADMIN, 101, {
+    status: "locked"
+  });
+
+  assert.equal(session.status, "locked");
+  assert.equal(session.note, "current");
+  assert.deepEqual(connection.state.mutations, []);
+  assert.equal(
+    connection.state.queries[0].sql,
+    "SELECT * FROM sessions WHERE id = ? FOR UPDATE"
+  );
+});
+
+test("child-id mutation paths lock session before re-locking the child", async (t) => {
+  await t.test("NPC update", async () => {
+    const connection = historicalRoleManagementConnection();
+    await assert.rejects(
+      () => updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { boundUserId: 12 }),
+      HISTORICAL_PREBIND_ERROR
+    );
+
+    const sessionLock = connection.state.events.indexOf(
+      "SELECT * FROM sessions WHERE id = ? FOR UPDATE"
+    );
+    const childLock = connection.state.events.indexOf(
+      "SELECT * FROM session_npc_roles WHERE id = ? AND session_id = ? FOR UPDATE"
+    );
+    assert.ok(sessionLock >= 0);
+    assert.ok(childLock > sessionLock);
+    assert.deepEqual(connection.state.mutations, []);
+  });
+
+  await t.test("signup approval", async () => {
+    const signup = {
+      id: 41,
+      session_id: 101,
+      organizer_user_id: ACTOR.user.id,
+      session_purpose: "historical_record",
+      status: "rejected"
+    };
+    const connection = recruitmentGuardConnection((sql) => {
+      if (sql === "SELECT session_id FROM signups WHERE id = ?") {
+        return [[{ session_id: signup.session_id }]];
+      }
+      if (sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+        return [[{
+          id: 101,
+          organizer_user_id: ACTOR.user.id,
+          session_purpose: "historical_record",
+          status: "locked"
+        }]];
+      }
+      if (sql === "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE") {
+        return [[signup]];
+      }
+      if (sql.includes("SELECT signup.*, session.organizer_user_id")) return [[signup]];
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+    await withMockMysqlConnection(connection, () =>
+      assert.rejects(() => approveSignup(ACTOR, 41), HISTORICAL_CLAIM_ERROR)
+    );
+
+    const sessionLock = connection.state.queries.findIndex(
+      ({ sql }) => sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE"
+    );
+    const childLock = connection.state.queries.findIndex(
+      ({ sql }) => sql === "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE"
+    );
+    assert.ok(sessionLock >= 0);
+    assert.ok(childLock > sessionLock);
+    assert.deepEqual(connection.state.mutations, []);
+  });
+});
+
+test("public Task 5 mutation wrappers open transactions around their row locks", async (t) => {
+  await t.test("generic PATCH", async () => {
+    const connection = historicalRoleManagementConnection({
+      session: { session_purpose: "future_carpool", status: "recruiting" }
+    });
+    await withMockMysqlConnection(connection, () =>
+      updateSession(ACTOR, 101, { note: "transactional" })
+    );
+    assert.ok(connection.state.events.indexOf("BEGIN") >= 0);
+    assert.ok(
+      connection.state.events.indexOf("SELECT * FROM sessions WHERE id = ? FOR UPDATE") >
+      connection.state.events.indexOf("BEGIN")
+    );
+    assert.ok(connection.state.events.indexOf("COMMIT") > connection.state.events.indexOf("BEGIN"));
+  });
+
+  await t.test("NPC update", async () => {
+    const connection = historicalRoleManagementConnection({
+      session: { session_purpose: "future_carpool", status: "recruiting" }
+    });
+    await withMockMysqlConnection(connection, () =>
+      updateSessionNpcRole(ACTOR, 31, { name: "transactional NPC" })
+    );
+    assert.ok(connection.state.events.indexOf("BEGIN") >= 0);
+    assert.ok(
+      connection.state.events.indexOf("SELECT * FROM sessions WHERE id = ? FOR UPDATE") >
+      connection.state.events.indexOf("BEGIN")
+    );
+    assert.ok(connection.state.events.indexOf("COMMIT") > connection.state.events.indexOf("BEGIN"));
+  });
+});
+
+test("future NPC binding normalization preserves legacy alias precedence", async (t) => {
+  const cases = [
+    ["preferred empty unbinds", { boundUserId: "", user_id: 12 }, null],
+    ["preferred null falls through", { boundUserId: null, user_id: 12 }, 12]
+  ];
+
+  for (const [name, body, expected] of cases) {
+    await t.test(`create: ${name}`, async () => {
+      const connection = historicalRoleManagementConnection({
+        session: { session_purpose: "future_carpool", status: "recruiting" }
+      });
+      await createSessionNpcRoleWithConnection(connection, ACTOR, 101, {
+        name: "NPC",
+        ...body
+      });
+      assert.equal(connection.state.mutations[0].values[6], expected);
+    });
+
+    await t.test(`update: ${name}`, async () => {
+      const connection = historicalRoleManagementConnection({
+        session: { session_purpose: "future_carpool", status: "recruiting" }
+      });
+      await updateSessionNpcRoleWithConnection(connection, ACTOR, 31, body);
+      assert.equal(connection.state.mutations[0].values[0], expected);
     });
   }
 });
