@@ -3,7 +3,7 @@
     <AuthIdentityBar />
     <FeedbackHost />
 
-    <view class="flow-top">
+    <view v-if="isHistorical" class="flow-top historical">
       <view class="step-label">4 / 4</view>
       <view class="title">{{ pageTitle }}</view>
       <view class="text">{{ pageIntro }}</view>
@@ -57,7 +57,10 @@
       />
     </view>
 
-    <view class="share-actions">
+    <view
+      v-if="canShareCurrentSession"
+      class="share-actions"
+    >
       <t-button
         class="button wechat-action"
         open-type="share"
@@ -81,7 +84,7 @@
 </template>
 
 <script>
-import { formatBeijingDateTime } from "@pinche/shared";
+import { formatBeijingDateTime, isHistoricalSession } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -108,6 +111,12 @@ import {
 } from "../../utils/createFlow";
 import { showWechatShareMenus } from "../../utils/share";
 import {
+  historicalClaimRequest,
+  historicalRoleClaimable,
+  inviteQuery,
+  inviteTokenState
+} from "../../utils/sessionShareInvite";
+import {
   isConfirmedSessionMember,
   requestSubscriptionAfterConfirmedJoin
 } from "../../utils/sessionMembership";
@@ -130,6 +139,9 @@ export default {
       entry: "",
       sessionId: "",
       inviteToken: "",
+      historicalInviteToken: "",
+      historicalCapabilitySupplied: false,
+      invalidInviteLink: false,
       session: {},
       navigatingAlbum: false,
       currentUserId: "",
@@ -145,16 +157,46 @@ export default {
     isAlbumEntry() {
       return this.entry === "album";
     },
+    isHistorical() {
+      return isHistoricalSession(this.session);
+    },
+    viewerIsOrganizer() {
+      return Boolean(
+        this.currentUserId &&
+        Number(this.session.organizer_user_id) === Number(this.currentUserId)
+      );
+    },
+    historicalViewerHasRole() {
+      return Boolean(this.role || this.currentUserNpcRole);
+    },
+    canShareCurrentSession() {
+      if (this.invalidInviteLink) {
+        return false;
+      }
+      if (this.historicalCapabilitySupplied || this.isHistorical) {
+        return Boolean(this.isHistorical && this.historicalInviteToken);
+      }
+      return true;
+    },
     pageTitle() {
+      if (this.isHistorical) {
+        return "补认当时角色";
+      }
       return this.isAlbumEntry ? "查看车局相册" : "邀请好友认领角色";
     },
     pageIntro() {
+      if (this.isHistorical) {
+        return "邀请当时同车玩家补认角色";
+      }
       if (this.isAlbumEntry) {
         return "同车成员可直接进入相册；未上车先选择角色。";
       }
       return "发送给好友或群聊，对方可以查看实时角色并申请认领。";
     },
     statusPillText() {
+      if (this.isHistorical) {
+        return "历史补录";
+      }
       if (this.isAlbumEntry) {
         return this.session.join_policy === "direct" ? "可直接上车" : "需车头审核";
       }
@@ -207,6 +249,12 @@ export default {
       return this.roleCards.filter((role) => role.stateKind === "taken").length;
     },
     roleSummaryText() {
+      if (this.isHistorical) {
+        const claimed = this.roleCards.filter((role) =>
+          ["mine", "taken"].includes(role.stateKind)
+        ).length;
+        return `${this.roleCards.length - claimed} 个待补认，${claimed} 个已补认`;
+      }
       return `${this.availableCount} 个可选，${this.mineCount} 个我选，${this.switchingCount} 个换选，${this.takenCount} 个已选`;
     },
     roleCards() {
@@ -218,12 +266,27 @@ export default {
           ? this.currentUserId &&
             Number(role.confirmedUserId) === Number(this.currentUserId)
           : this.role && isSameRole(role, this.role);
-        const claimable = this.isRoleClaimable(role, mine);
-        const pending = this.pendingRole && isSameRole(role, this.pendingRole);
+        const claimable = this.isHistorical
+          ? historicalRoleClaimable({
+              hasHistoricalToken: Boolean(this.historicalInviteToken),
+              occupied,
+              viewerHasRole: this.historicalViewerHasRole,
+              viewerIsOrganizer: this.viewerIsOrganizer
+            })
+          : this.isRoleClaimable(role, mine);
+        const pending = !this.isHistorical && this.pendingRole && isSameRole(role, this.pendingRole);
         const switching = pending && this.role && !isSameRole(role, this.role);
         const crossCast = (pending || mine) && isCrossCast(this.currentUserGender, role.roleGender);
         let stateKind = "available";
-        if (switching) {
+        if (this.isHistorical) {
+          if (mine) {
+            stateKind = "mine";
+          } else if (occupied) {
+            stateKind = "taken";
+          } else if (!claimable) {
+            stateKind = "unavailable";
+          }
+        } else if (switching) {
           stateKind = "switching";
         } else if (pending || mine) {
           stateKind = "mine";
@@ -247,7 +310,9 @@ export default {
           ownerGender: this.roleOccupantGender(role),
           boardType: "seat",
           stateKind,
-          stateLabel: stateKind === "switching"
+          stateLabel: this.isHistorical
+            ? ["mine", "taken"].includes(stateKind) ? "已补认" : "待补认"
+            : stateKind === "switching"
             ? "换选"
             : stateKind === "mine"
               ? ""
@@ -315,7 +380,14 @@ export default {
           const duplicateCurrentUserPendingNpcRole = pendingByCurrentUser && !pendingMine;
           const effectiveBoundUserId = duplicateCurrentUserNpcRole ? 0 : boundUserId;
           const effectivePendingUserId = duplicateCurrentUserPendingNpcRole ? 0 : pendingUserId;
-          const taken = effectiveBoundUserId > 0 || effectivePendingUserId > 0;
+          const taken = this.isHistorical
+            ? Boolean(
+                role.is_bound ||
+                role.has_pending_signup ||
+                effectiveBoundUserId > 0 ||
+                effectivePendingUserId > 0
+              )
+            : effectiveBoundUserId > 0 || effectivePendingUserId > 0;
           const displayRole =
             duplicateCurrentUserNpcRole || duplicateCurrentUserPendingNpcRole
               ? {
@@ -328,8 +400,24 @@ export default {
                   pending_signup_user_gender: ""
                 }
               : role;
+          const claimable = this.isHistorical
+            ? historicalRoleClaimable({
+                hasHistoricalToken: Boolean(this.historicalInviteToken),
+                occupied: taken,
+                viewerHasRole: this.historicalViewerHasRole,
+                viewerIsOrganizer: this.viewerIsOrganizer
+              })
+            : !taken && this.npcSelfJoinEnabled;
           let stateKind = "available";
-          if (mine) {
+          if (this.isHistorical) {
+            if (mine) {
+              stateKind = "mine";
+            } else if (taken) {
+              stateKind = "taken";
+            } else if (!claimable) {
+              stateKind = "unavailable";
+            }
+          } else if (mine) {
             stateKind = "mine";
           } else if (pendingMine) {
             stateKind = "pendingReview";
@@ -352,11 +440,13 @@ export default {
             pendingSignupId: duplicateCurrentUserPendingNpcRole ? null : role.pending_signup_id || null,
             pendingUserId: effectivePendingUserId,
             boundUserId: effectiveBoundUserId,
-            claimable: stateKind === "available",
+            claimable,
             mine,
             boardType: "npc",
             stateKind,
-            stateLabel: stateKind === "mine"
+            stateLabel: this.isHistorical
+              ? ["mine", "taken"].includes(stateKind) ? "已补认" : "待补认"
+              : stateKind === "mine"
               ? ""
               : stateKind === "pendingReview"
                 ? "待审"
@@ -380,10 +470,15 @@ export default {
         }
       ];
       if (this.npcRoleCards.length) {
+        const claimedNpcCount = this.npcRoleCards.filter((role) =>
+          ["mine", "taken"].includes(role.stateKind)
+        ).length;
         sections.push({
           key: "npc",
           title: "NPC角色",
-          summary: this.npcSelfJoinEnabled ? "工作人员可选择自己的NPC角色" : "本场NPC由车头安排",
+          summary: this.isHistorical
+            ? `${this.npcRoleCards.length - claimedNpcCount} 个待补认，${claimedNpcCount} 个已补认`
+            : this.npcSelfJoinEnabled ? "工作人员可选择自己的NPC角色" : "本场NPC由车头安排",
           items: this.npcRoleCards
         });
       }
@@ -399,10 +494,22 @@ export default {
     const fromQuery = queryToFlow(options);
     this.entry = options.entry || "";
     this.sessionId = options.id || fromQuery.sessionId || stored.sessionId || "";
-    this.inviteToken = options.inviteToken || "";
+    const tokenState = inviteTokenState(options);
+    this.inviteToken = tokenState.inviteToken;
+    this.historicalInviteToken = tokenState.historicalInviteToken;
+    this.historicalCapabilitySupplied = tokenState.historicalCapabilitySupplied;
+    if (this.sessionId) {
+      this.hideShareMenus();
+    }
+    if (tokenState.invalid) {
+      this.invalidInviteLink = true;
+      this.statusText = "邀请链接无效。";
+      this.hideShareMenus();
+      return;
+    }
     if (this.sessionId) {
       await this.loadPublishedSession(this.sessionId);
-      if (options.seatId) {
+      if (options.seatId && !this.isHistorical) {
         const seatRole = this.roleOptions.find(
           (role) => Number(role.seatId || role.id) === Number(options.seatId)
         );
@@ -458,17 +565,35 @@ export default {
     this.unbindAuthChangeListener();
   },
   onShareAppMessage() {
+    if (this.invalidInviteLink) {
+      return undefined;
+    }
     const flow = this.persistFlow();
     const title = this.shareCardTitle();
     if (this.sessionId) {
       const shareCode = `s${this.sessionId}-${Date.now()}`;
+      if (this.isHistorical) {
+        const historicalQuery = inviteQuery({
+          mode: "historical",
+          token: this.historicalInviteToken
+        });
+        if (!historicalQuery) {
+          showToast({ title: "补认邀请生成失败，请稍后重试", icon: "none" });
+          return undefined;
+        }
+        return {
+          title,
+          path: `/pages/session/share?id=${this.sessionId}&shareCode=${shareCode}${historicalQuery.replace(/^\?/, "&")}&source=wechat_share`,
+          imageUrl: "/static/art/ticket-landscape.jpg"
+        };
+      }
       const entryQuery = this.entry ? `&entry=${encodeURIComponent(this.entry)}` : "";
-      const inviteQuery = this.inviteToken
+      const ordinaryInviteQuery = this.inviteToken
         ? `&inviteToken=${encodeURIComponent(this.inviteToken)}`
         : "";
       return {
         title,
-        path: `/pages/session/share?id=${this.sessionId}${entryQuery}&shareCode=${shareCode}${inviteQuery}&source=wechat_share`,
+        path: `/pages/session/share?id=${this.sessionId}${entryQuery}&shareCode=${shareCode}${ordinaryInviteQuery}&source=wechat_share`,
         imageUrl: "/static/art/ticket-landscape.jpg"
       };
     }
@@ -496,6 +621,9 @@ export default {
       return writeCreateFlow(this.currentFlow());
     },
     shareCardTitle() {
+      if (this.isHistorical) {
+        return `邀请当时同车玩家补认角色｜${this.scriptName}`;
+      }
       return `${this.scriptName}｜${this.storeName}｜${this.startText}`;
     },
     hasSeatSelectionLogin() {
@@ -584,11 +712,15 @@ export default {
     async ensureSeatSelectionLogin(options = {}) {
       const wasLoggedIn = this.hasSeatSelectionLogin();
       const auth = await ensureLoggedIn({
-        content: "登录后可以选择角色并锁定你的位置。",
+        content: this.isHistorical
+          ? "登录后可以补认当时角色。"
+          : "登录后可以选择角色并锁定你的位置。",
         ...options
       });
       if (!auth?.user) {
-        this.statusText = "登录后可继续选择角色。";
+        this.statusText = this.isHistorical
+          ? "登录后可继续补认角色。"
+          : "登录后可继续选择角色。";
         return null;
       }
       this.currentUserId = auth.user.id || "";
@@ -596,6 +728,9 @@ export default {
       if (options.refreshAfterFreshLogin === true && !wasLoggedIn) {
         if (this.sessionId) {
           await this.loadPublishedSession(this.sessionId);
+          if (this.navigatingAlbum) {
+            return null;
+          }
           if (this.redirectAlbumMemberIfNeeded()) {
             return null;
           }
@@ -604,13 +739,24 @@ export default {
       return auth;
     },
     async loadPublishedSession(sessionId) {
+      const historicalRequest = Boolean(
+        this.historicalCapabilitySupplied ||
+        this.historicalInviteToken ||
+        this.isHistorical
+      );
       try {
-        const inviteQuery = this.inviteToken
-          ? `?inviteToken=${encodeURIComponent(this.inviteToken)}`
-          : "";
-        const response = await request({ url: `/api/sessions/${sessionId}${inviteQuery}` });
+        const query = this.historicalInviteToken
+          ? inviteQuery({ mode: "historical", token: this.historicalInviteToken })
+          : inviteQuery({ mode: "normal", token: this.inviteToken });
+        const response = await request({ url: `/api/sessions/${sessionId}${query}` });
         const session = dataOf(response) || {};
         this.session = session;
+        if (this.isHistorical) {
+          this.inviteToken = "";
+          if (typeof uni.setNavigationBarTitle === "function") {
+            uni.setNavigationBarTitle({ title: this.pageTitle });
+          }
+        }
         this.store = {
           id: session.store_id,
           name: session.store_name_snapshot
@@ -643,7 +789,9 @@ export default {
               Number(role.confirmedUserId) === Number(this.currentUserId)
           ) || null;
         this.startText = formatBeijingDateTime(session.start_at);
-        this.note = "剧本迷·拼车，一起沉浸好本。";
+        this.note = this.isHistorical
+          ? "历史车局补录"
+          : "剧本迷·拼车，一起沉浸好本。";
         writeCreateFlow({
           store: this.store,
           script: this.script,
@@ -651,22 +799,66 @@ export default {
           roleOptions: this.roleOptions,
           selectedRoles: this.selectedRoles,
           sessionId,
+          sessionPurpose: session.session_purpose,
           startAt: session.start_at,
           startText: this.startText,
           note: this.note
         });
+        if (this.redirectHistoricalMemberIfNeeded()) {
+          return;
+        }
         this.redirectAlbumMemberIfNeeded();
-        if (this.isAlbumEntry && !this.role && !this.currentUserNpcRole && !this.statusText) {
+        if (
+          !this.isHistorical &&
+          this.isAlbumEntry &&
+          !this.role &&
+          !this.currentUserNpcRole &&
+          !this.statusText
+        ) {
           this.statusText =
             this.session.join_policy === "direct"
               ? "选择角色后会直接进入相册。"
               : "选择角色提交申请，车头确认后可进入相册。";
         }
       } catch (error) {
+        if (historicalRequest) {
+          this.invalidInviteLink = true;
+          this.historicalInviteToken = "";
+          this.statusText = error?.statusCode === 403
+            ? "补认邀请已失效"
+            : "补认邀请加载失败，请稍后重试";
+          this.hideShareMenus();
+          showToast({ title: this.statusText, icon: "none" });
+          return;
+        }
         showToast({ title: "车局加载失败", icon: "none" });
       }
     },
     async prepareJoinInviteToken() {
+      if (this.isHistorical) {
+        if (
+          this.historicalInviteToken ||
+          !this.sessionId ||
+          !this.viewerIsOrganizer
+        ) {
+          return;
+        }
+        try {
+          const response = await request({
+            url: `/api/sessions/${this.sessionId}/historical-invite-token`,
+            method: "POST",
+            data: {}
+          });
+          this.historicalInviteToken = dataOf(response)?.token || "";
+          if (!this.historicalInviteToken) {
+            this.statusText = "补认邀请生成失败，请稍后重试。";
+          }
+        } catch (error) {
+          this.historicalInviteToken = "";
+          this.statusText = "补认邀请生成失败，请稍后重试。";
+        }
+        return;
+      }
       if (this.inviteToken || !this.sessionId || this.session.access_scope !== "member") {
         return;
       }
@@ -680,6 +872,20 @@ export default {
       } catch (error) {
         this.inviteToken = "";
       }
+    },
+    redirectHistoricalMemberIfNeeded() {
+      if (
+        !this.isHistorical ||
+        this.viewerIsOrganizer ||
+        !this.sessionId ||
+        !this.historicalViewerHasRole ||
+        this.navigatingAlbum
+      ) {
+        return false;
+      }
+      this.navigatingAlbum = true;
+      uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
+      return true;
     },
     redirectAlbumMemberIfNeeded() {
       if (
@@ -795,6 +1001,28 @@ export default {
           return;
         }
       }
+      if (this.isHistorical) {
+        if (!targetRole.claimable) {
+          showToast({
+            title: targetRole.stateKind === "taken"
+              ? "角色刚被其他人补认"
+              : "这个角色暂不可补认",
+            icon: "none"
+          });
+          return;
+        }
+        this.roleSelectionSubmitting = true;
+        try {
+          const confirmed = await this.confirmCrossCastRole(targetRole);
+          if (!confirmed) {
+            return;
+          }
+          await this.claimHistoricalRole(targetRole);
+        } finally {
+          this.roleSelectionSubmitting = false;
+        }
+        return;
+      }
       if (targetRole.taken && !targetRole.mine) {
         showToast({ title: "这个角色已被选择", icon: "none" });
         return;
@@ -841,6 +1069,14 @@ export default {
       return Number.isFinite(startAt) && startAt <= Date.now();
     },
     isRoleClaimable(role, mine = false) {
+      if (this.isHistorical) {
+        return historicalRoleClaimable({
+          hasHistoricalToken: Boolean(this.historicalInviteToken),
+          occupied: ["confirmed", "locked", "cancelled"].includes(role.status),
+          viewerHasRole: this.historicalViewerHasRole,
+          viewerIsOrganizer: this.viewerIsOrganizer
+        });
+      }
       if (!this.session.id || mine) {
         return true;
       }
@@ -866,6 +1102,19 @@ export default {
       const revealPending = options.revealPending !== false;
       if (!targetRole) {
         showToast({ title: "先选择一个可选角色", icon: "none" });
+        return;
+      }
+      if (this.isHistorical) {
+        const auth = await this.ensureSeatSelectionLogin({
+          refreshAfterFreshLogin: true
+        });
+        if (!auth) {
+          if (revealPending) {
+            this.pendingRole = null;
+          }
+          return;
+        }
+        await this.claimHistoricalRole(targetRole);
         return;
       }
       const auth = await this.ensureSeatSelectionLogin({
@@ -907,6 +1156,34 @@ export default {
       }
       this.persistFlow();
       showToast({ title: "角色已选择", icon: "none" });
+    },
+    async claimHistoricalRole(role) {
+      try {
+        await request(historicalClaimRequest({
+          sessionId: this.sessionId,
+          inviteToken: this.historicalInviteToken,
+          role
+        }));
+        this.pendingRole = null;
+        this.statusText = "已补认角色";
+        showToast({ title: "已补认角色", icon: "none" });
+        await this.loadPublishedSession(this.sessionId);
+      } catch (error) {
+        if (error?.statusCode === 409) {
+          this.statusText = "角色刚被其他人补认";
+          await this.loadPublishedSession(this.sessionId);
+        } else if (error?.statusCode === 403) {
+          this.statusText = "补认邀请已失效";
+          this.invalidInviteLink = true;
+          this.historicalInviteToken = "";
+          this.hideShareMenus();
+        } else if (error?.statusCode === 401) {
+          this.statusText = "请先登录后再补认角色";
+        } else {
+          this.statusText = "角色补认失败，请稍后重试";
+        }
+        showToast({ title: this.statusText, icon: "none" });
+      }
     },
     async claimSeat(role) {
       try {
@@ -985,6 +1262,28 @@ export default {
         return;
       }
       const targetRole = this.npcRoleCards.find((item) => this.roleKey(item) === selectedRoleKey) || npcRole;
+      if (this.isHistorical) {
+        if (!targetRole.claimable) {
+          showToast({
+            title: targetRole.stateKind === "taken"
+              ? "角色刚被其他人补认"
+              : "这个角色暂不可补认",
+            icon: "none"
+          });
+          return;
+        }
+        this.roleSelectionSubmitting = true;
+        try {
+          const confirmed = await this.confirmCrossCastRole(targetRole);
+          if (!confirmed) {
+            return;
+          }
+          await this.claimHistoricalRole(targetRole);
+        } finally {
+          this.roleSelectionSubmitting = false;
+        }
+        return;
+      }
       if (!targetRole.mine) {
         if (targetRole.stateKind === "pendingReview") {
           this.statusText = "已提交NPC角色申请，等待车头审核。";
@@ -1078,7 +1377,16 @@ export default {
         this.roleSelectionSubmitting = false;
       }
     },
+    hideShareMenus() {
+      if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
+        uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
+      }
+    },
     showShareMenus() {
+      if (!this.canShareCurrentSession) {
+        this.hideShareMenus();
+        return;
+      }
       const showFriendShareMenu = () => {
         showWechatShareMenus({
           withShareTicket: true,
@@ -1114,6 +1422,11 @@ export default {
 
 .flow-top {
   display: none;
+}
+
+.flow-top.historical {
+  display: block;
+  margin-bottom: 24rpx;
 }
 
 .step-label {
