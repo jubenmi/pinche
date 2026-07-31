@@ -329,7 +329,7 @@ function canonicalBody(action, body) {
       requireBodyValue(body, "scriptId");
       requireBodyValue(body, "startAt");
       pickDefined(result, body, [
-        "storeId", "scriptId", "startAt", "dmUserId", "dmNameSnapshot", "npcUserId",
+        "storeId", "scriptId", "startAt", "sessionPurpose", "dmUserId", "dmNameSnapshot", "npcUserId",
         "npcNameSnapshot", "depositAmount", "visibility", "note", "pinnedMessageText"
       ]);
       if (body.depositAmount !== undefined) result.depositAmount = integerValue(body.depositAmount);

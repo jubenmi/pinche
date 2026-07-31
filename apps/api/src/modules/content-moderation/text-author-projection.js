@@ -81,7 +81,7 @@ function projectPrivateScript(body) {
 
 function projectSessionCreate(body) {
   const projected = pickScalars(body, [
-    "storeId", "scriptId", "startAt", "dmUserId", "dmNameSnapshot", "npcUserId",
+    "storeId", "scriptId", "startAt", "sessionPurpose", "dmUserId", "dmNameSnapshot", "npcUserId",
     "npcNameSnapshot", "depositAmount", "visibility", "note", "pinnedMessageText",
     "joinPolicy", "joinPhoneRequired", "npcJoinEnabled"
   ]);

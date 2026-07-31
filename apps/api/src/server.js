@@ -529,6 +529,7 @@ function sessionTextSnapshot(row = {}) {
     script_name_snapshot: String(row.script_name_snapshot || ""),
     store_name_snapshot: String(row.store_name_snapshot || ""),
     start_at: row.start_at || null,
+    session_purpose: String(row.session_purpose || ""),
     dm_user_id: row.dm_user_id ? Number(row.dm_user_id) : null,
     dm_name_snapshot: String(row.dm_name_snapshot || ""),
     npc_user_id: row.npc_user_id ? Number(row.npc_user_id) : null,

@@ -176,6 +176,7 @@ test("text proposal payload is action-whitelisted and never keeps unrelated prof
     storeId: 3,
     scriptId: 4,
     startAt: "2026-07-12 20:00:00",
+    sessionPurpose: "historical_record",
     note: "拼车说明",
     extraNpcRoles: [{ label: "NPC", note: "角色说明", signedUrl: "https://private.example/x" }],
     phone: "13800138000",
@@ -187,6 +188,7 @@ test("text proposal payload is action-whitelisted and never keeps unrelated prof
       storeId: 3,
       scriptId: 4,
       startAt: "2026-07-12 20:00:00",
+      sessionPurpose: "historical_record",
       note: "拼车说明",
       extraNpcRoles: [{
         name: "NPC",

@@ -17,6 +17,7 @@ import {
   normalizeNpcRoles,
   normalizeRoleGender,
   normalizeRoleTemplateItem,
+  parseNpcRoles,
   parseRoleTemplate
 } from "./npc-role-normalization.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
@@ -62,6 +63,7 @@ import {
   createSessionRescheduleDedupeKey,
   normalizeSessionRescheduleStartAt
 } from "./session-reschedule.js";
+import { normalizeSessionCreationStartAt } from "./session-purpose.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
 import {
   findOwnedUserImageAssetById,
@@ -3862,6 +3864,28 @@ export async function createEntityClaim(user, body) {
 export async function createSessionWithConnection(connection, user, body) {
   requireVerifiedPhone(user);
 
+  const normalizedCreation = normalizeSessionCreationStartAt(
+    requireValue(body, "startAt"),
+    body.sessionPurpose
+  );
+  const isHistorical = normalizedCreation.sessionPurpose === "historical_record";
+  if (isHistorical) {
+    const directMemberAliases = ["dmUserId", "dm_user_id", "npcUserId", "npc_user_id"];
+    const hasDirectMember = directMemberAliases.some((key) => body[key] != null);
+    const historicalNpcRoles = parseNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles);
+    const memberAliases = ["boundUserId", "bound_user_id", "userId", "user_id"];
+    const hasPreboundNpcRole = historicalNpcRoles.some((role) => (
+      role && typeof role === "object" && memberAliases.some((key) => role[key] != null)
+    ));
+    if (hasDirectMember || hasPreboundNpcRole) {
+      throw new AppError(
+        400,
+        "HISTORICAL_MEMBER_PREBIND_FORBIDDEN",
+        "Historical members must claim a role through a historical invitation"
+      );
+    }
+  }
+
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
 
@@ -3877,11 +3901,11 @@ export async function createSessionWithConnection(connection, user, body) {
       INSERT INTO sessions
         (
           organizer_user_id, script_id, script_name_snapshot, store_id,
-          store_name_snapshot, start_at, dm_user_id, dm_name_snapshot,
+          store_name_snapshot, start_at, session_purpose, dm_user_id, dm_name_snapshot,
           npc_user_id, npc_name_snapshot, deposit_amount, visibility,
           join_policy, join_phone_required, npc_join_enabled, note
         )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       user.user.id,
@@ -3889,16 +3913,21 @@ export async function createSessionWithConnection(connection, user, body) {
       script.name,
       store.id,
       store.name,
-      requireValue(body, "startAt"),
-      body.dmUserId || null,
+      normalizedCreation.date,
+      normalizedCreation.sessionPurpose,
+      isHistorical ? null : body.dmUserId || null,
       optionalText(body.dmNameSnapshot),
-      body.npcUserId || null,
+      isHistorical ? null : body.npcUserId || null,
       optionalText(body.npcNameSnapshot),
       intValue(body.depositAmount, 0),
-      normalizeSessionVisibility(body.visibility),
-      normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
-      normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
-      normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
+      isHistorical ? "share_only" : normalizeSessionVisibility(body.visibility),
+      isHistorical ? "review_required" : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+      isHistorical
+        ? 0
+        : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
+      isHistorical
+        ? 0
+        : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
       optionalText(body.note)
     ]
   );

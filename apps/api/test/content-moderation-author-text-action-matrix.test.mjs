@@ -49,6 +49,7 @@ const ACTION_CASES = Object.freeze({
       storeId: 3,
       scriptId: 4,
       startAt: "2026-07-15 20:00:00",
+      sessionPurpose: "historical_record",
       dmNameSnapshot: "DM",
       depositAmount: 0,
       visibility: "share_only",
@@ -472,6 +473,9 @@ test("D46 all ten text actions execute the real service/boundary/applicator life
       const approvedEntity = approved.state.formalEntities.get(entityKey(action, testCase));
       assert.equal(approvedEntity.id, approvedResult.id, `${action}:approved:formal-write`);
       assert.deepEqual(approvedEntity.body, approvedInput.payload.body, `${action}:approved:canonical-body`);
+      if (action === "create_session") {
+        assert.equal(approvedEntity.body.sessionPurpose, "historical_record");
+      }
       assert.equal(await visibleDraft(approved.reader, action, testCase), null);
       assert.equal(resolveAuthorVisibility({
         viewerUserId: OTHER_USER_ID,
