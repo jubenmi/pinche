@@ -136,9 +136,14 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { formatBeijingDateTime } from "@pinche/shared";
-import { assetUrl, clearStoredAuth, getStoredAuth } from "./api";
+import {
+  AUTH_EXPIRED_EVENT,
+  assetUrl,
+  clearStoredAuth,
+  getStoredAuth
+} from "./api";
 import { parseAdminRouteQuery, writeAdminRoute } from "./adminRoute";
 import CatalogWorkspace from "./components/CatalogWorkspace.vue";
 import ContentModerationWorkspace from "./components/ContentModerationWorkspace.vue";
@@ -249,6 +254,16 @@ function setAuth(nextAuth) {
   profileDetailsOpen.value = false;
 }
 
+function resetAuthView() {
+  auth.value = getStoredAuth();
+  avatarLoadFailed.value = false;
+  profileDetailsOpen.value = false;
+}
+
+function handleAuthExpired() {
+  resetAuthView();
+}
+
 function handleAvatarError() {
   avatarLoadFailed.value = true;
 }
@@ -274,8 +289,14 @@ function switchActiveView(nextView) {
 
 function logout() {
   clearStoredAuth();
-  auth.value = getStoredAuth();
-  avatarLoadFailed.value = false;
-  profileDetailsOpen.value = false;
+  resetAuthView();
 }
+
+onMounted(() => {
+  window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+});
 </script>
