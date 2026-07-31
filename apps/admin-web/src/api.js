@@ -1,6 +1,7 @@
 const TOKEN_KEY = "pinche_admin_web_token";
 const USER_KEY = "pinche_admin_web_user";
 const ROLES_KEY = "pinche_admin_web_roles";
+export const AUTH_EXPIRED_EVENT = "pinche-admin-web-auth-expired";
 import { shouldAttachAdminAuthorization } from "./albumMedia";
 import { buildModerationListFilters } from "./contentModeration";
 import { createContentSecuritySettingsClient } from "./contentSecurity";
@@ -37,10 +38,18 @@ export function clearStoredAuth() {
   localStorage.removeItem(ROLES_KEY);
 }
 
-async function parseResponse(response) {
+function publishAuthExpired() {
+  clearStoredAuth();
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+}
+
+async function parseResponse(response, { hadToken = false } = {}) {
   const text = await response.text();
   const payload = text ? JSON.parse(text) : null;
   if (!response.ok || payload?.ok === false) {
+    if (response.status === 401 && hadToken) {
+      publishAuthExpired();
+    }
     const error = new Error(payload?.error?.message || `Request failed: ${response.status}`);
     error.status = response.status;
     error.statusCode = response.status;
@@ -53,6 +62,7 @@ async function parseResponse(response) {
 
 export async function apiRequest(path, options = {}) {
   const auth = getStoredAuth();
+  const hadToken = Boolean(auth.token);
   const response = await fetch(path, {
     method: options.method || "GET",
     headers: {
@@ -61,7 +71,7 @@ export async function apiRequest(path, options = {}) {
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body)
   });
-  return parseResponse(response);
+  return parseResponse(response, { hadToken });
 }
 
 const contentSecuritySettingsClient = createContentSecuritySettingsClient(apiRequest);
@@ -117,6 +127,7 @@ export async function fetchAuthorizedMediaObjectUrl(path) {
 
 async function apiFormDataRequest(path, formData, options = {}) {
   const auth = getStoredAuth();
+  const hadToken = Boolean(auth.token);
   const response = await fetch(path, {
     method: options.method || "POST",
     headers: {
@@ -124,7 +135,7 @@ async function apiFormDataRequest(path, formData, options = {}) {
     },
     body: formData
   });
-  return parseResponse(response);
+  return parseResponse(response, { hadToken });
 }
 
 function fileExtensionFromName(name) {
