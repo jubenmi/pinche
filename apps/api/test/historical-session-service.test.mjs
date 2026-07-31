@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { createSessionWithConnection } from "../src/modules/core/service.js";
@@ -275,4 +276,20 @@ test("moderated historical creation preserves snake member aliases through appro
       message: "Historical members must claim a role through a historical invitation"
     }
   );
+});
+
+test("historical stale snapshots select immutable purpose for NPC-role and pinned-message paths", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const paths = [
+    ["async function currentNpcRoleTextBase", "async function currentReviewTextBase"],
+    ["async function currentPinnedTextBase", "async function captureTextModerationBase"]
+  ];
+
+  for (const [startMarker, endMarker] of paths) {
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start);
+    const helper = source.slice(start, end);
+    assert.match(helper, /session\.session_purpose/);
+    assert.match(helper, /sessionTextSnapshot/);
+  }
 });
