@@ -1,4 +1,3 @@
--- session_purpose VARCHAR(32) NOT NULL DEFAULT 'future_carpool'
 SET @session_purpose_exists = (
   SELECT COUNT(*)
   FROM information_schema.COLUMNS
