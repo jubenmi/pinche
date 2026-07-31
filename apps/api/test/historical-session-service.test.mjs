@@ -25,6 +25,14 @@ const ACTOR = {
   roles: ["organizer"]
 };
 
+const ADMIN = {
+  user: {
+    id: 99,
+    phoneVerifiedAt: new Date("2026-01-01T00:00:00.000Z")
+  },
+  roles: ["system_admin"]
+};
+
 function compactSql(sql) {
   return String(sql).replace(/\s+/g, " ").trim();
 }
@@ -110,6 +118,7 @@ function createConnection() {
 
 function createPublishConnection({
   session = {},
+  sessionExists = true,
   seats = [],
   seatUpdateAffectedRows = 1
 } = {}) {
@@ -149,7 +158,7 @@ function createPublishConnection({
       }
 
       if (normalized === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
-        return [[currentSession]];
+        return [sessionExists ? [currentSession] : []];
       }
       if (
         normalized ===
@@ -309,6 +318,61 @@ test("future creation retains requested public visibility and recruitment settin
   assert.equal(values.npc_join_enabled, 1);
 });
 
+test("publish validation failures stop at the expected lock boundary without mutation", async (t) => {
+  const sessionLock = "SELECT * FROM sessions WHERE id = ? FOR UPDATE";
+  const seatsLock =
+    "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE";
+  const cases = [
+    {
+      name: "missing session",
+      connection: { sessionExists: false },
+      statusCode: 404,
+      queries: [sessionLock]
+    },
+    {
+      name: "unauthorized non-admin actor",
+      connection: { session: { organizer_user_id: 8 }, seats: [{ id: 11 }] },
+      statusCode: 403,
+      queries: [sessionLock]
+    },
+    {
+      name: "zero seats",
+      connection: { seats: [] },
+      statusCode: 400,
+      queries: [sessionLock, seatsLock]
+    },
+    {
+      name: "nonzero adjustment total",
+      connection: { seats: [{ id: 11, adjustment: 1 }] },
+      statusCode: 400,
+      queries: [sessionLock, seatsLock]
+    },
+    {
+      name: "negative payable price",
+      connection: { seats: [{ id: 11, payable_price: -1 }] },
+      statusCode: 400,
+      queries: [sessionLock, seatsLock]
+    }
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.name, async () => {
+      const connection = createPublishConnection(entry.connection);
+
+      await assert.rejects(
+        () => publishSessionWithConnection(connection, ACTOR, 101, { creatorSeatId: 11 }),
+        { statusCode: entry.statusCode }
+      );
+
+      assert.deepEqual(
+        connection.state.queries.map((query) => query.sql),
+        entry.queries
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
 test("historical publish requires creatorSeatId before any mutation", async () => {
   const connection = createPublishConnection({ seats: [{ id: 11 }] });
 
@@ -417,6 +481,20 @@ test("historical publish atomically binds organizer signup and locks safe settin
   assert.equal(session.join_policy, "review_required");
   assert.equal(session.join_phone_required, 0);
   assert.equal(session.npc_join_enabled, 0);
+});
+
+test("admin historical publish binds the locked session organizer instead of the admin", async () => {
+  const organizerUserId = 7;
+  const connection = createPublishConnection({
+    session: { organizer_user_id: organizerUserId },
+    seats: [{ id: 11 }]
+  });
+
+  await publishSessionWithConnection(connection, ADMIN, 101, { creatorSeatId: 11 });
+
+  assert.deepEqual(connection.state.mutations[0].values, [organizerUserId, 11, 101]);
+  assert.deepEqual(connection.state.mutations[1].values, [101, 11, organizerUserId]);
+  assert.equal(connection.state.seats[0].confirmed_user_id, organizerUserId);
 });
 
 test("future publish retains recruiting behavior without creatorSeatId", async () => {
@@ -624,4 +702,21 @@ test("publish route forwards the parsed request body", async () => {
   const route = source.slice(routeStart, routeEnd);
 
   assert.match(route, /publishSession\(user, publishSessionId, body\)/);
+});
+
+test("publish wrapper delegates the connection-bound call inside withTransaction", async () => {
+  const source = await readFile(
+    new URL("../src/modules/core/service.js", import.meta.url),
+    "utf8"
+  );
+  const wrapperStart = source.indexOf(
+    "export async function publishSession(user, sessionId, body = {})"
+  );
+  const wrapperEnd = source.indexOf("async function signupNotificationPayload", wrapperStart);
+  const wrapper = source.slice(wrapperStart, wrapperEnd).replace(/\s+/g, "");
+
+  assert.equal(
+    wrapper,
+    "exportasyncfunctionpublishSession(user,sessionId,body={}){returnwithTransaction((connection)=>publishSessionWithConnection(connection,user,sessionId,body));}"
+  );
 });

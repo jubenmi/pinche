@@ -5265,6 +5265,7 @@ export async function publishSessionWithConnection(connection, user, sessionId, 
   }
 
   if (session.session_purpose === "historical_record") {
+    const organizerUserId = Number(session.organizer_user_id);
     const creatorSeatId = positiveId(requireValue(body, "creatorSeatId"), "creatorSeatId");
     const creatorSeat = seats.find((seat) => Number(seat.id) === creatorSeatId);
     if (!creatorSeat) {
@@ -5280,7 +5281,7 @@ export async function publishSessionWithConnection(connection, user, sessionId, 
         SET status = 'confirmed', confirmed_user_id = ?
         WHERE id = ? AND session_id = ? AND status = 'open' AND confirmed_user_id IS NULL
       `,
-      [user.user.id, creatorSeatId, sessionId]
+      [organizerUserId, creatorSeatId, sessionId]
     );
     if (Number(seatUpdate.affectedRows) !== 1) {
       throw conflict("Creator seat changed before publish");
@@ -5296,7 +5297,7 @@ export async function publishSessionWithConnection(connection, user, sessionId, 
           review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
           user_hidden_at = NULL
       `,
-      [sessionId, creatorSeatId, user.user.id]
+      [sessionId, creatorSeatId, organizerUserId]
     );
     await connection.query(
       `
