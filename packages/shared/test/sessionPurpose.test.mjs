@@ -5,6 +5,7 @@ import {
   HISTORICAL_RECORD,
   isHistoricalSession,
   normalizeSessionPurpose,
+  sessionPurposeOf,
   sessionPurposeForStartAt
 } from "../src/sessionPurpose.js";
 
@@ -27,6 +28,7 @@ test("invalid dates fail closed", () => {
 
 test("stored purpose is explicit and backward compatible", () => {
   assert.equal(normalizeSessionPurpose(), FUTURE_CARPOOL);
+  assert.equal(normalizeSessionPurpose(undefined), FUTURE_CARPOOL);
   assert.equal(normalizeSessionPurpose(HISTORICAL_RECORD), HISTORICAL_RECORD);
   assert.equal(normalizeSessionPurpose(""), null);
   assert.equal(normalizeSessionPurpose(null), null);
@@ -34,4 +36,29 @@ test("stored purpose is explicit and backward compatible", () => {
   assert.equal(isHistoricalSession({ session_purpose: HISTORICAL_RECORD }), true);
   assert.equal(isHistoricalSession({ sessionPurpose: HISTORICAL_RECORD }), true);
   assert.equal(isHistoricalSession({}), false);
+});
+
+test("normalization rejects explicit non-string values", () => {
+  assert.equal(normalizeSessionPurpose([FUTURE_CARPOOL]), null);
+  assert.equal(normalizeSessionPurpose({ toString: () => FUTURE_CARPOOL }), null);
+  assert.equal(normalizeSessionPurpose(1), null);
+  assert.equal(normalizeSessionPurpose(true), null);
+});
+
+test("stored purpose fails closed for invalid containers", () => {
+  assert.equal(sessionPurposeOf(null), null);
+  assert.equal(sessionPurposeOf("historical_record"), null);
+  assert.equal(sessionPurposeOf(1), null);
+});
+
+test("stored purpose distinguishes omission from explicit null", () => {
+  assert.equal(sessionPurposeOf(), FUTURE_CARPOOL);
+  assert.equal(sessionPurposeOf({}), FUTURE_CARPOOL);
+  assert.equal(
+    sessionPurposeOf({ session_purpose: null, sessionPurpose: HISTORICAL_RECORD }),
+    null
+  );
+  assert.equal(sessionPurposeOf({ sessionPurpose: null }), null);
+  assert.equal(sessionPurposeOf({ session_purpose: HISTORICAL_RECORD }), HISTORICAL_RECORD);
+  assert.equal(sessionPurposeOf({ sessionPurpose: HISTORICAL_RECORD }), HISTORICAL_RECORD);
 });

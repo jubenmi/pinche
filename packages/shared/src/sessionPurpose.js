@@ -5,7 +5,8 @@ export const HISTORICAL_RECORD = "historical_record";
 export const SESSION_PURPOSES = Object.freeze([FUTURE_CARPOOL, HISTORICAL_RECORD]);
 
 export function normalizeSessionPurpose(value = FUTURE_CARPOOL) {
-  const normalized = String(value ?? "").trim();
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
   return SESSION_PURPOSES.includes(normalized) ? normalized : null;
 }
 
@@ -17,7 +18,10 @@ export function sessionPurposeForStartAt(startAt, now = new Date()) {
 }
 
 export function sessionPurposeOf(session = {}) {
-  return normalizeSessionPurpose(session.session_purpose ?? session.sessionPurpose);
+  if (!session || typeof session !== "object") return null;
+  const value =
+    session.session_purpose !== undefined ? session.session_purpose : session.sessionPurpose;
+  return normalizeSessionPurpose(value);
 }
 
 export function isHistoricalSession(session = {}) {
