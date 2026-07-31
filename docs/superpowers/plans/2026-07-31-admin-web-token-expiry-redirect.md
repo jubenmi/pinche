@@ -420,7 +420,7 @@ Run:
 
 ```bash
 npm --workspace apps/admin-web run check
-npm run d12:check
+node scripts/d12-admin-web-check.js
 npm --workspace apps/admin-web run build
 ```
 

@@ -253,6 +253,14 @@ for (const token of [
 }
 assert(!webApi.includes("restoreAdminSession"), "web API should not restore sessions as admin");
 assert(!webApi.includes("downlistSession"), "web API should not expose session downlisting");
+for (const token of [
+  "AUTH_EXPIRED_EVENT",
+  "response.status === 401 && hadToken",
+  "publishAuthExpired()",
+  "parseResponse(response, { hadToken })"
+]) {
+  assert(webApi.includes(token), `admin web API must centralize token expiry: ${token}`);
+}
 
 const adminViteConfigSource = read("apps/admin-web/vite.config.js");
 const adminNginxConfig = read("apps/admin-web/nginx.conf");
@@ -400,6 +408,14 @@ assert(
   appShell.includes("assetUrl") && appShell.includes("handleAvatarError"),
   "admin shell should resolve uploaded avatars and handle avatar load failures"
 );
+for (const token of [
+  "AUTH_EXPIRED_EVENT",
+  "window.addEventListener(AUTH_EXPIRED_EVENT",
+  "window.removeEventListener(AUTH_EXPIRED_EVENT",
+  "resetAuthView"
+]) {
+  assert(appShell.includes(token), `admin shell must return expired sessions to login: ${token}`);
+}
 for (const token of ["MiniProgramWorkspace", "网页小程序", "activeView === 'miniapp'"]) {
   assert(appShell.includes(token), `admin shell should expose the admin mini app ${token}`);
 }
