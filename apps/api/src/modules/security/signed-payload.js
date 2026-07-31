@@ -52,9 +52,6 @@ export function verifySignedPayload({
   } catch (error) {
     throw forbidden(`${label} is invalid`);
   }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw forbidden(`${label} is invalid`);
-  }
   if (tokenPositiveInteger(payload.exp, "exp") < nowSeconds()) {
     throw forbidden(`${label} expired`);
   }

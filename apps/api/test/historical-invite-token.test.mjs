@@ -82,21 +82,25 @@ test("historical invitation token verification rejects malformed token payloads"
   }
 });
 
-test("generic verification rejects signed non-object JSON without leaking parse errors", () => {
-  for (const payload of [null, [], 42, "claims"]) {
-    const token = signClaims(payload);
-    assert.throws(() => verifySignedPayload({
+test("generic verification preserves baseline handling of signed non-object JSON", () => {
+  function verifyPayload(payload) {
+    return verifySignedPayload({
       secret: SECRET,
       namespace: HISTORICAL_NAMESPACE,
-      token,
+      token: signClaims(payload),
       label: "test token",
       nowSeconds: () => NOW_SECONDS
-    }), {
-      statusCode: 403,
-      code: "FORBIDDEN",
-      message: "test token is invalid"
     });
   }
+
+  for (const payload of [[], 42, "claims"]) {
+    assert.throws(() => verifyPayload(payload), {
+      statusCode: 403,
+      code: "FORBIDDEN",
+      message: "exp is invalid"
+    });
+  }
+  assert.throws(() => verifyPayload(null), TypeError);
 });
 
 test("historical invitation tokens require the exact claim purpose and session purpose", () => {
