@@ -145,6 +145,22 @@ test("NPC-role proposal application locks its role and parent session before rev
   );
 });
 
+test("NPC-role and pinned-message stale snapshots select immutable session purpose", async () => {
+  const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const paths = [
+    ["async function currentNpcRoleTextBase", "async function currentReviewTextBase"],
+    ["async function currentPinnedTextBase", "async function captureTextModerationBase"]
+  ];
+
+  for (const [startMarker, endMarker] of paths) {
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start);
+    const helper = source.slice(start, end);
+    assert.match(helper, /session\.session_purpose/);
+    assert.match(helper, /sessionTextSnapshot/);
+  }
+});
+
 test("initial missing session, NPC, message, and pin targets keep normal not-found handling", async () => {
   const source = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
   const slices = [

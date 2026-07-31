@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createSessionWithConnection } from "../src/modules/core/service.js";
+import { buildTextModerationDescriptor } from "../src/modules/content-moderation/text-boundaries.js";
+import { projectAuthorTextProposal } from "../src/modules/content-moderation/text-author-projection.js";
+import {
+  createProductionTextProposalHandlers,
+  expectedTextCreationBase
+} from "../src/modules/content-moderation/text-proposal-handlers.js";
+import { createTextProposalApplicator } from "../src/modules/content-moderation/text-proposal-applicator.js";
+import {
+  textCreationTargetSubjectId,
+  textOperationSubjectId
+} from "../src/modules/content-moderation/text-request-identity.js";
 
 const ACTOR = {
   user: {
@@ -182,4 +193,86 @@ test("historical creation accepts an unbound extra NPC role", async () => {
   assert.ok(connection.state.sessionInsert);
   assert.equal(connection.state.sessionNpcRoleInserts.length, 1);
   assert.equal(connection.state.sessionNpcRoleInserts[0].values[6], null);
+});
+
+test("moderated historical creation preserves snake member aliases through approved application", async () => {
+  const targetSubjectId = textCreationTargetSubjectId({
+    action: "create_session",
+    actorUserId: ACTOR.user.id
+  });
+  const descriptor = buildTextModerationDescriptor({
+    action: "create_session",
+    actorUserId: ACTOR.user.id,
+    openid: "openid-7",
+    subjectId: targetSubjectId,
+    baseVersion: expectedTextCreationBase(ACTOR.user.id),
+    idempotencyKey: "historical-snake-member-aliases",
+    body: baseBody({
+      dm_user_id: 8,
+      npc_user_id: 9,
+      note: "这是一条需要审核的历史记录说明"
+    }),
+    context: { targetSubjectId }
+  });
+
+  assert.equal(descriptor.payload.body.dm_user_id, 8);
+  assert.equal(descriptor.payload.body.npc_user_id, 9);
+  const authorProjection = projectAuthorTextProposal({
+    action: "create_session",
+    targetSubjectId,
+    body: descriptor.payload.body
+  });
+  assert.equal(authorProjection.content.dm_user_id, 8);
+  assert.equal(authorProjection.content.npc_user_id, 9);
+
+  const unused = async () => null;
+  const handlers = createProductionTextProposalHandlers({
+    currentActorTextSnapshot: unused,
+    currentSessionCreateTextBase: async () => expectedTextCreationBase(ACTOR.user.id),
+    currentSessionTextBase: unused,
+    currentNpcRoleTextBase: unused,
+    currentReviewTextBase: unused,
+    currentMessageTextBase: unused,
+    currentPinnedTextBase: unused,
+    updateUserProfileWithConnection: unused,
+    createPrivateStoreWithConnection: unused,
+    createPrivateScriptWithConnection: unused,
+    createSessionWithConnection,
+    updateSessionWithConnection: unused,
+    createSessionNpcRoleWithConnection: unused,
+    updateSessionNpcRoleWithConnection: unused,
+    upsertMySessionReviewWithConnection: unused,
+    createSessionMessageWithConnection: unused,
+    updateSessionPinnedMessageWithConnection: unused
+  });
+  const applicator = createTextProposalApplicator({
+    loadActor: async () => ACTOR,
+    handlers
+  });
+  const proposal = {
+    action: "create_session",
+    created_by_user_id: ACTOR.user.id,
+    target_subject_id: targetSubjectId,
+    base_version: expectedTextCreationBase(ACTOR.user.id),
+    idempotency_key: "historical-snake-member-aliases",
+    normalized_payload_json: JSON.stringify(descriptor.payload)
+  };
+
+  await assert.rejects(
+    () => applicator.apply(createConnection(), {
+      job: {
+        subject_id: textOperationSubjectId({
+          action: proposal.action,
+          actorUserId: ACTOR.user.id,
+          idempotencyKey: proposal.idempotency_key
+        })
+      },
+      proposal
+    }),
+    {
+      statusCode: 400,
+      code: "HISTORICAL_MEMBER_PREBIND_FORBIDDEN",
+      message: "Historical members must claim a role through a historical invitation"
+    }
+  );
 });

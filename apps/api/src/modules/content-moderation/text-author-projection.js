@@ -81,9 +81,10 @@ function projectPrivateScript(body) {
 
 function projectSessionCreate(body) {
   const projected = pickScalars(body, [
-    "storeId", "scriptId", "startAt", "sessionPurpose", "dmUserId", "dmNameSnapshot", "npcUserId",
-    "npcNameSnapshot", "depositAmount", "visibility", "note", "pinnedMessageText",
-    "joinPolicy", "joinPhoneRequired", "npcJoinEnabled"
+    "storeId", "scriptId", "startAt", "sessionPurpose", "dmUserId", "dm_user_id",
+    "dmNameSnapshot", "npcUserId", "npc_user_id", "npcNameSnapshot", "depositAmount",
+    "visibility", "note", "pinnedMessageText", "joinPolicy", "joinPhoneRequired",
+    "npcJoinEnabled"
   ]);
   if (body.extraNpcRoles !== undefined) {
     projected.extraNpcRoles = projectRoles(body.extraNpcRoles, "extraNpcRoles");
