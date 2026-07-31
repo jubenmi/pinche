@@ -182,17 +182,34 @@ export function createProductionTextProposalHandlers(dependencies = {}) {
         })
       });
       const creationKeyHash = trustedHistoricalCreationKeyHash(proposal, payload);
-      assertProposalBase(
-        proposal,
-        await dependencies.currentSessionCreateTextBase(
-          connection,
-          actor.user.id,
-          payload.body,
-          { forUpdate: true }
-        )
-      );
+      if (!creationKeyHash) {
+        assertProposalBase(
+          proposal,
+          await dependencies.currentSessionCreateTextBase(
+            connection,
+            actor.user.id,
+            payload.body,
+            { forUpdate: true }
+          )
+        );
+      }
       return dependencies.createSessionWithConnection(connection, actor, payload.body, {
-        trustedHistoricalCreationKeyHash: creationKeyHash
+        trustedHistoricalCreationKeyHash: creationKeyHash,
+        ...(creationKeyHash
+          ? {
+              trustedHistoricalCreationRevalidate: async (lockedSnapshot) => {
+                assertProposalBase(
+                  proposal,
+                  await dependencies.currentSessionCreateTextBase(
+                    connection,
+                    actor.user.id,
+                    payload.body,
+                    { lockedSnapshot }
+                  )
+                );
+              }
+            }
+          : {})
       });
     },
 

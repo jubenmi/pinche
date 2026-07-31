@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -17,7 +18,9 @@ import {
   createOrRecoverHistoricalDraft,
   createSessionSetupSubmissionController,
   historicalCreateSettings,
+  historicalAuthorPrivatePendingDisposition,
   historicalDraftFingerprint,
+  historicalCreationOperationErrorDisposition,
   historicalPendingMatchesDescriptor,
   historicalPrimaryActionEnabled,
   historicalPinnedMessage,
@@ -27,6 +30,7 @@ import {
   sessionSetupSubmissionMatches,
   seatInitializationKey,
   selectedSessionPurpose,
+  shouldClearPendingHistoricalDraftForAuthorPrivate,
   submitPurposeChanged
 } from "../src/utils/sessionSetup.js";
 
@@ -244,6 +248,95 @@ function pendingFromSnapshot(snapshot, overrides = {}) {
     ...overrides
   };
 }
+
+test("historical descriptors reject a future snapshot against the injected real now", () => {
+  const future = historicalSnapshot({
+    dateValue: "2099-01-01",
+    timeValue: "19:30",
+    startAt: "2099-01-01 19:30:00"
+  });
+  assert.equal(historicalSetupDescriptor(future, NOW), null);
+});
+
+test("only an editable rejected author-private result releases the historical key", () => {
+  for (const moderation_status of ["pending", "processing", "review", "error"]) {
+    assert.equal(
+      shouldClearPendingHistoricalDraftForAuthorPrivate({
+        moderation_status,
+        can_resubmit: false
+      }),
+      false,
+      moderation_status
+    );
+  }
+  assert.equal(
+    shouldClearPendingHistoricalDraftForAuthorPrivate({
+      moderation_status: "rejected",
+      can_resubmit: false
+    }),
+    false
+  );
+  assert.equal(
+    shouldClearPendingHistoricalDraftForAuthorPrivate({
+      moderation_status: "rejected",
+      can_resubmit: true
+    }),
+    true
+  );
+  assert.deepEqual(
+    historicalAuthorPrivatePendingDisposition({
+      moderation_status: "rejected",
+      moderation_message: "仅自己可见 · 未通过",
+      can_resubmit: true
+    }),
+    {
+      clearPending: true,
+      statusText: "补录内容未通过审核，请修改后重新创建。"
+    }
+  );
+  assert.deepEqual(
+    historicalAuthorPrivatePendingDisposition({
+      moderation_status: "review",
+      moderation_message: "仅自己可见 · 进一步审核",
+      can_resubmit: false
+    }),
+    {
+      clearPending: false,
+      statusText: "仅自己可见 · 进一步审核"
+    }
+  );
+});
+
+test("a missing historical operation clears its marker and tells the user to create anew", () => {
+  assert.deepEqual(
+    historicalCreationOperationErrorDisposition({
+      code: "HISTORICAL_SESSION_CREATION_OPERATION_INVALID"
+    }),
+    {
+      clearPending: true,
+      statusText: "之前的历史补录已不存在，请再次点击重新创建。"
+    }
+  );
+  assert.equal(
+    historicalCreationOperationErrorDisposition({ code: "NETWORK_ERROR" }),
+    null
+  );
+});
+
+test("setup page applies terminal author-private and missing-operation marker dispositions", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/setup.vue", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    source,
+    /historicalAuthorPrivatePendingDisposition\(\s*result\.session\s*\)[\s\S]*?clearPending[\s\S]*?this\.clearPendingHistoricalDraft\(\)/
+  );
+  assert.match(
+    source,
+    /historicalCreationOperationErrorDisposition\(error\)[\s\S]*?clearPending[\s\S]*?this\.clearPendingHistoricalDraft\(\)/
+  );
+});
 
 test("setup submission is single-flight before deferred login and runs one create/initialize", async () => {
   const login = deferred();

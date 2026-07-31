@@ -372,6 +372,27 @@ test("a stale text proposal is terminal and closes its job without adding a stal
   assert.equal(state.audits[0].action, "stale");
 });
 
+test("admin approval closes a direct-A versus approved-B historical operation conflict as stale", async () => {
+  const { service, state } = harness({ subjectType: "user_nickname" });
+  const conflict = Object.assign(new Error("historical payload B conflicts with direct payload A"), {
+    code: "HISTORICAL_SESSION_CREATION_KEY_REUSED",
+    statusCode: 409
+  });
+
+  const result = await service.decideAsAdmin({
+    admin: { user: { id: 2 }, roles: ["system_admin"] },
+    jobId: 7,
+    action: "approve",
+    applyTextProposal: async () => { throw conflict; }
+  });
+
+  assert.deepEqual(result, { id: 7, status: "rejected", stale: true });
+  assert.equal(state.proposals.at(-1).toStatus, "stale");
+  assert.equal(state.transitions.at(-1).toStatus, "rejected");
+  assert.equal(state.transitions.at(-1).errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
+  assert.equal(state.audits.at(-1).action, "stale");
+});
+
 test("retry retires the old provider attempt so delayed callbacks stay stale", async () => {
   for (const decision of ["pass", "review", "block"]) {
     const { service, state } = harness({ status: "error", mediaStatus: "error" });

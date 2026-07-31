@@ -56,7 +56,11 @@ test("historical creation operation migration stores only scoped hashes and is r
   assert.match(sql, /PRIMARY KEY \(organizer_user_id, creation_key_hash\)/i);
   assert.match(sql, /UNIQUE KEY uniq_historical_creation_session \(session_id\)/i);
   assert.match(sql, /FOREIGN KEY \(organizer_user_id\)[\s\S]*REFERENCES users\(id\)/i);
-  assert.match(sql, /FOREIGN KEY \(session_id\)[\s\S]*REFERENCES sessions\(id\)/i);
+  assert.doesNotMatch(
+    sql,
+    /FOREIGN KEY \(session_id\)[\s\S]*REFERENCES sessions\(id\)/i,
+    "the unique session_id must survive session deletion as an idempotency tombstone"
+  );
   assert.doesNotMatch(sql, /raw_key|historical_creation_key VARCHAR|creation_key VARCHAR/i);
   assert.equal(
     requiredSchemaTables.includes("historical_session_creation_operations"),

@@ -421,6 +421,7 @@ function sessionInsertValues(insert) {
 
 function createConnection() {
   const state = {
+    operations: new Map(),
     sessionInsert: null,
     sessionNpcRoleInserts: [],
     nextInsertId: 100
@@ -431,13 +432,70 @@ function createConnection() {
     async query(sql, values = []) {
       const normalized = compactSql(sql);
 
+      if (
+        normalized ===
+        "SELECT id, nickname, avatar_url, gender, phone_verified_at FROM users WHERE id = ? LIMIT 1 FOR SHARE"
+      ) {
+        return [[{
+          id: Number(values[0]),
+          nickname: "测试用户",
+          avatar_url: null,
+          gender: "",
+          phone_verified_at: ACTOR.user.phoneVerifiedAt
+        }]];
+      }
+      if (
+        normalized ===
+        "SELECT role, status FROM user_roles WHERE user_id = ? ORDER BY role FOR UPDATE"
+      ) {
+        return [[{ role: "organizer", status: "active" }]];
+      }
+      if (
+        normalized ===
+        "SELECT id, name, status, visibility, review_status, created_by_user_id FROM stores WHERE id = ? LIMIT 1 FOR SHARE"
+      ) {
+        return [[{ id: 3, name: "测试门店", visibility: "public", review_status: "approved", status: "active" }]];
+      }
       if (normalized === "SELECT * FROM stores WHERE id = ?") {
         return [[{ id: 3, name: "测试门店", visibility: "public", review_status: "approved", status: "active" }]];
+      }
+      if (
+        normalized ===
+        "SELECT id, name, status, visibility, review_status, created_by_user_id FROM scripts WHERE id = ? LIMIT 1 FOR SHARE"
+      ) {
+        return [[{ id: 4, name: "测试剧本", visibility: "public", review_status: "approved", status: "active" }]];
       }
       if (normalized === "SELECT * FROM scripts WHERE id = ?") {
         return [[{ id: 4, name: "测试剧本", visibility: "public", review_status: "approved", status: "active" }]];
       }
       if (normalized.startsWith("INSERT INTO user_roles")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized.startsWith("INSERT INTO historical_session_creation_operations")) {
+        const id = `${values[0]}:${Buffer.from(values[1]).toString("hex")}`;
+        if (!state.operations.has(id)) {
+          state.operations.set(id, {
+            organizer_user_id: Number(values[0]),
+            payload_hash: Buffer.from(values[2]),
+            session_id: null
+          });
+        }
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized.startsWith("SELECT organizer_user_id, HEX(payload_hash)")) {
+        const id = `${values[0]}:${Buffer.from(values[1]).toString("hex")}`;
+        const operation = state.operations.get(id);
+        return [operation ? [{
+          organizer_user_id: operation.organizer_user_id,
+          payload_hash_hex: operation.payload_hash.toString("hex").toUpperCase(),
+          session_id: operation.session_id
+        }] : []];
+      }
+      if (normalized.startsWith("UPDATE historical_session_creation_operations SET session_id = ?")) {
+        const id = `${values[1]}:${Buffer.from(values[2]).toString("hex")}`;
+        const operation = state.operations.get(id);
+        if (!operation || operation.session_id !== null) return [{ affectedRows: 0 }];
+        operation.session_id = Number(values[0]);
         return [{ affectedRows: 1 }];
       }
       if (normalized.startsWith("INSERT INTO sessions")) {
@@ -457,7 +515,20 @@ function createConnection() {
           session_purpose: persisted.session_purpose
         }]];
       }
-      if (normalized.startsWith("SELECT * FROM script_npc_roles")) {
+      if (normalized === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+        const persisted = state.sessionInsert ? sessionInsertValues(state.sessionInsert) : {};
+        return [[{
+          id: 101,
+          organizer_user_id: persisted.organizer_user_id,
+          script_id: persisted.script_id,
+          script_name_snapshot: persisted.script_name_snapshot,
+          store_id: persisted.store_id,
+          store_name_snapshot: persisted.store_name_snapshot,
+          start_at: persisted.start_at,
+          session_purpose: persisted.session_purpose
+        }]];
+      }
+      if (normalized.includes("FROM script_npc_roles")) {
         return [[]];
       }
       if (normalized.startsWith("INSERT INTO session_npc_roles")) {
@@ -489,7 +560,10 @@ function idempotentHistoricalCreationConnection() {
   const state = {
     operations: new Map(),
     sessions: new Map(),
+    events: [],
     sessionInsertCount: 0,
+    sessionNpcRoleInsertCount: 0,
+    userRoleInsertCount: 0,
     chatRoomInsertCount: 0,
     messageInsertCount: 0,
     nextSessionId: 101
@@ -503,13 +577,48 @@ function idempotentHistoricalCreationConnection() {
     state,
     async query(sql, values = []) {
       const normalized = compactSql(sql);
+      if (
+        normalized ===
+        "SELECT id, nickname, avatar_url, gender, phone_verified_at FROM users WHERE id = ? LIMIT 1 FOR SHARE"
+      ) {
+        state.events.push("user_share");
+        return [[{
+          id: Number(values[0]),
+          nickname: "测试用户",
+          avatar_url: null,
+          gender: "",
+          phone_verified_at: ACTOR.user.phoneVerifiedAt
+        }]];
+      }
+      if (
+        normalized ===
+        "SELECT role, status FROM user_roles WHERE user_id = ? ORDER BY role FOR UPDATE"
+      ) {
+        state.events.push("user_roles_update");
+        return [[{ role: "organizer", status: "active" }]];
+      }
+      if (
+        normalized ===
+        "SELECT id, name, status, visibility, review_status, created_by_user_id FROM stores WHERE id = ? LIMIT 1 FOR SHARE"
+      ) {
+        state.events.push("store_share");
+        return [[{ id: Number(values[0]), name: "测试门店", visibility: "public", review_status: "approved", status: "active" }]];
+      }
       if (normalized === "SELECT * FROM stores WHERE id = ?") {
         return [[{ id: Number(values[0]), name: "测试门店", visibility: "public", review_status: "approved", status: "active" }]];
+      }
+      if (
+        normalized ===
+        "SELECT id, name, status, visibility, review_status, created_by_user_id FROM scripts WHERE id = ? LIMIT 1 FOR SHARE"
+      ) {
+        state.events.push("script_share");
+        return [[{ id: Number(values[0]), name: "测试剧本", visibility: "public", review_status: "approved", status: "active" }]];
       }
       if (normalized === "SELECT * FROM scripts WHERE id = ?") {
         return [[{ id: Number(values[0]), name: "测试剧本", visibility: "public", review_status: "approved", status: "active" }]];
       }
       if (normalized.startsWith("INSERT INTO user_roles")) {
+        state.userRoleInsertCount += 1;
         return [{ affectedRows: 1 }];
       }
       if (normalized.startsWith("INSERT INTO historical_session_creation_operations")) {
@@ -529,6 +638,7 @@ function idempotentHistoricalCreationConnection() {
         normalized ===
         "SELECT organizer_user_id, HEX(payload_hash) AS payload_hash_hex, session_id FROM historical_session_creation_operations WHERE organizer_user_id = ? AND creation_key_hash = ? FOR UPDATE"
       ) {
+        state.events.push("operation");
         const operation = state.operations.get(operationId(values[0], values[1]));
         return [operation ? [{
           organizer_user_id: operation.organizer_user_id,
@@ -553,8 +663,18 @@ function idempotentHistoricalCreationConnection() {
         const session = state.sessions.get(Number(values[0]));
         return [session ? [session] : []];
       }
-      if (normalized.startsWith("SELECT * FROM script_npc_roles")) {
+      if (normalized === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
+        state.events.push("session");
+        const session = state.sessions.get(Number(values[0]));
+        return [session ? [session] : []];
+      }
+      if (normalized.includes("FROM script_npc_roles")) {
+        if (normalized.endsWith("FOR SHARE")) state.events.push("script_npc_roles_share");
         return [[]];
+      }
+      if (normalized.startsWith("INSERT INTO session_npc_roles")) {
+        state.sessionNpcRoleInsertCount += 1;
+        return [{ insertId: 401 + state.sessionNpcRoleInsertCount }];
       }
       if (normalized === "SELECT * FROM session_chat_rooms WHERE session_id = ? LIMIT 1") {
         return [[]];
@@ -687,13 +807,22 @@ function createPublishConnection({
 }
 
 function baseBody(overrides = {}) {
-  return {
+  const body = {
     storeId: 3,
     scriptId: 4,
     startAt: "2020-01-01 13:00:00",
     sessionPurpose: "historical_record",
     ...overrides
   };
+  if (
+    body.sessionPurpose === "historical_record" &&
+    !Object.prototype.hasOwnProperty.call(overrides, "historicalCreationKey") &&
+    !Object.prototype.hasOwnProperty.call(overrides, "historicalCreationKeyHash")
+  ) {
+    body.historicalCreationKey =
+      "hs_default0123456789abcdef0123456789abcdef0123456789";
+  }
+  return body;
 }
 
 function applyApprovedSessionProposal(connection, body, idempotencyKey) {
@@ -704,7 +833,10 @@ function applyApprovedSessionProposal(connection, body, idempotencyKey) {
   const unused = async () => null;
   const handlers = createProductionTextProposalHandlers({
     currentActorTextSnapshot: unused,
-    currentSessionCreateTextBase: async () => expectedTextCreationBase(ACTOR.user.id),
+    currentSessionCreateTextBase: async () => {
+      connection.state?.events?.push("approved_baseline");
+      return expectedTextCreationBase(ACTOR.user.id);
+    },
     currentSessionTextBase: unused,
     currentNpcRoleTextBase: unused,
     currentReviewTextBase: unused,
@@ -805,6 +937,56 @@ test("historical creation key replay returns one session without repeating creat
   assert.equal(connection.state.operations.size, 1);
 });
 
+test("historical creation locks operation then dependencies in one deadlock-safe order", async () => {
+  const connection = idempotentHistoricalCreationConnection();
+  await createSessionWithConnection(connection, ACTOR, baseBody({
+    historicalCreationKey: "hs_0123456789abcdef0123456789abcdef0123456789abcdef"
+  }));
+
+  assert.deepEqual(connection.state.events.slice(0, 6), [
+    "operation",
+    "user_share",
+    "user_roles_update",
+    "store_share",
+    "script_share",
+    "script_npc_roles_share"
+  ]);
+  assert.equal(connection.state.userRoleInsertCount, 0);
+});
+
+test("different keys for one organizer never request a users lock upgrade", async () => {
+  const connection = idempotentHistoricalCreationConnection();
+  await createSessionWithConnection(connection, ACTOR, baseBody({
+    historicalCreationKey: "hs_first0123456789abcdef0123456789abcdef0123456789"
+  }));
+  await createSessionWithConnection(connection, ACTOR, baseBody({
+    historicalCreationKey: "hs_second123456789abcdef0123456789abcdef0123456789"
+  }));
+
+  assert.equal(connection.state.events.filter((event) => event === "user_share").length, 2);
+  assert.equal(connection.state.events.some((event) => event === "user_update"), false);
+  assert.equal(connection.state.userRoleInsertCount, 0);
+});
+
+test("a deleted historical session leaves an operation tombstone and can never be recreated", async () => {
+  const connection = idempotentHistoricalCreationConnection();
+  const body = baseBody({
+    historicalCreationKey: "hs_0123456789abcdef0123456789abcdef0123456789abcdef"
+  });
+  const created = await createSessionWithConnection(connection, ACTOR, body);
+  connection.state.sessions.delete(created.id);
+
+  await assert.rejects(
+    () => createSessionWithConnection(connection, ACTOR, body),
+    {
+      statusCode: 409,
+      code: "HISTORICAL_SESSION_CREATION_OPERATION_INVALID"
+    }
+  );
+  assert.equal(connection.state.operations.size, 1);
+  assert.equal(connection.state.sessionInsertCount, 1);
+});
+
 test("historical creation key replay with a changed payload conflicts before side effects", async () => {
   const connection = idempotentHistoricalCreationConnection();
   const historicalCreationKey =
@@ -875,6 +1057,24 @@ test("historical creation key validation is strict and future creation never ent
   assert.equal(futureConnection.state.operations.size, 0);
 });
 
+test("historical creation requires an operation identity before any domain lock or insert", async () => {
+  const connection = idempotentHistoricalCreationConnection();
+  await assert.rejects(
+    () => createSessionWithConnection(connection, ACTOR, {
+      storeId: 3,
+      scriptId: 4,
+      startAt: "2020-01-01 13:00:00",
+      sessionPurpose: "historical_record"
+    }),
+    {
+      statusCode: 400,
+      code: "HISTORICAL_SESSION_CREATION_KEY_REQUIRED"
+    }
+  );
+  assert.deepEqual(connection.state.events, []);
+  assert.equal(connection.state.sessionInsertCount, 0);
+});
+
 test("core rejects a body hash unless it matches the trusted proposal option", async () => {
   const historicalCreationKeyHash = crypto
     .createHash("sha256")
@@ -911,7 +1111,13 @@ test("direct raw key and approved hash proposal replay one historical creation",
     body: baseBody({
       historicalCreationKey,
       note: "审核中的补录",
-      pinnedMessageText: "补录说明"
+      pinnedMessageText: "补录说明",
+      extraNpcRoles: [{
+        id: 9988,
+        name: "待认领 NPC",
+        description: "现场补录",
+        roleGender: "unlimited"
+      }]
     })
   });
 
@@ -922,6 +1128,7 @@ test("direct raw key and approved hash proposal replay one historical creation",
     historicalCreationKeyHash
   );
   assert.equal(JSON.stringify(descriptor).includes(historicalCreationKey), false);
+  assert.equal(descriptor.payload.body.extraNpcRoles[0].id, undefined);
 
   const connection = idempotentHistoricalCreationConnection();
   const created = await createSessionWithConnection(
@@ -930,9 +1137,16 @@ test("direct raw key and approved hash proposal replay one historical creation",
     baseBody({
       historicalCreationKey,
       note: "审核中的补录",
-      pinnedMessageText: "补录说明"
+      pinnedMessageText: "补录说明",
+      extraNpcRoles: [{
+        id: 9988,
+        name: "待认领 NPC",
+        description: "现场补录",
+        roleGender: "unlimited"
+      }]
     })
   );
+  connection.state.events.length = 0;
   const replay = await applyApprovedSessionProposal(
     connection,
     descriptor.payload.body,
@@ -942,7 +1156,80 @@ test("direct raw key and approved hash proposal replay one historical creation",
   assert.equal(connection.state.sessionInsertCount, 1);
   assert.equal(connection.state.chatRoomInsertCount, 1);
   assert.equal(connection.state.messageInsertCount, 1);
+  assert.equal(connection.state.sessionNpcRoleInsertCount, 1);
   assert.equal(connection.state.operations.size, 1);
+  assert.deepEqual(connection.state.events, [
+    "operation",
+    "session"
+  ]);
+});
+
+test("an unbound approved operation validates its baseline once after canonical snapshot locks", async () => {
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const historicalCreationKeyHash = crypto
+    .createHash("sha256")
+    .update(historicalCreationKey)
+    .digest("hex");
+  const descriptor = buildTextModerationDescriptor({
+    action: "create_session",
+    subjectId: "session-create:7",
+    actorUserId: ACTOR.user.id,
+    openid: "openid-7",
+    baseVersion: expectedTextCreationBase(ACTOR.user.id),
+    idempotencyKey: `hsc_${historicalCreationKeyHash}`,
+    idempotencyExplicit: true,
+    body: baseBody({ historicalCreationKey, note: "首次审核补录" })
+  });
+  const connection = idempotentHistoricalCreationConnection();
+
+  await applyApprovedSessionProposal(
+    connection,
+    descriptor.payload.body,
+    descriptor.idempotencyKey
+  );
+
+  assert.deepEqual(connection.state.events.slice(0, 7), [
+    "operation",
+    "user_share",
+    "user_roles_update",
+    "store_share",
+    "script_share",
+    "script_npc_roles_share",
+    "approved_baseline"
+  ]);
+  assert.equal(
+    connection.state.events.filter((event) => event === "approved_baseline").length,
+    1
+  );
+});
+
+test("direct payload A then approved payload B closes the moderation proposal as stale", async () => {
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const historicalCreationKeyHash = crypto
+    .createHash("sha256")
+    .update(historicalCreationKey)
+    .digest("hex");
+  const moderationIdentity = `hsc_${historicalCreationKeyHash}`;
+  const connection = idempotentHistoricalCreationConnection();
+
+  await createSessionWithConnection(connection, ACTOR, baseBody({
+    historicalCreationKey,
+    note: "直连版本 A"
+  }));
+  await assert.rejects(
+    () => applyApprovedSessionProposal(
+      connection,
+      baseBody({
+        historicalCreationKeyHash,
+        note: "审核版本 B"
+      }),
+      moderationIdentity
+    ),
+    { code: "CONTENT_MODERATION_PROPOSAL_STALE" }
+  );
+  assert.equal(connection.state.sessionInsertCount, 1);
 });
 
 test("approved historical proposal rejects a moderation identity that mismatches its payload hash", async () => {

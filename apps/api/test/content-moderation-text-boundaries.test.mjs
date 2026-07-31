@@ -110,6 +110,20 @@ test("historical session moderation canonicalizes the raw operation key to a one
   );
   assert.equal(JSON.stringify(descriptor).includes(historicalCreationKey), false);
 
+  assert.throws(
+    () => buildTextModerationDescriptor(input("create_session", {
+      storeId: 3,
+      scriptId: 4,
+      startAt: "2020-01-01 13:00:00",
+      sessionPurpose: "historical_record",
+      note: "缺少操作标识"
+    })),
+    {
+      statusCode: 400,
+      code: "HISTORICAL_SESSION_CREATION_KEY_REQUIRED"
+    }
+  );
+
   const rehydrated = buildTextModerationDescriptor(input("create_session", {
     ...descriptor.payload.body
   }, {
@@ -208,6 +222,12 @@ test("NPC canonicalization mirrors every persisted role spelling, string form, a
 });
 
 test("text proposal payload is action-whitelisted and never keeps unrelated profile or request data", () => {
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const historicalCreationKeyHash = crypto
+    .createHash("sha256")
+    .update(historicalCreationKey)
+    .digest("hex");
   const nickname = buildTextModerationDescriptor(input("update_nickname", {
     nickname: "阿青",
     avatarUrl: "/uploads/avatars/avatar-7.png",
@@ -238,6 +258,7 @@ test("text proposal payload is action-whitelisted and never keeps unrelated prof
     scriptId: 4,
     startAt: "2026-07-12 20:00:00",
     sessionPurpose: "historical_record",
+    historicalCreationKey,
     note: "拼车说明",
     extraNpcRoles: [{ label: "NPC", note: "角色说明", signedUrl: "https://private.example/x" }],
     phone: "13800138000",
@@ -250,6 +271,7 @@ test("text proposal payload is action-whitelisted and never keeps unrelated prof
       scriptId: 4,
       startAt: "2026-07-12 20:00:00",
       sessionPurpose: "historical_record",
+      historicalCreationKeyHash,
       note: "拼车说明",
       extraNpcRoles: [{
         name: "NPC",

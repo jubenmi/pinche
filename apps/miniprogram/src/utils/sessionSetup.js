@@ -145,7 +145,7 @@ function setupRoleInitialization(snapshot = {}) {
   };
 }
 
-export function historicalSetupDescriptor(snapshot = {}) {
+export function historicalSetupDescriptor(snapshot = {}, now = new Date()) {
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
   const dateValue = String(snapshot.dateValue || "").trim();
   const timeValue = String(snapshot.timeValue || "").trim();
@@ -155,7 +155,7 @@ export function historicalSetupDescriptor(snapshot = {}) {
     !isNumericId(snapshot.script?.id) ||
     snapshot.sessionPurpose !== HISTORICAL_RECORD ||
     String(snapshot.startAt || "") !== startAt ||
-    selectedSessionPurpose(dateValue, timeValue, startAt) !== HISTORICAL_RECORD
+    selectedSessionPurpose(dateValue, timeValue, now) !== HISTORICAL_RECORD
   ) {
     return null;
   }
@@ -241,6 +241,35 @@ export function historicalPrimaryActionEnabled({
     canSubmitCurrent ||
       (hasPendingMismatch && historicalPendingMatchesDescriptor(pendingHistoricalDraft))
   );
+}
+
+export function shouldClearPendingHistoricalDraftForAuthorPrivate(session = {}) {
+  return Boolean(
+    session &&
+      typeof session === "object" &&
+      session.moderation_status === "rejected" &&
+      session.can_resubmit === true
+  );
+}
+
+export function historicalAuthorPrivatePendingDisposition(session = {}) {
+  const clearPending = shouldClearPendingHistoricalDraftForAuthorPrivate(session);
+  return {
+    clearPending,
+    statusText: clearPending
+      ? "补录内容未通过审核，请修改后重新创建。"
+      : String(session?.moderation_message || "")
+  };
+}
+
+export function historicalCreationOperationErrorDisposition(error = {}) {
+  if (error?.code !== "HISTORICAL_SESSION_CREATION_OPERATION_INVALID") {
+    return null;
+  }
+  return {
+    clearPending: true,
+    statusText: "之前的历史补录已不存在，请再次点击重新创建。"
+  };
 }
 
 export function sessionSetupSubmissionMatches({

@@ -685,8 +685,23 @@ async function currentSessionCreateTextBase(
   connection,
   actorUserId,
   body,
-  { forUpdate = false } = {}
+  { forUpdate = false, lockedSnapshot = null } = {}
 ) {
+  if (lockedSnapshot) {
+    const actor = lockedSnapshot.actor;
+    const store = lockedSnapshot.store;
+    const script = lockedSnapshot.script;
+    if (!actor || !store || !script) return "";
+    return createTextBaseline({
+      kind: "session_create",
+      actor: actorSessionCreateSnapshot(actor),
+      store,
+      script,
+      script_npc_roles: Array.isArray(lockedSnapshot.scriptNpcRoles)
+        ? lockedSnapshot.scriptNpcRoles
+        : []
+    });
+  }
   const lock = forUpdate ? " FOR UPDATE" : "";
   const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
   const [storeRows] = await connection.query(

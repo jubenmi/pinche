@@ -8,7 +8,5 @@ CREATE TABLE IF NOT EXISTS historical_session_creation_operations (
   PRIMARY KEY (organizer_user_id, creation_key_hash),
   UNIQUE KEY uniq_historical_creation_session (session_id),
   CONSTRAINT fk_historical_creation_organizer
-    FOREIGN KEY (organizer_user_id) REFERENCES users(id) ON DELETE CASCADE,
-  CONSTRAINT fk_historical_creation_session
-    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    FOREIGN KEY (organizer_user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -184,7 +184,9 @@ import {
   clearPendingHistoricalDraftState,
   createOrRecoverHistoricalDraft,
   createSessionSetupSubmissionController,
+  historicalAuthorPrivatePendingDisposition,
   historicalCreateSettings,
+  historicalCreationOperationErrorDisposition,
   historicalDraftFingerprint,
   historicalPendingMatchesDescriptor,
   historicalPrimaryActionEnabled,
@@ -873,7 +875,13 @@ export default {
           });
           if (!result.session) return null;
           if (isAuthorPrivateText(result.session)) {
-            this.statusText = result.session.moderation_message;
+            const moderationDisposition = historicalAuthorPrivatePendingDisposition(
+              result.session
+            );
+            if (moderationDisposition.clearPending) {
+              this.clearPendingHistoricalDraft();
+            }
+            this.statusText = moderationDisposition.statusText;
             return null;
           }
           return {
@@ -896,7 +904,13 @@ export default {
           );
         }
       }).catch((error) => {
-        if (error?.code === "SESSION_PURPOSE_TIME_MISMATCH") {
+        const operationDisposition = historicalCreationOperationErrorDisposition(error);
+        if (operationDisposition) {
+          if (operationDisposition.clearPending) {
+            this.clearPendingHistoricalDraft();
+          }
+          this.statusText = operationDisposition.statusText;
+        } else if (error?.code === "SESSION_PURPOSE_TIME_MISMATCH") {
           const expectedPurpose = error?.details?.expectedSessionPurpose;
           this.sessionPurpose = [FUTURE_CARPOOL, HISTORICAL_RECORD].includes(expectedPurpose)
             ? expectedPurpose

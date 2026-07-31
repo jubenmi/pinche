@@ -1151,16 +1151,27 @@ async function insertSessionNpcRoles(connection, sessionId, roles = [], options 
   }
 }
 
-async function cloneScriptNpcRolesForSession(connection, sessionId, scriptId) {
-  const rolesByScriptId = await scriptNpcRolesByScriptIds(connection, [scriptId]);
-  const roles = (rolesByScriptId.get(Number(scriptId)) || []).map((role, index) => ({
+async function cloneScriptNpcRolesForSession(
+  connection,
+  sessionId,
+  scriptId,
+  lockedRoles = null
+) {
+  let sourceRoles;
+  if (Array.isArray(lockedRoles)) {
+    sourceRoles = lockedRoles;
+  } else {
+    const rolesByScriptId = await scriptNpcRolesByScriptIds(connection, [scriptId]);
+    sourceRoles = rolesByScriptId.get(Number(scriptId)) || [];
+  }
+  const roles = sourceRoles.map((role, index) => ({
     scriptNpcRoleId: role.id,
     name: role.name,
     description: role.description,
-    roleGender: role.role_gender || "unlimited",
+    roleGender: role.role_gender || role.roleGender || "unlimited",
     source: "script",
     boundUserId: null,
-    sortOrder: role.sort_order ?? index
+    sortOrder: role.sort_order ?? role.sortOrder ?? index
   }));
   await insertSessionNpcRoles(connection, sessionId, roles, { source: "script" });
 }
@@ -4097,6 +4108,12 @@ export async function createEntityClaim(user, body) {
   });
 }
 
+function persistedSessionNpcRole(role) {
+  if (!role) return null;
+  const { id: _id, ...persisted } = role;
+  return persisted;
+}
+
 function normalizedSessionCreationPayload(body, normalizedCreation) {
   const isHistorical = normalizedCreation.sessionPurpose === "historical_record";
   return {
@@ -4124,7 +4141,7 @@ function normalizedSessionCreationPayload(body, normalizedCreation) {
     pinnedMessageText: optionalText(body.pinnedMessageText),
     extraNpcRoles: normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, {
       source: "session"
-    })
+    }).map(persistedSessionNpcRole)
   };
 }
 
@@ -4213,14 +4230,72 @@ async function bindHistoricalCreationOperation(
   }
 }
 
+function historicalCreationActorSnapshot(userRow, roleRows) {
+  if (!userRow) return null;
+  return {
+    id: Number(userRow.id),
+    nickname: String(userRow.nickname || ""),
+    avatarUrl: userRow.avatar_url ? String(userRow.avatar_url) : null,
+    gender: userRow.gender ? String(userRow.gender) : "",
+    phone_verified: Boolean(userRow.phone_verified_at),
+    roles: roleRows
+      .filter((row) => String(row.status) === "active")
+      .map((row) => String(row.role))
+  };
+}
+
+async function lockHistoricalCreationDependencies(
+  connection,
+  { organizerUserId, storeId, scriptId }
+) {
+  const [userRows] = await connection.query(
+    `SELECT id, nickname, avatar_url, gender, phone_verified_at
+     FROM users WHERE id = ? LIMIT 1 FOR SHARE`,
+    [organizerUserId]
+  );
+  const [roleRows] = await connection.query(
+    `SELECT role, status FROM user_roles
+     WHERE user_id = ?
+     ORDER BY role FOR UPDATE`,
+    [organizerUserId]
+  );
+  const [storeRows] = await connection.query(
+    `SELECT id, name, status, visibility, review_status, created_by_user_id
+     FROM stores WHERE id = ? LIMIT 1 FOR SHARE`,
+    [storeId]
+  );
+  const [scriptRows] = await connection.query(
+    `SELECT id, name, status, visibility, review_status, created_by_user_id
+     FROM scripts WHERE id = ? LIMIT 1 FOR SHARE`,
+    [scriptId]
+  );
+  const [scriptNpcRoles] = await connection.query(
+    `SELECT id, script_id, name, description, role_gender, sort_order, status
+     FROM script_npc_roles
+     WHERE script_id = ? AND status = 'active'
+     ORDER BY sort_order, id FOR SHARE`,
+    [scriptId]
+  );
+  return {
+    actor: historicalCreationActorSnapshot(userRows[0], roleRows),
+    store: storeRows[0] || null,
+    script: scriptRows[0] || null,
+    scriptNpcRoles,
+    organizerRoleActive: roleRows.some(
+      (row) => String(row.role) === "organizer" && String(row.status) === "active"
+    )
+  };
+}
+
 export async function createSessionWithConnection(
   connection,
   user,
   body,
-  { trustedHistoricalCreationKeyHash = null } = {}
+  {
+    trustedHistoricalCreationKeyHash = null,
+    trustedHistoricalCreationRevalidate = null
+  } = {}
 ) {
-  requireVerifiedPhone(user);
-
   const normalizedCreation = normalizeSessionCreationStartAt(
     requireValue(body, "startAt"),
     body.sessionPurpose
@@ -4259,6 +4334,29 @@ export async function createSessionWithConnection(
       ? hashHistoricalSessionCreationKey(historicalCreationKey)
       : null
   );
+  if (
+    normalizedCreation.sessionPurpose === "historical_record" &&
+    !historicalCreationKeyHash
+  ) {
+    throw new AppError(
+      400,
+      "HISTORICAL_SESSION_CREATION_KEY_REQUIRED",
+      "historicalCreationKey is required for historical session creation"
+    );
+  }
+  if (
+    trustedHistoricalCreationRevalidate !== null &&
+    (
+      !trustedCreationKeyHash ||
+      typeof trustedHistoricalCreationRevalidate !== "function"
+    )
+  ) {
+    throw new AppError(
+      400,
+      "UNTRUSTED_HISTORICAL_CREATION_REVALIDATION",
+      "historical creation revalidation is only accepted from an approved proposal"
+    );
+  }
 
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
@@ -4274,7 +4372,8 @@ export async function createSessionWithConnection(
       const existingSession = await findById(
         connection,
         "sessions",
-        historicalOperation.sessionId
+        historicalOperation.sessionId,
+        { forUpdate: true }
       );
       if (
         !existingSession ||
@@ -4291,12 +4390,40 @@ export async function createSessionWithConnection(
     }
   }
 
-  const store = await findById(connection, "stores", creation.storeId);
-  const script = await findById(connection, "scripts", creation.scriptId);
+  let store;
+  let script;
+  let lockedScriptNpcRoles = null;
+  let organizerRoleActive = false;
+  if (creation.sessionPurpose === "historical_record") {
+    const dependencies = await lockHistoricalCreationDependencies(connection, {
+      organizerUserId: user.user.id,
+      storeId: creation.storeId,
+      scriptId: creation.scriptId
+    });
+    if (trustedHistoricalCreationRevalidate) {
+      await trustedHistoricalCreationRevalidate({
+        actor: dependencies.actor,
+        store: dependencies.store,
+        script: dependencies.script,
+        scriptNpcRoles: dependencies.scriptNpcRoles
+      });
+    }
+    if (!dependencies.actor?.phone_verified) throw phoneRequired();
+    store = dependencies.store;
+    script = dependencies.script;
+    lockedScriptNpcRoles = dependencies.scriptNpcRoles;
+    organizerRoleActive = dependencies.organizerRoleActive;
+  } else {
+    requireVerifiedPhone(user);
+    store = await findById(connection, "stores", creation.storeId);
+    script = await findById(connection, "scripts", creation.scriptId);
+  }
   assertCatalogUsableForSession(store, user, "Store");
   assertCatalogUsableForSession(script, user, "Script");
 
-  await ensureRole(connection, user.user.id, "organizer");
+  if (!organizerRoleActive) {
+    await ensureRole(connection, user.user.id, "organizer");
+  }
 
   const [result] = await connection.query(
     `
@@ -4331,7 +4458,12 @@ export async function createSessionWithConnection(
   );
 
   const session = await findById(connection, "sessions", result.insertId);
-  await cloneScriptNpcRolesForSession(connection, session.id, script.id);
+  await cloneScriptNpcRolesForSession(
+    connection,
+    session.id,
+    script.id,
+    lockedScriptNpcRoles
+  );
   await insertSessionNpcRoles(
     connection,
     session.id,

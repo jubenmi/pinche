@@ -2,7 +2,7 @@ import {
   normalizeNpcRoles,
   normalizePrivateRoleTemplate
 } from "../core/npc-role-normalization.js";
-import { badRequest } from "../../http/errors.js";
+import { AppError, badRequest } from "../../http/errors.js";
 import { normalizeSessionReviewAlbumPhotoIds } from "../core/session-review.js";
 import {
   assertHistoricalSessionMemberPrebindAllowed,
@@ -343,6 +343,17 @@ function canonicalBody(action, body, { trustedHistoricalCreationIdentity = "" } 
       ]);
       const hasRawHistoricalCreationKey = own(body, "historicalCreationKey");
       const hasHistoricalCreationKeyHash = own(body, "historicalCreationKeyHash");
+      if (
+        body.sessionPurpose === "historical_record" &&
+        !hasRawHistoricalCreationKey &&
+        !hasHistoricalCreationKeyHash
+      ) {
+        throw new AppError(
+          400,
+          "HISTORICAL_SESSION_CREATION_KEY_REQUIRED",
+          "historicalCreationKey is required for historical session creation"
+        );
+      }
       if (hasRawHistoricalCreationKey && hasHistoricalCreationKeyHash) {
         throw badRequest("Provide only one historical creation key identity");
       }

@@ -786,6 +786,21 @@ test("a stale business baseline marks the proposal stale and never overwrites th
   assert.equal(state.transitions.at(-1).errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
 });
 
+test("provider approval closes a direct-A versus approved-B historical key conflict as stale", async () => {
+  const conflict = Object.assign(new Error("historical creation key already has payload A"), {
+    code: "HISTORICAL_SESSION_CREATION_KEY_REUSED",
+    statusCode: 409
+  });
+  const { service, state } = textHarness({ applyError: conflict });
+
+  await assert.rejects(service.moderateTextMutation(mutationInput()), {
+    code: "CONTENT_MODERATION_PROPOSAL_STALE"
+  });
+  assert.equal(state.proposalTransitions.at(-1).toStatus, "stale");
+  assert.equal(state.transitions.at(-1).toStatus, "rejected");
+  assert.equal(state.transitions.at(-1).errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
+});
+
 test("a same-second snapshot change stales the proposal before it can write", async () => {
   const capturedBase = createTextBaseline({
     id: 12,
@@ -1008,6 +1023,84 @@ test("leased text retry applies the current proposal through the same applicator
     fromStatus: "error",
     leaseDurationMs: 90_000
   });
+});
+
+test("leased retry closes a deleted direct-A historical operation instead of retrying forever", async () => {
+  const normalizedText = normalizeTextFields({ note: "周末拼车" });
+  const subjectVersion = textMutationSubjectVersion({ normalizedText });
+  const normalizedPayload = {
+    body: { note: "周末拼车" },
+    context: {},
+    actor_user_id: 7
+  };
+  const payloadDigest = textProposalPayloadDigest({
+    action: "update_session",
+    baseVersion: "session-v1",
+    normalizedText,
+    normalizedPayload
+  });
+  const operationInvalid = Object.assign(new Error("direct session was deleted"), {
+    code: "HISTORICAL_SESSION_CREATION_OPERATION_INVALID",
+    statusCode: 409
+  });
+  const { service, state } = textHarness({
+    jobStatus: "error",
+    applyError: operationInvalid,
+    jobOverrides: {
+      subject_id: "text-op-historical-retry",
+      subject_version: subjectVersion
+    },
+    proposalOverrides: {
+      subject_id: "text-op-historical-retry",
+      idempotency_key: "historical-retry",
+      payload_digest: payloadDigest,
+      normalized_payload_json: JSON.stringify(normalizedPayload)
+    }
+  });
+  const job = {
+    id: 41,
+    provider: "wechat_sec_check",
+    subject_type: "session_update",
+    subject_id: "text-op-historical-retry",
+    subject_version: subjectVersion,
+    status: "error",
+    lease_token: "lease-text"
+  };
+  const proposal = {
+    id: 51,
+    status: "pending",
+    subject_type: "session_update",
+    subject_id: "text-op-historical-retry",
+    action: "update_session",
+    base_version: "session-v1",
+    idempotency_key: "historical-retry",
+    payload_digest: payloadDigest,
+    created_by_user_id: 7,
+    normalized_payload_json: JSON.stringify(normalizedPayload)
+  };
+
+  assert.deepEqual(await service.retryTextModeration({
+    job,
+    proposal,
+    normalizedText,
+    openid: "openid-7",
+    leaseToken: "lease-text",
+    expectedText: {
+      jobId: 41,
+      proposalId: 51,
+      subjectType: "session_update",
+      subjectId: "text-op-historical-retry",
+      subjectVersion,
+      action: "update_session",
+      actorUserId: 7,
+      baseVersion: "session-v1",
+      idempotencyKey: "historical-retry",
+      payloadDigest
+    }
+  }), { kind: "stale" });
+  assert.equal(state.proposalTransitions.at(-1).toStatus, "stale");
+  assert.equal(state.transitions.at(-1).toStatus, "rejected");
+  assert.equal(state.failures.length, 0);
 });
 
 test("a leased text retry with an expired lease or changed immutable version cannot apply the proposal", async () => {
