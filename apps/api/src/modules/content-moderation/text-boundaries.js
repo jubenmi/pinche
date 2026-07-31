@@ -4,7 +4,10 @@ import {
 } from "../core/npc-role-normalization.js";
 import { badRequest } from "../../http/errors.js";
 import { normalizeSessionReviewAlbumPhotoIds } from "../core/session-review.js";
-import { assertHistoricalSessionMemberPrebindAllowed } from "../core/session-purpose.js";
+import {
+  assertHistoricalSessionMemberPrebindAllowed,
+  normalizeHistoricalSessionCreationKey
+} from "../core/session-purpose.js";
 
 const PHONE_NUMBER = /(?:\+?86[\s-]?)?1[3-9]\d(?:[\s-]?\d){8}/g;
 const MAX_SESSION_REVIEW_PHOTOS = 9;
@@ -335,6 +338,11 @@ function canonicalBody(action, body) {
         "dmNameSnapshot", "npcUserId", "npc_user_id", "npcNameSnapshot", "depositAmount",
         "visibility", "note", "pinnedMessageText"
       ]);
+      const historicalCreationKey = normalizeHistoricalSessionCreationKey(
+        body,
+        body.sessionPurpose
+      );
+      if (historicalCreationKey) result.historicalCreationKey = historicalCreationKey;
       if (body.depositAmount !== undefined) result.depositAmount = integerValue(body.depositAmount);
       if (body.visibility !== undefined) result.visibility = normalizeSessionVisibility(body.visibility);
       assertPublicTextSafe("dmNameSnapshot", result.dmNameSnapshot);

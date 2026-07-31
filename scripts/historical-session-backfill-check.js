@@ -56,6 +56,12 @@ for (const marker of [
   "submitPurposeChanged",
   "missingSeatPayloads",
   "historicalDraftFingerprint",
+  "createSessionSetupSubmissionController",
+  "createOrRecoverHistoricalDraft",
+  "historicalPendingMatchesDescriptor",
+  "primaryActionEnabled",
+  "historicalCreationKey",
+  "idempotencyKey",
   "继续上次补录",
   "补录草稿已保留，点击重试继续初始化",
   "SESSION_PURPOSE_TIME_MISMATCH",
@@ -67,6 +73,7 @@ assert.match(setup, /v-if=["']!isHistorical["']/);
 assert.match(setup, /sessionPurpose:\s*this\.sessionPurpose/);
 assert.match(setup, /creatorSeatId/);
 assert.match(setup, /pendingHistoricalDraft:\s*null/);
+assert.match(setup, /:disabled="busyAction \|\| !primaryActionEnabled"/);
 
 assert.match(createFlow, /sessionPurpose:\s*flow\.sessionPurpose/);
 assert.match(createFlow, /sessionPurpose:\s*decode\(options\.sessionPurpose\)/);
@@ -87,9 +94,9 @@ assertBefore(
 );
 assertBefore(
   createPublishedSession,
-  "persistPendingHistoricalDraft",
+  "createOrRecoverHistoricalDraft",
   "initializeHistoricalSession",
-  "historical marker must be persisted before seat initialization"
+  "historical create/recovery coordination must finish before seat initialization"
 );
 
 const recoveryAction = methodBody(setup, "restorePendingHistoricalDraft");
@@ -115,6 +122,14 @@ assertBefore(
 );
 assert.match(historicalInitialization, /if \(pinnedMessageText\)[\s\S]*\/chat\/pin/);
 assert.match(historicalInitialization, /data:\s*\{ creatorSeatId \}/);
+assert.match(
+  historicalInitialization,
+  /resolveSelectedSeat\(\s*reloaded\.seats,\s*descriptor\.selectedSeatKey,\s*descriptor\.selectedSeatOccurrence/s
+);
+assert.doesNotMatch(
+  historicalInitialization,
+  /resolveSelectedSeat\([\s\S]*pendingHistoricalDraft\.selectedSeatKey/
+);
 assert.doesNotMatch(historicalInitialization, /session-seats\/\$\{[^}]+\}\/claim/);
 const historicalPublishIndex = historicalInitialization.indexOf(
   "`/api/sessions/${session.id}/publish`"

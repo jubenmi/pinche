@@ -64,6 +64,7 @@ import {
 } from "./session-reschedule.js";
 import {
   assertHistoricalSessionMemberPrebindAllowed,
+  normalizeHistoricalSessionCreationKey,
   normalizeSessionCreationStartAt
 } from "./session-purpose.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
@@ -4094,6 +4095,123 @@ export async function createEntityClaim(user, body) {
   });
 }
 
+function normalizedSessionCreationPayload(body, normalizedCreation) {
+  const isHistorical = normalizedCreation.sessionPurpose === "historical_record";
+  return {
+    storeId: positiveId(requireValue(body, "storeId"), "storeId"),
+    scriptId: positiveId(requireValue(body, "scriptId"), "scriptId"),
+    startAt: normalizedCreation.date,
+    canonicalStartAt: normalizedCreation.canonical,
+    sessionPurpose: normalizedCreation.sessionPurpose,
+    dmUserId: isHistorical ? null : body.dmUserId || null,
+    dmNameSnapshot: optionalText(body.dmNameSnapshot),
+    npcUserId: isHistorical ? null : body.npcUserId || null,
+    npcNameSnapshot: optionalText(body.npcNameSnapshot),
+    depositAmount: intValue(body.depositAmount, 0),
+    visibility: isHistorical ? "share_only" : normalizeSessionVisibility(body.visibility),
+    joinPolicy: isHistorical
+      ? "review_required"
+      : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+    joinPhoneRequired: isHistorical
+      ? 0
+      : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
+    npcJoinEnabled: isHistorical
+      ? 0
+      : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
+    note: optionalText(body.note),
+    pinnedMessageText: optionalText(body.pinnedMessageText),
+    extraNpcRoles: normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, {
+      source: "session"
+    })
+  };
+}
+
+function historicalCreationPayloadHash(payload) {
+  const hashPayload = {
+    storeId: payload.storeId,
+    scriptId: payload.scriptId,
+    startAt: payload.canonicalStartAt,
+    sessionPurpose: payload.sessionPurpose,
+    dmUserId: payload.dmUserId,
+    dmNameSnapshot: payload.dmNameSnapshot,
+    npcUserId: payload.npcUserId,
+    npcNameSnapshot: payload.npcNameSnapshot,
+    depositAmount: payload.depositAmount,
+    visibility: payload.visibility,
+    joinPolicy: payload.joinPolicy,
+    joinPhoneRequired: payload.joinPhoneRequired,
+    npcJoinEnabled: payload.npcJoinEnabled,
+    note: payload.note,
+    pinnedMessageText: payload.pinnedMessageText,
+    extraNpcRoles: payload.extraNpcRoles
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(hashPayload)).digest();
+}
+
+async function lockHistoricalCreationOperation(
+  connection,
+  { organizerUserId, historicalCreationKey, payloadHash }
+) {
+  const creationKeyHash = crypto.createHash("sha256").update(historicalCreationKey).digest();
+  await connection.query(
+    `
+      INSERT INTO historical_session_creation_operations
+        (organizer_user_id, creation_key_hash, payload_hash, session_id)
+      VALUES (?, ?, ?, NULL)
+      ON DUPLICATE KEY UPDATE creation_key_hash = VALUES(creation_key_hash)
+    `,
+    [organizerUserId, creationKeyHash, payloadHash]
+  );
+  const [rows] = await connection.query(
+    `
+      SELECT organizer_user_id, HEX(payload_hash) AS payload_hash_hex, session_id
+      FROM historical_session_creation_operations
+      WHERE organizer_user_id = ? AND creation_key_hash = ?
+      FOR UPDATE
+    `,
+    [organizerUserId, creationKeyHash]
+  );
+  const operation = rows[0];
+  if (!operation) {
+    throw new AppError(
+      409,
+      "HISTORICAL_SESSION_CREATION_OPERATION_MISSING",
+      "Historical session creation operation could not be locked"
+    );
+  }
+  if (String(operation.payload_hash_hex || "").toLowerCase() !== payloadHash.toString("hex")) {
+    throw new AppError(
+      409,
+      "HISTORICAL_SESSION_CREATION_KEY_REUSED",
+      "historicalCreationKey was already used with a different payload"
+    );
+  }
+  return { creationKeyHash, sessionId: operation.session_id };
+}
+
+async function bindHistoricalCreationOperation(
+  connection,
+  { organizerUserId, creationKeyHash, sessionId }
+) {
+  const [result] = await connection.query(
+    `
+      UPDATE historical_session_creation_operations
+      SET session_id = ?
+      WHERE organizer_user_id = ?
+        AND creation_key_hash = ?
+        AND session_id IS NULL
+    `,
+    [sessionId, organizerUserId, creationKeyHash]
+  );
+  if (Number(result.affectedRows) !== 1) {
+    throw new AppError(
+      409,
+      "HISTORICAL_SESSION_CREATION_OPERATION_CHANGED",
+      "Historical session creation operation changed before completion"
+    );
+  }
+}
+
 export async function createSessionWithConnection(connection, user, body) {
   requireVerifiedPhone(user);
 
@@ -4102,13 +4220,44 @@ export async function createSessionWithConnection(connection, user, body) {
     body.sessionPurpose
   );
   assertHistoricalSessionMemberPrebindAllowed(body, normalizedCreation.sessionPurpose);
-  const isHistorical = normalizedCreation.sessionPurpose === "historical_record";
+  const historicalCreationKey = normalizeHistoricalSessionCreationKey(
+    body,
+    normalizedCreation.sessionPurpose
+  );
 
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
+  const creation = normalizedSessionCreationPayload(body, normalizedCreation);
+  let historicalOperation = null;
+  if (historicalCreationKey) {
+    historicalOperation = await lockHistoricalCreationOperation(connection, {
+      organizerUserId: user.user.id,
+      historicalCreationKey,
+      payloadHash: historicalCreationPayloadHash(creation)
+    });
+    if (historicalOperation.sessionId !== null) {
+      const existingSession = await findById(
+        connection,
+        "sessions",
+        historicalOperation.sessionId
+      );
+      if (
+        !existingSession ||
+        Number(existingSession.organizer_user_id) !== Number(user.user.id) ||
+        existingSession.session_purpose !== "historical_record"
+      ) {
+        throw new AppError(
+          409,
+          "HISTORICAL_SESSION_CREATION_OPERATION_INVALID",
+          "Historical session creation operation no longer matches its session"
+        );
+      }
+      return existingSession;
+    }
+  }
 
-  const store = await findById(connection, "stores", requireValue(body, "storeId"));
-  const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
+  const store = await findById(connection, "stores", creation.storeId);
+  const script = await findById(connection, "scripts", creation.scriptId);
   assertCatalogUsableForSession(store, user, "Store");
   assertCatalogUsableForSession(script, user, "Script");
 
@@ -4131,22 +4280,18 @@ export async function createSessionWithConnection(connection, user, body) {
       script.name,
       store.id,
       store.name,
-      normalizedCreation.date,
-      normalizedCreation.sessionPurpose,
-      isHistorical ? null : body.dmUserId || null,
-      optionalText(body.dmNameSnapshot),
-      isHistorical ? null : body.npcUserId || null,
-      optionalText(body.npcNameSnapshot),
-      intValue(body.depositAmount, 0),
-      isHistorical ? "share_only" : normalizeSessionVisibility(body.visibility),
-      isHistorical ? "review_required" : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
-      isHistorical
-        ? 0
-        : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
-      isHistorical
-        ? 0
-        : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
-      optionalText(body.note)
+      creation.startAt,
+      creation.sessionPurpose,
+      creation.dmUserId,
+      creation.dmNameSnapshot,
+      creation.npcUserId,
+      creation.npcNameSnapshot,
+      creation.depositAmount,
+      creation.visibility,
+      creation.joinPolicy,
+      creation.joinPhoneRequired,
+      creation.npcJoinEnabled,
+      creation.note
     ]
   );
 
@@ -4155,14 +4300,21 @@ export async function createSessionWithConnection(connection, user, body) {
   await insertSessionNpcRoles(
     connection,
     session.id,
-    normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, { source: "session" }),
+    creation.extraNpcRoles,
     { source: "session" }
   );
   await runSessionExtensionHook("afterSessionCreated", {
     connection,
     session,
-    pinnedMessageText: body.pinnedMessageText
+    pinnedMessageText: creation.pinnedMessageText
   });
+  if (historicalOperation) {
+    await bindHistoricalCreationOperation(connection, {
+      organizerUserId: user.user.id,
+      creationKeyHash: historicalOperation.creationKeyHash,
+      sessionId: session.id
+    });
+  }
   return session;
 }
 

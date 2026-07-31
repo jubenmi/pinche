@@ -151,8 +151,8 @@
     <view class="bottom-action">
       <t-button
         class="button"
-        :class="{ disabled: busyAction || !canSubmit }"
-        :disabled="busyAction || !canSubmit"
+        :class="{ disabled: busyAction || !primaryActionEnabled }"
+        :disabled="busyAction || !primaryActionEnabled"
         @tap="handlePrimaryAction"
       >
         {{ busyAction ? "创建中..." : primaryActionText }}
@@ -181,10 +181,18 @@ import {
   HISTORICAL_PINNED_PLACEHOLDER,
   TIME_PICKER_END,
   TIME_PICKER_START,
+  clearPendingHistoricalDraftState,
+  createOrRecoverHistoricalDraft,
+  createSessionSetupSubmissionController,
   historicalCreateSettings,
   historicalDraftFingerprint,
+  historicalPendingMatchesDescriptor,
+  historicalPrimaryActionEnabled,
   historicalPinnedMessage,
+  historicalSetupDescriptor,
   missingSeatPayloads,
+  persistPendingHistoricalDraftState,
+  sessionSetupSubmissionMatches,
   seatInitializationKey,
   selectedSessionPurpose,
   submitPurposeChanged
@@ -235,7 +243,8 @@ export default {
       npcJoinEnabled: true,
       cityVisible: true,
       statusText: "",
-      busyAction: false
+      busyAction: false,
+      submissionController: createSessionSetupSubmissionController()
     };
   },
   computed: {
@@ -276,10 +285,11 @@ export default {
       if (!this.pendingHistoricalDraft) {
         return false;
       }
+      const descriptor = this.historicalDraftDescriptor();
       return Boolean(
         !this.isHistorical ||
-          this.pendingHistoricalDraft.fingerprint !==
-            this.historicalDraftDescriptor().fingerprint
+          !descriptor ||
+          !historicalPendingMatchesDescriptor(this.pendingHistoricalDraft, descriptor)
       );
     },
     primaryActionText() {
@@ -290,6 +300,13 @@ export default {
     },
     canSubmit() {
       return isNumericId(this.store?.id) && isNumericId(this.script?.id);
+    },
+    primaryActionEnabled() {
+      return historicalPrimaryActionEnabled({
+        canSubmitCurrent: this.canSubmit,
+        hasPendingMismatch: this.hasPendingHistoricalMismatch,
+        pendingHistoricalDraft: this.pendingHistoricalDraft
+      });
     }
   },
   onLoad() {
@@ -314,10 +331,10 @@ export default {
       selectedSessionPurpose(this.dateValue, this.timeValue, new Date()) ||
       flow.sessionPurpose ||
       FUTURE_CARPOOL;
-    if (!this.canSubmit) {
-      this.statusText = "当前店家或剧本是演示数据，请连接后端后选择真实店家和剧本。";
-    } else if (this.hasPendingHistoricalMismatch) {
+    if (this.hasPendingHistoricalMismatch && historicalPendingMatchesDescriptor(this.pendingHistoricalDraft)) {
       this.statusText = "已有未完成的历史补录，请先继续上次补录。";
+    } else if (!this.canSubmit) {
+      this.statusText = "当前店家或剧本是演示数据，请连接后端后选择真实店家和剧本。";
     } else if (this.pendingHistoricalDraft) {
       this.statusText = "补录草稿已保留，点击重试继续初始化";
     }
@@ -448,6 +465,10 @@ export default {
     },
     historicalDraftDescriptor() {
       const initialization = this.roleInitialization();
+      const snapshot = this.historicalSetupSnapshot();
+      if (this.isHistorical) {
+        return historicalSetupDescriptor(snapshot);
+      }
       return {
         ...initialization,
         fingerprint: historicalDraftFingerprint({
@@ -460,28 +481,30 @@ export default {
           selectedSeatKey: initialization.selectedSeatKey,
           selectedSeatOccurrence: initialization.selectedSeatOccurrence
         }),
-        snapshot: this.historicalSetupSnapshot()
+        snapshot
       };
     },
     persistPendingHistoricalDraft(pendingHistoricalDraft) {
-      writeCreateFlow({ pendingHistoricalDraft });
-      this.pendingHistoricalDraft = pendingHistoricalDraft;
+      return persistPendingHistoricalDraftState(
+        this,
+        pendingHistoricalDraft,
+        (value) => writeCreateFlow({ pendingHistoricalDraft: value })
+      );
     },
-    clearPendingHistoricalDraft() {
-      writeCreateFlow({ pendingHistoricalDraft: null });
-      this.pendingHistoricalDraft = null;
+    clearPendingHistoricalDraft(continueAfterClear) {
+      return clearPendingHistoricalDraftState(
+        this,
+        (value) => writeCreateFlow({ pendingHistoricalDraft: value }),
+        continueAfterClear
+      );
     },
     restorePendingHistoricalDraft() {
-      const snapshot = this.pendingHistoricalDraft?.snapshot;
-      if (
-        !snapshot ||
-        typeof snapshot !== "object" ||
-        snapshot.sessionPurpose !== HISTORICAL_RECORD
-      ) {
+      if (!historicalPendingMatchesDescriptor(this.pendingHistoricalDraft)) {
         this.clearPendingHistoricalDraft();
         this.statusText = "上次补录草稿信息已失效，请再次点击重新创建。";
         return;
       }
+      const snapshot = this.pendingHistoricalDraft.snapshot;
       this.store = snapshot.store || null;
       this.script = snapshot.script || null;
       this.role = snapshot.role || null;
@@ -514,7 +537,7 @@ export default {
         .sort((left, right) => Number(left.id) - Number(right.id));
       return matchingSeats[selectedSeatOccurrence] || null;
     },
-    sessionCreationData(pinnedMessageText) {
+    sessionCreationData(pinnedMessageText, creationIdentity = {}) {
       const historicalSettings = historicalCreateSettings();
       if (this.isHistorical) {
         return {
@@ -524,6 +547,12 @@ export default {
           sessionPurpose: this.sessionPurpose,
           depositAmount: 0,
           ...historicalSettings,
+          ...(creationIdentity.historicalCreationKey
+            ? {
+                historicalCreationKey: creationIdentity.historicalCreationKey,
+                idempotencyKey: creationIdentity.idempotencyKey
+              }
+            : {}),
           note: historicalPinnedMessage(pinnedMessageText) || "历史车局补录",
           pinnedMessageText: historicalPinnedMessage(pinnedMessageText)
         };
@@ -577,7 +606,13 @@ export default {
           pinnedMessageText
         }
       });
-      this.completeSessionCreation(session.id, descriptor.roles, pinnedMessageText);
+      this.completeSessionCreation(
+        session.id,
+        descriptor.roles,
+        pinnedMessageText,
+        undefined,
+        descriptor.snapshot
+      );
     },
     async recoverHistoricalSession(pendingHistoricalDraft) {
       try {
@@ -606,8 +641,16 @@ export default {
         `${recoveredStartAt}:00` === snapshot.startAt
       );
     },
-    async initializeHistoricalSession(session, pendingHistoricalDraft, descriptor) {
-      if (!this.recoveredHistoricalSessionMatches(session, pendingHistoricalDraft)) {
+    async initializeHistoricalSession(
+      session,
+      pendingHistoricalDraft,
+      descriptor,
+      preparedPinnedMessageText
+    ) {
+      if (
+        !historicalPendingMatchesDescriptor(pendingHistoricalDraft, descriptor) ||
+        !this.recoveredHistoricalSessionMatches(session, pendingHistoricalDraft)
+      ) {
         this.clearPendingHistoricalDraft();
         this.statusText = "上次补录草稿信息已失效，请再次点击重新创建。";
         return;
@@ -618,9 +661,9 @@ export default {
         return;
       }
       if (session.status === "locked") {
-        this.clearPendingHistoricalDraft();
-        uni.redirectTo({ url: `/pages/session/share?id=${session.id}` });
-        return;
+        return this.clearPendingHistoricalDraft(() =>
+          this.redirectToSessionShare(session.id)
+        );
       }
       if (session.status !== "draft") {
         throw new Error("Historical draft is not initializable");
@@ -646,23 +689,23 @@ export default {
         return;
       }
       if (reloaded.status === "locked") {
-        this.clearPendingHistoricalDraft();
-        uni.redirectTo({ url: `/pages/session/share?id=${session.id}` });
-        return;
+        return this.clearPendingHistoricalDraft(() =>
+          this.redirectToSessionShare(session.id)
+        );
       }
       if (reloaded.status !== "draft") {
         throw new Error("Historical draft changed before publish");
       }
       const selectedSeat = this.resolveSelectedSeat(
         reloaded.seats,
-        pendingHistoricalDraft.selectedSeatKey,
-        pendingHistoricalDraft.selectedSeatOccurrence
+        descriptor.selectedSeatKey,
+        descriptor.selectedSeatOccurrence
       );
       if (!selectedSeat) {
         throw new Error("Historical creator seat is missing");
       }
 
-      const pinnedMessageText = historicalPinnedMessage(this.pinnedMessageText);
+      const pinnedMessageText = historicalPinnedMessage(preparedPinnedMessageText);
       if (pinnedMessageText) {
         await request({
           url: `/api/sessions/${session.id}/chat/pin`,
@@ -676,35 +719,38 @@ export default {
         method: "POST",
         data: { creatorSeatId }
       });
-      this.clearPendingHistoricalDraft();
-      this.completeSessionCreation(
-        session.id,
-        descriptor.roles,
-        pinnedMessageText,
-        pinnedMessageText || "历史车局补录"
+      return this.clearPendingHistoricalDraft(() =>
+        this.completeSessionCreation(
+          session.id,
+          descriptor.roles,
+          pinnedMessageText,
+          pinnedMessageText || "历史车局补录",
+          descriptor.snapshot
+        )
       );
     },
-    completeSessionCreation(sessionId, roles, pinnedMessageText, note) {
+    completeSessionCreation(sessionId, roles, pinnedMessageText, note, setupSnapshot) {
+      const setup = setupSnapshot || this.historicalSetupSnapshot();
       const finalNote = note || "剧本迷·拼车，一起沉浸好本。";
-      const completedSettings = this.isHistorical
+      const completedSettings = setup.sessionPurpose === HISTORICAL_RECORD
         ? historicalCreateSettings()
         : {
-            joinPolicy: this.joinPolicy,
-            joinPhoneRequired: this.joinPhoneRequired,
-            npcJoinEnabled: this.npcJoinEnabled,
-            visibility: this.cityVisible ? "public" : "share_only"
+            joinPolicy: setup.joinPolicy,
+            joinPhoneRequired: setup.joinPhoneRequired,
+            npcJoinEnabled: setup.npcJoinEnabled,
+            visibility: setup.cityVisible ? "public" : "share_only"
           };
       try {
         writeCreateFlow({
-          store: this.store,
-          script: this.script,
-          role: this.role,
+          store: setup.store,
+          script: setup.script,
+          role: setup.role,
           roleOptions: roles,
-          selectedRoles: this.selectedRoles,
+          selectedRoles: setup.selectedRoles,
           sessionId,
-          startAt: this.startAt,
-          startText: this.startText,
-          sessionPurpose: this.sessionPurpose,
+          startAt: setup.startAt,
+          startText: setup.startText,
+          sessionPurpose: setup.sessionPurpose,
           pendingHistoricalDraft: null,
           pinnedMessageText,
           joinPolicy: completedSettings.joinPolicy,
@@ -716,92 +762,138 @@ export default {
       } catch (error) {
         // The server-side publish already succeeded; navigation is the recovery path.
       }
-      uni.redirectTo({ url: `/pages/session/share?id=${sessionId}` });
+      this.redirectToSessionShare(sessionId);
     },
-    async createPublishedSession() {
-      if (this.busyAction) {
-        return;
-      }
-      const submitNow = new Date();
-      const submitPurpose = selectedSessionPurpose(this.dateValue, this.timeValue, submitNow);
-      if (!submitPurpose) {
-        this.statusText = "请选择有效的开本日期和时间。";
-        return;
-      }
-      if (submitPurposeChanged(this.sessionPurpose, this.startAt, submitNow)) {
-        this.sessionPurpose = submitPurpose;
-        this.persistDraft();
-        this.statusText = this.isHistorical
-          ? "开本时间已进入过去，当前为历史补录，请再次点击创建历史补录。"
-          : "开本时间用途已更新，请再次点击确认创建。";
-        return;
-      }
-      if (this.hasPendingHistoricalMismatch) {
-        this.statusText = "已有未完成的历史补录，请先继续上次补录。";
-        return;
-      }
-      const descriptor = this.historicalDraftDescriptor();
-      if (
-        this.isHistorical &&
-        (descriptor.seatPayloads.length === 0 ||
-          !descriptor.selectedSeatKey ||
-          descriptor.selectedSeatOccurrence < 0)
-      ) {
-        this.statusText = "请先选择你当时扮演的角色。";
-        return;
-      }
-      const auth = await ensureLoggedIn({
-        content: "登录后发布并分享你的剧本局。",
-        requirePhone: true,
-        phoneRequiredTitle: "授权手机号后发布",
-        phoneRequiredContent: "创建车前需要授权手机号，方便车局沟通和审核。"
-      });
-      if (!auth) {
-        this.statusText = "登录后可继续发布。";
-        return;
-      }
-      if (!this.canSubmit) {
-        return;
-      }
-      this.busyAction = true;
-      this.statusText = "";
-      const pinnedMessageText = this.effectivePinnedMessage;
-      try {
-        let session;
-        if (this.isHistorical && this.pendingHistoricalDraft) {
-          session = await this.recoverHistoricalSession(this.pendingHistoricalDraft);
-          if (!session) {
-            return;
+    createPublishedSession() {
+      return this.submissionController.submit({
+        prepare: () => {
+          const submitNow = new Date();
+          const submitPurpose = selectedSessionPurpose(this.dateValue, this.timeValue, submitNow);
+          if (!submitPurpose) {
+            this.statusText = "请选择有效的开本日期和时间。";
+            return null;
           }
-        } else {
-          const sessionResponse = await request({
-            url: "/api/sessions",
-            method: "POST",
-            data: this.sessionCreationData(pinnedMessageText)
-          });
-          session = dataOf(sessionResponse);
-        }
-        if (isAuthorPrivateText(session)) {
-          this.statusText = session.moderation_message;
-          return;
-        }
-        if (!this.isHistorical) {
-          await this.initializeFutureSession(session, descriptor, pinnedMessageText);
-          return;
-        }
-        let pendingHistoricalDraft = this.pendingHistoricalDraft;
-        if (!pendingHistoricalDraft) {
-          pendingHistoricalDraft = {
-            sessionId: Number(session.id),
-            fingerprint: descriptor.fingerprint,
-            snapshot: descriptor.snapshot,
-            selectedSeatKey: descriptor.selectedSeatKey,
-            selectedSeatOccurrence: descriptor.selectedSeatOccurrence
+          if (submitPurposeChanged(this.sessionPurpose, this.startAt, submitNow)) {
+            this.sessionPurpose = submitPurpose;
+            this.persistDraft();
+            this.statusText = this.isHistorical
+              ? "开本时间已进入过去，当前为历史补录，请再次点击创建历史补录。"
+              : "开本时间用途已更新，请再次点击确认创建。";
+            return null;
+          }
+          if (this.hasPendingHistoricalMismatch) {
+            this.statusText = "已有未完成的历史补录，请先继续上次补录。";
+            return null;
+          }
+          const descriptor = this.historicalDraftDescriptor();
+          if (
+            !descriptor ||
+            (this.isHistorical &&
+              (descriptor.seatPayloads.length === 0 ||
+                !descriptor.selectedSeatKey ||
+                descriptor.selectedSeatOccurrence < 0))
+          ) {
+            this.statusText = "请先选择你当时扮演的角色。";
+            return null;
+          }
+          this.statusText = "";
+          const pinnedMessageText = this.effectivePinnedMessage;
+          return {
+            descriptor,
+            pinnedMessageText,
+            sessionPurpose: this.sessionPurpose,
+            isHistorical: this.isHistorical,
+            creationData: this.sessionCreationData(pinnedMessageText)
           };
-          this.persistPendingHistoricalDraft(pendingHistoricalDraft);
+        },
+        ensureAuthenticated: async () => {
+          const auth = await ensureLoggedIn({
+            content: "登录后发布并分享你的剧本局。",
+            requirePhone: true,
+            phoneRequiredTitle: "授权手机号后发布",
+            phoneRequiredContent: "创建车前需要授权手机号，方便车局沟通和审核。"
+          });
+          if (!auth) {
+            this.statusText = "登录后可继续发布。";
+            return null;
+          }
+          if (!this.canSubmit) return null;
+          this.busyAction = true;
+          return auth;
+        },
+        createSession: async (prepared) => {
+          const {
+            descriptor,
+            pinnedMessageText,
+            sessionPurpose,
+            isHistorical,
+            creationData
+          } = prepared;
+          if (!sessionSetupSubmissionMatches({
+            preparedPurpose: sessionPurpose,
+            currentPurpose: this.sessionPurpose,
+            preparedDescriptor: descriptor,
+            currentDescriptor: this.historicalDraftDescriptor()
+          })) {
+            this.statusText = "登录期间开本设置已变化，请再次点击确认创建。";
+            return null;
+          }
+          if (!isHistorical) {
+            const sessionResponse = await request({
+              url: "/api/sessions",
+              method: "POST",
+              data: creationData
+            });
+            const session = dataOf(sessionResponse);
+            if (isAuthorPrivateText(session)) {
+              this.statusText = session.moderation_message;
+              return null;
+            }
+            return { session, pendingHistoricalDraft: null };
+          }
+          const result = await createOrRecoverHistoricalDraft({
+            pendingHistoricalDraft: this.pendingHistoricalDraft,
+            descriptor,
+            persistPending: (pending) => this.persistPendingHistoricalDraft(pending),
+            recoverSession: (pending) => this.recoverHistoricalSession(pending),
+            createSession: async ({ historicalCreationKey, idempotencyKey }) => {
+              const sessionResponse = await request({
+                url: "/api/sessions",
+                method: "POST",
+                data: {
+                  ...creationData,
+                  historicalCreationKey,
+                  idempotencyKey
+                }
+              });
+              return dataOf(sessionResponse);
+            }
+          });
+          if (!result.session) return null;
+          if (isAuthorPrivateText(result.session)) {
+            this.statusText = result.session.moderation_message;
+            return null;
+          }
+          return {
+            session: result.session,
+            pendingHistoricalDraft: result.pendingHistoricalDraft
+          };
+        },
+        initializeSession: async (
+          { session, pendingHistoricalDraft },
+          { descriptor, pinnedMessageText, isHistorical }
+        ) => {
+          if (!isHistorical) {
+            return this.initializeFutureSession(session, descriptor, pinnedMessageText);
+          }
+          return this.initializeHistoricalSession(
+            session,
+            pendingHistoricalDraft,
+            descriptor,
+            pinnedMessageText
+          );
         }
-        await this.initializeHistoricalSession(session, pendingHistoricalDraft, descriptor);
-      } catch (error) {
+      }).catch((error) => {
         if (error?.code === "SESSION_PURPOSE_TIME_MISMATCH") {
           const expectedPurpose = error?.details?.expectedSessionPurpose;
           this.sessionPurpose = [FUTURE_CARPOOL, HISTORICAL_RECORD].includes(expectedPurpose)
@@ -814,9 +906,12 @@ export default {
         } else {
           this.statusText = this.createErrorText(error);
         }
-      } finally {
+      }).finally(() => {
         this.busyAction = false;
-      }
+      });
+    },
+    redirectToSessionShare(sessionId) {
+      uni.redirectTo({ url: `/pages/session/share?id=${sessionId}` });
     },
     createErrorText(error) {
       if (error?.statusCode === 400) {

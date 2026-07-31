@@ -19,6 +19,7 @@ const NPC_MEMBER_ALIASES = Object.freeze([
   "userId",
   "user_id"
 ]);
+const HISTORICAL_CREATION_KEY = /^[A-Za-z0-9_-]{32,128}$/;
 
 function hasExplicitNonNullAlias(value, aliases) {
   if (!value || typeof value !== "object") return false;
@@ -44,6 +45,28 @@ export function assertHistoricalSessionMemberPrebindAllowed(body = {}, sessionPu
       "Historical members must claim a role through a historical invitation"
     );
   }
+}
+
+export function normalizeHistoricalSessionCreationKey(body = {}, sessionPurpose) {
+  if (!Object.prototype.hasOwnProperty.call(body, "historicalCreationKey")) {
+    return null;
+  }
+  if (normalizeSessionPurpose(sessionPurpose) !== HISTORICAL_RECORD) {
+    throw new AppError(
+      400,
+      "INVALID_HISTORICAL_CREATION_KEY",
+      "historicalCreationKey is only valid for historical sessions"
+    );
+  }
+  const value = body.historicalCreationKey;
+  if (typeof value !== "string" || !HISTORICAL_CREATION_KEY.test(value)) {
+    throw new AppError(
+      400,
+      "INVALID_HISTORICAL_CREATION_KEY",
+      "historicalCreationKey must contain 32 to 128 URL-safe characters"
+    );
+  }
+  return value;
 }
 
 export function normalizeSessionCreationStartAt(startAt, sessionPurpose, now = new Date()) {

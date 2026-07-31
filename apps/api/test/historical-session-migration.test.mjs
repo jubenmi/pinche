@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { requiredSchemaTables } from "../src/db/mysql.js";
 
 test("historical-session migration adds a safe compatible purpose", async () => {
   const sql = await readFile(
@@ -39,4 +40,26 @@ test("historical-session migration adds a safe compatible purpose", async () => 
     /PREPARE session_purpose_index_statement FROM @session_purpose_index_sql; EXECUTE session_purpose_index_statement;/i
   );
   assert.doesNotMatch(executableSql, /UPDATE\s+sessions/i);
+});
+
+test("historical creation operation migration stores only scoped hashes and is readiness-critical", async () => {
+  const sql = await readFile(
+    new URL("../migrations/0034_historical_session_creation_operations.sql", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS historical_session_creation_operations/i);
+  assert.match(sql, /organizer_user_id BIGINT UNSIGNED NOT NULL/i);
+  assert.match(sql, /creation_key_hash BINARY\(32\) NOT NULL/i);
+  assert.match(sql, /payload_hash BINARY\(32\) NOT NULL/i);
+  assert.match(sql, /session_id BIGINT UNSIGNED NULL/i);
+  assert.match(sql, /PRIMARY KEY \(organizer_user_id, creation_key_hash\)/i);
+  assert.match(sql, /UNIQUE KEY uniq_historical_creation_session \(session_id\)/i);
+  assert.match(sql, /FOREIGN KEY \(organizer_user_id\)[\s\S]*REFERENCES users\(id\)/i);
+  assert.match(sql, /FOREIGN KEY \(session_id\)[\s\S]*REFERENCES sessions\(id\)/i);
+  assert.doesNotMatch(sql, /raw_key|historical_creation_key VARCHAR|creation_key VARCHAR/i);
+  assert.equal(
+    requiredSchemaTables.includes("historical_session_creation_operations"),
+    true
+  );
 });

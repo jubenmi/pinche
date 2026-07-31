@@ -484,6 +484,99 @@ function createConnection() {
   };
 }
 
+function idempotentHistoricalCreationConnection() {
+  const state = {
+    operations: new Map(),
+    sessions: new Map(),
+    sessionInsertCount: 0,
+    chatRoomInsertCount: 0,
+    messageInsertCount: 0,
+    nextSessionId: 101
+  };
+
+  function operationId(userId, keyHash) {
+    return `${Number(userId)}:${Buffer.from(keyHash).toString("hex")}`;
+  }
+
+  return {
+    state,
+    async query(sql, values = []) {
+      const normalized = compactSql(sql);
+      if (normalized === "SELECT * FROM stores WHERE id = ?") {
+        return [[{ id: Number(values[0]), name: "测试门店", visibility: "public", review_status: "approved", status: "active" }]];
+      }
+      if (normalized === "SELECT * FROM scripts WHERE id = ?") {
+        return [[{ id: Number(values[0]), name: "测试剧本", visibility: "public", review_status: "approved", status: "active" }]];
+      }
+      if (normalized.startsWith("INSERT INTO user_roles")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized.startsWith("INSERT INTO historical_session_creation_operations")) {
+        const id = operationId(values[0], values[1]);
+        if (!state.operations.has(id)) {
+          state.operations.set(id, {
+            organizer_user_id: Number(values[0]),
+            creation_key_hash: Buffer.from(values[1]),
+            payload_hash: Buffer.from(values[2]),
+            session_id: null
+          });
+          return [{ affectedRows: 1 }];
+        }
+        return [{ affectedRows: 0 }];
+      }
+      if (
+        normalized ===
+        "SELECT organizer_user_id, HEX(payload_hash) AS payload_hash_hex, session_id FROM historical_session_creation_operations WHERE organizer_user_id = ? AND creation_key_hash = ? FOR UPDATE"
+      ) {
+        const operation = state.operations.get(operationId(values[0], values[1]));
+        return [operation ? [{
+          organizer_user_id: operation.organizer_user_id,
+          payload_hash_hex: operation.payload_hash.toString("hex").toUpperCase(),
+          session_id: operation.session_id
+        }] : []];
+      }
+      if (normalized.startsWith("UPDATE historical_session_creation_operations SET session_id = ?")) {
+        const operation = state.operations.get(operationId(values[1], values[2]));
+        if (!operation || operation.session_id !== null) return [{ affectedRows: 0 }];
+        operation.session_id = Number(values[0]);
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized.startsWith("INSERT INTO sessions")) {
+        const id = state.nextSessionId++;
+        const insert = { sql, values };
+        state.sessions.set(id, { id, ...sessionInsertValues(insert) });
+        state.sessionInsertCount += 1;
+        return [{ insertId: id }];
+      }
+      if (normalized === "SELECT * FROM sessions WHERE id = ?") {
+        const session = state.sessions.get(Number(values[0]));
+        return [session ? [session] : []];
+      }
+      if (normalized.startsWith("SELECT * FROM script_npc_roles")) {
+        return [[]];
+      }
+      if (normalized === "SELECT * FROM session_chat_rooms WHERE session_id = ? LIMIT 1") {
+        return [[]];
+      }
+      if (normalized.startsWith("INSERT INTO session_chat_rooms")) {
+        state.chatRoomInsertCount += 1;
+        return [{ insertId: 201 + state.chatRoomInsertCount }];
+      }
+      if (normalized.startsWith("INSERT INTO session_messages")) {
+        state.messageInsertCount += 1;
+        return [{ insertId: 301 + state.messageInsertCount }];
+      }
+      if (normalized.startsWith("UPDATE session_chat_rooms")) {
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized.includes("FROM session_messages message")) {
+        return [[]];
+      }
+      throw new Error(`Unexpected query: ${normalized}`);
+    }
+  };
+}
+
 function createPublishConnection({
   session = {},
   sessionExists = true,
@@ -692,6 +785,128 @@ test("future creation retains requested public visibility and recruitment settin
   assert.equal(values.join_policy, "direct");
   assert.equal(values.join_phone_required, 1);
   assert.equal(values.npc_join_enabled, 1);
+});
+
+test("historical creation key replay returns one session without repeating creation side effects", async () => {
+  const connection = idempotentHistoricalCreationConnection();
+  const body = baseBody({
+    historicalCreationKey: "hs_0123456789abcdef0123456789abcdef0123456789abcdef",
+    pinnedMessageText: "补录说明"
+  });
+
+  const first = await createSessionWithConnection(connection, ACTOR, body);
+  const replay = await createSessionWithConnection(connection, ACTOR, body);
+
+  assert.equal(replay.id, first.id);
+  assert.equal(connection.state.sessionInsertCount, 1);
+  assert.equal(connection.state.chatRoomInsertCount, 1);
+  assert.equal(connection.state.messageInsertCount, 1);
+  assert.equal(connection.state.operations.size, 1);
+});
+
+test("historical creation key replay with a changed payload conflicts before side effects", async () => {
+  const connection = idempotentHistoricalCreationConnection();
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+
+  await createSessionWithConnection(connection, ACTOR, baseBody({
+    historicalCreationKey,
+    note: "第一次补录"
+  }));
+  await assert.rejects(
+    () => createSessionWithConnection(connection, ACTOR, baseBody({
+      historicalCreationKey,
+      note: "被更改的补录"
+    })),
+    {
+      statusCode: 409,
+      code: "HISTORICAL_SESSION_CREATION_KEY_REUSED"
+    }
+  );
+
+  assert.equal(connection.state.sessionInsertCount, 1);
+  assert.equal(connection.state.operations.size, 1);
+});
+
+test("historical creation keys are isolated by authenticated organizer", async () => {
+  const connection = idempotentHistoricalCreationConnection();
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const secondActor = {
+    user: { id: 8, phoneVerifiedAt: ACTOR.user.phoneVerifiedAt },
+    roles: ["organizer"]
+  };
+
+  const first = await createSessionWithConnection(connection, ACTOR, baseBody({
+    historicalCreationKey
+  }));
+  const second = await createSessionWithConnection(connection, secondActor, baseBody({
+    historicalCreationKey
+  }));
+
+  assert.notEqual(first.id, second.id);
+  assert.equal(connection.state.sessionInsertCount, 2);
+  assert.equal(connection.state.operations.size, 2);
+});
+
+test("historical creation key validation is strict and future creation never enters operation storage", async (t) => {
+  for (const historicalCreationKey of ["short", "hs_has spaces_012345678901234567890123456789", "x".repeat(129)]) {
+    await t.test(`rejects ${JSON.stringify(historicalCreationKey)}`, async () => {
+      const connection = idempotentHistoricalCreationConnection();
+      await assert.rejects(
+        () => createSessionWithConnection(connection, ACTOR, baseBody({ historicalCreationKey })),
+        { statusCode: 400 }
+      );
+      assert.equal(connection.state.sessionInsertCount, 0);
+      assert.equal(connection.state.operations.size, 0);
+    });
+  }
+
+  const futureConnection = idempotentHistoricalCreationConnection();
+  await assert.rejects(
+    () => createSessionWithConnection(futureConnection, ACTOR, baseBody({
+      startAt: "2099-01-01 13:00:00",
+      sessionPurpose: "future_carpool",
+      historicalCreationKey: "hs_0123456789abcdef0123456789abcdef0123456789abcdef"
+    })),
+    { statusCode: 400 }
+  );
+  assert.equal(futureConnection.state.operations.size, 0);
+});
+
+test("moderated historical session proposal retains the business creation key for apply", async () => {
+  const historicalCreationKey =
+    "hs_0123456789abcdef0123456789abcdef0123456789abcdef";
+  const descriptor = buildTextModerationDescriptor({
+    action: "create_session",
+    subjectId: "session-create:7",
+    actorUserId: ACTOR.user.id,
+    openid: "openid-7",
+    baseVersion: expectedTextCreationBase(ACTOR.user.id),
+    idempotencyKey: historicalCreationKey,
+    idempotencyExplicit: true,
+    body: baseBody({
+      historicalCreationKey,
+      note: "审核中的补录"
+    })
+  });
+
+  assert.equal(descriptor.idempotencyKey, historicalCreationKey);
+  assert.equal(descriptor.payload.body.historicalCreationKey, historicalCreationKey);
+
+  const connection = idempotentHistoricalCreationConnection();
+  const created = await applyApprovedSessionProposal(
+    connection,
+    descriptor.payload.body,
+    historicalCreationKey
+  );
+  const replay = await applyApprovedSessionProposal(
+    connection,
+    descriptor.payload.body,
+    historicalCreationKey
+  );
+  assert.equal(replay.id, created.id);
+  assert.equal(connection.state.sessionInsertCount, 1);
 });
 
 test("publish validation failures stop at the expected lock boundary without mutation", async (t) => {
