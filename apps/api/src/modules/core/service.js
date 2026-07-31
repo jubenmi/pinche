@@ -1370,24 +1370,41 @@ async function updateAllowed(connection, table, id, body, fields) {
   return findById(connection, table, id);
 }
 
-async function requireSeatOwner(connection, seatId, user) {
-  const [rows] = await connection.query(
-    `
-      SELECT seat.*, session.organizer_user_id
-      FROM session_seats seat
-      JOIN sessions session ON session.id = seat.session_id
-      WHERE seat.id = ?
-    `,
+async function requireLockedSeatOwner(
+  connection,
+  seatId,
+  user,
+  { fullMembership = false } = {}
+) {
+  const [seatRefs] = await connection.query(
+    "SELECT session_id FROM session_seats WHERE id = ?",
     [seatId]
   );
-  const seat = rows[0];
+  const seatRef = seatRefs[0];
+  if (!seatRef) {
+    throw notFound("Seat not found");
+  }
+  const session = await findLockedSession(connection, seatRef.session_id);
+  if (!session) {
+    throw notFound("Seat not found");
+  }
+  if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the session organizer can perform this action");
+  }
+  if (fullMembership) {
+    await lockSessionMembershipRows(connection, session.id);
+  } else {
+    await lockSessionSeats(connection, session.id);
+  }
+  const [seatRows] = await connection.query(
+    "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE",
+    [seatId, session.id]
+  );
+  const seat = seatRows[0];
   if (!seat) {
     throw notFound("Seat not found");
   }
-  if (!isAdmin(user) && Number(seat.organizer_user_id) !== Number(user.user.id)) {
-    throw forbidden("Only the session organizer can perform this action");
-  }
-  return seat;
+  return sessionMembershipTarget(seat, session);
 }
 
 async function requireSignupOwner(connection, signupId, user) {
@@ -1426,7 +1443,50 @@ async function requireLockedSessionOwner(
   return session;
 }
 
-async function requireLockedSignupOwner(connection, signupId, user) {
+async function findLockedSession(connection, sessionId) {
+  return findById(connection, "sessions", sessionId, {
+    forUpdate: true
+  });
+}
+
+async function requireLockedSession(connection, sessionId) {
+  const session = await findLockedSession(connection, sessionId);
+  if (!session) {
+    throw notFound("Session not found");
+  }
+  return session;
+}
+
+async function sessionWithDatabaseStarted(connection, session) {
+  const [rows] = await connection.query(
+    "SELECT (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ?",
+    [session.id]
+  );
+  return {
+    ...session,
+    session_started: Number(rows[0]?.session_started || 0)
+  };
+}
+
+function sessionMembershipTarget(row, session) {
+  return {
+    ...row,
+    session_purpose: session.session_purpose,
+    organizer_user_id: session.organizer_user_id,
+    join_policy: session.join_policy,
+    join_phone_required: session.join_phone_required ?? 1,
+    npc_join_enabled: session.npc_join_enabled ?? 1,
+    session_status: session.status,
+    session_started: Number(session.session_started || 0)
+  };
+}
+
+async function requireLockedSignupOwner(
+  connection,
+  signupId,
+  user,
+  { validateSession = null } = {}
+) {
   const [signupRefs] = await connection.query(
     "SELECT session_id FROM signups WHERE id = ?",
     [signupId]
@@ -1440,6 +1500,10 @@ async function requireLockedSignupOwner(connection, signupId, user) {
     signupRef.session_id,
     user
   );
+  await lockSessionMembershipRows(connection, session.id);
+  if (validateSession) {
+    validateSession(session);
+  }
   const [rows] = await connection.query(
     "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE",
     [signupId, session.id]
@@ -1476,6 +1540,38 @@ async function lockSessionSeats(connection, sessionId) {
     `,
     [sessionId]
   );
+}
+
+async function lockSessionNpcRoles(connection, sessionId) {
+  await connection.query(
+    `
+      SELECT id
+      FROM session_npc_roles
+      WHERE session_id = ?
+      ORDER BY id
+      FOR UPDATE
+    `,
+    [sessionId]
+  );
+}
+
+async function lockSessionSignups(connection, sessionId) {
+  await connection.query(
+    `
+      SELECT id
+      FROM signups
+      WHERE session_id = ?
+      ORDER BY id
+      FOR UPDATE
+    `,
+    [sessionId]
+  );
+}
+
+async function lockSessionMembershipRows(connection, sessionId) {
+  await lockSessionSeats(connection, sessionId);
+  await lockSessionNpcRoles(connection, sessionId);
+  await lockSessionSignups(connection, sessionId);
 }
 
 async function assertUserCanJoinSession(connection, sessionId, userId) {
@@ -1632,11 +1728,20 @@ async function releaseUserOtherSessionNpcRoles(
         AND bound_user_id = ?
         AND id <> ?
         AND status = 'active'
-      FOR UPDATE
     `,
     [sessionId, userId, npcRoleId || 0]
   );
 
+  await connection.query(
+    `
+      UPDATE session_npc_roles
+      SET bound_user_id = NULL
+      WHERE session_id = ?
+        AND bound_user_id = ?
+        AND id <> ?
+    `,
+    [sessionId, userId, npcRoleId || 0]
+  );
   await connection.query(
     `
       UPDATE signups
@@ -1652,16 +1757,6 @@ async function releaseUserOtherSessionNpcRoles(
         )
     `,
     [sessionId, userId, sessionId, npcRoleId || 0]
-  );
-  await connection.query(
-    `
-      UPDATE session_npc_roles
-      SET bound_user_id = NULL
-      WHERE session_id = ?
-        AND bound_user_id = ?
-        AND id <> ?
-    `,
-    [sessionId, userId, npcRoleId || 0]
   );
 
   return boundRows;
@@ -1715,20 +1810,20 @@ async function cleanupSessionExclusiveRoleSelections(connection, sessionId) {
   const placeholders = duplicateNpcRoleIds.map(() => "?").join(", ");
   await connection.query(
     `
-      UPDATE signups
-      SET status = 'cancelled'
+      UPDATE session_npc_roles
+      SET bound_user_id = NULL
       WHERE session_id = ?
-        AND status IN ('pending', 'approved')
-        AND session_npc_role_id IN (${placeholders})
+        AND id IN (${placeholders})
     `,
     [sessionId, ...duplicateNpcRoleIds]
   );
   await connection.query(
     `
-      UPDATE session_npc_roles
-      SET bound_user_id = NULL
+      UPDATE signups
+      SET status = 'cancelled'
       WHERE session_id = ?
-        AND id IN (${placeholders})
+        AND status IN ('pending', 'approved')
+        AND session_npc_role_id IN (${placeholders})
     `,
     [sessionId, ...duplicateNpcRoleIds]
   );
@@ -4042,6 +4137,8 @@ function publicSessionNpcRoleResponse(row = {}) {
 
 async function memberSessionDetail(connection, session) {
   const id = Number(session.id);
+  const lockedSession = await requireLockedSession(connection, id);
+  await lockSessionMembershipRows(connection, id);
   await cleanupSessionExclusiveRoleSelections(connection, id);
   const [seats] = await connection.query(
     `
@@ -4060,10 +4157,14 @@ async function memberSessionDetail(connection, session) {
   );
   const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
   const activeAlbumPhotoCount = await activeSessionAlbumPhotoCount(connection, id);
-  const storeLocation = session.store_id
-    ? await findById(connection, "stores", session.store_id)
+  const storeLocation = lockedSession.store_id
+    ? await findById(connection, "stores", lockedSession.store_id)
     : null;
-  const { note: _note, cancelled_by_user_id: _cancelledByUserId, ...safeSession } = session;
+  const {
+    note: _note,
+    cancelled_by_user_id: _cancelledByUserId,
+    ...safeSession
+  } = lockedSession;
   return {
     ...safeSession,
     store_address: storeLocation?.address || null,
@@ -5095,8 +5196,8 @@ export async function rescheduleSessionInTransaction(connection, user, id, body 
     // Lock order is parent session, indexed seat range, then indexed NPC-role range.
     // Existing child updates wait on these locks; FK-validating child inserts also wait
     // on the already-exclusive parent lock, keeping this membership snapshot stable.
-    await connection.query("SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE", [id]);
-    await connection.query("SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE", [id]);
+    await lockSessionSeats(connection, id);
+    await lockSessionNpcRoles(connection, id);
 
     const [recipientRows] = await connection.query(
       `
@@ -5337,8 +5438,9 @@ export async function updateSessionNpcRole(user, npcRoleId, body = {}) {
 }
 
 export async function createSeat(user, sessionId, body) {
-  return withDatabaseConnection(async (connection) => {
-    await requireSessionOwner(connection, sessionId, user);
+  return withTransaction(async (connection) => {
+    const session = await requireLockedSessionOwner(connection, sessionId, user);
+    await lockSessionSeats(connection, session.id);
     assertPublicTextSafe("seatName", body.name);
     assertPublicTextSafe("roleName", body.roleName);
     const basePrice = intValue(body.basePrice, 0);
@@ -5370,8 +5472,8 @@ export async function createSeat(user, sessionId, body) {
 }
 
 export async function updateSeat(user, seatId, body) {
-  return withDatabaseConnection(async (connection) => {
-    const current = await requireSeatOwner(connection, seatId, user);
+  return withTransaction(async (connection) => {
+    const current = await requireLockedSeatOwner(connection, seatId, user);
     assertPublicTextSafe("seatName", body.name);
     assertPublicTextSafe("roleName", body.roleName);
     const basePrice =
@@ -5450,6 +5552,9 @@ export async function publishSessionWithConnection(connection, user, sessionId, 
     if (creatorSeat.status !== "open" || creatorSeat.confirmed_user_id !== null) {
       throw conflict("Creator seat must be open and unoccupied");
     }
+
+    await lockSessionNpcRoles(connection, sessionId);
+    await lockSessionSignups(connection, sessionId);
 
     const [seatUpdate] = await connection.query(
       `
@@ -5604,26 +5709,30 @@ async function tryNotify(label, sendNotification) {
 export async function createSignup(user, body) {
   const { signup, notification } = await withTransaction(async (connection) => {
     const seatId = requireValue(body, "seatId");
-    const [rows] = await connection.query(
-      `
-        SELECT
-          seat.*,
-          session.session_purpose,
-          session.status AS session_status,
-          COALESCE(session.join_phone_required, 1) AS join_phone_required,
-          (session.start_at <= CURRENT_TIMESTAMP) AS session_started
-        FROM session_seats seat
-        JOIN sessions session ON session.id = seat.session_id
-        WHERE seat.id = ?
-        FOR UPDATE
-      `,
+    const [seatRefs] = await connection.query(
+      "SELECT session_id FROM session_seats WHERE id = ?",
       [seatId]
     );
-    const seat = rows[0];
-    if (!seat) {
+    const seatRef = seatRefs[0];
+    if (!seatRef) {
       throw notFound("Seat not found");
     }
-    assertOrdinaryHistoricalRoleClaimAllowed(seat);
+    const session = await findLockedSession(connection, seatRef.session_id);
+    if (!session) {
+      throw notFound("Seat not found");
+    }
+    assertOrdinaryHistoricalRoleClaimAllowed(session);
+    const membershipSession = await sessionWithDatabaseStarted(connection, session);
+    await lockSessionMembershipRows(connection, session.id);
+    const [seatRows] = await connection.query(
+      "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE",
+      [seatId, session.id]
+    );
+    const seatRow = seatRows[0];
+    if (!seatRow) {
+      throw notFound("Seat not found");
+    }
+    const seat = sessionMembershipTarget(seatRow, membershipSession);
     const acceptsSignup =
       seat.session_status === "recruiting" ||
       (
@@ -5735,43 +5844,29 @@ function forbidPlayerDirectClaim(user, seat) {
 export async function claimSessionSeat(user, seatId, body = {}) {
   return withTransaction(async (connection) => {
     const [seatRefs] = await connection.query(
-      `
-        SELECT seat.session_id, session.session_purpose
-        FROM session_seats seat
-        JOIN sessions session ON session.id = seat.session_id
-        WHERE seat.id = ?
-      `,
+      "SELECT session_id FROM session_seats WHERE id = ?",
       [seatId]
     );
     const seatRef = seatRefs[0];
     if (!seatRef) {
       throw notFound("Seat not found");
     }
-    assertOrdinaryHistoricalRoleClaimAllowed(seatRef);
-
-    await lockSessionSeats(connection, seatRef.session_id);
-
-    const [rows] = await connection.query(
-      `
-        SELECT
-          seat.*,
-          session.session_purpose,
-          session.organizer_user_id,
-          session.join_policy,
-          COALESCE(session.join_phone_required, 1) AS join_phone_required,
-          session.status AS session_status,
-          (session.start_at <= CURRENT_TIMESTAMP) AS session_started
-        FROM session_seats seat
-        JOIN sessions session ON session.id = seat.session_id
-        WHERE seat.id = ?
-      `,
-      [seatId]
-    );
-    const seat = rows[0];
-    if (!seat) {
+    const session = await findLockedSession(connection, seatRef.session_id);
+    if (!session) {
       throw notFound("Seat not found");
     }
-    assertOrdinaryHistoricalRoleClaimAllowed(seat);
+    assertOrdinaryHistoricalRoleClaimAllowed(session);
+    const membershipSession = await sessionWithDatabaseStarted(connection, session);
+    await lockSessionMembershipRows(connection, session.id);
+    const [seatRows] = await connection.query(
+      "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE",
+      [seatId, session.id]
+    );
+    const seatRow = seatRows[0];
+    if (!seatRow) {
+      throw notFound("Seat not found");
+    }
+    const seat = sessionMembershipTarget(seatRow, membershipSession);
     await assertUserCanJoinSession(connection, seat.session_id, user.user.id);
     forbidPlayerDirectClaim(user, seat);
     requireJoinPhoneIfNeeded(user, seat);
@@ -5876,28 +5971,29 @@ export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
   const id = positiveId(npcRoleId, "npcRoleId");
 
   return withTransaction(async (connection) => {
-    const [rows] = await connection.query(
-      `
-        SELECT
-          role.*,
-          session.session_purpose,
-          session.organizer_user_id,
-          session.status AS session_status,
-          session.join_policy,
-          COALESCE(session.join_phone_required, 1) AS join_phone_required,
-          COALESCE(session.npc_join_enabled, 1) AS npc_join_enabled
-        FROM session_npc_roles role
-        JOIN sessions session ON session.id = role.session_id
-        WHERE role.id = ?
-        FOR UPDATE
-      `,
+    const [roleRefs] = await connection.query(
+      "SELECT session_id FROM session_npc_roles WHERE id = ?",
       [id]
     );
-    const role = rows[0];
-    if (!role) {
+    const roleRef = roleRefs[0];
+    if (!roleRef) {
       throw notFound("Session NPC role not found");
     }
-    assertOrdinaryHistoricalRoleClaimAllowed(role);
+    const session = await findLockedSession(connection, roleRef.session_id);
+    if (!session) {
+      throw notFound("Session NPC role not found");
+    }
+    assertOrdinaryHistoricalRoleClaimAllowed(session);
+    await lockSessionMembershipRows(connection, session.id);
+    const [roleRows] = await connection.query(
+      "SELECT * FROM session_npc_roles WHERE id = ? AND session_id = ? FOR UPDATE",
+      [id, session.id]
+    );
+    const roleRow = roleRows[0];
+    if (!roleRow) {
+      throw notFound("Session NPC role not found");
+    }
+    const role = sessionMembershipTarget(roleRow, session);
     if (role.status !== "active") {
       throw conflict("NPC role is not available");
     }
@@ -6197,8 +6293,9 @@ export async function listSessionSignups(user, sessionId) {
 
 export async function approveSignup(user, signupId) {
   const { signup, notification } = await withTransaction(async (connection) => {
-    const signup = await requireLockedSignupOwner(connection, signupId, user);
-    assertOrdinaryHistoricalRoleClaimAllowed(signup);
+    const signup = await requireLockedSignupOwner(connection, signupId, user, {
+      validateSession: assertOrdinaryHistoricalRoleClaimAllowed
+    });
     if (signup.status !== "pending") {
       throw badRequest("Only pending signup can be approved");
     }
@@ -6208,10 +6305,10 @@ export async function approveSignup(user, signupId) {
         `
           SELECT *
           FROM session_npc_roles
-          WHERE id = ?
+          WHERE id = ? AND session_id = ?
           FOR UPDATE
         `,
-        [signup.session_npc_role_id]
+        [signup.session_npc_role_id, signup.session_id]
       );
       const role = roleRows[0];
       if (!role) {
@@ -6226,7 +6323,6 @@ export async function approveSignup(user, signupId) {
       ) {
         throw conflict("NPC role already has a bound user");
       }
-      await lockSessionSeats(connection, signup.session_id);
       await releaseUserOtherConfirmedSeats(
         connection,
         signup.session_id,
@@ -6285,11 +6381,9 @@ export async function approveSignup(user, signupId) {
       };
     }
 
-    await lockSessionSeats(connection, signup.session_id);
-
     const [seatRows] = await connection.query(
-      "SELECT * FROM session_seats WHERE id = ?",
-      [signup.seat_id]
+      "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE",
+      [signup.seat_id, signup.session_id]
     );
     const seat = seatRows[0];
     if (!seat) {
@@ -6361,7 +6455,7 @@ export async function approveSignup(user, signupId) {
 
 export async function rejectSignup(user, signupId) {
   const { signup, notification } = await withTransaction(async (connection) => {
-    const signup = await requireSignupOwner(connection, signupId, user);
+    const signup = await requireLockedSignupOwner(connection, signupId, user);
     if (signup.status !== "pending") {
       throw badRequest("Only pending signup can be rejected");
     }
@@ -6444,7 +6538,7 @@ export async function updateDeposit(user, signupId, body) {
 
 export async function lockSeat(user, seatId) {
   return withTransaction(async (connection) => {
-    const seat = await requireSeatOwner(connection, seatId, user);
+    const seat = await requireLockedSeatOwner(connection, seatId, user);
     if (seat.status !== "confirmed") {
       throw badRequest("Only confirmed seat can be locked");
     }
@@ -6458,23 +6552,9 @@ export async function lockSeat(user, seatId) {
 
 export async function kickSessionSeat(user, seatId, body = {}) {
   return withTransaction(async (connection) => {
-    const [rows] = await connection.query(
-      `
-        SELECT seat.*, session.organizer_user_id, session.status AS session_status
-        FROM session_seats seat
-        JOIN sessions session ON session.id = seat.session_id
-        WHERE seat.id = ?
-        FOR UPDATE
-      `,
-      [seatId]
-    );
-    const seat = rows[0];
-    if (!seat) {
-      throw notFound("Seat not found");
-    }
-    if (!isAdmin(user) && Number(seat.organizer_user_id) !== Number(user.user.id)) {
-      throw forbidden("Only the session organizer can perform this action");
-    }
+    const seat = await requireLockedSeatOwner(connection, seatId, user, {
+      fullMembership: true
+    });
 
     const report = booleanValue(body.report, false);
     const reasonType = normalizeRemovalReasonType(
@@ -6610,6 +6690,7 @@ export async function cancelSession(user, sessionId, body = {}) {
     }
     const reason = optionalText(body.reason);
     assertMessageTextSafe("reason", reason);
+    await lockSessionMembershipRows(connection, id);
     return {
       id,
       deleted: await deleteSessionTree(connection, id)
@@ -6620,12 +6701,8 @@ export async function cancelSession(user, sessionId, body = {}) {
 export async function deleteAdminSession(sessionId) {
   return withTransaction(async (connection) => {
     const id = positiveId(sessionId, "sessionId");
-    const [rows] = await connection.query("SELECT id FROM sessions WHERE id = ? FOR UPDATE", [
-      id
-    ]);
-    if (!rows[0]) {
-      throw notFound("Session not found");
-    }
+    await requireLockedSession(connection, id);
+    await lockSessionMembershipRows(connection, id);
     return {
       id,
       deleted: await deleteSessionTree(connection, id)

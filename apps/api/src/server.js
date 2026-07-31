@@ -727,26 +727,61 @@ async function currentNpcRoleTextBase(
   actorUserId,
   { forUpdate = false } = {}
 ) {
-  const [rows] = await connection.query(
-    `SELECT role.id, role.session_id, role.script_npc_role_id, role.name,
-            role.description, role.role_gender, role.source, role.bound_user_id,
-            role.sort_order, role.status,
-            session.id AS parent_session_id, session.organizer_user_id,
-            session.script_id, session.store_id, session.script_name_snapshot,
-            session.store_name_snapshot, session.start_at, session.session_purpose,
-            session.dm_user_id,
-            session.dm_name_snapshot, session.npc_user_id, session.npc_name_snapshot,
-            session.deposit_amount, session.visibility, session.join_policy,
-            session.join_phone_required, session.npc_join_enabled, session.note,
-            session.status AS session_status, session.cancelled_at
-     FROM session_npc_roles AS role
-     JOIN sessions AS session ON session.id = role.session_id
-     WHERE role.id = ? LIMIT 1${forUpdate ? " FOR UPDATE" : ""}`,
-    [Number(npcRoleId)]
-  );
-  const role = rows[0];
+  let role = null;
+  let parentSession = null;
+  if (!forUpdate) {
+    const [rows] = await connection.query(
+      `SELECT role.id, role.session_id, role.script_npc_role_id, role.name,
+              role.description, role.role_gender, role.source, role.bound_user_id,
+              role.sort_order, role.status,
+              session.id AS parent_session_id, session.organizer_user_id,
+              session.script_id, session.store_id, session.script_name_snapshot,
+              session.store_name_snapshot, session.start_at, session.session_purpose,
+              session.dm_user_id,
+              session.dm_name_snapshot, session.npc_user_id, session.npc_name_snapshot,
+              session.deposit_amount, session.visibility, session.join_policy,
+              session.join_phone_required, session.npc_join_enabled, session.note,
+              session.status AS session_status, session.cancelled_at
+       FROM session_npc_roles AS role
+       JOIN sessions AS session ON session.id = role.session_id
+       WHERE role.id = ? LIMIT 1`,
+      [Number(npcRoleId)]
+    );
+    role = rows[0] || null;
+    if (role) {
+      parentSession = sessionTextSnapshot({
+        ...role,
+        id: role.parent_session_id,
+        status: role.session_status
+      });
+    }
+  } else {
+    const [roleRefRows] = await connection.query(
+      "SELECT session_id FROM session_npc_roles WHERE id = ? LIMIT 1",
+      [Number(npcRoleId)]
+    );
+    const roleRef = roleRefRows[0] || null;
+    if (roleRef) {
+      const [sessionRows] = await connection.query(
+        "SELECT * FROM sessions WHERE id = ? LIMIT 1 FOR UPDATE",
+        [Number(roleRef.session_id)]
+      );
+      const session = sessionRows[0] || null;
+      if (session) {
+        const [roleRows] = await connection.query(
+          `SELECT id, session_id, script_npc_role_id, name, description,
+                  role_gender, source, bound_user_id, sort_order, status
+           FROM session_npc_roles
+           WHERE id = ? AND session_id = ? LIMIT 1 FOR UPDATE`,
+          [Number(npcRoleId), Number(session.id)]
+        );
+        role = roleRows[0] || null;
+        parentSession = sessionTextSnapshot(session);
+      }
+    }
+  }
   const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
-  if (!role) {
+  if (!role || !parentSession) {
     if (!forUpdate) requireInitialTextModerationTarget(role, "Session NPC role");
     return "";
   }
@@ -754,11 +789,6 @@ async function currentNpcRoleTextBase(
     if (!forUpdate) requireInitialTextModerationTarget(actor, "User");
     return "";
   }
-  const parentSession = sessionTextSnapshot({
-    ...role,
-    id: role.parent_session_id,
-    status: role.session_status
-  });
   if (!forUpdate) assertSessionOwnerPreflight(parentSession, actor);
   return createTextBaseline({
     kind: "session_npc_role",
@@ -1085,7 +1115,7 @@ async function moderateCoveredText({ request, user, action, subjectId, body, con
 
 async function loadTextProposalActor(connection, actorUserId) {
   const [users] = await connection.query(
-    "SELECT * FROM users WHERE id = ? LIMIT 1 FOR UPDATE",
+    "SELECT * FROM users WHERE id = ? LIMIT 1",
     [Number(actorUserId)]
   );
   if (!users[0]) return null;

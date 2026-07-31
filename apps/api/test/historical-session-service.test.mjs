@@ -421,6 +421,14 @@ function createPublishConnection({
       }
       if (
         normalized ===
+          "SELECT id FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+        normalized ===
+          "SELECT id FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+      ) {
+        return [[]];
+      }
+      if (
+        normalized ===
         "UPDATE session_seats SET status = 'confirmed', confirmed_user_id = ? WHERE id = ? AND session_id = ? AND status = 'open' AND confirmed_user_id IS NULL"
       ) {
         if (seatUpdateAffectedRows === 1) {
@@ -936,15 +944,14 @@ test("historical sessions reject every ordinary recruitment path before mutation
       "createSignup",
       () => createSignup(ACTOR, { seatId: 11 }),
       (sql) => {
-        if (sql.includes("FROM session_seats seat") && sql.includes("FOR UPDATE")) {
+        if (sql === "SELECT session_id FROM session_seats WHERE id = ?") {
+          return [[{ session_id: 101 }]];
+        }
+        if (sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
           return [[{
-            id: 11,
-            session_id: 101,
+            id: 101,
             session_purpose: "historical_record",
-            session_status: "locked",
-            session_started: 1,
-            status: "cancelled",
-            join_phone_required: 0
+            status: "locked"
           }]];
         }
         throw new Error(`Unexpected query: ${sql}`);
@@ -954,24 +961,14 @@ test("historical sessions reject every ordinary recruitment path before mutation
       "claimSessionSeat",
       () => claimSessionSeat(ACTOR, 11),
       (sql) => {
-        if (sql.startsWith("SELECT seat.session_id, session.session_purpose")) {
-          return [[{ session_id: 101, session_purpose: "historical_record" }]];
+        if (sql === "SELECT session_id FROM session_seats WHERE id = ?") {
+          return [[{ session_id: 101 }]];
         }
-        if (sql.includes("SELECT id FROM session_seats") && sql.includes("FOR UPDATE")) {
-          return [[]];
-        }
-        if (sql.includes("session.organizer_user_id") && sql.includes("FROM session_seats seat")) {
+        if (sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
           return [[{
-            id: 11,
-            session_id: 101,
+            id: 101,
             session_purpose: "historical_record",
-            organizer_user_id: 88,
-            join_policy: "review_required",
-            join_phone_required: 0,
-            session_status: "locked",
-            session_started: 1,
-            status: "cancelled",
-            confirmed_user_id: 99
+            status: "locked"
           }]];
         }
         throw new Error(`Unexpected query: ${sql}`);
@@ -981,18 +978,14 @@ test("historical sessions reject every ordinary recruitment path before mutation
       "claimSessionNpcRole",
       () => claimSessionNpcRole(ACTOR, 31),
       (sql) => {
-        if (sql.includes("FROM session_npc_roles role") && sql.includes("FOR UPDATE")) {
+        if (sql === "SELECT session_id FROM session_npc_roles WHERE id = ?") {
+          return [[{ session_id: 101 }]];
+        }
+        if (sql === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") {
           return [[{
-            id: 31,
-            session_id: 101,
+            id: 101,
             session_purpose: "historical_record",
-            organizer_user_id: 88,
-            session_status: "cancelled",
-            join_policy: "review_required",
-            join_phone_required: 0,
-            npc_join_enabled: 0,
-            status: "inactive",
-            bound_user_id: 99
+            status: "locked"
           }]];
         }
         throw new Error(`Unexpected query: ${sql}`);
@@ -1012,6 +1005,13 @@ test("historical sessions reject every ordinary recruitment path before mutation
             session_purpose: "historical_record",
             status: "locked"
           }]];
+        }
+        if (
+          sql === "SELECT id FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+          sql === "SELECT id FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+          sql === "SELECT id FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+        ) {
+          return [[]];
         }
         if (sql === "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE") {
           return [[{
@@ -1161,6 +1161,13 @@ test("child-id mutation paths lock session before re-locking the child", async (
           status: "locked"
         }]];
       }
+      if (
+        sql === "SELECT id FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+        sql === "SELECT id FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE" ||
+        sql === "SELECT id FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+      ) {
+        return [[]];
+      }
       if (sql === "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE") {
         return [[signup]];
       }
@@ -1178,7 +1185,19 @@ test("child-id mutation paths lock session before re-locking the child", async (
       ({ sql }) => sql === "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE"
     );
     assert.ok(sessionLock >= 0);
-    assert.ok(childLock > sessionLock);
+    assert.equal(childLock, -1, "historical purpose guard must run before target signup locking");
+    assert.deepEqual(
+      connection.state.queries
+        .map(({ sql }) => sql)
+        .filter((sql) => /FOR UPDATE/.test(sql))
+        .slice(0, 4),
+      [
+        "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
+        "SELECT id FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE",
+        "SELECT id FROM session_npc_roles WHERE session_id = ? ORDER BY id FOR UPDATE",
+        "SELECT id FROM signups WHERE session_id = ? ORDER BY id FOR UPDATE"
+      ]
+    );
     assert.deepEqual(connection.state.mutations, []);
   });
 });
