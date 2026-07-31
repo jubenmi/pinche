@@ -17,7 +17,6 @@ import {
   normalizeNpcRoles,
   normalizeRoleGender,
   normalizeRoleTemplateItem,
-  parseNpcRoles,
   parseRoleTemplate
 } from "./npc-role-normalization.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
@@ -63,7 +62,10 @@ import {
   createSessionRescheduleDedupeKey,
   normalizeSessionRescheduleStartAt
 } from "./session-reschedule.js";
-import { normalizeSessionCreationStartAt } from "./session-purpose.js";
+import {
+  assertHistoricalSessionMemberPrebindAllowed,
+  normalizeSessionCreationStartAt
+} from "./session-purpose.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
 import {
   findOwnedUserImageAssetById,
@@ -3868,23 +3870,8 @@ export async function createSessionWithConnection(connection, user, body) {
     requireValue(body, "startAt"),
     body.sessionPurpose
   );
+  assertHistoricalSessionMemberPrebindAllowed(body, normalizedCreation.sessionPurpose);
   const isHistorical = normalizedCreation.sessionPurpose === "historical_record";
-  if (isHistorical) {
-    const directMemberAliases = ["dmUserId", "dm_user_id", "npcUserId", "npc_user_id"];
-    const hasDirectMember = directMemberAliases.some((key) => body[key] != null);
-    const historicalNpcRoles = parseNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles);
-    const memberAliases = ["boundUserId", "bound_user_id", "userId", "user_id"];
-    const hasPreboundNpcRole = historicalNpcRoles.some((role) => (
-      role && typeof role === "object" && memberAliases.some((key) => role[key] != null)
-    ));
-    if (hasDirectMember || hasPreboundNpcRole) {
-      throw new AppError(
-        400,
-        "HISTORICAL_MEMBER_PREBIND_FORBIDDEN",
-        "Historical members must claim a role through a historical invitation"
-      );
-    }
-  }
 
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);

@@ -4,7 +4,6 @@ import test from "node:test";
 
 import { createSessionWithConnection } from "../src/modules/core/service.js";
 import { buildTextModerationDescriptor } from "../src/modules/content-moderation/text-boundaries.js";
-import { projectAuthorTextProposal } from "../src/modules/content-moderation/text-author-projection.js";
 import {
   createProductionTextProposalHandlers,
   expectedTextCreationBase
@@ -116,6 +115,58 @@ function baseBody(overrides = {}) {
   };
 }
 
+function applyApprovedSessionProposal(connection, body, idempotencyKey) {
+  const targetSubjectId = textCreationTargetSubjectId({
+    action: "create_session",
+    actorUserId: ACTOR.user.id
+  });
+  const unused = async () => null;
+  const handlers = createProductionTextProposalHandlers({
+    currentActorTextSnapshot: unused,
+    currentSessionCreateTextBase: async () => expectedTextCreationBase(ACTOR.user.id),
+    currentSessionTextBase: unused,
+    currentNpcRoleTextBase: unused,
+    currentReviewTextBase: unused,
+    currentMessageTextBase: unused,
+    currentPinnedTextBase: unused,
+    updateUserProfileWithConnection: unused,
+    createPrivateStoreWithConnection: unused,
+    createPrivateScriptWithConnection: unused,
+    createSessionWithConnection,
+    updateSessionWithConnection: unused,
+    createSessionNpcRoleWithConnection: unused,
+    updateSessionNpcRoleWithConnection: unused,
+    upsertMySessionReviewWithConnection: unused,
+    createSessionMessageWithConnection: unused,
+    updateSessionPinnedMessageWithConnection: unused
+  });
+  const applicator = createTextProposalApplicator({
+    loadActor: async () => ACTOR,
+    handlers
+  });
+  const proposal = {
+    action: "create_session",
+    created_by_user_id: ACTOR.user.id,
+    target_subject_id: targetSubjectId,
+    base_version: expectedTextCreationBase(ACTOR.user.id),
+    idempotency_key: idempotencyKey,
+    normalized_payload_json: JSON.stringify({
+      body,
+      context: { targetSubjectId }
+    })
+  };
+  return applicator.apply(connection, {
+    job: {
+      subject_id: textOperationSubjectId({
+        action: proposal.action,
+        actorUserId: ACTOR.user.id,
+        idempotencyKey: proposal.idempotency_key
+      })
+    },
+    proposal
+  });
+}
+
 test("historical creation binds normalized purpose and time with share-only reviewed joining", async () => {
   const connection = createConnection();
 
@@ -196,86 +247,96 @@ test("historical creation accepts an unbound extra NPC role", async () => {
   assert.equal(connection.state.sessionNpcRoleInserts[0].values[6], null);
 });
 
-test("moderated historical creation preserves snake member aliases through approved application", async () => {
-  const targetSubjectId = textCreationTargetSubjectId({
-    action: "create_session",
-    actorUserId: ACTOR.user.id
-  });
-  const descriptor = buildTextModerationDescriptor({
+test("historical moderation rejects raw member aliases before NPC normalization", () => {
+  const cases = [
+    ["dm_user_id direct", { dm_user_id: 8 }],
+    ["npc_user_id direct", { npc_user_id: 8 }],
+    ["boundUserId empty", { extraNpcRoles: [{ name: "NPC", boundUserId: "" }] }],
+    ["bound_user_id", { extra_npc_roles: [{ name: "NPC", bound_user_id: 8 }] }],
+    ["userId", { extraNpcRoles: [{ name: "NPC", userId: 8 }] }],
+    ["user_id", { extra_npc_roles: [{ name: "NPC", user_id: 8 }] }],
+    ["nameless", { extraNpcRoles: [{ user_id: 8 }] }],
+    ["conflicting", { extraNpcRoles: [{ name: "NPC", boundUserId: "", user_id: 8 }] }]
+  ];
+
+  for (const [name, overrides] of cases) {
+    assert.throws(
+      () => buildTextModerationDescriptor({
+        action: "create_session",
+        actorUserId: ACTOR.user.id,
+        openid: "openid-7",
+        subjectId: "creation:create_session:7",
+        baseVersion: "v1",
+        idempotencyKey: `historical-raw-alias-${name}`,
+        body: baseBody({
+          note: "这是一条需要审核的历史记录说明",
+          ...overrides
+        })
+      }),
+      {
+        statusCode: 400,
+        code: "HISTORICAL_MEMBER_PREBIND_FORBIDDEN",
+        message: "Historical members must claim a role through a historical invitation"
+      },
+      name
+    );
+  }
+});
+
+test("moderation accepts future prebinding and null historical role aliases", () => {
+  const future = buildTextModerationDescriptor({
     action: "create_session",
     actorUserId: ACTOR.user.id,
     openid: "openid-7",
-    subjectId: targetSubjectId,
-    baseVersion: expectedTextCreationBase(ACTOR.user.id),
-    idempotencyKey: "historical-snake-member-aliases",
+    subjectId: "creation:create_session:7",
+    baseVersion: "v1",
+    idempotencyKey: "future-raw-alias",
     body: baseBody({
-      dm_user_id: 8,
-      npc_user_id: 9,
-      note: "这是一条需要审核的历史记录说明"
-    }),
-    context: { targetSubjectId }
+      startAt: "2099-01-01 13:00:00",
+      sessionPurpose: "future_carpool",
+      note: "未来拼车说明",
+      extraNpcRoles: [{ name: "NPC", user_id: 8 }]
+    })
   });
+  assert.equal(future.payload.body.extraNpcRoles[0].boundUserId, 8);
 
-  assert.equal(descriptor.payload.body.dm_user_id, 8);
-  assert.equal(descriptor.payload.body.npc_user_id, 9);
-  const authorProjection = projectAuthorTextProposal({
+  const historical = buildTextModerationDescriptor({
     action: "create_session",
-    targetSubjectId,
-    body: descriptor.payload.body
+    actorUserId: ACTOR.user.id,
+    openid: "openid-7",
+    subjectId: "creation:create_session:7",
+    baseVersion: "v1",
+    idempotencyKey: "historical-null-aliases",
+    body: baseBody({
+      note: "历史记录说明",
+      extra_npc_roles: [{
+        name: "待认领 NPC",
+        boundUserId: null,
+        bound_user_id: null,
+        userId: null,
+        user_id: null
+      }]
+    })
   });
-  assert.equal(authorProjection.content.dm_user_id, 8);
-  assert.equal(authorProjection.content.npc_user_id, 9);
+  assert.equal(historical.payload.body.extraNpcRoles[0].boundUserId, null);
+});
 
-  const unused = async () => null;
-  const handlers = createProductionTextProposalHandlers({
-    currentActorTextSnapshot: unused,
-    currentSessionCreateTextBase: async () => expectedTextCreationBase(ACTOR.user.id),
-    currentSessionTextBase: unused,
-    currentNpcRoleTextBase: unused,
-    currentReviewTextBase: unused,
-    currentMessageTextBase: unused,
-    currentPinnedTextBase: unused,
-    updateUserProfileWithConnection: unused,
-    createPrivateStoreWithConnection: unused,
-    createPrivateScriptWithConnection: unused,
-    createSessionWithConnection,
-    updateSessionWithConnection: unused,
-    createSessionNpcRoleWithConnection: unused,
-    updateSessionNpcRoleWithConnection: unused,
-    upsertMySessionReviewWithConnection: unused,
-    createSessionMessageWithConnection: unused,
-    updateSessionPinnedMessageWithConnection: unused
-  });
-  const applicator = createTextProposalApplicator({
-    loadActor: async () => ACTOR,
-    handlers
-  });
-  const proposal = {
-    action: "create_session",
-    created_by_user_id: ACTOR.user.id,
-    target_subject_id: targetSubjectId,
-    base_version: expectedTextCreationBase(ACTOR.user.id),
-    idempotency_key: "historical-snake-member-aliases",
-    normalized_payload_json: JSON.stringify(descriptor.payload)
-  };
+test("approved raw proposal bypassing moderation descriptor still rejects before session INSERT", async () => {
+  const connection = createConnection();
 
   await assert.rejects(
-    () => applicator.apply(createConnection(), {
-      job: {
-        subject_id: textOperationSubjectId({
-          action: proposal.action,
-          actorUserId: ACTOR.user.id,
-          idempotencyKey: proposal.idempotency_key
-        })
-      },
-      proposal
-    }),
+    () => applyApprovedSessionProposal(
+      connection,
+      baseBody({ extraNpcRoles: [{ user_id: 8 }] }),
+      "historical-raw-approved-proposal"
+    ),
     {
       statusCode: 400,
       code: "HISTORICAL_MEMBER_PREBIND_FORBIDDEN",
       message: "Historical members must claim a role through a historical invitation"
     }
   );
+  assert.equal(connection.state.sessionInsert, null);
 });
 
 test("historical stale snapshots select immutable purpose for NPC-role and pinned-message paths", async () => {

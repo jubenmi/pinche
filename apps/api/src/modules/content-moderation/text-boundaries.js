@@ -4,6 +4,7 @@ import {
 } from "../core/npc-role-normalization.js";
 import { badRequest } from "../../http/errors.js";
 import { normalizeSessionReviewAlbumPhotoIds } from "../core/session-review.js";
+import { assertHistoricalSessionMemberPrebindAllowed } from "../core/session-purpose.js";
 
 const PHONE_NUMBER = /(?:\+?86[\s-]?)?1[3-9]\d(?:[\s-]?\d){8}/g;
 const MAX_SESSION_REVIEW_PHOTOS = 9;
@@ -328,6 +329,7 @@ function canonicalBody(action, body) {
       requireBodyValue(body, "storeId");
       requireBodyValue(body, "scriptId");
       requireBodyValue(body, "startAt");
+      assertHistoricalSessionMemberPrebindAllowed(body, body.sessionPurpose);
       pickDefined(result, body, [
         "storeId", "scriptId", "startAt", "sessionPurpose", "dmUserId", "dm_user_id",
         "dmNameSnapshot", "npcUserId", "npc_user_id", "npcNameSnapshot", "depositAmount",
