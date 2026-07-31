@@ -243,6 +243,7 @@ import {
   beijingDateKey,
   beijingDateParts,
   beijingTimeText,
+  isHistoricalSession,
   parseBusinessDateTime
 } from "@pinche/shared";
 import { dataOf, request } from "../utils/api";
@@ -714,6 +715,10 @@ function handleCalendarAction(item) {
     goDetail(item.sessionId);
     return;
   }
+  if (isHistoricalSession({ session_purpose: item.sessionPurpose })) {
+    goAlbum(item.sessionId);
+    return;
+  }
   if (isCalendarItemPostStart(item)) {
     goAlbum(item.sessionId);
     return;
@@ -906,6 +911,7 @@ function createDiscoveryCalendarItems(rows = [], itemType = "city") {
         type: itemType,
         raw: session,
         sessionStatus: session.status || "recruiting",
+        sessionPurpose: session.session_purpose || "future_carpool",
         signupStatus: "",
         title: session.script_name_snapshot || "未命名车局",
         storeName: session.store_name_snapshot || "店家待定",
@@ -1011,6 +1017,8 @@ function refreshCalendarItem(item) {
   item.type = item.isOrganized ? "organized" : "joined";
   item.raw = item.session || item.signup || {};
   item.sessionStatus = item.session?.status || item.signup?.session_status || "";
+  item.sessionPurpose =
+    item.session?.session_purpose || item.signup?.session_purpose || "";
   item.signupStatus = item.signup?.status || "";
   item.title = source.script_name_snapshot || "未命名车局";
   item.storeName = source.store_name_snapshot || "店家待定";
@@ -1028,7 +1036,11 @@ function refreshCalendarItem(item) {
   item.canReview = Boolean(item.signup?.can_review);
   item.identityTags = calendarIdentityTags(item);
   item.isPending = calendarItemIsPending(item);
-  item.albumFirst = isCalendarItemPostStart(item);
+  item.albumFirst =
+    !calendarItemFailed(item) &&
+    !item.isAuthorPrivate &&
+    (isHistoricalSession({ session_purpose: item.sessionPurpose }) ||
+      isCalendarItemPostStart(item));
   item.albumCtaNote = item.albumFirst ? calendarAlbumCtaNote(item.raw) : "";
   item.stripeTone = calendarStripeTone(item);
   item.statusText = calendarItemStatusText(item);
@@ -1056,6 +1068,9 @@ function calendarItemFailed(item) {
 
 function calendarIdentityTags(item) {
   const tags = [];
+  if (isHistoricalSession({ session_purpose: item.sessionPurpose })) {
+    tags.push({ key: "historical", label: "历史补录", tone: "historical" });
+  }
   if (item.isAuthorPrivate) {
     tags.push({ key: "author-private", label: "仅自己可见", tone: "pending" });
     return tags;
@@ -1067,8 +1082,13 @@ function calendarIdentityTags(item) {
 }
 
 function calendarItemIsPending(item) {
+  if (item.isAuthorPrivate) {
+    return true;
+  }
+  if (isHistoricalSession({ session_purpose: item.sessionPurpose })) {
+    return false;
+  }
   return (
-    item.isAuthorPrivate ||
     Number(item.session?.pending_signup_count || 0) > 0 ||
     item.sessionStatus === "draft" ||
     item.signupStatus === "pending"
@@ -1076,6 +1096,13 @@ function calendarItemIsPending(item) {
 }
 
 function calendarMetaText(item) {
+  if (isHistoricalSession({ session_purpose: item.sessionPurpose })) {
+    return item.isOrganized
+      ? `${Number(item.session?.seat_count || 0)}位 · 历史资料`
+      : item.signup?.seat_role_name
+        ? `当时角色：${item.signup.seat_role_name}`
+        : "同车成员";
+  }
   if (item.isOrganized) {
     const pendingSignupCount = Number(item.session?.pending_signup_count || 0);
     const metaParts = [`${Number(item.session?.seat_count || 0)}位`];
@@ -1088,8 +1115,27 @@ function calendarMetaText(item) {
 }
 
 function calendarItemStatusText(item) {
+  const failed = calendarItemFailed(item);
+  const historical = isHistoricalSession({ session_purpose: item.sessionPurpose });
+  if (failed) {
+    if (
+      historical &&
+      (item.sessionStatus === "cancelled" || item.signupStatus === "cancelled")
+    ) {
+      return "已取消补录";
+    }
+    if (item.isOrganized) {
+      return statusLabel(item.sessionStatus);
+    }
+    if (item.isJoined) {
+      return signupStatusLabel(item.signupStatus);
+    }
+  }
   if (item.isAuthorPrivate) {
     return item.raw?.moderation_message || "仅自己可见 · 审核中";
+  }
+  if (isHistoricalSession({ session_purpose: item.sessionPurpose })) {
+    return "历史补录";
   }
   if (isCalendarItemPostStart(item)) {
     return calendarPostStartText(item.raw);
@@ -1126,6 +1172,9 @@ function hasAlbumContent(source = {}) {
 }
 
 function calendarAlbumCtaNote(source = {}) {
+  if (isHistoricalSession(source)) {
+    return hasAlbumContent(source) ? "回看这场记录" : "打开相册，补上当时的照片";
+  }
   return hasAlbumContent(source) ? "这场车已沉淀下来" : "发车后相册已开放";
 }
 

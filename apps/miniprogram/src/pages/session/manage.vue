@@ -15,7 +15,7 @@
           </view>
           <view class="text">{{ summaryText }}</view>
         </view>
-        <t-button class="overview-refresh" :disabled="busyAction" @tap="reload">
+        <t-button class="overview-refresh" :disabled="busyAction" @tap="reload()">
           {{ busyAction ? "处理中" : "刷新" }}
         </t-button>
       </view>
@@ -31,15 +31,23 @@
           <view class="overview-stat-value">{{ seatStats.total }}</view>
           <view class="overview-stat-label">座位</view>
         </view>
-        <view class="overview-stat">
+        <view v-if="isHistorical" class="overview-stat warning">
+          <view class="overview-stat-value">{{ seatStats.unclaimed }}</view>
+          <view class="overview-stat-label">待补认</view>
+        </view>
+        <view v-if="isHistorical" class="overview-stat">
+          <view class="overview-stat-value">{{ seatStats.claimed }}</view>
+          <view class="overview-stat-label">已补认</view>
+        </view>
+        <view v-if="!isHistorical" class="overview-stat">
           <view class="overview-stat-value">{{ seatStats.open }}</view>
           <view class="overview-stat-label">空位</view>
         </view>
-        <view class="overview-stat warning">
+        <view v-if="!isHistorical" class="overview-stat warning">
           <view class="overview-stat-value">{{ seatStats.applied }}</view>
           <view class="overview-stat-label">待审</view>
         </view>
-        <view class="overview-stat">
+        <view v-if="!isHistorical" class="overview-stat">
           <view class="overview-stat-value">{{ seatStats.onboard }}</view>
           <view class="overview-stat-label">已上车</view>
         </view>
@@ -57,12 +65,25 @@
         >
           改期
         </t-button>
-        <t-button class="mini-button muted" :disabled="busyAction" @tap="subscribeSignupReminder">
+        <t-button
+          v-if="!isHistorical"
+          class="mini-button muted"
+          :disabled="busyAction"
+          @tap="subscribeSignupReminder"
+        >
           申请提醒
+        </t-button>
+        <t-button
+          v-if="isHistorical && viewerIsOrganizer"
+          class="mini-button muted"
+          :disabled="busyAction"
+          @tap="goHistoricalShare"
+        >
+          邀请同车成员补认
         </t-button>
         <t-button class="mini-button muted" :disabled="busyAction" @tap="goDetail">车局详情</t-button>
         <t-button
-          v-if="hasOtherOnboardMembers"
+          v-if="!isHistorical && hasOtherOnboardMembers"
           class="mini-button muted"
           :disabled="busyAction"
           @tap="leaveOrganizer"
@@ -87,16 +108,17 @@
           :key="extension.id"
           :session-id="sessionId"
           :session="session"
+          :session-purpose="session.session_purpose"
           :busy="busyAction"
           :embedded="true"
           :auth-tools="authTools"
           @status="setStatus"
-          @updated="reload"
+          @updated="reload()"
         />
       </view>
     </view>
 
-    <view v-if="session.id" class="section">
+    <view v-if="session.id && !isHistorical" class="section">
       <view class="section-head">
         <view>
           <view class="section-title">车局设置</view>
@@ -170,7 +192,7 @@
     />
 
     <RoleSeatBoard
-      v-if="session.id"
+      v-if="!isHistorical && session.id"
       title="上车申请"
       :summary="signupSummary"
       :items="signupCards"
@@ -179,7 +201,35 @@
     />
 
     <view v-if="session.id" class="section danger-section">
-      <view v-if="!hasOtherOnboardMembers && !hasActiveAlbumPhotos">
+      <view v-if="isHistorical && !hasOtherOnboardMembers && !hasActiveAlbumPhotos">
+        <view class="section-title">取消补录</view>
+        <view class="section-note">取消补录后，这条历史记录及其角色、聊天和相册资料会一起删除。</view>
+        <t-textarea
+          :value="cancelReason"
+          class="textarea"
+          maxlength="200"
+          placeholder="可选：写一句取消补录原因"
+          placeholder-class="placeholder"
+          @change="cancelReason = $event.detail.value"
+        />
+        <view class="actions">
+          <t-button class="button danger" :disabled="busyAction" @tap="cancelSession">
+            取消补录
+          </t-button>
+        </view>
+      </view>
+      <view v-else-if="isHistorical && hasOtherOnboardMembers">
+        <view class="section-title">已有补认成员</view>
+        <view class="section-note">请先移除其他补认成员，再取消补录。</view>
+      </view>
+      <view v-else-if="isHistorical">
+        <view class="section-title">先删照片</view>
+        <view class="section-note">相册已有照片，不能取消补录；请先删除所有照片，避免留下无主照片。</view>
+        <view class="actions">
+          <t-button class="button secondary" :disabled="busyAction" @tap="goAlbum">打开相册</t-button>
+        </view>
+      </view>
+      <view v-else-if="!hasOtherOnboardMembers && !hasActiveAlbumPhotos">
         <view class="section-title">取消车</view>
         <view class="section-note">取消后这辆车会被直接删除，座位、报名、聊天和相册记录会一起删除。</view>
         <t-textarea
@@ -216,12 +266,19 @@
 </template>
 
 <script>
+import { isHistoricalSession } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import ManagePinnedMessage from "../../extensions/session-pseudo-chat/ManagePinnedMessage.vue";
 import { sessionManageExtensions } from "../../extensions/sessionExtensions.js";
-import { dataOf, ensureLoggedIn, request } from "../../utils/api";
+import {
+  AUTH_CHANGE_EVENT,
+  dataOf,
+  ensureLoggedIn,
+  getCurrentUser,
+  request
+} from "../../utils/api";
 import { contentModerationErrorText } from "../../utils/contentModeration";
 import { normalizeAuthorPrivateSession } from "../../utils/authorPrivateText";
 import { normalizeRoleGender, roleGenderSymbol } from "../../utils/createFlow";
@@ -258,6 +315,8 @@ export default {
       sessionId: "",
       session: {},
       signups: [],
+      currentUserId: "",
+      manageRequestGeneration: 0,
       sessionManageExtensions,
       joinPolicy: "review_required",
       joinPhoneRequired: true,
@@ -272,6 +331,16 @@ export default {
     };
   },
   computed: {
+    isHistorical() {
+      return isHistoricalSession(this.session);
+    },
+    viewerIsOrganizer() {
+      return Boolean(
+        this.currentUserId &&
+        this.session.id &&
+        Number(this.currentUserId) === Number(this.session.organizer_user_id)
+      );
+    },
     operationText() {
       if (this.busyAction) {
         return this.busyText || "正在处理，请稍候...";
@@ -282,16 +351,23 @@ export default {
       if (!this.session.id) {
         return "加载车况、提醒、详情和置顶信息。";
       }
+      if (this.isHistorical) {
+        return `${this.session.store_name_snapshot} / ${this.formattedStartAt} · 已完成车局的历史资料记录`;
+      }
       return `${this.session.store_name_snapshot} / ${this.formattedStartAt}`;
     },
     formattedStartAt() {
       return formatSessionDateTime(this.session.start_at);
     },
     canReschedule() {
-      return canRescheduleSession(this.session.start_at);
+      return !this.isHistorical && canRescheduleSession(this.session.start_at);
     },
     seatSummary() {
       const seats = this.session.seats || [];
+      if (this.isHistorical) {
+        const claimed = seats.filter((seat) => Boolean(seat.confirmed_user_id)).length;
+        return `${seats.length}位，${seats.length - claimed}待补认，${claimed}已补认`;
+      }
       const open = seats.filter((seat) => seat.status === "open").length;
       const applied = seats.filter((seat) => seat.status === "applied").length;
       const confirmed = seats.filter((seat) => seat.status === "confirmed").length;
@@ -300,6 +376,17 @@ export default {
     },
     seatStats() {
       const seats = this.session.seats || [];
+      if (this.isHistorical) {
+        const claimed = seats.filter((seat) => Boolean(seat.confirmed_user_id)).length;
+        return {
+          total: seats.length,
+          unclaimed: seats.length - claimed,
+          claimed,
+          open: 0,
+          applied: 0,
+          onboard: 0
+        };
+      }
       const open = seats.filter((seat) => seat.status === "open").length;
       const applied = seats.filter((seat) => seat.status === "applied").length;
       const confirmed = seats.filter((seat) => seat.status === "confirmed").length;
@@ -344,7 +431,7 @@ export default {
       return Number(this.session.active_album_photo_count || this.session.photo_count || 0) > 0;
     },
     settingsDirty() {
-      if (!this.session.id) {
+      if (this.isHistorical || !this.session.id) {
         return false;
       }
       return (
@@ -382,13 +469,17 @@ export default {
           avatarGender: seat.confirmed_user_gender || seat.role_gender || "unlimited",
           confirmedUserId: seat.confirmed_user_id || "",
           stateKind: this.seatStateKind(seat),
-          stateLabel: this.seatStatusLabel(seat.status),
+          stateLabel: this.seatStatusLabel(seat.status, seat),
           actions
         };
       });
     },
     npcRoleSummary() {
       const roles = this.session.session_npc_roles || [];
+      if (this.isHistorical) {
+        const claimed = roles.filter((role) => Boolean(role.bound_user_id)).length;
+        return `${roles.length}个NPC，${roles.length - claimed}待补认，${claimed}已补认`;
+      }
       const available = roles.filter((role) => this.npcRoleStateKind(role) === "available").length;
       const pending = roles.filter((role) => this.npcRoleStateKind(role) === "pendingReview").length;
       const assigned = roles.filter((role) => this.npcRoleStateKind(role) === "taken").length;
@@ -423,7 +514,9 @@ export default {
           stateLabel: this.npcRoleStatusLabel(role),
           meta: [
             role.source ? { key: "source", label: "来源", text: role.source === "script" ? "剧本固定" : "本场额外" } : null,
-            role.pending_signup_id ? { key: "pending", label: "申请", text: "等待车头审核" } : null
+            !this.isHistorical && role.pending_signup_id
+              ? { key: "pending", label: "申请", text: "等待车头审核" }
+              : null
           ].filter(Boolean),
           actions
         };
@@ -444,13 +537,18 @@ export default {
           key: "npc",
           title: "NPC角色",
           summary: this.npcRoleSummary,
-          statusPill: this.npcJoinEnabled ? "允许自选" : "车头安排",
+          statusPill: this.isHistorical
+            ? "待补认 / 已补认"
+            : this.npcJoinEnabled ? "允许自选" : "车头安排",
           items: this.manageNpcRoleCards
         });
       }
       return sections;
     },
     visibleSignups() {
+      if (this.isHistorical) {
+        return [];
+      }
       return (this.signups || []).filter((signup) => signup.status !== "rejected");
     },
     signupSummary() {
@@ -500,29 +598,117 @@ export default {
     }
   },
   async onLoad(options) {
+    this.sessionId = options.id || "";
+    this.observeManageAuthChanges();
     const auth = await ensureLoggedIn({
       content: "登录后继续管理你创建的车。"
     });
-    if (!auth) {
+    this.applyManageAuth(auth);
+    if (!auth?.user) {
       this.statusText = "登录后可继续管理发车。";
       return;
     }
-    this.sessionId = options.id || "";
-    this.reload();
+    await this.reload(auth);
+  },
+  async onShow() {
+    if (!this.sessionId) {
+      return;
+    }
+    const auth = getCurrentUser();
+    this.applyManageAuth(auth);
+    if (!auth?.user) {
+      this.clearManageProjection("登录后可继续管理发车。");
+      return;
+    }
+    await this.reload(auth);
+  },
+  onHide() {
+    this.invalidateManageRequests();
+  },
+  onUnload() {
+    this.invalidateManageRequests();
+    this.unobserveManageAuthChanges();
   },
   methods: {
-    async ensureManageActionLogin() {
+    observeManageAuthChanges() {
+      if (typeof uni !== "undefined" && typeof uni.$on === "function") {
+        uni.$on(AUTH_CHANGE_EVENT, this.handleManageAuthChange);
+      }
+    },
+    unobserveManageAuthChanges() {
+      if (typeof uni !== "undefined" && typeof uni.$off === "function") {
+        uni.$off(AUTH_CHANGE_EVENT, this.handleManageAuthChange);
+      }
+    },
+    handleManageAuthChange(auth = {}) {
+      const changed = this.applyManageAuth(auth);
+      if (!changed || !this.sessionId || !this.currentUserId) {
+        return;
+      }
+      this.reload(auth);
+    },
+    applyManageAuth(auth = {}) {
+      const nextUserId = auth?.user?.id || "";
+      const changed = String(nextUserId) !== String(this.currentUserId || "");
+      if (changed) {
+        this.invalidateManageRequests();
+        this.clearManageProjection("");
+      }
+      this.currentUserId = nextUserId;
+      return changed;
+    },
+    invalidateManageRequests() {
+      this.manageRequestGeneration += 1;
+    },
+    beginManageRequest() {
+      this.manageRequestGeneration += 1;
+      return {
+        generation: this.manageRequestGeneration,
+        userId: this.currentUserId
+      };
+    },
+    isCurrentManageRequest(owner) {
+      return Boolean(
+        owner &&
+        owner.generation === this.manageRequestGeneration &&
+        String(owner.userId || "") === String(this.currentUserId || "")
+      );
+    },
+    clearManageProjection(message = "") {
+      this.session = {};
+      this.signups = [];
+      this.joinPolicy = "review_required";
+      this.joinPhoneRequired = true;
+      this.npcJoinEnabled = true;
+      this.statusText = message;
+    },
+    async ensureManageActionLogin(requireOwner = true) {
       const auth = await ensureLoggedIn({
         content: "登录后继续管理你创建的车。"
       });
-      if (!auth) {
+      this.applyManageAuth(auth);
+      if (!auth?.user) {
         this.statusText = "登录后可继续管理发车。";
+        return null;
+      }
+      if (requireOwner && !this.viewerIsOrganizer) {
+        this.clearManageProjection("只有车头可以管理本车。");
         return null;
       }
       return auth;
     },
-    async reload() {
-      const auth = await this.ensureManageActionLogin();
+    async reload(knownAuth = null) {
+      const hasKnownAuth = Boolean(
+        knownAuth &&
+          typeof knownAuth === "object" &&
+          Object.prototype.hasOwnProperty.call(knownAuth, "user")
+      );
+      const auth = hasKnownAuth
+        ? knownAuth
+        : await this.ensureManageActionLogin(false);
+      if (hasKnownAuth) {
+        this.applyManageAuth(auth);
+      }
       if (!auth) {
         return;
       }
@@ -530,11 +716,19 @@ export default {
         this.statusText = "请从我的发车进入管理页。";
         return;
       }
-      await this.loadSession();
-      await this.loadSignups();
+      const requestOwner = this.beginManageRequest();
+      const loaded = await this.loadSession(requestOwner);
+      if (!loaded || !this.isCurrentManageRequest(requestOwner)) {
+        return;
+      }
+      if (this.isHistorical) {
+        this.signups = [];
+        return;
+      }
+      await this.loadSignups(requestOwner);
     },
     openReschedulePicker() {
-      if (this.busyAction || !this.canReschedule) {
+      if (this.isHistorical || this.busyAction || !this.canReschedule) {
         return;
       }
       if (!this.rescheduleValue) {
@@ -547,6 +741,9 @@ export default {
       this.reschedulePickerVisible = false;
     },
     confirmRescheduleSelection(event) {
+      if (this.isHistorical) {
+        return;
+      }
       const selectedValue = event?.detail?.value || this.rescheduleValue;
       this.rescheduleValue = selectedValue;
       this.reschedulePickerVisible = false;
@@ -562,6 +759,9 @@ export default {
       this.showRescheduleConfirmation(validation.startAt);
     },
     showRescheduleConfirmation(startAt) {
+      if (this.isHistorical) {
+        return;
+      }
       const memberCount = this.otherOnboardMemberCount;
       showModal({
         title: "确认改期",
@@ -580,7 +780,7 @@ export default {
       });
     },
     async rescheduleSession(startAt, membersConfirmed) {
-      if (this.busyAction) {
+      if (this.isHistorical || this.busyAction) {
         return;
       }
       const auth = await this.ensureManageActionLogin();
@@ -632,21 +832,50 @@ export default {
     rescheduleErrorText(error) {
       return formatRescheduleErrorText(error);
     },
-    async loadSession() {
+    async loadSession(requestOwner) {
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
-        this.session = normalizeAuthorPrivateSession(dataOf(response) || {});
+        if (!this.isCurrentManageRequest(requestOwner)) {
+          return false;
+        }
+        const nextSession = normalizeAuthorPrivateSession(dataOf(response) || {});
+        if (
+          !nextSession.id ||
+          Number(nextSession.organizer_user_id) !== Number(requestOwner.userId)
+        ) {
+          this.clearManageProjection("只有车头可以管理本车。");
+          return false;
+        }
+        this.session = nextSession;
         this.syncSessionSettings();
+        this.statusText = "";
+        return true;
       } catch (error) {
-        this.statusText = "车详情加载失败，请稍后重试。";
+        if (this.isCurrentManageRequest(requestOwner)) {
+          this.clearManageProjection("车详情加载失败，请稍后重试。");
+        }
+        return false;
       }
     },
-    async loadSignups() {
+    async loadSignups(requestOwner) {
+      if (!this.isCurrentManageRequest(requestOwner)) {
+        return;
+      }
+      if (this.isHistorical) {
+        this.signups = [];
+        return;
+      }
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/signups` });
+        if (!this.isCurrentManageRequest(requestOwner)) {
+          return;
+        }
         this.signups = dataOf(response) || [];
         this.statusText = "";
       } catch (error) {
+        if (!this.isCurrentManageRequest(requestOwner)) {
+          return;
+        }
         if (error?.statusCode === 403) {
           this.statusText = "只有车头可以管理本车。";
         } else if (error?.statusCode === 401) {
@@ -675,15 +904,27 @@ export default {
       this.npcJoinEnabled = this.sessionNpcJoinEnabled();
     },
     setJoinPolicy(value) {
+      if (this.isHistorical) {
+        return;
+      }
       this.joinPolicy = value === "direct" ? "direct" : "review_required";
     },
     setJoinPhoneRequired(value) {
+      if (this.isHistorical) {
+        return;
+      }
       this.joinPhoneRequired = Boolean(value);
     },
     setNpcJoinEnabled(value) {
+      if (this.isHistorical) {
+        return;
+      }
       this.npcJoinEnabled = Boolean(value);
     },
     async updateSessionSettings() {
+      if (this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth || !this.settingsDirty) {
         return;
@@ -730,6 +971,9 @@ export default {
       );
     },
     async approve(signup) {
+      if (this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
         return;
@@ -740,6 +984,9 @@ export default {
       });
     },
     async reject(signup) {
+      if (this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
         return;
@@ -750,6 +997,9 @@ export default {
       });
     },
     async subscribeSignupReminder() {
+      if (this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
         return;
@@ -763,8 +1013,15 @@ export default {
           : "未开启提醒，也不影响你继续管理申请。";
     },
     async kickSeat(seat) {
+      if (this.isHistorical && !this.canKickSeat(seat)) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
+        return;
+      }
+      if (this.isHistorical) {
+        this.showRemoveMemberReasons(seat);
         return;
       }
       if (this.isOnboardSeat(seat)) {
@@ -809,6 +1066,12 @@ export default {
       ];
     },
     showRemoveMemberReasons(seat) {
+      if (this.isHistorical) {
+        this.confirmAction(`确认移除「${seat.name}」的补认成员吗？`, async () => {
+          await this.runKickSeat(seat, {}, "已移除补认成员。");
+        });
+        return;
+      }
       const options = this.removeReasonOptions();
       showActionSheet({
         itemList: options.map((option) => option.label),
@@ -843,8 +1106,11 @@ export default {
       });
     },
     async transferOrganizerToSeat(seat) {
+      if (this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
-      if (!auth) {
+      if (!auth || this.isHistorical || !this.viewerIsOrganizer) {
         return;
       }
       this.confirmAction(`确认把车头转让给「${seat.name}」吗？`, async () => {
@@ -858,6 +1124,12 @@ export default {
       });
     },
     async handleNpcRoleManagement(role) {
+      if (this.isHistorical) {
+        if (role.bound_user_id) {
+          await this.releaseNpcRole(role);
+        }
+        return;
+      }
       if (role.bound_user_id) {
         await this.releaseNpcRole(role);
         return;
@@ -869,6 +1141,9 @@ export default {
       await this.closeNpcRole(role);
     },
     async closeNpcRole(role) {
+      if (this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
         return;
@@ -884,6 +1159,9 @@ export default {
       });
     },
     async openNpcRole(role) {
+      if (this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
         return;
@@ -903,17 +1181,24 @@ export default {
       if (!auth) {
         return;
       }
-      this.confirmAction(`确认移除NPC成员「${role.name || "NPC角色"}」吗？`, async () => {
-        await this.runAction("NPC成员已移除。", {
-          url: `/api/session-npc-roles/${role.id}`,
-          method: "PATCH",
-          data: {
-            boundUserId: null
-          }
-        });
-      });
+      const historicalCopy = this.isHistorical;
+      this.confirmAction(
+        historicalCopy
+          ? `确认移除NPC角色「${role.name || "NPC角色"}」的补认成员吗？`
+          : `确认移除NPC成员「${role.name || "NPC角色"}」吗？`,
+        async () => {
+          await this.runAction(historicalCopy ? "已移除补认成员。" : "NPC成员已移除。", {
+            url: `/api/session-npc-roles/${role.id}`,
+            method: "PATCH",
+            data: { boundUserId: null }
+          });
+        }
+      );
     },
     async leaveOrganizer() {
+      if (this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureManageActionLogin();
       if (!auth) {
         return;
@@ -931,21 +1216,31 @@ export default {
         return;
       }
       if (this.hasActiveAlbumPhotos) {
-        this.confirmAction("相册已有照片，不能取消删除。要先打开相册删除所有照片吗？", () => {
-          this.goAlbum();
-        });
+        this.confirmAction(
+          this.isHistorical
+            ? "相册已有照片，不能取消补录。要先打开相册删除所有照片吗？"
+            : "相册已有照片，不能取消删除。要先打开相册删除所有照片吗？",
+          () => {
+            this.goAlbum();
+          }
+        );
         return;
       }
-      this.confirmAction("确认取消本车吗？取消后这辆车会被直接删除。", async () => {
-        await this.runCancelSession();
-      });
+      this.confirmAction(
+        this.isHistorical
+          ? "确认取消补录吗？取消后这条历史资料记录会被直接删除。"
+          : "确认取消本车吗？取消后这辆车会被直接删除。",
+        async () => {
+          await this.runCancelSession();
+        }
+      );
     },
     async runCancelSession() {
       if (this.busyAction) {
         return;
       }
       this.busyAction = true;
-      this.busyText = "正在取消本车...";
+      this.busyText = this.isHistorical ? "正在取消补录..." : "正在取消本车...";
       try {
         await request({
           url: `/api/sessions/${this.sessionId}/cancel`,
@@ -954,8 +1249,8 @@ export default {
             reason: this.cancelReason.trim()
           }
         });
-        this.statusText = "本车已取消。";
-        showToast({ title: "本车已取消", icon: "none" });
+        this.statusText = this.isHistorical ? "补录已取消。" : "本车已取消。";
+        showToast({ title: this.isHistorical ? "补录已取消" : "本车已取消", icon: "none" });
         uni.redirectTo({ url: "/pages/mine/index" });
       } catch (error) {
         this.statusText = this.cancelSessionErrorText(error);
@@ -1025,11 +1320,22 @@ export default {
         return "只有车头可以执行这个操作。";
       }
       if (error?.statusCode === 409) {
+        if (this.isHistorical) {
+          return "补认成员状态已变化，请刷新后重试。";
+        }
         return "暂无可接任的车友，请先确认有人已上车。";
       }
       return "操作失败，请稍后重试。";
     },
     cancelSessionErrorText(error) {
+      if (this.isHistorical) {
+        if (error?.data?.error?.code === "SESSION_HAS_ONBOARD_MEMBERS") {
+          return "已有补认成员，不能取消补录；请先移除其他补认成员。";
+        }
+        if (error?.data?.error?.code === "SESSION_HAS_ALBUM_PHOTOS") {
+          return "相册已有照片，请先删除所有照片后再取消补录。";
+        }
+      }
       if (error?.data?.error?.code === "SESSION_HAS_ONBOARD_MEMBERS") {
         return "已有玩家上车，不能取消删除；请退出车头。";
       }
@@ -1044,6 +1350,16 @@ export default {
       }
       const id = this.sessionId || "d1-demo";
       uni.navigateTo({ url: `/pages/session/album?id=${id}` });
+    },
+    async goHistoricalShare() {
+      if (!this.isHistorical || !this.viewerIsOrganizer || this.busyAction) {
+        return;
+      }
+      const auth = await this.ensureManageActionLogin();
+      if (!auth || !this.isHistorical || !this.viewerIsOrganizer || this.busyAction) {
+        return;
+      }
+      uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}` });
     },
     async goDetail() {
       if (this.busyAction) {
@@ -1092,6 +1408,13 @@ export default {
       return this.seatStatusLabel(this.seatStatus(signup.seat_id));
     },
     canKickSeat(seat) {
+      if (this.isHistorical) {
+        return Boolean(
+          seat?.id &&
+          seat.confirmed_user_id &&
+          Number(seat.confirmed_user_id) !== Number(this.session.organizer_user_id)
+        );
+      }
       return Boolean(seat?.id);
     },
     isOnboardSeat(seat) {
@@ -1100,9 +1423,15 @@ export default {
       );
     },
     kickSeatActionText(seat) {
+      if (this.isHistorical) {
+        return seat?.confirmed_user_id ? "移除补认成员" : "";
+      }
       return this.isOnboardSeat(seat) ? "移除成员" : "关闭座位";
     },
     canTransferOrganizerToSeat(seat) {
+      if (this.isHistorical) {
+        return false;
+      }
       return (
         seat?.confirmed_user_id &&
         Number(seat.confirmed_user_id) !== Number(this.session.organizer_user_id)
@@ -1132,6 +1461,9 @@ export default {
       this.handleManageSeatAction(payload);
     },
     handleSignupAction(payload) {
+      if (this.isHistorical) {
+        return;
+      }
       const signup = payload.item.raw;
       if (!signup) {
         return;
@@ -1145,6 +1477,9 @@ export default {
       }
     },
     seatStateKind(seat) {
+      if (this.isHistorical) {
+        return seat.confirmed_user_id ? "taken" : "available";
+      }
       if (seat.status === "open") {
         return "available";
       }
@@ -1157,6 +1492,9 @@ export default {
       return "unavailable";
     },
     npcRoleStateKind(role) {
+      if (this.isHistorical) {
+        return role.bound_user_id ? "taken" : "available";
+      }
       if (role.author_private?.content?.is_draft === true) {
         return "pendingReview";
       }
@@ -1172,6 +1510,9 @@ export default {
       return "available";
     },
     npcRoleActionText(role) {
+      if (this.isHistorical) {
+        return role.bound_user_id ? "移除补认成员" : "";
+      }
       if (role.author_private?.content?.is_draft === true) {
         return "";
       }
@@ -1184,6 +1525,9 @@ export default {
       return role.status && role.status !== "active" ? "开放角色" : "关闭角色";
     },
     npcRoleStatusLabel(role) {
+      if (this.isHistorical) {
+        return role.bound_user_id ? "已补认" : "待补认";
+      }
       if (role.author_private?.content?.is_draft === true) {
         return role.moderation_message || "仅自己可见 · 审核中";
       }
@@ -1200,6 +1544,9 @@ export default {
       return this.npcJoinEnabled ? "可自选" : "可安排";
     },
     sessionStatusLabel(status) {
+      if (this.isHistorical) {
+        return status === "cancelled" ? "已取消补录" : "历史补录";
+      }
       const labels = {
         draft: "草稿",
         recruiting: "招募中",
@@ -1208,7 +1555,12 @@ export default {
       };
       return labels[status] || status || "未知";
     },
-    seatStatusLabel(status) {
+    seatStatusLabel(status, seat = {}) {
+      if (this.isHistorical) {
+        return seat.confirmed_user_id || ["confirmed", "locked"].includes(status)
+          ? "已补认"
+          : "待补认";
+      }
       const labels = {
         open: "开放",
         applied: "待审核",

@@ -135,6 +135,7 @@
             </view>
           </t-button>
           <t-button
+            v-if="!isHistoricalAlbum"
             class="album-command"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
@@ -148,6 +149,23 @@
                 mode="aspectFit"
               />
               <text class="album-command-label">招募</text>
+            </view>
+          </t-button>
+          <t-button
+            v-if="isHistoricalOrganizer"
+            class="album-command"
+            size="extra-small"
+            custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; font-size: 23rpx; font-weight: 600; line-height: 52rpx;"
+            :disabled="albumBusy"
+            @tap="openRecruitment"
+          >
+            <view class="album-command-content">
+              <t-image
+                class="album-command-icon"
+                src="/static/icons/album-recruit.svg"
+                mode="aspectFit"
+              />
+              <text class="album-command-label">邀请补认</text>
             </view>
           </t-button>
         </view>
@@ -678,6 +696,7 @@ import {
 import {
   albumMediaError,
   isApprovedAlbumImageDownloadCandidate,
+  isHistoricalSession,
   isModerationPublished
 } from "@pinche/shared";
 import { uploadAlbumPhoto } from "../../utils/albumPhotoUpload";
@@ -790,6 +809,10 @@ export default {
       deletingPhotoId: null,
       currentUserId: "",
       currentRoles: [],
+      albumAuthGeneration: 0,
+      albumLoadingOwner: null,
+      albumRequiresFullLoad: true,
+      suppressAlbumAuthReload: false,
       mediaLoadSerial: 0,
       waterfallPhotos: [],
       waterfallList1: [],
@@ -826,6 +849,16 @@ export default {
     };
   },
   computed: {
+    isHistoricalAlbum() {
+      return isHistoricalSession(this.albumSession || {});
+    },
+    isHistoricalOrganizer() {
+      return (
+        this.isHistoricalAlbum &&
+        Boolean(this.currentUserId) &&
+        Number(this.currentUserId) === Number(this.albumSession?.organizer_user_id)
+      );
+    },
     tagSheetVisible() {
       return !this.timelineMode && Boolean(this.tagSheetPhoto);
     },
@@ -1158,15 +1191,16 @@ export default {
       return;
     }
     this.observeAlbumAuthChanges();
+    this.invalidateAlbumMemberRequests();
+    this.clearMemberAlbumProjection();
     const auth = await ensureLoggedIn({
       content: "登录后可以查看车局相册。"
     });
+    this.applyAlbumAuth(auth || {});
     if (!auth?.user) {
       this.statusText = "登录后可继续查看相册。";
       return;
     }
-    this.currentUserId = auth.user.id || "";
-    this.currentRoles = auth.roles || [];
     await this.loadAlbum();
   },
   async onShow() {
@@ -1180,8 +1214,20 @@ export default {
       return;
     }
     const auth = getCurrentUser();
-    const accountChanged = this.handleAlbumAuthChange(auth);
+    let accountChanged = false;
+    this.suppressAlbumAuthReload = true;
+    try {
+      accountChanged = this.handleAlbumAuthChange(auth);
+    } finally {
+      this.suppressAlbumAuthReload = false;
+    }
     const skipRefresh = this.consumePreviewReturnRefreshSkip();
+    if (accountChanged || this.albumRequiresFullLoad) {
+      if (this.sessionId && this.currentUserId && !this.loadingAlbum) {
+        await this.loadAlbum();
+      }
+      return;
+    }
     if (skipRefresh && !accountChanged) {
       return;
     }
@@ -1193,12 +1239,14 @@ export default {
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
     this.clearAuthorPrivateAlbumState();
+    this.invalidateAlbumMemberRequests();
   },
   onUnload() {
     this.resetSingleMediaShareState();
     this.cancelSelectionMode({ force: true });
     this.clearActiveAlbumShareState({ hideMenus: true });
-    this.clearAuthorPrivateAlbumState();
+    this.invalidateAlbumMemberRequests();
+    this.clearMemberAlbumProjection();
     this.unobserveAlbumAuthChanges();
     this.albumMediaRefresh?.dispose();
     this.disconnectPhotoObservers();
@@ -1523,7 +1571,9 @@ export default {
         script_name_snapshot: data.script_name_snapshot || "",
         store_name_snapshot: data.store_name_snapshot || "",
         start_at: data.start_at || "",
-        played_on: data.played_on || ""
+        played_on: data.played_on || "",
+        session_purpose: data.session_purpose || "",
+        organizer_user_id: data.organizer_user_id || ""
       };
     },
     applyAlbumSessionFallback(session) {
@@ -1560,6 +1610,15 @@ export default {
         uni.$off(AUTH_CHANGE_EVENT, this.handleAlbumAuthChange);
       }
     },
+    applyAlbumAuth(auth = {}) {
+      const previousSuppression = this.suppressAlbumAuthReload;
+      this.suppressAlbumAuthReload = true;
+      try {
+        return this.handleAlbumAuthChange(auth);
+      } finally {
+        this.suppressAlbumAuthReload = previousSuppression;
+      }
+    },
     handleAlbumAuthChange(auth = {}) {
       const nextUserId = auth?.user?.id || "";
       const accountChanged = String(nextUserId) !== String(this.currentUserId || "");
@@ -1568,9 +1627,22 @@ export default {
         this.cancelSelectionMode({ force: true });
         this.clearActiveAlbumShareState({ hideMenus: true });
         this.clearAuthorPrivateAlbumState();
+        this.invalidateAlbumMemberRequests();
+        this.clearMemberAlbumProjection(
+          nextUserId ? "" : "登录后可继续查看相册。"
+        );
+        this.applyAlbumNavigationTitle();
       }
       this.currentUserId = nextUserId;
       this.currentRoles = Array.isArray(auth?.roles) ? auth.roles : [];
+      if (
+        accountChanged &&
+        this.sessionId &&
+        this.currentUserId &&
+        !this.suppressAlbumAuthReload
+      ) {
+        void this.loadAlbum();
+      }
       return accountChanged;
     },
     updateTopActionsFloating() {
@@ -1805,6 +1877,72 @@ export default {
     isCurrentAlbumListRequest(listRequest) {
       return this.albumListRequestAuthority.isCurrent(listRequest);
     },
+    invalidateAlbumMemberRequests() {
+      if (this.timelineMode) {
+        return;
+      }
+      this.albumAuthGeneration += 1;
+      this.beginAlbumListRequest();
+      this.albumLoadingOwner = null;
+      this.loadingAlbum = false;
+    },
+    beginAlbumMemberRequest(listRequest = null) {
+      return {
+        listRequest: listRequest || this.beginAlbumListRequest(),
+        authGeneration: this.albumAuthGeneration,
+        userId: this.currentUserId
+      };
+    },
+    isCurrentAlbumMemberRequest(requestOwner) {
+      return Boolean(
+        !this.timelineMode &&
+          requestOwner &&
+          requestOwner.authGeneration === this.albumAuthGeneration &&
+          String(requestOwner.userId || "") === String(this.currentUserId || "") &&
+          this.isCurrentAlbumListRequest(requestOwner.listRequest)
+      );
+    },
+    clearMemberAlbumProjection(message = "") {
+      if (this.timelineMode) {
+        return false;
+      }
+      this.disconnectPhotoObservers?.();
+      this.albumWaterfallRenderAuthority?.begin?.();
+      this.mediaLoadSerial += 1;
+      this.photos = [];
+      this.people = [];
+      this.albumSession = null;
+      this.canUpload = false;
+      this.hiddenCount = 0;
+      this.activeFilter = "all";
+      this.selectedRoleFilter = "";
+      this.roleFilterPickerVisible = false;
+      this.waterfallPhotos = [];
+      this.waterfallList1 = [];
+      this.waterfallList2 = [];
+      this.visiblePhotoMedia = {};
+      this.visiblePhotoMediaRequests = {};
+      this.mediaProgressById = {};
+      this.listThumbnailLoadedById = {};
+      this.listThumbnailFailedById = {};
+      this.previewVideoUrlRequests = {};
+      this.mediaRefreshAttempts = {};
+      this.previewOverlayVisible = false;
+      this.previewPhotos = [];
+      this.previewCurrentIndex = 0;
+      this.previewInitialIndex = 0;
+      this.tagSheetPhoto = null;
+      this.selectedTagKeys = [];
+      this.selectionMode = false;
+      this.selectionModePurpose = "tag";
+      this.selectedPhotoIds = [];
+      this.bulkTagging = false;
+      this.topActionsFloating = false;
+      this.skipNextAlbumRefreshOnShow = false;
+      this.albumRequiresFullLoad = true;
+      this.statusText = message;
+      return true;
+    },
     initializeAlbumMediaRefreshController() {
       this.albumMediaRefresh?.dispose();
       this.albumMediaRefresh = createAlbumMediaRefreshController({
@@ -1816,25 +1954,36 @@ export default {
           this.refreshWaterfall();
         },
         reloadAlbum: async () => {
-          const listRequest = this.beginAlbumListRequest();
+          const timelineRequest = this.timelineMode;
+          if (!timelineRequest && (this.loadingAlbum || this.albumRequiresFullLoad)) {
+            return null;
+          }
+          const requestOwner = timelineRequest ? null : this.beginAlbumMemberRequest();
+          const listRequest = timelineRequest
+            ? this.beginAlbumListRequest()
+            : requestOwner.listRequest;
+          const isCurrentRequest = () =>
+            timelineRequest
+              ? this.isCurrentAlbumListRequest(listRequest)
+              : this.isCurrentAlbumMemberRequest(requestOwner);
           try {
             const response = await request({
-              url: this.timelineMode
+              url: timelineRequest
                 ? `/api/sessions/${this.sessionId}/album/public-share${queryString({
                     token: this.albumShareToken
                   })}`
                 : `/api/sessions/${this.sessionId}/album`,
               suppressMaintenance: true
             });
-            if (!this.isCurrentAlbumListRequest(listRequest)) {
+            if (!isCurrentRequest()) {
               return null;
             }
             const data = dataOf(response) || {};
-            if (this.timelineMode) {
+            if (timelineRequest) {
               this.shareCoverPrepared = false;
               this.showShareMenus();
               const preparedCoverUrl = await this.prepareShareCoverUrl(data.cover_url || "");
-              if (!this.isCurrentAlbumListRequest(listRequest)) {
+              if (!isCurrentRequest()) {
                 return null;
               }
               this.albumSession = this.albumSessionSummary(data);
@@ -1851,12 +2000,19 @@ export default {
               this.applyAlbumNavigationTitle();
             }
             reportAlbumMediaEvent("media_refresh_success", { sessionId: Number(this.sessionId) });
+            const photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
+            if (timelineRequest) {
+              return {
+                photos,
+                isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
+              };
+            }
             return {
-              photos: (data.photos || []).map((photo) => this.normalizePhotoMedia(photo)),
-              isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
+              photos,
+              isCurrent: () => this.isCurrentAlbumMemberRequest(requestOwner)
             };
           } catch (error) {
-            if (!this.isCurrentAlbumListRequest(listRequest)) {
+            if (!isCurrentRequest()) {
               return null;
             }
             reportAlbumMediaEvent("media_refresh_failure", {
@@ -1864,9 +2020,13 @@ export default {
               errorCode: error?.code || "MEDIA_REFRESH_FAILED"
             });
             if (error?.statusCode === 401 || error?.statusCode === 403) {
+              if (!timelineRequest) {
+                this.clearMemberAlbumProjection("车局相册发车后仅同车成员可查看。");
+                this.applyAlbumNavigationTitle();
+              }
               return {
                 photos: [],
-                isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
+                isCurrent: isCurrentRequest
               };
             }
             throw error;
@@ -1875,15 +2035,27 @@ export default {
       });
     },
     async loadAlbum() {
-      if (this.loadingAlbum) {
-        return;
+      if (this.timelineMode) {
+        return false;
       }
-      this.loadingAlbum = true;
+      if (!this.currentUserId) {
+        this.invalidateAlbumMemberRequests();
+        this.clearMemberAlbumProjection("登录后可继续查看相册。");
+        this.applyAlbumNavigationTitle();
+        return false;
+      }
       const listRequest = this.beginAlbumListRequest();
+      const requestOwner = this.beginAlbumMemberRequest(listRequest);
+      const isCurrentRequest = () =>
+        this.isCurrentAlbumListRequest(listRequest) &&
+        this.isCurrentAlbumMemberRequest(requestOwner);
+      this.albumLoadingOwner = requestOwner;
+      this.loadingAlbum = true;
+      this.clearMemberAlbumProjection();
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album` });
-        if (!this.isCurrentAlbumListRequest(listRequest)) {
-          return;
+        if (!isCurrentRequest()) {
+          return false;
         }
         const data = dataOf(response) || {};
         this.disconnectPhotoObservers();
@@ -1901,33 +2073,35 @@ export default {
         this.statusText = "";
         this.refreshWaterfall();
         if (this.canUpload) {
-          await this.loadPeople();
+          await this.loadPeople(requestOwner);
+          if (!isCurrentRequest()) {
+            return false;
+          }
           this.ensureSelectedRoleFilter();
         } else {
           this.people = [];
           this.selectedRoleFilter = "";
         }
         this.applyAlbumNavigationTitle();
+        this.albumRequiresFullLoad = false;
         this.albumMediaRefresh?.schedule();
+        return true;
       } catch (error) {
-        if (!this.isCurrentAlbumListRequest(listRequest)) {
-          return;
+        if (!isCurrentRequest()) {
+          return false;
         }
-        if (error?.statusCode === 401 || error?.statusCode === 403) {
-          this.mediaLoadSerial += 1;
-          this.photos = [];
-          this.pruneUnpublishedAlbumMediaState(this.photos);
-          this.albumSession = null;
-          this.canUpload = false;
-          this.statusText = "车局相册发车后仅同车成员可查看。";
-          this.refreshWaterfall();
-        } else {
-          this.statusText = "相册加载失败，请稍后重试。";
-        }
+        this.clearMemberAlbumProjection(
+          error?.statusCode === 401 || error?.statusCode === 403
+            ? "车局相册发车后仅同车成员可查看。"
+            : "相册加载失败，请稍后重试。"
+        );
         this.applyAlbumNavigationTitle();
-        this.albumMediaRefresh?.schedule();
+        return false;
       } finally {
-        this.loadingAlbum = false;
+        if (this.albumLoadingOwner === requestOwner) {
+          this.albumLoadingOwner = null;
+          this.loadingAlbum = false;
+        }
       }
     },
     async loadPublicAlbum() {
@@ -2954,19 +3128,39 @@ export default {
       }
       return "height:328rpx;";
     },
-    async loadPeople() {
+    async loadPeople(requestOwner) {
+      if (!this.isCurrentAlbumMemberRequest(requestOwner)) {
+        return false;
+      }
       let people = [];
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album/people` });
+        if (!this.isCurrentAlbumMemberRequest(requestOwner)) {
+          return false;
+        }
         people = dataOf(response)?.people || [];
       } catch (error) {
+        if (!this.isCurrentAlbumMemberRequest(requestOwner)) {
+          return false;
+        }
         people = [];
       }
-      this.people = this.mergePeople([...people, ...(await this.loadSessionPeopleFallback())]);
+      const fallbackPeople = await this.loadSessionPeopleFallback(requestOwner);
+      if (!this.isCurrentAlbumMemberRequest(requestOwner)) {
+        return false;
+      }
+      this.people = this.mergePeople([...people, ...fallbackPeople]);
+      return true;
     },
-    async loadSessionPeopleFallback() {
+    async loadSessionPeopleFallback(requestOwner) {
+      if (!this.isCurrentAlbumMemberRequest(requestOwner)) {
+        return [];
+      }
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
+        if (!this.isCurrentAlbumMemberRequest(requestOwner)) {
+          return [];
+        }
         const session = dataOf(response) || {};
         this.applyAlbumSessionFallback(session);
         return this.sessionDetailPeople(session);
@@ -4235,6 +4429,9 @@ export default {
     },
     openRecruitment() {
       if (this.timelineMode || this.albumBusy || !this.sessionId) {
+        return;
+      }
+      if (this.isHistoricalAlbum && !this.isHistoricalOrganizer) {
         return;
       }
       uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}` });

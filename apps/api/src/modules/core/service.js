@@ -7012,6 +7012,7 @@ export async function listMySignups(user) {
           session.script_name_snapshot,
           session.store_name_snapshot,
           session.start_at,
+          session.session_purpose,
           session.status AS session_status,
           session.cancelled_at,
           seat.name AS seat_name,
@@ -7485,11 +7486,14 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       );
     }
 
-    const content = report
-      ? `车头已将「${seat.name}」移出本车，原因：${removalReasonLabel(reasonType)}`
-      : reason
-        ? `车头已释放「${seat.name}」：${reason}`
-        : `车头已释放「${seat.name}」`;
+    const historicalRemoval = seat.session_purpose === "historical_record";
+    const content = historicalRemoval
+      ? `车头已移除「${seat.name}」的补认成员`
+      : report
+        ? `车头已将「${seat.name}」移出本车，原因：${removalReasonLabel(reasonType)}`
+        : reason
+          ? `车头已释放「${seat.name}」：${reason}`
+          : `车头已释放「${seat.name}」`;
     await runSessionExtensionHook("afterSessionSeatKicked", {
       connection,
       sessionId: seat.session_id,
@@ -8131,6 +8135,8 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
       script_name_snapshot: session.script_name_snapshot,
       store_name_snapshot: session.store_name_snapshot,
       start_at: session.start_at,
+      session_purpose: session.session_purpose,
+      organizer_user_id: session.organizer_user_id,
       can_upload: true,
       privacy,
       visible_count: photos.filter((photo) => isModerationPublished(photo.moderation_status)).length,
