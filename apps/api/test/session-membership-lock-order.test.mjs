@@ -66,8 +66,9 @@ const SIGNUP_RANGE_LOCK =
 const PLAIN_SEAT_MEMBERSHIP =
   "SELECT id FROM session_seats WHERE session_id = ? AND confirmed_user_id = ? AND status IN ('confirmed', 'locked') LIMIT 1";
 const LOCKED_SEAT_MEMBERSHIP = `${PLAIN_SEAT_MEMBERSHIP} FOR UPDATE`;
-const LOCKED_NPC_MEMBERSHIP =
-  "SELECT id FROM session_npc_roles WHERE session_id = ? AND bound_user_id = ? AND status = 'active' LIMIT 1 FOR UPDATE";
+const PLAIN_NPC_MEMBERSHIP =
+  "SELECT id FROM session_npc_roles WHERE session_id = ? AND bound_user_id = ? AND status = 'active' LIMIT 1";
+const LOCKED_NPC_MEMBERSHIP = `${PLAIN_NPC_MEMBERSHIP} FOR UPDATE`;
 const ACTIVE_PHOTO_RANGE_LOCK =
   "SELECT id FROM session_album_photos WHERE session_id = ? AND status = 'active' AND moderation_status IN ('approved', 'approved_legacy') ORDER BY id FOR UPDATE";
 const CHILD_LOCK_PREFIX = [SEAT_RANGE_LOCK, NPC_RANGE_LOCK, SIGNUP_RANGE_LOCK];
@@ -112,6 +113,10 @@ function lockingQueries(connection) {
   return connection.state.queries
     .map(({ sql }) => sql)
     .filter((sql) => /\bFOR UPDATE\b/.test(sql));
+}
+
+function firstDomainQuery(connection) {
+  return connection.state.queries.find(({ sql }) => sql !== "SET time_zone = '+00:00'")?.sql;
 }
 
 function assertCanonicalPrefix(connection, label) {
@@ -867,6 +872,142 @@ test("direct NPC claim projects the role from current locked membership rows", a
     connection.state.queries.some(({ sql }) => sql.includes("FROM session_npc_roles role")),
     false
   );
+});
+
+function previewAuthorizationConnection({
+  snapshotSession,
+  currentSession,
+  seatRows = [],
+  npcRoleRows = []
+}) {
+  return traceConnection((sql) => {
+    if (sql === "SELECT * FROM sessions WHERE id = ?") return [[snapshotSession]];
+    if (sql === SESSION_STARTED_LOCK) return [[currentSession]];
+    if (sql === PLAIN_SEAT_MEMBERSHIP || sql === PLAIN_NPC_MEMBERSHIP) return [[]];
+    if (
+      sql ===
+      "SELECT seat.* FROM session_seats seat WHERE seat.session_id = ? ORDER BY seat.id"
+    ) {
+      return [seatRows];
+    }
+    if (sql.includes("FROM session_npc_roles role")) return [npcRoleRows];
+    throw new Error(`Unexpected query: ${sql}`);
+  });
+}
+
+test("anonymous public preview is denied from the locked-current private session", async () => {
+  const connection = previewAuthorizationConnection({
+    snapshotSession: { ...SESSION, visibility: "public", status: "recruiting" },
+    currentSession: {
+      ...SESSION,
+      visibility: "share_only",
+      status: "cancelled",
+      session_started: 0
+    }
+  });
+
+  await withMockMysqlConnection(connection, () =>
+    assert.rejects(() => getSessionForViewer(SESSION.id), {
+      statusCode: 404,
+      message: "Session not found"
+    })
+  );
+  assert.equal(firstDomainQuery(connection), SESSION_STARTED_LOCK);
+});
+
+test("authenticated nonmember public preview is denied from the locked-current private session", async () => {
+  const connection = previewAuthorizationConnection({
+    snapshotSession: { ...SESSION, visibility: "public", status: "recruiting" },
+    currentSession: {
+      ...SESSION,
+      visibility: "share_only",
+      status: "cancelled",
+      session_started: 0
+    }
+  });
+
+  await withMockMysqlConnection(connection, () =>
+    assert.rejects(() => getSessionForViewer(SESSION.id, { viewer: MEMBER }), {
+      statusCode: 404,
+      message: "Session not found"
+    })
+  );
+  assert.equal(firstDomainQuery(connection), SESSION_STARTED_LOCK);
+});
+
+test("invite preview is denied from the locked-current cancelled session", async () => {
+  const connection = previewAuthorizationConnection({
+    snapshotSession: { ...SESSION, visibility: "share_only", status: "locked" },
+    currentSession: {
+      ...SESSION,
+      visibility: "share_only",
+      status: "cancelled",
+      session_started: 1
+    }
+  });
+
+  await withMockMysqlConnection(connection, () =>
+    assert.rejects(
+      () => getSessionForViewer(SESSION.id, {
+        inviteClaims: { sessionId: SESSION.id }
+      }),
+      { statusCode: 404, message: "Session not found" }
+    )
+  );
+  assert.equal(firstDomainQuery(connection), SESSION_STARTED_LOCK);
+});
+
+test("current public session still returns its normal public preview", async () => {
+  const currentSession = {
+    ...SESSION,
+    visibility: "public",
+    status: "recruiting",
+    session_started: 0
+  };
+  const connection = previewAuthorizationConnection({
+    snapshotSession: currentSession,
+    currentSession,
+    seatRows: [{
+      id: 11,
+      session_id: SESSION.id,
+      name: "A",
+      status: "confirmed",
+      confirmed_user_id: 77,
+      confirmed_user_nickname: "Private seat member"
+    }],
+    npcRoleRows: [{
+      id: 31,
+      session_id: SESSION.id,
+      name: "NPC",
+      status: "active",
+      bound_user_id: 88,
+      bound_user_nickname: "Private bound member",
+      pending_signup_id: 41,
+      pending_signup_user_id: 99,
+      pending_signup_user_nickname: "Private applicant"
+    }]
+  });
+
+  const result = await withMockMysqlConnection(connection, () =>
+    getSessionForViewer(SESSION.id)
+  );
+  assert.equal(result.access_scope, "public_preview");
+  assert.equal(result.seats.length, 1);
+  assert.equal(Object.hasOwn(result.seats[0], "confirmed_user_id"), false);
+  assert.equal(Object.hasOwn(result.seats[0], "confirmed_user_nickname"), false);
+  assert.equal(result.session_npc_roles.length, 1);
+  assert.equal(result.session_npc_roles[0].is_bound, true);
+  assert.equal(result.session_npc_roles[0].has_pending_signup, true);
+  for (const privateField of [
+    "bound_user_id",
+    "bound_user_name",
+    "pending_signup_id",
+    "pending_signup_user_id",
+    "pending_signup_user_name"
+  ]) {
+    assert.equal(Object.hasOwn(result.session_npc_roles[0], privateField), false);
+  }
+  assert.equal(firstDomainQuery(connection), SESSION_STARTED_LOCK);
 });
 
 function staleViewerConnection({ visibility = "public", currentSeatRows = [] } = {}) {

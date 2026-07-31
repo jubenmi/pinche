@@ -4409,18 +4409,14 @@ export async function getSessionForViewer(id, options = {}) {
   const viewer = options.viewer || null;
   const inviteClaims = options.inviteClaims || null;
   return withTransaction(async (connection) => {
-    const session = await findById(connection, "sessions", sessionId);
-    if (!session) {
-      throw notFound("Session not found");
-    }
+    const currentSession = await requireLockedSession(connection, sessionId);
     const initiallyMemberAllowed = Boolean(
       viewer &&
-        (isAdmin(viewer) || (await isSessionAlbumMember(connection, session, viewer.user.id)))
+        (isAdmin(viewer) ||
+          (await isSessionAlbumMember(connection, currentSession, viewer.user.id)))
     );
-    let currentSession = session;
     let currentMembershipRows = null;
     if (initiallyMemberAllowed) {
-      currentSession = await requireLockedSession(connection, sessionId);
       currentMembershipRows = await lockSessionMembershipRows(connection, sessionId);
       const currentlyMemberAllowed = Boolean(
         isAdmin(viewer) ||
