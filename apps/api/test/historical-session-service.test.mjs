@@ -1632,6 +1632,30 @@ test("historical claims require exactly one positive seatId or npcRoleId", async
   }
 });
 
+test("mismatched historical claims are rejected before target validation or session lookup", async (t) => {
+  const cases = [
+    ["existing path", historicalClaimConnection(), { seatId: 11 }],
+    ["nonexistent path", historicalClaimConnection({ sessionExists: false }), { seatId: 11 }],
+    ["invalid target body", historicalClaimConnection(), {}]
+  ];
+  for (const [name, connection, body] of cases) {
+    await t.test(name, async () => {
+      await assert.rejects(
+        () => claimHistoricalSessionRoleWithConnection(
+          connection,
+          CLAIMANT,
+          102,
+          body,
+          HISTORICAL_INVITE_CLAIMS
+        ),
+        { statusCode: 403, code: "FORBIDDEN" }
+      );
+      assert.deepEqual(connection.state.queries, []);
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
 test("historical claims reject invalid lifecycle and stale invitation claims before mutation", async (t) => {
   const cases = [
     ["session is not historical", { session: { session_purpose: "future_carpool" } }, HISTORICAL_INVITE_CLAIMS],

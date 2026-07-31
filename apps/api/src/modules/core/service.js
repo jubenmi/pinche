@@ -4539,12 +4539,19 @@ function historicalClaimTarget(body = {}) {
   return { type: "npc_role", id: positiveId(body.npcRoleId, "npcRoleId") };
 }
 
-function assertHistoricalClaimInvitation(session, sessionId, inviteClaims) {
+function assertHistoricalClaimPreflight(sessionId, inviteClaims) {
   if (
     inviteClaims?.purpose !== "historical_session_claim" ||
     inviteClaims?.sessionPurpose !== "historical_record" ||
-    Number(inviteClaims?.sessionId) !== Number(sessionId) ||
-    Number(inviteClaims?.inviterUserId) !== Number(session.organizer_user_id) ||
+    Number(inviteClaims?.sessionId) !== Number(sessionId)
+  ) {
+    throw forbidden("Historical invitation is no longer valid");
+  }
+}
+
+function assertHistoricalClaimSession(session, inviteClaims) {
+  if (
+    Number(inviteClaims.inviterUserId) !== Number(session.organizer_user_id) ||
     session.session_purpose !== "historical_record" ||
     session.status !== "locked" ||
     Boolean(session.cancelled_by_user_id)
@@ -4654,6 +4661,7 @@ export async function claimHistoricalSessionRoleWithConnection(
   inviteClaims
 ) {
   const id = positiveId(sessionId, "sessionId");
+  assertHistoricalClaimPreflight(id, inviteClaims);
   const target = historicalClaimTarget(body);
   const userId = positiveId(user?.user?.id, "userId");
   const session = await requireLockedSession(connection, id);
@@ -4661,7 +4669,7 @@ export async function claimHistoricalSessionRoleWithConnection(
   const npcRoles = await lockSessionNpcRoles(connection, id);
   const activeSignups = await lockHistoricalClaimSignups(connection, id, userId);
 
-  assertHistoricalClaimInvitation(session, id, inviteClaims);
+  assertHistoricalClaimSession(session, inviteClaims);
   await assertUserCanJoinSession(connection, id, userId);
   assertNoOtherHistoricalRole({ seats, npcRoles, activeSignups }, userId, target);
 
