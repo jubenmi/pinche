@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import mysql from "mysql2/promise";
 
 import {
+  approveSignup,
+  assertSessionJoinInviteAllowed,
+  claimSessionNpcRole,
+  claimSessionSeat,
+  createSessionNpcRoleWithConnection,
   createSessionWithConnection,
-  publishSessionWithConnection
+  createSignup,
+  publishSessionWithConnection,
+  updateSessionNpcRoleWithConnection,
+  updateSessionWithConnection
 } from "../src/modules/core/service.js";
 import { buildTextModerationDescriptor } from "../src/modules/content-moderation/text-boundaries.js";
 import {
@@ -35,6 +44,110 @@ const ADMIN = {
 
 function compactSql(sql) {
   return String(sql).replace(/\s+/g, " ").trim();
+}
+
+const HISTORICAL_CLAIM_ERROR = {
+  statusCode: 403,
+  code: "HISTORICAL_ROLE_CLAIM_INVITE_REQUIRED",
+  message: "Historical sessions require a historical role-claim invitation"
+};
+
+const HISTORICAL_PREBIND_ERROR = {
+  statusCode: 400,
+  code: "HISTORICAL_MEMBER_PREBIND_FORBIDDEN",
+  message: "Historical members must claim a role through a historical invitation"
+};
+
+async function withMockMysqlConnection(connection, work) {
+  const originalCreateConnection = mysql.createConnection;
+  mysql.createConnection = async () => connection;
+  try {
+    return await work();
+  } finally {
+    mysql.createConnection = originalCreateConnection;
+  }
+}
+
+function recruitmentGuardConnection(queryResult) {
+  const state = { mutations: [] };
+  return {
+    state,
+    async query(sql, values = []) {
+      const normalized = compactSql(sql);
+      if (normalized === "SET time_zone = '+00:00'") return [{ affectedRows: 0 }];
+      if (/^(INSERT|UPDATE|DELETE) /i.test(normalized)) {
+        state.mutations.push({ sql: normalized, values });
+      }
+      return queryResult(normalized, values);
+    },
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    async end() {}
+  };
+}
+
+function historicalRoleManagementConnection() {
+  const session = {
+    id: 101,
+    organizer_user_id: ACTOR.user.id,
+    session_purpose: "historical_record",
+    status: "locked",
+    visibility: "share_only",
+    join_policy: "review_required",
+    join_phone_required: 0,
+    npc_join_enabled: 0,
+    dm_user_id: 8,
+    npc_user_id: 9
+  };
+  const role = {
+    id: 31,
+    session_id: session.id,
+    organizer_user_id: session.organizer_user_id,
+    session_purpose: session.session_purpose,
+    name: "NPC",
+    status: "active",
+    bound_user_id: 8
+  };
+  const state = { mutations: [], session, role };
+  return {
+    state,
+    async query(sql, values = []) {
+      const normalized = compactSql(sql);
+      if (/^(INSERT|UPDATE|DELETE) /i.test(normalized)) {
+        state.mutations.push({ sql: normalized, values });
+      }
+      if (normalized === "SELECT * FROM sessions WHERE id = ?") return [[session]];
+      if (normalized.includes("SELECT role.*, session.organizer_user_id")) return [[role]];
+      if (normalized.startsWith("INSERT INTO session_npc_roles")) {
+        role.bound_user_id = values[6];
+        return [{ insertId: role.id }];
+      }
+      if (
+        normalized.includes("FROM session_npc_roles role") &&
+        normalized.includes("WHERE role.session_id = ?")
+      ) {
+        return [[role]];
+      }
+      if (normalized.startsWith("UPDATE session_npc_roles SET")) {
+        role.bound_user_id = values[0];
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized === "SELECT * FROM session_npc_roles WHERE id = ?") return [[role]];
+      if (
+        normalized.includes("FROM session_npc_roles role") &&
+        normalized.includes("WHERE role.id = ?")
+      ) {
+        return [[role]];
+      }
+      if (normalized.startsWith("UPDATE sessions SET")) {
+        if (normalized.includes("status = ?")) session.status = values[0];
+        return [{ affectedRows: 1 }];
+      }
+      if (normalized === "SELECT * FROM sessions WHERE id = ? FOR UPDATE") return [[session]];
+      throw new Error(`Unexpected query: ${normalized}`);
+    }
+  };
 }
 
 function insertColumns(sql) {
@@ -675,6 +788,208 @@ test("approved raw proposal bypassing moderation descriptor still rejects before
     }
   );
   assert.equal(connection.state.sessionInsert, null);
+});
+
+test("historical sessions reject every ordinary recruitment path before mutation", async (t) => {
+  const cases = [
+    [
+      "createSignup",
+      () => createSignup(ACTOR, { seatId: 11 }),
+      (sql) => {
+        if (sql.includes("FROM session_seats seat") && sql.includes("FOR UPDATE")) {
+          return [[{
+            id: 11,
+            session_id: 101,
+            session_purpose: "historical_record",
+            session_status: "locked",
+            session_started: 1,
+            status: "cancelled",
+            join_phone_required: 0
+          }]];
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    ],
+    [
+      "claimSessionSeat",
+      () => claimSessionSeat(ACTOR, 11),
+      (sql) => {
+        if (sql.startsWith("SELECT seat.session_id, session.session_purpose")) {
+          return [[{ session_id: 101, session_purpose: "historical_record" }]];
+        }
+        if (sql.includes("SELECT id FROM session_seats") && sql.includes("FOR UPDATE")) {
+          return [[]];
+        }
+        if (sql.includes("session.organizer_user_id") && sql.includes("FROM session_seats seat")) {
+          return [[{
+            id: 11,
+            session_id: 101,
+            session_purpose: "historical_record",
+            organizer_user_id: 88,
+            join_policy: "review_required",
+            join_phone_required: 0,
+            session_status: "locked",
+            session_started: 1,
+            status: "cancelled",
+            confirmed_user_id: 99
+          }]];
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    ],
+    [
+      "claimSessionNpcRole",
+      () => claimSessionNpcRole(ACTOR, 31),
+      (sql) => {
+        if (sql.includes("FROM session_npc_roles role") && sql.includes("FOR UPDATE")) {
+          return [[{
+            id: 31,
+            session_id: 101,
+            session_purpose: "historical_record",
+            organizer_user_id: 88,
+            session_status: "cancelled",
+            join_policy: "review_required",
+            join_phone_required: 0,
+            npc_join_enabled: 0,
+            status: "inactive",
+            bound_user_id: 99
+          }]];
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    ],
+    [
+      "approveSignup",
+      () => approveSignup(ACTOR, 41),
+      (sql) => {
+        if (sql.includes("SELECT signup.*, session.organizer_user_id")) {
+          return [[{
+            id: 41,
+            session_id: 101,
+            session_purpose: "historical_record",
+            organizer_user_id: ACTOR.user.id,
+            status: "rejected"
+          }]];
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    ],
+    [
+      "assertSessionJoinInviteAllowed",
+      () => assertSessionJoinInviteAllowed(ACTOR, 101),
+      (sql) => {
+        if (sql === "SELECT * FROM sessions WHERE id = ?") {
+          return [[{
+            id: 101,
+            organizer_user_id: ACTOR.user.id,
+            session_purpose: "historical_record",
+            status: "locked"
+          }]];
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      }
+    ]
+  ];
+
+  for (const [name, invoke, queryResult] of cases) {
+    await t.test(name, async () => {
+      const connection = recruitmentGuardConnection(queryResult);
+      await withMockMysqlConnection(connection, () =>
+        assert.rejects(invoke, HISTORICAL_CLAIM_ERROR)
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("historical NPC role creation rejects every non-null binding alias before mutation", async (t) => {
+  const cases = [
+    ...["boundUserId", "bound_user_id", "userId", "user_id"].map((field) => [field, { [field]: 12 }]),
+    ["conflicting aliases", { boundUserId: "", user_id: 12 }]
+  ];
+  for (const [name, binding] of cases) {
+    await t.test(name, async () => {
+      const connection = historicalRoleManagementConnection();
+      await assert.rejects(
+        () => createSessionNpcRoleWithConnection(
+          connection,
+          ACTOR,
+          101,
+          { name: "NPC", ...binding }
+        ),
+        HISTORICAL_PREBIND_ERROR
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("historical NPC role creation permits an explicitly unbound role", async () => {
+  const connection = historicalRoleManagementConnection();
+
+  await createSessionNpcRoleWithConnection(connection, ACTOR, 101, {
+    name: "待认领 NPC",
+    bound_user_id: null
+  });
+
+  assert.equal(connection.state.mutations.length, 1);
+  assert.equal(connection.state.mutations[0].values[6], null);
+});
+
+test("historical NPC role update rejects every non-null binding alias before mutation", async (t) => {
+  for (const field of ["boundUserId", "bound_user_id", "userId", "user_id"]) {
+    await t.test(field, async () => {
+      const connection = historicalRoleManagementConnection();
+      await assert.rejects(
+        () => updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { [field]: 12 }),
+        HISTORICAL_PREBIND_ERROR
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("historical NPC role update permits explicit null unbinding through every alias", async (t) => {
+  for (const field of ["boundUserId", "bound_user_id", "userId", "user_id"]) {
+    await t.test(field, async () => {
+      const connection = historicalRoleManagementConnection();
+      await updateSessionNpcRoleWithConnection(connection, ACTOR, 31, { [field]: null });
+      assert.equal(connection.state.mutations.length, 1);
+      assert.equal(connection.state.mutations[0].values[0], null);
+    });
+  }
+});
+
+test("historical generic PATCH rejects every non-null direct-member alias before mutation", async (t) => {
+  for (const field of ["dmUserId", "dm_user_id", "npcUserId", "npc_user_id"]) {
+    await t.test(field, async () => {
+      const connection = historicalRoleManagementConnection();
+      await assert.rejects(
+        () => updateSessionWithConnection(connection, ACTOR, 101, { [field]: 12 }),
+        HISTORICAL_PREBIND_ERROR
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
+});
+
+test("locked historical generic PATCH cannot reset status or reopen publish", async (t) => {
+  for (const status of ["draft", "recruiting"]) {
+    await t.test(status, async () => {
+      const connection = historicalRoleManagementConnection();
+      await assert.rejects(
+        () => updateSessionWithConnection(connection, ACTOR, 101, { status }),
+        { statusCode: 400 }
+      );
+      assert.equal(connection.state.session.status, "locked");
+      assert.deepEqual(connection.state.mutations, []);
+      await assert.rejects(
+        () => publishSessionWithConnection(connection, ACTOR, 101),
+        { statusCode: 409 }
+      );
+      assert.deepEqual(connection.state.mutations, []);
+    });
+  }
 });
 
 test("historical stale snapshots select immutable purpose for NPC-role and pinned-message paths", async () => {

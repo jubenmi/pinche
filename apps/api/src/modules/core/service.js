@@ -1393,7 +1393,7 @@ async function requireSeatOwner(connection, seatId, user) {
 async function requireSignupOwner(connection, signupId, user) {
   const [rows] = await connection.query(
     `
-      SELECT signup.*, session.organizer_user_id
+      SELECT signup.*, session.organizer_user_id, session.session_purpose
       FROM signups signup
       JOIN sessions session ON session.id = signup.session_id
       WHERE signup.id = ?
@@ -1408,6 +1408,16 @@ async function requireSignupOwner(connection, signupId, user) {
     throw forbidden("Only the session organizer can perform this action");
   }
   return signup;
+}
+
+function assertOrdinaryHistoricalRoleClaimAllowed(session) {
+  if (session?.session_purpose === "historical_record") {
+    throw new AppError(
+      403,
+      "HISTORICAL_ROLE_CLAIM_INVITE_REQUIRED",
+      "Historical sessions require a historical role-claim invitation"
+    );
+  }
 }
 
 async function lockSessionSeats(connection, sessionId) {
@@ -4118,6 +4128,7 @@ export async function assertSessionJoinInviteAllowed(user, sessionId) {
     if (!session) {
       throw notFound("Session not found");
     }
+    assertOrdinaryHistoricalRoleClaimAllowed(session);
     if (!(await isSessionAlbumMember(connection, session, user.user.id))) {
       throw forbidden("Only session members can share a join invitation");
     }
@@ -4794,13 +4805,99 @@ export function assertSessionPatchDoesNotReschedule(body = {}) {
   }
 }
 
-export async function updateSessionWithConnection(connection, user, id, body) {
+function bodyAliasValue(body, aliases) {
+  for (const alias of aliases) {
+    if (Object.prototype.hasOwnProperty.call(body, alias)) {
+      return body[alias];
+    }
+  }
+  return undefined;
+}
+
+function historicalRecruitmentSettingChanged(currentSession, body) {
+  const settings = [
+    {
+      aliases: ["visibility"],
+      current: currentSession.visibility,
+      normalize: normalizeSessionVisibility
+    },
+    {
+      aliases: ["joinPolicy", "join_policy"],
+      current: currentSession.join_policy,
+      normalize: normalizeJoinPolicy
+    },
+    {
+      aliases: ["joinPhoneRequired", "join_phone_required"],
+      current: Boolean(Number(currentSession.join_phone_required)),
+      normalize: normalizeJoinPhoneRequired
+    },
+    {
+      aliases: ["npcJoinEnabled", "npc_join_enabled"],
+      current: Boolean(Number(currentSession.npc_join_enabled)),
+      normalize: normalizeNpcJoinEnabled
+    }
+  ];
+  return settings.some(({ aliases, current, normalize }) => {
+    return aliases.some((alias) => (
+      Object.prototype.hasOwnProperty.call(body, alias) &&
+      normalize(body[alias]) !== current
+    ));
+  });
+}
+
+export function assertSessionPatchLifecycle(currentSession = {}, body = {}) {
   assertSessionPatchDoesNotReschedule(body);
-  await requireSessionOwner(connection, id, user);
+  if (
+    Object.prototype.hasOwnProperty.call(body, "sessionPurpose") ||
+    Object.prototype.hasOwnProperty.call(body, "session_purpose")
+  ) {
+    throw badRequest("sessionPurpose is immutable");
+  }
+
+  const sessionPurpose = currentSession.session_purpose ?? currentSession.sessionPurpose;
+  if (sessionPurpose === "historical_record") {
+    if (historicalRecruitmentSettingChanged(currentSession, body)) {
+      throw badRequest("Historical recruitment settings are immutable");
+    }
+    const directMemberAliases = ["dmUserId", "dm_user_id", "npcUserId", "npc_user_id"];
+    if (directMemberAliases.some((alias) => (
+      Object.prototype.hasOwnProperty.call(body, alias) &&
+      body[alias] !== null &&
+      body[alias] !== undefined
+    ))) {
+      assertHistoricalSessionMemberPrebindAllowed(body, sessionPurpose);
+    }
+  }
+
+  if (body.status === undefined) {
+    return undefined;
+  }
+  const nextStatus = String(body.status || "").trim();
+  if (!["draft", "recruiting", "locked", "cancelled"].includes(nextStatus)) {
+    throw badRequest("Session status is invalid");
+  }
+  if (nextStatus === currentSession.status) {
+    return undefined;
+  }
+  if (
+    sessionPurpose === "future_carpool" &&
+    currentSession.status === "recruiting" &&
+    nextStatus === "locked"
+  ) {
+    return nextStatus;
+  }
+  throw badRequest("Session lifecycle changes must use a dedicated route");
+}
+
+export async function updateSessionWithConnection(connection, user, id, body) {
+  const currentSession = await requireSessionOwner(connection, id, user);
+  const validatedStatus = assertSessionPatchLifecycle(currentSession, body);
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
   const normalized = {
     ...body,
+    dmUserId: bodyAliasValue(body, ["dmUserId", "dm_user_id"]),
+    npcUserId: bodyAliasValue(body, ["npcUserId", "npc_user_id"]),
     visibility:
       body.visibility === undefined
         ? undefined
@@ -4820,7 +4917,8 @@ export async function updateSessionWithConnection(connection, user, id, body) {
         ? undefined
         : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled)
           ? 1
-          : 0
+          : 0,
+    status: validatedStatus
   };
   return updateAllowed(connection, "sessions", id, normalized, [
     ["dmUserId", "dm_user_id"],
@@ -5026,7 +5124,7 @@ export async function rescheduleSessionInTransaction(connection, user, id, body 
 async function requireSessionNpcRoleOwner(connection, npcRoleId, user) {
   const [rows] = await connection.query(
     `
-      SELECT role.*, session.organizer_user_id
+      SELECT role.*, session.organizer_user_id, session.session_purpose
       FROM session_npc_roles role
       JOIN sessions session ON session.id = role.session_id
       WHERE role.id = ?
@@ -5044,16 +5142,17 @@ async function requireSessionNpcRoleOwner(connection, npcRoleId, user) {
 }
 
 function nullableBoundUserId(body = {}) {
-  if (
-    body.boundUserId === undefined &&
-    body.bound_user_id === undefined &&
-    body.userId === undefined &&
-    body.user_id === undefined
-  ) {
+  const aliases = ["boundUserId", "bound_user_id", "userId", "user_id"];
+  const values = aliases
+    .filter((alias) => Object.prototype.hasOwnProperty.call(body, alias))
+    .map((alias) => body[alias]);
+  if (values.length === 0 || values.every((value) => value === undefined)) {
     return undefined;
   }
-  const value = body.boundUserId ?? body.bound_user_id ?? body.userId ?? body.user_id;
-  if (value === null || value === "") {
+  const value = values.find((candidate) => (
+    candidate !== undefined && candidate !== null && candidate !== ""
+  ));
+  if (value === undefined) {
     return null;
   }
   return positiveId(value, "boundUserId");
@@ -5089,11 +5188,19 @@ export async function listSessionNpcRoles(user, sessionId, options = {}) {
 
 export async function createSessionNpcRoleWithConnection(connection, user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
-  await requireSessionOwner(connection, id, user);
+  const session = await requireSessionOwner(connection, id, user);
   const [role] = normalizeNpcRoles([body], { source: "session" });
   if (!role) {
     throw badRequest("npc role name is required");
   }
+  const boundUserId = nullableBoundUserId(body);
+  if (boundUserId !== undefined) {
+    role.boundUserId = boundUserId;
+  }
+  assertHistoricalSessionMemberPrebindAllowed(
+    { extraNpcRoles: [role] },
+    session.session_purpose
+  );
   await insertSessionNpcRoles(connection, id, [role], { source: "session" });
   const roles = await sessionNpcRolesForSession(connection, id);
   return roles[roles.length - 1] || null;
@@ -5110,6 +5217,13 @@ export async function updateSessionNpcRoleWithConnection(connection, user, npcRo
   const current = await requireSessionNpcRoleOwner(connection, id, user);
   assertPublicTextSafe("npcRoleName", body.name);
   assertPublicTextSafe("npcRoleDescription", body.description || body.note);
+  const boundUserId = nullableBoundUserId(body);
+  if (boundUserId !== undefined) {
+    assertHistoricalSessionMemberPrebindAllowed(
+      { extraNpcRoles: [{ boundUserId }] },
+      current.session_purpose
+    );
+  }
   const normalized = {
     ...body,
     description:
@@ -5121,7 +5235,7 @@ export async function updateSessionNpcRoleWithConnection(connection, user, npcRo
       body.roleGender === undefined && body.role_gender === undefined && body.gender === undefined
         ? undefined
         : normalizeRoleGender(body.roleGender ?? body.role_gender ?? body.gender),
-    boundUserId: nullableBoundUserId(body),
+    boundUserId,
     sortOrder:
       body.sortOrder === undefined && body.sort_order === undefined
         ? undefined
@@ -5432,6 +5546,7 @@ export async function createSignup(user, body) {
       `
         SELECT
           seat.*,
+          session.session_purpose,
           session.status AS session_status,
           COALESCE(session.join_phone_required, 1) AS join_phone_required,
           (session.start_at <= CURRENT_TIMESTAMP) AS session_started
@@ -5446,6 +5561,7 @@ export async function createSignup(user, body) {
     if (!seat) {
       throw notFound("Seat not found");
     }
+    assertOrdinaryHistoricalRoleClaimAllowed(seat);
     const acceptsSignup =
       seat.session_status === "recruiting" ||
       (
@@ -5557,13 +5673,19 @@ function forbidPlayerDirectClaim(user, seat) {
 export async function claimSessionSeat(user, seatId, body = {}) {
   return withTransaction(async (connection) => {
     const [seatRefs] = await connection.query(
-      "SELECT session_id FROM session_seats WHERE id = ?",
+      `
+        SELECT seat.session_id, session.session_purpose
+        FROM session_seats seat
+        JOIN sessions session ON session.id = seat.session_id
+        WHERE seat.id = ?
+      `,
       [seatId]
     );
     const seatRef = seatRefs[0];
     if (!seatRef) {
       throw notFound("Seat not found");
     }
+    assertOrdinaryHistoricalRoleClaimAllowed(seatRef);
 
     await lockSessionSeats(connection, seatRef.session_id);
 
@@ -5571,6 +5693,7 @@ export async function claimSessionSeat(user, seatId, body = {}) {
       `
         SELECT
           seat.*,
+          session.session_purpose,
           session.organizer_user_id,
           session.join_policy,
           COALESCE(session.join_phone_required, 1) AS join_phone_required,
@@ -5586,6 +5709,7 @@ export async function claimSessionSeat(user, seatId, body = {}) {
     if (!seat) {
       throw notFound("Seat not found");
     }
+    assertOrdinaryHistoricalRoleClaimAllowed(seat);
     await assertUserCanJoinSession(connection, seat.session_id, user.user.id);
     forbidPlayerDirectClaim(user, seat);
     requireJoinPhoneIfNeeded(user, seat);
@@ -5694,6 +5818,7 @@ export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
       `
         SELECT
           role.*,
+          session.session_purpose,
           session.organizer_user_id,
           session.status AS session_status,
           session.join_policy,
@@ -5710,6 +5835,7 @@ export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
     if (!role) {
       throw notFound("Session NPC role not found");
     }
+    assertOrdinaryHistoricalRoleClaimAllowed(role);
     if (role.status !== "active") {
       throw conflict("NPC role is not available");
     }
@@ -6010,6 +6136,7 @@ export async function listSessionSignups(user, sessionId) {
 export async function approveSignup(user, signupId) {
   const { signup, notification } = await withTransaction(async (connection) => {
     const signup = await requireSignupOwner(connection, signupId, user);
+    assertOrdinaryHistoricalRoleClaimAllowed(signup);
     if (signup.status !== "pending") {
       throw badRequest("Only pending signup can be approved");
     }
