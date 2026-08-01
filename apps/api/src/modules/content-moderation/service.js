@@ -853,7 +853,9 @@ export function createContentModerationService(dependencies) {
       ? input.payload
       : {};
     const normalizedPayload = {
-      ...buildTextProposalPayload(action, payload),
+      ...buildTextProposalPayload(action, payload, {
+        trustedHistoricalCreationIdentity: idempotencyKey
+      }),
       actor_user_id: actorUserId
     };
     const authorPrivateEnabled = authorPrivateTextActionEnabled(deps.config, action);

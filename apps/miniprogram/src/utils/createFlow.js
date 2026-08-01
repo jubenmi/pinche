@@ -229,6 +229,7 @@ export function flowToQuery(flow) {
     sessionId: flow.sessionId,
     startAt: flow.startAt,
     startText: flow.startText,
+    sessionPurpose: flow.sessionPurpose,
     pinnedMessageText: flow.pinnedMessageText,
     note: flow.note
   };
@@ -283,6 +284,7 @@ export function queryToFlow(options = {}) {
     sessionId: decode(options.sessionId || options.id),
     startAt: decode(options.startAt),
     startText: decode(options.startText),
+    sessionPurpose: decode(options.sessionPurpose),
     pinnedMessageText: decode(options.pinnedMessageText),
     note: decode(options.note)
   };

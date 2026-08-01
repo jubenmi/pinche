@@ -67,7 +67,13 @@ import {
   normalizeSessionCreationIdempotencyKey,
   replaySessionCreation
 } from "./session-creation-idempotency.js";
-import { normalizeSessionCreationStartAt } from "./session-create-time.js";
+import {
+  assertHistoricalSessionMemberPrebindAllowed,
+  hashHistoricalSessionCreationKey,
+  normalizeHistoricalSessionCreationKeyHash,
+  normalizeHistoricalSessionCreationKey,
+  normalizeSessionCreationStartAt
+} from "./session-purpose.js";
 import { moderationStatusForIntake } from "../content-moderation/intake-gate.js";
 import {
   findOwnedUserImageAssetById,
@@ -1173,16 +1179,27 @@ async function insertSessionNpcRoles(connection, sessionId, roles = [], options 
   }
 }
 
-async function cloneScriptNpcRolesForSession(connection, sessionId, scriptId) {
-  const rolesByScriptId = await scriptNpcRolesByScriptIds(connection, [scriptId]);
-  const roles = (rolesByScriptId.get(Number(scriptId)) || []).map((role, index) => ({
+async function cloneScriptNpcRolesForSession(
+  connection,
+  sessionId,
+  scriptId,
+  lockedRoles = null
+) {
+  let sourceRoles;
+  if (Array.isArray(lockedRoles)) {
+    sourceRoles = lockedRoles;
+  } else {
+    const rolesByScriptId = await scriptNpcRolesByScriptIds(connection, [scriptId]);
+    sourceRoles = rolesByScriptId.get(Number(scriptId)) || [];
+  }
+  const roles = sourceRoles.map((role, index) => ({
     scriptNpcRoleId: role.id,
     name: role.name,
     description: role.description,
-    roleGender: role.role_gender || "unlimited",
+    roleGender: role.role_gender || role.roleGender || "unlimited",
     source: "script",
     boundUserId: null,
-    sortOrder: role.sort_order ?? index
+    sortOrder: role.sort_order ?? role.sortOrder ?? index
   }));
   await insertSessionNpcRoles(connection, sessionId, roles, { source: "script" });
 }
@@ -1395,30 +1412,47 @@ async function updateAllowed(connection, table, id, body, fields) {
   return findById(connection, table, id);
 }
 
-async function requireSeatOwner(connection, seatId, user) {
-  const [rows] = await connection.query(
-    `
-      SELECT seat.*, session.organizer_user_id
-      FROM session_seats seat
-      JOIN sessions session ON session.id = seat.session_id
-      WHERE seat.id = ?
-    `,
+async function requireLockedSeatOwner(
+  connection,
+  seatId,
+  user,
+  { fullMembership = false } = {}
+) {
+  const [seatRefs] = await connection.query(
+    "SELECT session_id FROM session_seats WHERE id = ?",
     [seatId]
   );
-  const seat = rows[0];
+  const seatRef = seatRefs[0];
+  if (!seatRef) {
+    throw notFound("Seat not found");
+  }
+  const session = await findLockedSession(connection, seatRef.session_id);
+  if (!session) {
+    throw notFound("Seat not found");
+  }
+  if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the session organizer can perform this action");
+  }
+  if (fullMembership) {
+    await lockSessionMembershipRows(connection, session.id);
+  } else {
+    await lockSessionSeats(connection, session.id);
+  }
+  const [seatRows] = await connection.query(
+    "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE",
+    [seatId, session.id]
+  );
+  const seat = seatRows[0];
   if (!seat) {
     throw notFound("Seat not found");
   }
-  if (!isAdmin(user) && Number(seat.organizer_user_id) !== Number(user.user.id)) {
-    throw forbidden("Only the session organizer can perform this action");
-  }
-  return seat;
+  return sessionMembershipTarget(seat, session);
 }
 
 async function requireSignupOwner(connection, signupId, user) {
   const [rows] = await connection.query(
     `
-      SELECT signup.*, session.organizer_user_id
+      SELECT signup.*, session.organizer_user_id, session.session_purpose
       FROM signups signup
       JOIN sessions session ON session.id = signup.session_id
       WHERE signup.id = ?
@@ -1435,10 +1469,110 @@ async function requireSignupOwner(connection, signupId, user) {
   return signup;
 }
 
+async function requireLockedSessionOwner(
+  connection,
+  sessionId,
+  user,
+  ownerError = "Only the session organizer can perform this action"
+) {
+  const session = await findById(connection, "sessions", sessionId, { forUpdate: true });
+  if (!session) {
+    throw notFound("Session not found");
+  }
+  if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+    throw forbidden(ownerError);
+  }
+  return session;
+}
+
+async function findLockedSession(connection, sessionId) {
+  const [rows] = await connection.query(
+    `SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started
+     FROM sessions
+     WHERE id = ?
+     FOR UPDATE`,
+    [sessionId]
+  );
+  return rows[0] || null;
+}
+
+async function requireLockedSession(connection, sessionId) {
+  const session = await findLockedSession(connection, sessionId);
+  if (!session) {
+    throw notFound("Session not found");
+  }
+  return session;
+}
+
+function sessionMembershipTarget(row, session) {
+  return {
+    ...row,
+    session_purpose: session.session_purpose,
+    organizer_user_id: session.organizer_user_id,
+    join_policy: session.join_policy,
+    join_phone_required: session.join_phone_required ?? 1,
+    npc_join_enabled: session.npc_join_enabled ?? 1,
+    session_status: session.status,
+    session_started: Number(session.session_started || 0)
+  };
+}
+
+async function requireLockedSignupOwner(
+  connection,
+  signupId,
+  user,
+  { validateSession = null } = {}
+) {
+  const [signupRefs] = await connection.query(
+    "SELECT session_id FROM signups WHERE id = ?",
+    [signupId]
+  );
+  const signupRef = signupRefs[0];
+  if (!signupRef) {
+    throw notFound("Signup not found");
+  }
+  const session = await requireLockedSessionOwner(
+    connection,
+    signupRef.session_id,
+    user
+  );
+  const membershipRows = await lockSessionMembershipRows(connection, session.id);
+  if (validateSession) {
+    validateSession(session);
+  }
+  const [rows] = await connection.query(
+    "SELECT * FROM signups WHERE id = ? AND session_id = ? FOR UPDATE",
+    [signupId, session.id]
+  );
+  const signup = rows[0];
+  if (!signup) {
+    throw notFound("Signup not found");
+  }
+  return {
+    signup: {
+      ...signup,
+      organizer_user_id: session.organizer_user_id,
+      session_purpose: session.session_purpose
+    },
+    session,
+    membershipRows
+  };
+}
+
+function assertOrdinaryHistoricalRoleClaimAllowed(session) {
+  if (session?.session_purpose === "historical_record") {
+    throw new AppError(
+      403,
+      "HISTORICAL_ROLE_CLAIM_INVITE_REQUIRED",
+      "Historical sessions require a historical role-claim invitation"
+    );
+  }
+}
+
 async function lockSessionSeats(connection, sessionId) {
-  await connection.query(
+  const [rows] = await connection.query(
     `
-      SELECT id
+      SELECT *
       FROM session_seats
       WHERE session_id = ?
       ORDER BY id
@@ -1446,6 +1580,42 @@ async function lockSessionSeats(connection, sessionId) {
     `,
     [sessionId]
   );
+  return rows;
+}
+
+async function lockSessionNpcRoles(connection, sessionId) {
+  const [rows] = await connection.query(
+    `
+      SELECT *
+      FROM session_npc_roles
+      WHERE session_id = ?
+      ORDER BY id
+      FOR UPDATE
+    `,
+    [sessionId]
+  );
+  return rows;
+}
+
+async function lockSessionSignups(connection, sessionId) {
+  const [rows] = await connection.query(
+    `
+      SELECT *
+      FROM signups
+      WHERE session_id = ?
+      ORDER BY id
+      FOR UPDATE
+    `,
+    [sessionId]
+  );
+  return rows;
+}
+
+async function lockSessionMembershipRows(connection, sessionId) {
+  const seats = await lockSessionSeats(connection, sessionId);
+  const npcRoles = await lockSessionNpcRoles(connection, sessionId);
+  const signups = await lockSessionSignups(connection, sessionId);
+  return { seats, npcRoles, signups };
 }
 
 async function assertUserCanJoinSession(connection, sessionId, userId) {
@@ -1457,6 +1627,7 @@ async function assertUserCanJoinSession(connection, sessionId, userId) {
         AND removed_user_id = ?
         AND block_rejoin = 1
       LIMIT 1
+      FOR UPDATE
     `,
     [sessionId, userId]
   );
@@ -1469,20 +1640,32 @@ async function releaseUserOtherConfirmedSeats(
   connection,
   sessionId,
   userId,
-  seatId
+  seatId,
+  options = {}
 ) {
-  const [lockedRows] = await connection.query(
-    `
-      SELECT id, name
-      FROM session_seats
-      WHERE session_id = ?
-        AND confirmed_user_id = ?
-        AND id <> ?
-        AND status = 'locked'
-      LIMIT 1
-    `,
-    [sessionId, userId, seatId]
-  );
+  let lockedRows;
+  if (Array.isArray(options.lockedSeats)) {
+    lockedRows = options.lockedSeats.filter((seat) =>
+      Number(seat.session_id) === Number(sessionId) &&
+      Number(seat.confirmed_user_id) === Number(userId) &&
+      Number(seat.id) !== Number(seatId) &&
+      seat.status === "locked"
+    );
+  } else {
+    [lockedRows] = await connection.query(
+      `
+        SELECT id, name
+        FROM session_seats
+        WHERE session_id = ?
+          AND confirmed_user_id = ?
+          AND id <> ?
+          AND status = 'locked'
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [sessionId, userId, seatId]
+    );
+  }
   if (lockedRows.length > 0) {
     throw conflict("User already has a locked seat in this session", {
       seatId: lockedRows[0].id,
@@ -1490,17 +1673,28 @@ async function releaseUserOtherConfirmedSeats(
     });
   }
 
-  const [confirmedRows] = await connection.query(
-    `
-      SELECT id, name
-      FROM session_seats
-      WHERE session_id = ?
-        AND confirmed_user_id = ?
-        AND id <> ?
-        AND status = 'confirmed'
-    `,
-    [sessionId, userId, seatId]
-  );
+  let confirmedRows;
+  if (Array.isArray(options.lockedSeats)) {
+    confirmedRows = options.lockedSeats.filter((seat) =>
+      Number(seat.session_id) === Number(sessionId) &&
+      Number(seat.confirmed_user_id) === Number(userId) &&
+      Number(seat.id) !== Number(seatId) &&
+      seat.status === "confirmed"
+    );
+  } else {
+    [confirmedRows] = await connection.query(
+      `
+        SELECT id, name
+        FROM session_seats
+        WHERE session_id = ?
+          AND confirmed_user_id = ?
+          AND id <> ?
+          AND status = 'confirmed'
+        FOR UPDATE
+      `,
+      [sessionId, userId, seatId]
+    );
+  }
   if (confirmedRows.length === 0) {
     return [];
   }
@@ -1537,6 +1731,10 @@ async function releaseUserOtherConfirmedSeats(
     `,
     [sessionId, userId, seatId]
   );
+  for (const confirmedRow of confirmedRows) {
+    confirmedRow.status = "open";
+    confirmedRow.confirmed_user_id = null;
+  }
 
   return confirmedRows;
 }
@@ -1592,21 +1790,42 @@ async function releaseUserOtherSessionNpcRoles(
   connection,
   sessionId,
   userId,
-  npcRoleId = 0
+  npcRoleId = 0,
+  options = {}
 ) {
-  const [boundRows] = await connection.query(
+  let boundRows;
+  if (Array.isArray(options.lockedNpcRoles)) {
+    boundRows = options.lockedNpcRoles.filter((role) =>
+      Number(role.session_id) === Number(sessionId) &&
+      Number(role.bound_user_id) === Number(userId) &&
+      Number(role.id) !== Number(npcRoleId || 0) &&
+      role.status === "active"
+    );
+  } else {
+    [boundRows] = await connection.query(
+      `
+        SELECT id, name
+        FROM session_npc_roles
+        WHERE session_id = ?
+          AND bound_user_id = ?
+          AND id <> ?
+          AND status = 'active'
+        FOR UPDATE
+      `,
+      [sessionId, userId, npcRoleId || 0]
+    );
+  }
+
+  await connection.query(
     `
-      SELECT id, name
-      FROM session_npc_roles
+      UPDATE session_npc_roles
+      SET bound_user_id = NULL
       WHERE session_id = ?
         AND bound_user_id = ?
         AND id <> ?
-        AND status = 'active'
-      FOR UPDATE
     `,
     [sessionId, userId, npcRoleId || 0]
   );
-
   await connection.query(
     `
       UPDATE signups
@@ -1623,66 +1842,90 @@ async function releaseUserOtherSessionNpcRoles(
     `,
     [sessionId, userId, sessionId, npcRoleId || 0]
   );
-  await connection.query(
-    `
-      UPDATE session_npc_roles
-      SET bound_user_id = NULL
-      WHERE session_id = ?
-        AND bound_user_id = ?
-        AND id <> ?
-    `,
-    [sessionId, userId, npcRoleId || 0]
-  );
 
   return boundRows;
 }
 
-async function cleanupSessionExclusiveRoleSelections(connection, sessionId) {
-  const [ordinaryMemberRows] = await connection.query(
-    `
-      SELECT DISTINCT confirmed_user_id AS user_id
-      FROM session_seats
-      WHERE session_id = ?
-        AND confirmed_user_id IS NOT NULL
-        AND confirmed_user_id > 0
-        AND status IN ('confirmed', 'locked')
-    `,
-    [sessionId]
+function applyReleasedSessionNpcRoles(membershipRows, userId, keepNpcRoleId = 0) {
+  const roles = membershipRows.npcRoles || [];
+  const roleIds = new Set(
+    roles
+      .filter((role) => Number(role.id) !== Number(keepNpcRoleId || 0))
+      .map((role) => Number(role.id))
+      .filter(Boolean)
   );
-  for (const row of ordinaryMemberRows) {
+  for (const role of roles) {
+    if (
+      Number(role.bound_user_id) === Number(userId) &&
+      Number(role.id) !== Number(keepNpcRoleId || 0)
+    ) {
+      role.bound_user_id = null;
+    }
+  }
+  for (const signup of membershipRows.signups || []) {
+    if (
+      Number(signup.user_id) === Number(userId) &&
+      ["pending", "approved"].includes(signup.status) &&
+      roleIds.has(Number(signup.session_npc_role_id))
+    ) {
+      signup.status = "cancelled";
+    }
+  }
+}
+
+async function cleanupSessionExclusiveRoleSelections(
+  connection,
+  sessionId,
+  membershipRows
+) {
+  const ordinaryMemberUserIds = [...new Set(
+    (membershipRows.seats || [])
+      .filter((seat) =>
+        Number(seat.confirmed_user_id) > 0 &&
+        ["confirmed", "locked"].includes(seat.status)
+      )
+      .map((seat) => Number(seat.confirmed_user_id))
+  )].sort((left, right) => left - right);
+  for (const userId of ordinaryMemberUserIds) {
     await releaseUserOtherSessionNpcRoles(
       connection,
       sessionId,
-      row.user_id,
-      0
+      userId,
+      0,
+      { lockedNpcRoles: membershipRows.npcRoles }
     );
+    applyReleasedSessionNpcRoles(membershipRows, userId, 0);
   }
 
-  const [duplicateNpcRoleRows] = await connection.query(
-    `
-      SELECT role.id
-      FROM session_npc_roles role
-      JOIN (
-        SELECT bound_user_id, MIN(id) AS keep_id
-        FROM session_npc_roles
-        WHERE session_id = ?
-          AND bound_user_id IS NOT NULL
-          AND bound_user_id > 0
-          AND status = 'active'
-        GROUP BY bound_user_id
-        HAVING COUNT(*) > 1
-      ) duplicate_npc_roles ON duplicate_npc_roles.bound_user_id = role.bound_user_id
-      WHERE role.session_id = ?
-        AND role.id <> duplicate_npc_roles.keep_id
-    `,
-    [sessionId, sessionId]
-  );
-  const duplicateNpcRoleIds = duplicateNpcRoleRows.map((row) => row.id).filter(Boolean);
+  const rolesByUserId = new Map();
+  for (const role of membershipRows.npcRoles || []) {
+    const userId = Number(role.bound_user_id);
+    if (!userId || role.status !== "active") {
+      continue;
+    }
+    const roles = rolesByUserId.get(userId) || [];
+    roles.push(role);
+    rolesByUserId.set(userId, roles);
+  }
+  const duplicateNpcRoleIds = [];
+  for (const roles of rolesByUserId.values()) {
+    roles.sort((left, right) => Number(left.id) - Number(right.id));
+    duplicateNpcRoleIds.push(...roles.slice(1).map((role) => Number(role.id)));
+  }
   if (duplicateNpcRoleIds.length === 0) {
     return;
   }
 
   const placeholders = duplicateNpcRoleIds.map(() => "?").join(", ");
+  await connection.query(
+    `
+      UPDATE session_npc_roles
+      SET bound_user_id = NULL
+      WHERE session_id = ?
+        AND id IN (${placeholders})
+    `,
+    [sessionId, ...duplicateNpcRoleIds]
+  );
   await connection.query(
     `
       UPDATE signups
@@ -1693,15 +1936,20 @@ async function cleanupSessionExclusiveRoleSelections(connection, sessionId) {
     `,
     [sessionId, ...duplicateNpcRoleIds]
   );
-  await connection.query(
-    `
-      UPDATE session_npc_roles
-      SET bound_user_id = NULL
-      WHERE session_id = ?
-        AND id IN (${placeholders})
-    `,
-    [sessionId, ...duplicateNpcRoleIds]
-  );
+  const duplicateNpcRoleIdSet = new Set(duplicateNpcRoleIds);
+  for (const role of membershipRows.npcRoles || []) {
+    if (duplicateNpcRoleIdSet.has(Number(role.id))) {
+      role.bound_user_id = null;
+    }
+  }
+  for (const signup of membershipRows.signups || []) {
+    if (
+      ["pending", "approved"].includes(signup.status) &&
+      duplicateNpcRoleIdSet.has(Number(signup.session_npc_role_id))
+    ) {
+      signup.status = "cancelled";
+    }
+  }
 }
 
 function reviewWindowSql() {
@@ -3903,83 +4151,394 @@ export async function createEntityClaim(user, body) {
   });
 }
 
-export async function createSessionWithConnection(connection, user, body) {
-  requireVerifiedPhone(user);
-  const creationIdempotencyKey = normalizeSessionCreationIdempotencyKey(body);
+function persistedSessionNpcRole(role) {
+  if (!role) return null;
+  const { id: _id, ...persisted } = role;
+  return persisted;
+}
 
+function normalizedSessionCreationPayload(body, normalizedCreation) {
+  const isHistorical = normalizedCreation.sessionPurpose === "historical_record";
+  return {
+    storeId: positiveId(requireValue(body, "storeId"), "storeId"),
+    scriptId: positiveId(requireValue(body, "scriptId"), "scriptId"),
+    startAt: normalizedCreation.date,
+    canonicalStartAt: normalizedCreation.canonical,
+    sessionPurpose: normalizedCreation.sessionPurpose,
+    dmUserId: isHistorical ? null : body.dmUserId || null,
+    dmNameSnapshot: optionalText(body.dmNameSnapshot),
+    npcUserId: isHistorical ? null : body.npcUserId || null,
+    npcNameSnapshot: optionalText(body.npcNameSnapshot),
+    depositAmount: intValue(body.depositAmount, 0),
+    visibility: isHistorical ? "share_only" : normalizeSessionVisibility(body.visibility),
+    joinPolicy: isHistorical
+      ? "review_required"
+      : normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
+    joinPhoneRequired: isHistorical
+      ? 0
+      : normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
+    npcJoinEnabled: isHistorical
+      ? 0
+      : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
+    note: optionalText(body.note),
+    pinnedMessageText: optionalText(body.pinnedMessageText),
+    extraNpcRoles: normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, {
+      source: "session"
+    }).map(persistedSessionNpcRole)
+  };
+}
+
+function historicalCreationPayloadHash(payload) {
+  const hashPayload = {
+    storeId: payload.storeId,
+    scriptId: payload.scriptId,
+    startAt: payload.canonicalStartAt,
+    sessionPurpose: payload.sessionPurpose,
+    dmUserId: payload.dmUserId,
+    dmNameSnapshot: payload.dmNameSnapshot,
+    npcUserId: payload.npcUserId,
+    npcNameSnapshot: payload.npcNameSnapshot,
+    depositAmount: payload.depositAmount,
+    visibility: payload.visibility,
+    joinPolicy: payload.joinPolicy,
+    joinPhoneRequired: payload.joinPhoneRequired,
+    npcJoinEnabled: payload.npcJoinEnabled,
+    note: payload.note,
+    pinnedMessageText: payload.pinnedMessageText,
+    extraNpcRoles: payload.extraNpcRoles
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(hashPayload)).digest();
+}
+
+async function lockHistoricalCreationOperation(
+  connection,
+  { organizerUserId, creationKeyHash, payloadHash }
+) {
+  await connection.query(
+    `
+      INSERT INTO historical_session_creation_operations
+        (organizer_user_id, creation_key_hash, payload_hash, session_id)
+      VALUES (?, ?, ?, NULL)
+      ON DUPLICATE KEY UPDATE creation_key_hash = VALUES(creation_key_hash)
+    `,
+    [organizerUserId, creationKeyHash, payloadHash]
+  );
+  const [rows] = await connection.query(
+    `
+      SELECT organizer_user_id, HEX(payload_hash) AS payload_hash_hex, session_id
+      FROM historical_session_creation_operations
+      WHERE organizer_user_id = ? AND creation_key_hash = ?
+      FOR UPDATE
+    `,
+    [organizerUserId, creationKeyHash]
+  );
+  const operation = rows[0];
+  if (!operation) {
+    throw new AppError(
+      409,
+      "HISTORICAL_SESSION_CREATION_OPERATION_MISSING",
+      "Historical session creation operation could not be locked"
+    );
+  }
+  if (String(operation.payload_hash_hex || "").toLowerCase() !== payloadHash.toString("hex")) {
+    throw new AppError(
+      409,
+      "HISTORICAL_SESSION_CREATION_KEY_REUSED",
+      "historicalCreationKey was already used with a different payload"
+    );
+  }
+  return { creationKeyHash, sessionId: operation.session_id };
+}
+
+async function bindHistoricalCreationOperation(
+  connection,
+  { organizerUserId, creationKeyHash, sessionId }
+) {
+  const [result] = await connection.query(
+    `
+      UPDATE historical_session_creation_operations
+      SET session_id = ?
+      WHERE organizer_user_id = ?
+        AND creation_key_hash = ?
+        AND session_id IS NULL
+    `,
+    [sessionId, organizerUserId, creationKeyHash]
+  );
+  if (Number(result.affectedRows) !== 1) {
+    throw new AppError(
+      409,
+      "HISTORICAL_SESSION_CREATION_OPERATION_CHANGED",
+      "Historical session creation operation changed before completion"
+    );
+  }
+}
+
+function historicalCreationActorSnapshot(userRow, roleRows) {
+  if (!userRow) return null;
+  return {
+    id: Number(userRow.id),
+    nickname: String(userRow.nickname || ""),
+    avatarUrl: userRow.avatar_url ? String(userRow.avatar_url) : null,
+    gender: userRow.gender ? String(userRow.gender) : "",
+    phone_verified: Boolean(userRow.phone_verified_at),
+    roles: roleRows
+      .filter((row) => String(row.status) === "active")
+      .map((row) => String(row.role))
+  };
+}
+
+async function lockHistoricalCreationDependencies(
+  connection,
+  { organizerUserId, storeId, scriptId }
+) {
+  const [userRows] = await connection.query(
+    `SELECT id, nickname, avatar_url, gender, phone_verified_at
+     FROM users WHERE id = ? LIMIT 1 FOR SHARE`,
+    [organizerUserId]
+  );
+  const [roleRows] = await connection.query(
+    `SELECT role, status FROM user_roles
+     WHERE user_id = ?
+     ORDER BY role FOR UPDATE`,
+    [organizerUserId]
+  );
+  const [storeRows] = await connection.query(
+    `SELECT id, name, status, visibility, review_status, created_by_user_id
+     FROM stores WHERE id = ? LIMIT 1 FOR SHARE`,
+    [storeId]
+  );
+  const [scriptRows] = await connection.query(
+    `SELECT id, name, status, visibility, review_status, created_by_user_id
+     FROM scripts WHERE id = ? LIMIT 1 FOR SHARE`,
+    [scriptId]
+  );
+  const [scriptNpcRoles] = await connection.query(
+    `SELECT id, script_id, name, description, role_gender, sort_order, status
+     FROM script_npc_roles
+     WHERE script_id = ? AND status = 'active'
+     ORDER BY sort_order, id FOR SHARE`,
+    [scriptId]
+  );
+  return {
+    actor: historicalCreationActorSnapshot(userRows[0], roleRows),
+    store: storeRows[0] || null,
+    script: scriptRows[0] || null,
+    scriptNpcRoles,
+    organizerRoleActive: roleRows.some(
+      (row) => String(row.role) === "organizer" && String(row.status) === "active"
+    )
+  };
+}
+
+export async function createSessionWithConnection(
+  connection,
+  user,
+  body,
+  {
+    trustedHistoricalCreationKeyHash = null,
+    trustedHistoricalCreationRevalidate = null
+  } = {}
+) {
+  const normalizedCreation = normalizeSessionCreationStartAt(
+    requireValue(body, "startAt"),
+    body.sessionPurpose
+  );
+  const creationIdempotencyKey = normalizeSessionCreationIdempotencyKey(body);
+  const createNormalizedSession = async () => {
+  assertHistoricalSessionMemberPrebindAllowed(body, normalizedCreation.sessionPurpose);
+  const historicalCreationKey = normalizeHistoricalSessionCreationKey(
+    body,
+    normalizedCreation.sessionPurpose
+  );
+  const trustedCreationKeyHash = normalizeHistoricalSessionCreationKeyHash(
+    trustedHistoricalCreationKeyHash,
+    normalizedCreation.sessionPurpose
+  );
+  if (Object.prototype.hasOwnProperty.call(body, "historicalCreationKeyHash")) {
+    const bodyCreationKeyHash = normalizeHistoricalSessionCreationKeyHash(
+      body.historicalCreationKeyHash,
+      normalizedCreation.sessionPurpose
+    );
+    if (!bodyCreationKeyHash || bodyCreationKeyHash !== trustedCreationKeyHash) {
+      throw new AppError(
+        400,
+        "UNTRUSTED_HISTORICAL_CREATION_KEY_HASH",
+        "historical creation key hash is only accepted from an approved proposal"
+      );
+    }
+  }
+  if (historicalCreationKey && trustedCreationKeyHash) {
+    throw new AppError(
+      400,
+      "AMBIGUOUS_HISTORICAL_CREATION_KEY",
+      "Provide only one historical creation key identity"
+    );
+  }
+  const historicalCreationKeyHash = trustedCreationKeyHash || (
+    historicalCreationKey
+      ? hashHistoricalSessionCreationKey(historicalCreationKey)
+      : null
+  );
+  if (
+    normalizedCreation.sessionPurpose === "historical_record" &&
+    !historicalCreationKeyHash
+  ) {
+    throw new AppError(
+      400,
+      "HISTORICAL_SESSION_CREATION_KEY_REQUIRED",
+      "historicalCreationKey is required for historical session creation"
+    );
+  }
+  if (
+    trustedHistoricalCreationRevalidate !== null &&
+    (
+      !trustedCreationKeyHash ||
+      typeof trustedHistoricalCreationRevalidate !== "function"
+    )
+  ) {
+    throw new AppError(
+      400,
+      "UNTRUSTED_HISTORICAL_CREATION_REVALIDATION",
+      "historical creation revalidation is only accepted from an approved proposal"
+    );
+  }
+
+  assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
+  assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
+  const creation = normalizedSessionCreationPayload(body, normalizedCreation);
+  let historicalOperation = null;
+  if (historicalCreationKeyHash) {
+    historicalOperation = await lockHistoricalCreationOperation(connection, {
+      organizerUserId: user.user.id,
+      creationKeyHash: Buffer.from(historicalCreationKeyHash, "hex"),
+      payloadHash: historicalCreationPayloadHash(creation)
+    });
+    if (historicalOperation.sessionId !== null) {
+      const existingSession = await findById(
+        connection,
+        "sessions",
+        historicalOperation.sessionId,
+        { forUpdate: true }
+      );
+      if (
+        !existingSession ||
+        Number(existingSession.organizer_user_id) !== Number(user.user.id) ||
+        existingSession.session_purpose !== "historical_record"
+      ) {
+        throw new AppError(
+          409,
+          "HISTORICAL_SESSION_CREATION_OPERATION_INVALID",
+          "Historical session creation operation no longer matches its session"
+        );
+      }
+      return existingSession;
+    }
+  }
+
+  let store;
+  let script;
+  let lockedScriptNpcRoles = null;
+  let organizerRoleActive = false;
+  if (creation.sessionPurpose === "historical_record") {
+    const dependencies = await lockHistoricalCreationDependencies(connection, {
+      organizerUserId: user.user.id,
+      storeId: creation.storeId,
+      scriptId: creation.scriptId
+    });
+    if (trustedHistoricalCreationRevalidate) {
+      await trustedHistoricalCreationRevalidate({
+        actor: dependencies.actor,
+        store: dependencies.store,
+        script: dependencies.script,
+        scriptNpcRoles: dependencies.scriptNpcRoles
+      });
+    }
+    if (!dependencies.actor?.phone_verified) throw phoneRequired();
+    store = dependencies.store;
+    script = dependencies.script;
+    lockedScriptNpcRoles = dependencies.scriptNpcRoles;
+    organizerRoleActive = dependencies.organizerRoleActive;
+  } else {
+    requireVerifiedPhone(user);
+    store = await findById(connection, "stores", creation.storeId);
+    script = await findById(connection, "scripts", creation.scriptId);
+  }
+  assertCatalogUsableForSession(store, user, "Store");
+  assertCatalogUsableForSession(script, user, "Script");
+
+  if (!organizerRoleActive) {
+    await ensureRole(connection, user.user.id, "organizer");
+  }
+
+  const [result] = await connection.query(
+    `
+      INSERT INTO sessions
+        (
+          organizer_user_id, creation_idempotency_key, script_id, script_name_snapshot, store_id,
+          store_name_snapshot, start_at, session_purpose, dm_user_id, dm_name_snapshot,
+          npc_user_id, npc_name_snapshot, deposit_amount, visibility,
+          join_policy, join_phone_required, npc_join_enabled, note
+        )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      user.user.id,
+      creationIdempotencyKey || null,
+      script.id,
+      script.name,
+      store.id,
+      store.name,
+      creation.startAt,
+      creation.sessionPurpose,
+      creation.dmUserId,
+      creation.dmNameSnapshot,
+      creation.npcUserId,
+      creation.npcNameSnapshot,
+      creation.depositAmount,
+      creation.visibility,
+      creation.joinPolicy,
+      creation.joinPhoneRequired,
+      creation.npcJoinEnabled,
+      creation.note
+    ]
+  );
+
+  const session = await findById(connection, "sessions", result.insertId);
+  await cloneScriptNpcRolesForSession(
+    connection,
+    session.id,
+    script.id,
+    lockedScriptNpcRoles
+  );
+  await insertSessionNpcRoles(
+    connection,
+    session.id,
+    creation.extraNpcRoles,
+    { source: "session" }
+  );
+  await runSessionExtensionHook("afterSessionCreated", {
+    connection,
+    session,
+    pinnedMessageText: creation.pinnedMessageText
+  });
+  if (historicalOperation) {
+    await bindHistoricalCreationOperation(connection, {
+      organizerUserId: user.user.id,
+      creationKeyHash: historicalOperation.creationKeyHash,
+      sessionId: session.id
+    });
+  }
+  return session;
+  };
+
+  if (normalizedCreation.sessionPurpose === "historical_record") {
+    return createNormalizedSession();
+  }
   return replaySessionCreation(
     connection,
     user.user.id,
     creationIdempotencyKey,
-    async () => {
-      assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
-      assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
-
-      let normalizedStartAt;
-      try {
-        normalizedStartAt = normalizeSessionCreationStartAt(requireValue(body, "startAt"));
-      } catch (error) {
-        if (error.code === "INVALID_START_AT") {
-          throw badRequest(error.message);
-        }
-        throw error;
-      }
-
-      const store = await findById(connection, "stores", requireValue(body, "storeId"));
-      const script = await findById(connection, "scripts", requireValue(body, "scriptId"));
-      assertCatalogUsableForSession(store, user, "Store");
-      assertCatalogUsableForSession(script, user, "Script");
-
-      await ensureRole(connection, user.user.id, "organizer");
-
-      const [result] = await connection.query(
-        `
-          INSERT INTO sessions
-            (
-              organizer_user_id, creation_idempotency_key, script_id,
-              script_name_snapshot, store_id, store_name_snapshot, start_at,
-              dm_user_id, dm_name_snapshot, npc_user_id, npc_name_snapshot,
-              deposit_amount, visibility, join_policy, join_phone_required,
-              npc_join_enabled, note
-            )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-        [
-          user.user.id,
-          creationIdempotencyKey || null,
-          script.id,
-          script.name,
-          store.id,
-          store.name,
-          normalizedStartAt,
-          body.dmUserId || null,
-          optionalText(body.dmNameSnapshot),
-          body.npcUserId || null,
-          optionalText(body.npcNameSnapshot),
-          intValue(body.depositAmount, 0),
-          normalizeSessionVisibility(body.visibility),
-          normalizeJoinPolicy(body.joinPolicy ?? body.join_policy),
-          normalizeJoinPhoneRequired(body.joinPhoneRequired ?? body.join_phone_required) ? 1 : 0,
-          normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled) ? 1 : 0,
-          optionalText(body.note)
-        ]
-      );
-
-      const session = await findById(connection, "sessions", result.insertId);
-      await cloneScriptNpcRolesForSession(connection, session.id, script.id);
-      await insertSessionNpcRoles(
-        connection,
-        session.id,
-        normalizeNpcRoles(body.extraNpcRoles ?? body.extra_npc_roles, { source: "session" }),
-        { source: "session" }
-      );
-      await runSessionExtensionHook("afterSessionCreated", {
-        connection,
-        session,
-        pinnedMessageText: body.pinnedMessageText
-      });
-      return session;
-    }
+    createNormalizedSession
   );
 }
 
@@ -3996,6 +4555,7 @@ export function sessionHasStarted(session = {}, nowMs = Date.now()) {
 function publicSessionAvailable(session) {
   const startAt = new Date(session.start_at).getTime();
   return (
+    session.session_purpose === "future_carpool" &&
     session.visibility === "public" &&
     session.status === "recruiting" &&
     Number.isFinite(startAt) &&
@@ -4039,30 +4599,116 @@ function publicSessionNpcRoleResponse(row = {}) {
   };
 }
 
-async function memberSessionDetail(connection, session) {
-  const id = Number(session.id);
-  await cleanupSessionExclusiveRoleSelections(connection, id);
-  const [seats] = await connection.query(
+function pendingSignupByNpcRoleId(signups = []) {
+  const pendingByRoleId = new Map();
+  for (const signup of [...signups].sort((left, right) => Number(left.id) - Number(right.id))) {
+    const roleId = Number(signup.session_npc_role_id);
+    if (roleId && signup.status === "pending" && !pendingByRoleId.has(roleId)) {
+      pendingByRoleId.set(roleId, signup);
+    }
+  }
+  return pendingByRoleId;
+}
+
+function sessionNpcRolesFromLockedMembership(membershipRows, usersById = new Map()) {
+  const pendingByRoleId = pendingSignupByNpcRoleId(membershipRows.signups);
+  return (membershipRows.npcRoles || [])
+    .filter((role) => role.status === "active")
+    .sort((left, right) =>
+      Number(left.sort_order || 0) - Number(right.sort_order || 0) ||
+      Number(left.id) - Number(right.id)
+    )
+    .map((role) => {
+      const boundUser = usersById.get(Number(role.bound_user_id)) || {};
+      const pendingSignup = pendingByRoleId.get(Number(role.id)) || {};
+      const pendingUser = usersById.get(Number(pendingSignup.user_id)) || {};
+      return sessionNpcRoleResponse({
+        ...role,
+        bound_user_nickname: boundUser.nickname,
+        bound_user_open_id: boundUser.open_id,
+        bound_user_avatar_url: boundUser.avatar_url,
+        bound_user_gender: boundUser.gender,
+        pending_signup_id: pendingSignup.id,
+        pending_signup_user_id: pendingSignup.user_id,
+        pending_signup_user_nickname: pendingUser.nickname,
+        pending_signup_user_open_id: pendingUser.open_id,
+        pending_signup_user_avatar_url: pendingUser.avatar_url,
+        pending_signup_user_gender: pendingUser.gender
+      });
+    });
+}
+
+async function lockUsersByIds(connection, inputUserIds) {
+  const userIds = [...new Set(inputUserIds.map(Number).filter(Boolean))]
+    .sort((left, right) => left - right);
+  if (userIds.length === 0) {
+    return new Map();
+  }
+  const placeholders = userIds.map(() => "?").join(", ");
+  const [users] = await connection.query(
     `
-      SELECT
-        seat.*,
-        user.nickname AS confirmed_user_nickname,
-        user.open_id AS confirmed_user_open_id,
-        user.avatar_url AS confirmed_user_avatar_url,
-        user.gender AS confirmed_user_gender
-      FROM session_seats seat
-      LEFT JOIN users user ON user.id = seat.confirmed_user_id
-      WHERE seat.session_id = ?
-      ORDER BY seat.id
+      SELECT *
+      FROM users
+      WHERE id IN (${placeholders})
+      ORDER BY id
+      FOR UPDATE
     `,
-    [id]
+    userIds
   );
-  const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
+  return new Map(users.map((user) => [Number(user.id), user]));
+}
+
+async function lockedMembershipUsers(connection, membershipRows) {
+  return lockUsersByIds(connection, [
+    ...(membershipRows.seats || []).map((seat) => Number(seat.confirmed_user_id)),
+    ...(membershipRows.npcRoles || []).map((role) => Number(role.bound_user_id)),
+    ...(membershipRows.signups || [])
+      .filter((signup) => signup.status === "pending")
+      .map((signup) => Number(signup.user_id))
+  ]);
+}
+
+function seatsFromLockedMembership(membershipRows, usersById) {
+  return (membershipRows.seats || []).map((seat) => {
+    const confirmedUser = usersById.get(Number(seat.confirmed_user_id)) || {};
+    return {
+      ...seat,
+      confirmed_user_nickname: confirmedUser.nickname ?? null,
+      confirmed_user_open_id: confirmedUser.open_id ?? null,
+      confirmed_user_avatar_url: confirmedUser.avatar_url ?? null,
+      confirmed_user_gender: confirmedUser.gender ?? null
+    };
+  });
+}
+
+async function npcRoleFromLockedMembership(connection, membershipRows, npcRoleId) {
+  const usersById = await lockedMembershipUsers(connection, membershipRows);
+  return sessionNpcRolesFromLockedMembership(membershipRows, usersById).find(
+    (role) => Number(role.id) === Number(npcRoleId)
+  ) || null;
+}
+
+async function memberSessionDetail(connection, session, options = {}) {
+  const id = Number(session.id);
+  const lockedSession = options.locksHeld
+    ? session
+    : await requireLockedSession(connection, id);
+  const membershipRows = options.membershipRows ||
+    await lockSessionMembershipRows(connection, id);
+  await cleanupSessionExclusiveRoleSelections(connection, id, membershipRows);
+  const usersById = await lockedMembershipUsers(connection, membershipRows);
+  const seats = seatsFromLockedMembership(membershipRows, usersById);
+  const sessionNpcRoles = sessionNpcRolesFromLockedMembership(membershipRows, usersById);
   const activeAlbumPhotoCount = await activeSessionAlbumPhotoCount(connection, id);
-  const storeLocation = session.store_id
-    ? await findById(connection, "stores", session.store_id)
+  const storeLocation = lockedSession.store_id
+    ? await findById(connection, "stores", lockedSession.store_id)
     : null;
-  const { note: _note, cancelled_by_user_id: _cancelledByUserId, ...safeSession } = session;
+  const {
+    note: _note,
+    cancelled_by_user_id: _cancelledByUserId,
+    session_started: _sessionStarted,
+    ...safeSession
+  } = lockedSession;
   return {
     ...safeSession,
     store_address: storeLocation?.address || null,
@@ -4079,18 +4725,30 @@ async function memberSessionDetail(connection, session) {
   };
 }
 
-async function publicSessionPreview(connection, session, accessScope = "public_preview") {
+async function publicSessionPreview(
+  connection,
+  session,
+  accessScope = "public_preview",
+  options = {}
+) {
   const id = Number(session.id);
-  const [seats] = await connection.query(
-    `
-      SELECT seat.*
-      FROM session_seats seat
-      WHERE seat.session_id = ?
-      ORDER BY seat.id
-    `,
-    [id]
-  );
-  const sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
+  let seats;
+  let sessionNpcRoles;
+  if (options.membershipRows) {
+    seats = options.membershipRows.seats || [];
+    sessionNpcRoles = sessionNpcRolesFromLockedMembership(options.membershipRows);
+  } else {
+    [seats] = await connection.query(
+      `
+        SELECT seat.*
+        FROM session_seats seat
+        WHERE seat.session_id = ?
+        ORDER BY seat.id
+      `,
+      [id]
+    );
+    sessionNpcRoles = await sessionNpcRolesForSession(connection, id);
+  }
   const storeLocation = session.store_id
     ? await findById(connection, "stores", session.store_id)
     : null;
@@ -4101,6 +4759,7 @@ async function publicSessionPreview(connection, session, accessScope = "public_p
     organizer_hidden_at: _organizerHiddenAt,
     dm_user_id: _dmUserId,
     npc_user_id: _npcUserId,
+    session_started: _sessionStarted,
     ...safeSession
   } = session;
   return {
@@ -4121,11 +4780,12 @@ async function publicSessionPreview(connection, session, accessScope = "public_p
 export async function getSession(id) {
   const sessionId = positiveId(id, "sessionId");
   return withTransaction(async (connection) => {
-    const session = await findById(connection, "sessions", sessionId);
-    if (!session) {
-      throw notFound("Session not found");
-    }
-    return memberSessionDetail(connection, session);
+    const session = await requireLockedSession(connection, sessionId);
+    const membershipRows = await lockSessionMembershipRows(connection, sessionId);
+    return memberSessionDetail(connection, session, {
+      locksHeld: true,
+      membershipRows
+    });
   });
 }
 
@@ -4133,35 +4793,82 @@ export async function getSessionForViewer(id, options = {}) {
   const sessionId = positiveId(id, "sessionId");
   const viewer = options.viewer || null;
   const inviteClaims = options.inviteClaims || null;
+  const historicalInviteClaims = options.historicalInviteClaims || null;
+  if (inviteClaims && historicalInviteClaims) {
+    throw badRequest("Provide either inviteToken or historicalInviteToken, not both");
+  }
   return withTransaction(async (connection) => {
-    const session = await findById(connection, "sessions", sessionId);
-    if (!session) {
-      throw notFound("Session not found");
-    }
-    const memberAllowed = Boolean(
+    const currentSession = await requireLockedSession(connection, sessionId);
+    const initiallyMemberAllowed = Boolean(
       viewer &&
-        (isAdmin(viewer) || (await isSessionAlbumMember(connection, session, viewer.user.id)))
+        (isAdmin(viewer) ||
+          (await isSessionAlbumMember(connection, currentSession, viewer.user.id)))
     );
-    if (memberAllowed) {
-      const detail = {
-        ...(await memberSessionDetail(connection, session)),
-        access_scope: "member"
-      };
-      return mergeAuthorSessionView(connection, {
-        reader: options.authorTextReader,
-        userId: viewer.user.id,
-        session: detail
-      });
+    let currentMembershipRows = null;
+    if (initiallyMemberAllowed) {
+      currentMembershipRows = await lockSessionMembershipRows(connection, sessionId);
+      const currentlyMemberAllowed = Boolean(
+        isAdmin(viewer) ||
+          (await isSessionAlbumMember(
+            connection,
+            currentSession,
+            viewer.user.id,
+            { forUpdate: true }
+          ))
+      );
+      if (currentlyMemberAllowed) {
+        const detail = {
+          ...(await memberSessionDetail(connection, currentSession, {
+            locksHeld: true,
+            membershipRows: currentMembershipRows
+          })),
+          access_scope: "member"
+        };
+        return mergeAuthorSessionView(connection, {
+          reader: options.authorTextReader,
+          userId: viewer.user.id,
+          session: detail
+        });
+      }
     }
-    if (publicSessionAvailable(session)) {
-      return publicSessionPreview(connection, session);
+    if (publicSessionAvailable(currentSession)) {
+      return publicSessionPreview(connection, currentSession, "public_preview", {
+        membershipRows: currentMembershipRows
+      });
     }
     if (
       inviteClaims &&
       Number(inviteClaims.sessionId) === sessionId &&
-      session.status !== "cancelled"
+      currentSession.session_purpose === "future_carpool" &&
+      currentSession.status !== "cancelled"
     ) {
-      return publicSessionPreview(connection, session, "invite_preview");
+      return publicSessionPreview(connection, currentSession, "invite_preview", {
+        membershipRows: currentMembershipRows
+      });
+    }
+    if (
+      historicalInviteClaims &&
+      historicalInviteClaims.purpose === "historical_session_claim" &&
+      historicalInviteClaims.sessionPurpose === "historical_record" &&
+      Number(historicalInviteClaims.sessionId) === sessionId &&
+      Number(historicalInviteClaims.inviterUserId) === Number(currentSession.organizer_user_id) &&
+      currentSession.session_purpose === "historical_record" &&
+      currentSession.status === "locked" &&
+      !currentSession.cancelled_by_user_id
+    ) {
+      const preview = await publicSessionPreview(
+        connection,
+        currentSession,
+        "historical_invite_preview",
+        { membershipRows: currentMembershipRows }
+      );
+      const {
+        join_policy: _joinPolicy,
+        join_phone_required: _joinPhoneRequired,
+        npc_join_enabled: _npcJoinEnabled,
+        ...historicalPreview
+      } = preview;
+      return historicalPreview;
     }
     throw notFound("Session not found");
   });
@@ -4190,9 +4897,8 @@ export async function createSessionJoinInviteToken(
       throw notFound("Session not found");
     }
     assertSessionJoinInviteTokenAllowed(lockedSession);
-    if (
-      !(await isSessionAlbumMember(connection, lockedSession, user.user.id))
-    ) {
+    assertOrdinaryHistoricalRoleClaimAllowed(lockedSession);
+    if (!(await isSessionAlbumMember(connection, lockedSession, user.user.id))) {
       throw forbidden("Only session members can share a join invitation");
     }
     return createToken({
@@ -4206,6 +4912,262 @@ export async function assertSessionJoinInviteAllowed(user, sessionId) {
   return createSessionJoinInviteToken(user, sessionId, ({ sessionId: id }) => ({
     session_id: id
   }));
+}
+
+export async function assertHistoricalSessionInviteAllowed(user, sessionId) {
+  const id = positiveId(sessionId, "sessionId");
+  return withDatabaseConnection(async (connection) => {
+    const session = await findById(connection, "sessions", id);
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    if (
+      session.session_purpose !== "historical_record" ||
+      session.status !== "locked" ||
+      Boolean(session.cancelled_by_user_id) ||
+      Number(session.organizer_user_id) !== Number(user.user.id)
+    ) {
+      throw forbidden("Only the current organizer can invite historical role claims");
+    }
+    return {
+      sessionId: Number(session.id),
+      organizerUserId: Number(session.organizer_user_id)
+    };
+  });
+}
+
+function historicalClaimTarget(body = {}) {
+  const hasSeatId = body.seatId !== undefined && body.seatId !== null && body.seatId !== "";
+  const hasNpcRoleId =
+    body.npcRoleId !== undefined && body.npcRoleId !== null && body.npcRoleId !== "";
+  if (hasSeatId === hasNpcRoleId) {
+    throw badRequest("Exactly one of seatId and npcRoleId is required");
+  }
+  if (hasSeatId) {
+    return { type: "seat", id: positiveId(body.seatId, "seatId") };
+  }
+  return { type: "npc_role", id: positiveId(body.npcRoleId, "npcRoleId") };
+}
+
+function assertHistoricalClaimPreflight(sessionId, inviteClaims) {
+  if (
+    inviteClaims?.purpose !== "historical_session_claim" ||
+    inviteClaims?.sessionPurpose !== "historical_record" ||
+    Number(inviteClaims?.sessionId) !== Number(sessionId)
+  ) {
+    throw forbidden("Historical invitation is no longer valid");
+  }
+}
+
+function assertHistoricalClaimSession(session, inviteClaims) {
+  if (
+    Number(inviteClaims.inviterUserId) !== Number(session.organizer_user_id) ||
+    session.session_purpose !== "historical_record" ||
+    session.status !== "locked" ||
+    Boolean(session.cancelled_by_user_id)
+  ) {
+    throw forbidden("Historical invitation is no longer valid");
+  }
+}
+
+function historicalSignupMatchesTarget(signup, target) {
+  if (target.type === "seat") {
+    return Number(signup.seat_id) === target.id && !Number(signup.session_npc_role_id || 0);
+  }
+  return (
+    Number(signup.session_npc_role_id) === target.id &&
+    !Number(signup.seat_id || 0)
+  );
+}
+
+function assertNoOtherHistoricalRole({ seats, npcRoles, activeSignups }, userId, target) {
+  const ownsOtherSeat = seats.some((seat) =>
+    Number(seat.confirmed_user_id) === userId &&
+    ["confirmed", "locked"].includes(seat.status) &&
+    !(target.type === "seat" && Number(seat.id) === target.id)
+  );
+  const ownsOtherNpcRole = npcRoles.some((role) =>
+    Number(role.bound_user_id) === userId &&
+    role.status === "active" &&
+    !(target.type === "npc_role" && Number(role.id) === target.id)
+  );
+  const hasOtherActiveSignup = activeSignups.some(
+    (signup) => !historicalSignupMatchesTarget(signup, target)
+  );
+  if (ownsOtherSeat || ownsOtherNpcRole || hasOtherActiveSignup) {
+    throw conflict("User already has another role in this session");
+  }
+}
+
+async function lockHistoricalClaimSignups(connection, sessionId, userId) {
+  const [rows] = await connection.query(
+    `
+      SELECT *
+      FROM signups
+      WHERE session_id = ?
+        AND user_id = ?
+        AND status IN ('pending', 'approved')
+      ORDER BY id
+      FOR UPDATE
+    `,
+    [sessionId, userId]
+  );
+  return rows;
+}
+
+async function upsertHistoricalSeatSignup(connection, sessionId, seatId, userId) {
+  await connection.query(
+    `
+      INSERT INTO signups
+        (
+          session_id, seat_id, session_npc_role_id, signup_type,
+          user_id, note, status, review_eligible_at
+        )
+      VALUES (
+        ?, ?, NULL, 'seat', ?,
+        '玩家通过历史邀请认领角色', 'approved', CURRENT_TIMESTAMP
+      )
+      ON DUPLICATE KEY UPDATE
+        seat_id = VALUES(seat_id),
+        session_npc_role_id = NULL,
+        signup_type = 'seat',
+        status = 'approved',
+        review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
+        user_hidden_at = NULL
+    `,
+    [sessionId, seatId, userId]
+  );
+}
+
+async function upsertHistoricalNpcRoleSignup(connection, sessionId, npcRoleId, userId) {
+  await connection.query(
+    `
+      INSERT INTO signups
+        (
+          session_id, seat_id, session_npc_role_id, signup_type,
+          user_id, note, status, review_eligible_at
+        )
+      VALUES (
+        ?, NULL, ?, 'session_npc_role', ?,
+        '玩家通过历史邀请认领角色', 'approved', CURRENT_TIMESTAMP
+      )
+      ON DUPLICATE KEY UPDATE
+        seat_id = NULL,
+        session_npc_role_id = VALUES(session_npc_role_id),
+        signup_type = 'session_npc_role',
+        status = 'approved',
+        review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
+        user_hidden_at = NULL
+    `,
+    [sessionId, npcRoleId, userId]
+  );
+}
+
+export async function claimHistoricalSessionRoleWithConnection(
+  connection,
+  user,
+  sessionId,
+  body,
+  inviteClaims
+) {
+  const id = positiveId(sessionId, "sessionId");
+  assertHistoricalClaimPreflight(id, inviteClaims);
+  const target = historicalClaimTarget(body);
+  const userId = positiveId(user?.user?.id, "userId");
+  const session = await requireLockedSession(connection, id);
+  const seats = await lockSessionSeats(connection, id);
+  const npcRoles = await lockSessionNpcRoles(connection, id);
+  const activeSignups = await lockHistoricalClaimSignups(connection, id, userId);
+
+  assertHistoricalClaimSession(session, inviteClaims);
+  await assertUserCanJoinSession(connection, id, userId);
+  assertNoOtherHistoricalRole({ seats, npcRoles, activeSignups }, userId, target);
+
+  if (target.type === "seat") {
+    const seat = seats.find((candidate) => Number(candidate.id) === target.id);
+    if (!seat) {
+      throw notFound("Seat not found");
+    }
+    const alreadyClaimed =
+      Number(seat.confirmed_user_id) === userId &&
+      ["confirmed", "locked"].includes(seat.status);
+    if (!alreadyClaimed && (seat.status !== "open" || seat.confirmed_user_id)) {
+      throw conflict("Seat is not available for historical claim");
+    }
+    if (!alreadyClaimed) {
+      const [result] = await connection.query(
+        `
+          UPDATE session_seats
+          SET status = 'confirmed', confirmed_user_id = ?
+          WHERE id = ?
+            AND session_id = ?
+            AND status = 'open'
+            AND confirmed_user_id IS NULL
+        `,
+        [userId, target.id, id]
+      );
+      if (Number(result.affectedRows) !== 1) {
+        throw conflict("Seat is not available for historical claim");
+      }
+      seat.status = "confirmed";
+      seat.confirmed_user_id = userId;
+    }
+    await upsertHistoricalSeatSignup(connection, id, target.id, userId);
+    return {
+      claim_result: "historical_claimed",
+      claim_type: "seat",
+      seat
+    };
+  }
+
+  const npcRole = npcRoles.find((candidate) => Number(candidate.id) === target.id);
+  if (!npcRole) {
+    throw notFound("Session NPC role not found");
+  }
+  const alreadyClaimed = Number(npcRole.bound_user_id) === userId;
+  if (npcRole.status !== "active" || (!alreadyClaimed && npcRole.bound_user_id)) {
+    throw conflict("NPC role is not available for historical claim");
+  }
+  if (!alreadyClaimed) {
+    const [result] = await connection.query(
+      `
+        UPDATE session_npc_roles
+        SET bound_user_id = ?
+        WHERE id = ?
+          AND session_id = ?
+          AND status = 'active'
+          AND bound_user_id IS NULL
+      `,
+      [userId, target.id, id]
+    );
+    if (Number(result.affectedRows) !== 1) {
+      throw conflict("NPC role is not available for historical claim");
+    }
+    npcRole.bound_user_id = userId;
+  }
+  await upsertHistoricalNpcRoleSignup(connection, id, target.id, userId);
+  return {
+    claim_result: "historical_claimed",
+    claim_type: "npc_role",
+    npc_role: npcRole
+  };
+}
+
+export async function claimHistoricalSessionRole(
+  user,
+  sessionId,
+  body,
+  inviteClaims
+) {
+  return withTransaction((connection) =>
+    claimHistoricalSessionRoleWithConnection(
+      connection,
+      user,
+      sessionId,
+      body,
+      inviteClaims
+    )
+  );
 }
 
 export async function getSessionShareStats(sessionId) {
@@ -4377,6 +5339,7 @@ export async function listDiscoverableSessions(user, filters = {}) {
       `
     : "NULL";
   const where = [
+    "session.session_purpose = 'future_carpool'",
     "session.status = 'recruiting'",
     "session.start_at > CURRENT_TIMESTAMP",
     "session.visibility = 'public'",
@@ -4506,7 +5469,8 @@ export async function listPublicUpcomingSessions(filters = {}) {
           ) AS available_npc_count
         FROM sessions session
         JOIN stores store ON store.id = session.store_id
-        WHERE session.visibility = 'public'
+        WHERE session.session_purpose = 'future_carpool'
+          AND session.visibility = 'public'
           AND session.status = 'recruiting'
           AND session.start_at > CURRENT_TIMESTAMP
           AND (
@@ -4877,13 +5841,99 @@ export function assertSessionPatchDoesNotReschedule(body = {}) {
   }
 }
 
-export async function updateSessionWithConnection(connection, user, id, body) {
+function bodyAliasValue(body, aliases) {
+  for (const alias of aliases) {
+    if (Object.prototype.hasOwnProperty.call(body, alias)) {
+      return body[alias];
+    }
+  }
+  return undefined;
+}
+
+function historicalRecruitmentSettingChanged(currentSession, body) {
+  const settings = [
+    {
+      aliases: ["visibility"],
+      current: currentSession.visibility,
+      normalize: normalizeSessionVisibility
+    },
+    {
+      aliases: ["joinPolicy", "join_policy"],
+      current: currentSession.join_policy,
+      normalize: normalizeJoinPolicy
+    },
+    {
+      aliases: ["joinPhoneRequired", "join_phone_required"],
+      current: Boolean(Number(currentSession.join_phone_required)),
+      normalize: normalizeJoinPhoneRequired
+    },
+    {
+      aliases: ["npcJoinEnabled", "npc_join_enabled"],
+      current: Boolean(Number(currentSession.npc_join_enabled)),
+      normalize: normalizeNpcJoinEnabled
+    }
+  ];
+  return settings.some(({ aliases, current, normalize }) => {
+    return aliases.some((alias) => (
+      Object.prototype.hasOwnProperty.call(body, alias) &&
+      normalize(body[alias]) !== current
+    ));
+  });
+}
+
+export function assertSessionPatchLifecycle(currentSession = {}, body = {}) {
   assertSessionPatchDoesNotReschedule(body);
-  await requireSessionOwner(connection, id, user);
+  if (
+    Object.prototype.hasOwnProperty.call(body, "sessionPurpose") ||
+    Object.prototype.hasOwnProperty.call(body, "session_purpose")
+  ) {
+    throw badRequest("sessionPurpose is immutable");
+  }
+
+  const sessionPurpose = currentSession.session_purpose ?? currentSession.sessionPurpose;
+  if (sessionPurpose === "historical_record") {
+    if (historicalRecruitmentSettingChanged(currentSession, body)) {
+      throw badRequest("Historical recruitment settings are immutable");
+    }
+    const directMemberAliases = ["dmUserId", "dm_user_id", "npcUserId", "npc_user_id"];
+    if (directMemberAliases.some((alias) => (
+      Object.prototype.hasOwnProperty.call(body, alias) &&
+      body[alias] !== null &&
+      body[alias] !== undefined
+    ))) {
+      assertHistoricalSessionMemberPrebindAllowed(body, sessionPurpose);
+    }
+  }
+
+  if (body.status === undefined) {
+    return undefined;
+  }
+  const nextStatus = String(body.status || "").trim();
+  if (!["draft", "recruiting", "locked", "cancelled"].includes(nextStatus)) {
+    throw badRequest("Session status is invalid");
+  }
+  if (nextStatus === currentSession.status) {
+    return undefined;
+  }
+  if (
+    sessionPurpose === "future_carpool" &&
+    currentSession.status === "recruiting" &&
+    nextStatus === "locked"
+  ) {
+    return nextStatus;
+  }
+  throw badRequest("Session lifecycle changes must use a dedicated route");
+}
+
+export async function updateSessionWithConnection(connection, user, id, body) {
+  const currentSession = await requireLockedSessionOwner(connection, id, user);
+  const validatedStatus = assertSessionPatchLifecycle(currentSession, body);
   assertPublicTextSafe("dmNameSnapshot", body.dmNameSnapshot);
   assertPublicTextSafe("npcNameSnapshot", body.npcNameSnapshot);
   const normalized = {
     ...body,
+    dmUserId: bodyAliasValue(body, ["dmUserId", "dm_user_id"]),
+    npcUserId: bodyAliasValue(body, ["npcUserId", "npc_user_id"]),
     visibility:
       body.visibility === undefined
         ? undefined
@@ -4903,7 +5953,8 @@ export async function updateSessionWithConnection(connection, user, id, body) {
         ? undefined
         : normalizeNpcJoinEnabled(body.npcJoinEnabled ?? body.npc_join_enabled)
           ? 1
-          : 0
+          : 0,
+    status: validatedStatus
   };
   return updateAllowed(connection, "sessions", id, normalized, [
     ["dmUserId", "dm_user_id"],
@@ -4921,7 +5972,7 @@ export async function updateSessionWithConnection(connection, user, id, body) {
 }
 
 export async function updateSession(user, id, body) {
-  return withDatabaseConnection((connection) =>
+  return withTransaction((connection) =>
     updateSessionWithConnection(connection, user, id, body)
   );
 }
@@ -5104,8 +6155,8 @@ export async function rescheduleSessionInTransaction(connection, user, id, body 
     // Lock order is parent session, indexed seat range, then indexed NPC-role range.
     // Existing child updates wait on these locks; FK-validating child inserts also wait
     // on the already-exclusive parent lock, keeping this membership snapshot stable.
-    await connection.query("SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE", [id]);
-    await connection.query("SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE", [id]);
+    await lockSessionSeats(connection, id);
+    await lockSessionNpcRoles(connection, id);
 
     const [recipientRows] = await connection.query(
       `
@@ -5176,23 +6227,33 @@ export async function rescheduleSessionInTransaction(connection, user, id, body 
 }
 
 async function requireSessionNpcRoleOwner(connection, npcRoleId, user) {
-  const [rows] = await connection.query(
-    `
-      SELECT role.*, session.organizer_user_id
-      FROM session_npc_roles role
-      JOIN sessions session ON session.id = role.session_id
-      WHERE role.id = ?
-    `,
+  const [roleRefs] = await connection.query(
+    "SELECT session_id FROM session_npc_roles WHERE id = ?",
     [npcRoleId]
+  );
+  const roleRef = roleRefs[0];
+  if (!roleRef) {
+    throw notFound("Session NPC role not found");
+  }
+  const session = await requireLockedSessionOwner(
+    connection,
+    roleRef.session_id,
+    user,
+    "Only the session organizer can manage NPC roles"
+  );
+  const [rows] = await connection.query(
+    "SELECT * FROM session_npc_roles WHERE id = ? AND session_id = ? FOR UPDATE",
+    [npcRoleId, session.id]
   );
   const role = rows[0];
   if (!role) {
     throw notFound("Session NPC role not found");
   }
-  if (!isAdmin(user) && Number(role.organizer_user_id) !== Number(user.user.id)) {
-    throw forbidden("Only the session organizer can manage NPC roles");
-  }
-  return role;
+  return {
+    ...role,
+    organizer_user_id: session.organizer_user_id,
+    session_purpose: session.session_purpose
+  };
 }
 
 function nullableBoundUserId(body = {}) {
@@ -5205,7 +6266,7 @@ function nullableBoundUserId(body = {}) {
     return undefined;
   }
   const value = body.boundUserId ?? body.bound_user_id ?? body.userId ?? body.user_id;
-  if (value === null || value === "") {
+  if (value === undefined || value === null || value === "") {
     return null;
   }
   return positiveId(value, "boundUserId");
@@ -5241,11 +6302,23 @@ export async function listSessionNpcRoles(user, sessionId, options = {}) {
 
 export async function createSessionNpcRoleWithConnection(connection, user, sessionId, body = {}) {
   const id = positiveId(sessionId, "sessionId");
-  await requireSessionOwner(connection, id, user);
+  const session = await requireLockedSessionOwner(connection, id, user);
+  assertHistoricalSessionMemberPrebindAllowed(
+    { extraNpcRoles: [body] },
+    session.session_purpose
+  );
   const [role] = normalizeNpcRoles([body], { source: "session" });
   if (!role) {
     throw badRequest("npc role name is required");
   }
+  const boundUserId = nullableBoundUserId(body);
+  if (boundUserId !== undefined) {
+    role.boundUserId = boundUserId;
+  }
+  assertHistoricalSessionMemberPrebindAllowed(
+    { extraNpcRoles: [role] },
+    session.session_purpose
+  );
   await insertSessionNpcRoles(connection, id, [role], { source: "session" });
   const roles = await sessionNpcRolesForSession(connection, id);
   return roles[roles.length - 1] || null;
@@ -5260,8 +6333,25 @@ export async function createSessionNpcRole(user, sessionId, body = {}) {
 export async function updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body = {}) {
   const id = positiveId(npcRoleId, "npcRoleId");
   const current = await requireSessionNpcRoleOwner(connection, id, user);
+  if (
+    current.session_purpose === "historical_record" &&
+    body.status !== undefined
+  ) {
+    throw badRequest("Historical NPC role status cannot be changed");
+  }
+  assertHistoricalSessionMemberPrebindAllowed(
+    { extraNpcRoles: [body] },
+    current.session_purpose
+  );
   assertPublicTextSafe("npcRoleName", body.name);
   assertPublicTextSafe("npcRoleDescription", body.description || body.note);
+  const boundUserId = nullableBoundUserId(body);
+  if (boundUserId !== undefined) {
+    assertHistoricalSessionMemberPrebindAllowed(
+      { extraNpcRoles: [{ boundUserId }] },
+      current.session_purpose
+    );
+  }
   const normalized = {
     ...body,
     description:
@@ -5273,13 +6363,32 @@ export async function updateSessionNpcRoleWithConnection(connection, user, npcRo
       body.roleGender === undefined && body.role_gender === undefined && body.gender === undefined
         ? undefined
         : normalizeRoleGender(body.roleGender ?? body.role_gender ?? body.gender),
-    boundUserId: nullableBoundUserId(body),
+    boundUserId,
     sortOrder:
       body.sortOrder === undefined && body.sort_order === undefined
         ? undefined
         : nonNegativeIntValue(body.sortOrder ?? body.sort_order, "sortOrder"),
     status: normalizeNpcRoleStatus(body.status)
   };
+  if (
+    current.session_purpose === "historical_record" &&
+    Number(current.bound_user_id) > 0 &&
+    boundUserId === null
+  ) {
+    await lockSessionSignups(connection, current.session_id);
+    await connection.query(
+      `
+        UPDATE signups
+        SET status = 'cancelled',
+            review_eligible_at = NULL
+        WHERE session_id = ?
+          AND session_npc_role_id = ?
+          AND user_id = ?
+          AND status IN ('pending', 'approved')
+      `,
+      [current.session_id, current.id, current.bound_user_id]
+    );
+  }
   const updated = await updateAllowed(connection, "session_npc_roles", id, normalized, [
     ["name", "name"],
     ["description", "description"],
@@ -5307,14 +6416,15 @@ export async function updateSessionNpcRoleWithConnection(connection, user, npcRo
 }
 
 export async function updateSessionNpcRole(user, npcRoleId, body = {}) {
-  return withDatabaseConnection((connection) =>
+  return withTransaction((connection) =>
     updateSessionNpcRoleWithConnection(connection, user, npcRoleId, body)
   );
 }
 
 export async function createSeat(user, sessionId, body) {
-  return withDatabaseConnection(async (connection) => {
-    await requireSessionOwner(connection, sessionId, user);
+  return withTransaction(async (connection) => {
+    const session = await requireLockedSessionOwner(connection, sessionId, user);
+    await lockSessionSeats(connection, session.id);
     assertPublicTextSafe("seatName", body.name);
     assertPublicTextSafe("roleName", body.roleName);
     const basePrice = intValue(body.basePrice, 0);
@@ -5346,8 +6456,8 @@ export async function createSeat(user, sessionId, body) {
 }
 
 export async function updateSeat(user, seatId, body) {
-  return withDatabaseConnection(async (connection) => {
-    const current = await requireSeatOwner(connection, seatId, user);
+  return withTransaction(async (connection) => {
+    const current = await requireLockedSeatOwner(connection, seatId, user);
     assertPublicTextSafe("seatName", body.name);
     assertPublicTextSafe("roleName", body.roleName);
     const basePrice =
@@ -5382,77 +6492,139 @@ export async function updateSeat(user, seatId, body) {
   });
 }
 
-export async function publishSession(user, sessionId) {
-  return withTransaction(async (connection) => {
-    await requireSessionOwner(connection, sessionId, user);
-    const [seats] = await connection.query(
-      "SELECT * FROM session_seats WHERE session_id = ? FOR UPDATE",
+export async function publishSessionWithConnection(connection, user, sessionId, body = {}) {
+  const [sessionRows] = await connection.query(
+    "SELECT * FROM sessions WHERE id = ? FOR UPDATE",
+    [sessionId]
+  );
+  const session = sessionRows[0];
+  if (!session) {
+    throw notFound("Session not found");
+  }
+  if (!isAdmin(user) && Number(session.organizer_user_id) !== Number(user.user.id)) {
+    throw forbidden("Only the session organizer can perform this action");
+  }
+  if (session.status !== "draft") {
+    throw conflict("Only draft sessions can be published");
+  }
+
+  const [seats] = await connection.query(
+    "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE",
+    [sessionId]
+  );
+  if (seats.length === 0) {
+    throw badRequest("At least one seat is required before publish");
+  }
+
+  const adjustmentSum = seats.reduce((sum, seat) => sum + Number(seat.adjustment), 0);
+  if (adjustmentSum !== 0) {
+    throw badRequest("Seat adjustments must sum to 0");
+  }
+
+  const negativeSeat = seats.find((seat) => Number(seat.payable_price) < 0);
+  if (negativeSeat) {
+    throw badRequest("Seat payable price cannot be negative");
+  }
+
+  if (session.session_purpose === "historical_record") {
+    const organizerUserId = Number(session.organizer_user_id);
+    const creatorSeatId = positiveId(requireValue(body, "creatorSeatId"), "creatorSeatId");
+    const creatorSeat = seats.find((seat) => Number(seat.id) === creatorSeatId);
+    if (!creatorSeat) {
+      throw badRequest("creatorSeatId must belong to this session");
+    }
+    if (creatorSeat.status !== "open" || creatorSeat.confirmed_user_id !== null) {
+      throw conflict("Creator seat must be open and unoccupied");
+    }
+
+    await lockSessionNpcRoles(connection, sessionId);
+    await lockSessionSignups(connection, sessionId);
+
+    const [seatUpdate] = await connection.query(
+      `
+        UPDATE session_seats
+        SET status = 'confirmed', confirmed_user_id = ?
+        WHERE id = ? AND session_id = ? AND status = 'open' AND confirmed_user_id IS NULL
+      `,
+      [organizerUserId, creatorSeatId, sessionId]
+    );
+    if (Number(seatUpdate.affectedRows) !== 1) {
+      throw conflict("Creator seat changed before publish");
+    }
+
+    await connection.query(
+      `
+        INSERT INTO signups
+          (session_id, seat_id, session_npc_role_id, signup_type, user_id, note, status, review_eligible_at)
+        VALUES (?, ?, NULL, 'seat', ?, '车头创建历史补录时选择角色', 'approved', CURRENT_TIMESTAMP)
+        ON DUPLICATE KEY UPDATE
+          status = 'approved',
+          review_eligible_at = COALESCE(review_eligible_at, CURRENT_TIMESTAMP),
+          user_hidden_at = NULL
+      `,
+      [sessionId, creatorSeatId, organizerUserId]
+    );
+    await connection.query(
+      `
+        UPDATE sessions
+        SET status = 'locked', visibility = 'share_only',
+            join_policy = 'review_required', join_phone_required = 0,
+            npc_join_enabled = 0
+        WHERE id = ?
+      `,
       [sessionId]
     );
-    if (seats.length === 0) {
-      throw badRequest("At least one seat is required before publish");
+  } else {
+    if (body.creatorSeatId !== undefined) {
+      throw badRequest("creatorSeatId is only valid for historical sessions");
     }
-
-    const adjustmentSum = seats.reduce((sum, seat) => sum + Number(seat.adjustment), 0);
-    if (adjustmentSum !== 0) {
-      throw badRequest("Seat adjustments must sum to 0");
-    }
-
-    const negativeSeat = seats.find((seat) => Number(seat.payable_price) < 0);
-    if (negativeSeat) {
-      throw badRequest("Seat payable price cannot be negative");
-    }
-
     await connection.query(
       "UPDATE sessions SET status = 'recruiting' WHERE id = ?",
       [sessionId]
     );
-    return findById(connection, "sessions", sessionId);
-  });
+  }
+
+  return findById(connection, "sessions", sessionId);
 }
 
-async function signupNotificationPayload(connection, signupId) {
-  const [rows] = await connection.query(
-    `
-      SELECT
-        signup.id,
-        signup.session_id,
-        signup.status,
-        session.script_name_snapshot,
-        session.store_name_snapshot,
-        session.start_at,
-        seat.name AS seat_name,
-        seat.role_name,
-        npc_role.name AS npc_role_name,
-        npc_role.role_gender AS npc_role_gender,
-        organizer.open_id AS organizer_open_id,
-        applicant.open_id AS applicant_open_id,
-        applicant.nickname AS applicant_nickname
-      FROM signups signup
-      JOIN sessions session ON session.id = signup.session_id
-      LEFT JOIN session_seats seat ON seat.id = signup.seat_id
-      LEFT JOIN session_npc_roles npc_role ON npc_role.id = signup.session_npc_role_id
-      JOIN users organizer ON organizer.id = session.organizer_user_id
-      JOIN users applicant ON applicant.id = signup.user_id
-      WHERE signup.id = ?
-    `,
-    [signupId]
+export async function publishSession(user, sessionId, body = {}) {
+  return withTransaction((connection) =>
+    publishSessionWithConnection(connection, user, sessionId, body)
   );
-  const row = rows[0];
-  if (!row) {
+}
+
+async function signupNotificationPayload(
+  connection,
+  signup,
+  session,
+  membershipRows
+) {
+  if (!signup || !session) {
     return null;
   }
+  const seat = (membershipRows.seats || []).find(
+    (candidate) => Number(candidate.id) === Number(signup.seat_id)
+  ) || {};
+  const npcRole = (membershipRows.npcRoles || []).find(
+    (candidate) => Number(candidate.id) === Number(signup.session_npc_role_id)
+  ) || {};
+  const usersById = await lockUsersByIds(connection, [
+    session.organizer_user_id,
+    signup.user_id
+  ]);
+  const organizer = usersById.get(Number(session.organizer_user_id)) || {};
+  const applicant = usersById.get(Number(signup.user_id)) || {};
   return {
-    signupId: Number(row.id),
-    sessionId: Number(row.session_id),
-    status: row.status,
-    scriptName: row.script_name_snapshot,
-    storeName: row.store_name_snapshot,
-    seatName: row.role_name || row.seat_name || row.npc_role_name || "NPC角色",
-    startAt: row.start_at,
-    organizerOpenId: row.organizer_open_id,
-    applicantOpenId: row.applicant_open_id,
-    actorName: row.applicant_nickname || "新申请"
+    signupId: Number(signup.id),
+    sessionId: Number(signup.session_id),
+    status: signup.status,
+    scriptName: session.script_name_snapshot,
+    storeName: session.store_name_snapshot,
+    seatName: seat.role_name || seat.name || npcRole.name || "NPC角色",
+    startAt: session.start_at,
+    organizerOpenId: organizer.open_id,
+    applicantOpenId: applicant.open_id,
+    actorName: applicant.nickname || "新申请"
   };
 }
 
@@ -5511,24 +6683,29 @@ async function tryNotify(label, sendNotification) {
 export async function createSignup(user, body) {
   const { signup, notification } = await withTransaction(async (connection) => {
     const seatId = requireValue(body, "seatId");
-    const [rows] = await connection.query(
-      `
-        SELECT
-          seat.*,
-          session.status AS session_status,
-          COALESCE(session.join_phone_required, 1) AS join_phone_required,
-          (session.start_at <= CURRENT_TIMESTAMP) AS session_started
-        FROM session_seats seat
-        JOIN sessions session ON session.id = seat.session_id
-        WHERE seat.id = ?
-        FOR UPDATE
-      `,
+    const [seatRefs] = await connection.query(
+      "SELECT session_id FROM session_seats WHERE id = ?",
       [seatId]
     );
-    const seat = rows[0];
-    if (!seat) {
+    const seatRef = seatRefs[0];
+    if (!seatRef) {
       throw notFound("Seat not found");
     }
+    const session = await findLockedSession(connection, seatRef.session_id);
+    if (!session) {
+      throw notFound("Seat not found");
+    }
+    assertOrdinaryHistoricalRoleClaimAllowed(session);
+    const membershipRows = await lockSessionMembershipRows(connection, session.id);
+    const [seatRows] = await connection.query(
+      "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE",
+      [seatId, session.id]
+    );
+    const seatRow = seatRows[0];
+    if (!seatRow) {
+      throw notFound("Seat not found");
+    }
+    const seat = sessionMembershipTarget(seatRow, session);
     const acceptsSignup =
       seat.session_status === "recruiting" ||
       (
@@ -5547,13 +6724,15 @@ export async function createSignup(user, body) {
       connection,
       seat.session_id,
       user.user.id,
-      seat.id
+      seat.id,
+      { lockedSeats: membershipRows.seats }
     );
     await releaseUserOtherSessionNpcRoles(
       connection,
       seat.session_id,
       user.user.id,
-      0
+      0,
+      { lockedNpcRoles: membershipRows.npcRoles }
     );
     await cancelUserOtherPendingSignups(
       connection,
@@ -5620,7 +6799,12 @@ export async function createSignup(user, body) {
 
     return {
       signup,
-      notification: await signupNotificationPayload(connection, signup.id)
+      notification: await signupNotificationPayload(
+        connection,
+        signup,
+        session,
+        membershipRows
+      )
     };
   });
   await tryNotify("notifySignupCreated", () => notifySignupCreated(notification));
@@ -5647,28 +6831,21 @@ export async function claimSessionSeat(user, seatId, body = {}) {
     if (!seatRef) {
       throw notFound("Seat not found");
     }
-
-    await lockSessionSeats(connection, seatRef.session_id);
-
-    const [rows] = await connection.query(
-      `
-        SELECT
-          seat.*,
-          session.organizer_user_id,
-          session.join_policy,
-          COALESCE(session.join_phone_required, 1) AS join_phone_required,
-          session.status AS session_status,
-          (session.start_at <= CURRENT_TIMESTAMP) AS session_started
-        FROM session_seats seat
-        JOIN sessions session ON session.id = seat.session_id
-        WHERE seat.id = ?
-      `,
-      [seatId]
-    );
-    const seat = rows[0];
-    if (!seat) {
+    const session = await findLockedSession(connection, seatRef.session_id);
+    if (!session) {
       throw notFound("Seat not found");
     }
+    assertOrdinaryHistoricalRoleClaimAllowed(session);
+    const membershipRows = await lockSessionMembershipRows(connection, session.id);
+    const [seatRows] = await connection.query(
+      "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE",
+      [seatId, session.id]
+    );
+    const seatRow = seatRows[0];
+    if (!seatRow) {
+      throw notFound("Seat not found");
+    }
+    const seat = sessionMembershipTarget(seatRow, session);
     await assertUserCanJoinSession(connection, seat.session_id, user.user.id);
     forbidPlayerDirectClaim(user, seat);
     requireJoinPhoneIfNeeded(user, seat);
@@ -5702,13 +6879,15 @@ export async function claimSessionSeat(user, seatId, body = {}) {
       connection,
       seat.session_id,
       user.user.id,
-      seat.id
+      seat.id,
+      { lockedSeats: membershipRows.seats }
     );
     await releaseUserOtherSessionNpcRoles(
       connection,
       seat.session_id,
       user.user.id,
-      0
+      0,
+      { lockedNpcRoles: membershipRows.npcRoles }
     );
     await cancelUserOtherPendingSignups(
       connection,
@@ -5773,26 +6952,30 @@ export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
   const id = positiveId(npcRoleId, "npcRoleId");
 
   return withTransaction(async (connection) => {
-    const [rows] = await connection.query(
-      `
-        SELECT
-          role.*,
-          session.organizer_user_id,
-          session.status AS session_status,
-          session.join_policy,
-          COALESCE(session.join_phone_required, 1) AS join_phone_required,
-          COALESCE(session.npc_join_enabled, 1) AS npc_join_enabled
-        FROM session_npc_roles role
-        JOIN sessions session ON session.id = role.session_id
-        WHERE role.id = ?
-        FOR UPDATE
-      `,
+    const [roleRefs] = await connection.query(
+      "SELECT session_id FROM session_npc_roles WHERE id = ?",
       [id]
     );
-    const role = rows[0];
-    if (!role) {
+    const roleRef = roleRefs[0];
+    if (!roleRef) {
       throw notFound("Session NPC role not found");
     }
+    const session = await findLockedSession(connection, roleRef.session_id);
+    if (!session) {
+      throw notFound("Session NPC role not found");
+    }
+    assertOrdinaryHistoricalRoleClaimAllowed(session);
+    const membershipRows = await lockSessionMembershipRows(connection, session.id);
+    const [roleRows] = await connection.query(
+      "SELECT * FROM session_npc_roles WHERE id = ? AND session_id = ? FOR UPDATE",
+      [id, session.id]
+    );
+    const roleRow = roleRows[0];
+    if (!roleRow) {
+      throw notFound("Session NPC role not found");
+    }
+    const role = sessionMembershipTarget(roleRow, session);
+    await assertUserCanJoinSession(connection, role.session_id, user.user.id);
     if (role.status !== "active") {
       throw conflict("NPC role is not available");
     }
@@ -5840,13 +7023,15 @@ export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
       connection,
       role.session_id,
       currentUserId,
-      0
+      0,
+      { lockedSeats: membershipRows.seats }
     );
     await releaseUserOtherSessionNpcRoles(
       connection,
       role.session_id,
       currentUserId,
-      id
+      id,
+      { lockedNpcRoles: membershipRows.npcRoles }
     );
     await cancelUserOtherPendingSignups(
       connection,
@@ -5877,9 +7062,16 @@ export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
         `,
         [role.session_id, id, currentUserId, contactText, note]
       );
+      const lockedSignup = (membershipRows.signups || []).find((signup) =>
+        Number(signup.session_npc_role_id) === id &&
+        Number(signup.user_id) === currentUserId
+      );
+      if (lockedSignup) {
+        lockedSignup.status = "approved";
+      }
       return {
         join_result: "npc_joined",
-        npc_role: await sessionNpcRoleById(connection, id)
+        npc_role: await npcRoleFromLockedMembership(connection, membershipRows, id)
       };
     }
 
@@ -5920,9 +7112,25 @@ export async function claimSessionNpcRole(user, npcRoleId, body = {}) {
         `,
         [id, currentUserId]
       );
+      const lockedRole = (membershipRows.npcRoles || []).find(
+        (candidate) => Number(candidate.id) === id
+      );
+      if (lockedRole) {
+        lockedRole.bound_user_id = currentUserId;
+      }
+      for (const lockedSignup of membershipRows.signups || []) {
+        if (Number(lockedSignup.session_npc_role_id) !== id) {
+          continue;
+        }
+        if (Number(lockedSignup.user_id) === currentUserId) {
+          lockedSignup.status = "approved";
+        } else if (lockedSignup.status === "pending") {
+          lockedSignup.status = "rejected";
+        }
+      }
       return {
         join_result: "npc_joined",
-        npc_role: await sessionNpcRoleById(connection, id)
+        npc_role: await npcRoleFromLockedMembership(connection, membershipRows, id)
       };
     }
 
@@ -5988,6 +7196,7 @@ export async function listMySignups(user) {
           session.script_name_snapshot,
           session.store_name_snapshot,
           session.start_at,
+          session.session_purpose,
           session.status AS session_status,
           session.cancelled_at,
           seat.name AS seat_name,
@@ -6092,7 +7301,13 @@ export async function listSessionSignups(user, sessionId) {
 
 export async function approveSignup(user, signupId) {
   const { signup, notification } = await withTransaction(async (connection) => {
-    const signup = await requireSignupOwner(connection, signupId, user);
+    const {
+      signup,
+      session,
+      membershipRows
+    } = await requireLockedSignupOwner(connection, signupId, user, {
+      validateSession: assertOrdinaryHistoricalRoleClaimAllowed
+    });
     if (signup.status !== "pending") {
       throw badRequest("Only pending signup can be approved");
     }
@@ -6102,10 +7317,10 @@ export async function approveSignup(user, signupId) {
         `
           SELECT *
           FROM session_npc_roles
-          WHERE id = ?
+          WHERE id = ? AND session_id = ?
           FOR UPDATE
         `,
-        [signup.session_npc_role_id]
+        [signup.session_npc_role_id, signup.session_id]
       );
       const role = roleRows[0];
       if (!role) {
@@ -6120,18 +7335,19 @@ export async function approveSignup(user, signupId) {
       ) {
         throw conflict("NPC role already has a bound user");
       }
-      await lockSessionSeats(connection, signup.session_id);
       await releaseUserOtherConfirmedSeats(
         connection,
         signup.session_id,
         signup.user_id,
-        0
+        0,
+        { lockedSeats: membershipRows.seats }
       );
       await releaseUserOtherSessionNpcRoles(
         connection,
         signup.session_id,
         signup.user_id,
-        signup.session_npc_role_id
+        signup.session_npc_role_id,
+        { lockedNpcRoles: membershipRows.npcRoles }
       );
       await cancelUserOtherPendingSignups(
         connection,
@@ -6164,7 +7380,12 @@ export async function approveSignup(user, signupId) {
       await markSignupReviewEligible(connection, signupId);
       const approvedSignup = await findById(connection, "signups", signupId);
       const notification = {
-        ...(await signupNotificationPayload(connection, signupId)),
+        ...(await signupNotificationPayload(
+          connection,
+          approvedSignup,
+          session,
+          membershipRows
+        )),
         resultText: "已通过"
       };
       await insertSignupReviewedNotification(
@@ -6179,11 +7400,9 @@ export async function approveSignup(user, signupId) {
       };
     }
 
-    await lockSessionSeats(connection, signup.session_id);
-
     const [seatRows] = await connection.query(
-      "SELECT * FROM session_seats WHERE id = ?",
-      [signup.seat_id]
+      "SELECT * FROM session_seats WHERE id = ? AND session_id = ? FOR UPDATE",
+      [signup.seat_id, signup.session_id]
     );
     const seat = seatRows[0];
     if (!seat) {
@@ -6196,13 +7415,15 @@ export async function approveSignup(user, signupId) {
       connection,
       signup.session_id,
       signup.user_id,
-      signup.seat_id
+      signup.seat_id,
+      { lockedSeats: membershipRows.seats }
     );
     await releaseUserOtherSessionNpcRoles(
       connection,
       signup.session_id,
       signup.user_id,
-      0
+      0,
+      { lockedNpcRoles: membershipRows.npcRoles }
     );
     await cancelUserOtherPendingSignups(
       connection,
@@ -6235,7 +7456,12 @@ export async function approveSignup(user, signupId) {
 
     const approvedSignup = await findById(connection, "signups", signupId);
     const notification = {
-      ...(await signupNotificationPayload(connection, signupId)),
+      ...(await signupNotificationPayload(
+        connection,
+        approvedSignup,
+        session,
+        membershipRows
+      )),
       resultText: "已通过"
     };
     await insertSignupReviewedNotification(
@@ -6255,7 +7481,11 @@ export async function approveSignup(user, signupId) {
 
 export async function rejectSignup(user, signupId) {
   const { signup, notification } = await withTransaction(async (connection) => {
-    const signup = await requireSignupOwner(connection, signupId, user);
+    const {
+      signup,
+      session,
+      membershipRows
+    } = await requireLockedSignupOwner(connection, signupId, user);
     if (signup.status !== "pending") {
       throw badRequest("Only pending signup can be rejected");
     }
@@ -6266,7 +7496,12 @@ export async function rejectSignup(user, signupId) {
     if ((signup.signup_type || "seat") === "session_npc_role") {
       const rejectedSignup = await findById(connection, "signups", signupId);
       const notification = {
-        ...(await signupNotificationPayload(connection, signupId)),
+        ...(await signupNotificationPayload(
+          connection,
+          rejectedSignup,
+          session,
+          membershipRows
+        )),
         resultText: "已拒绝"
       };
       await insertSignupReviewedNotification(
@@ -6281,15 +7516,12 @@ export async function rejectSignup(user, signupId) {
       };
     }
 
-    const [activeRows] = await connection.query(
-      `
-        SELECT COUNT(*) AS active_count
-        FROM signups
-        WHERE seat_id = ? AND status IN ('pending', 'approved')
-      `,
-      [signup.seat_id]
-    );
-    if (Number(activeRows[0]?.active_count || 0) === 0) {
+    const activeSignupCount = (membershipRows.signups || []).filter((candidate) =>
+      Number(candidate.id) !== Number(signupId) &&
+      Number(candidate.seat_id) === Number(signup.seat_id) &&
+      ["pending", "approved"].includes(candidate.status)
+    ).length;
+    if (activeSignupCount === 0) {
       await connection.query(
         `
           UPDATE session_seats
@@ -6302,7 +7534,12 @@ export async function rejectSignup(user, signupId) {
 
     const rejectedSignup = await findById(connection, "signups", signupId);
     const notification = {
-      ...(await signupNotificationPayload(connection, signupId)),
+      ...(await signupNotificationPayload(
+        connection,
+        rejectedSignup,
+        session,
+        membershipRows
+      )),
       resultText: "已拒绝"
     };
     await insertSignupReviewedNotification(
@@ -6338,7 +7575,7 @@ export async function updateDeposit(user, signupId, body) {
 
 export async function lockSeat(user, seatId) {
   return withTransaction(async (connection) => {
-    const seat = await requireSeatOwner(connection, seatId, user);
+    const seat = await requireLockedSeatOwner(connection, seatId, user);
     if (seat.status !== "confirmed") {
       throw badRequest("Only confirmed seat can be locked");
     }
@@ -6352,23 +7589,9 @@ export async function lockSeat(user, seatId) {
 
 export async function kickSessionSeat(user, seatId, body = {}) {
   return withTransaction(async (connection) => {
-    const [rows] = await connection.query(
-      `
-        SELECT seat.*, session.organizer_user_id, session.status AS session_status
-        FROM session_seats seat
-        JOIN sessions session ON session.id = seat.session_id
-        WHERE seat.id = ?
-        FOR UPDATE
-      `,
-      [seatId]
-    );
-    const seat = rows[0];
-    if (!seat) {
-      throw notFound("Seat not found");
-    }
-    if (!isAdmin(user) && Number(seat.organizer_user_id) !== Number(user.user.id)) {
-      throw forbidden("Only the session organizer can perform this action");
-    }
+    const seat = await requireLockedSeatOwner(connection, seatId, user, {
+      fullMembership: true
+    });
 
     const report = booleanValue(body.report, false);
     const reasonType = normalizeRemovalReasonType(
@@ -6378,6 +7601,7 @@ export async function kickSessionSeat(user, seatId, body = {}) {
     const reason = optionalText(body.reason);
     assertMessageTextSafe("reason", reason);
     const removedUserId = seat.confirmed_user_id ? Number(seat.confirmed_user_id) : null;
+    const historicalRemoval = seat.session_purpose === "historical_record";
     if (
       report &&
       (!removedUserId || !["confirmed", "locked"].includes(seat.status))
@@ -6385,10 +7609,13 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       throw conflict("Reported removal requires an onboard member");
     }
 
+    const historicalReviewReset = historicalRemoval
+      ? ", review_eligible_at = NULL"
+      : "";
     await connection.query(
       `
         UPDATE signups
-        SET status = 'cancelled'
+        SET status = 'cancelled'${historicalReviewReset}
         WHERE seat_id = ? AND status IN ('pending', 'approved')
       `,
       [seatId]
@@ -6397,7 +7624,7 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       await connection.query(
         `
           UPDATE signups
-          SET status = 'cancelled'
+          SET status = 'cancelled'${historicalReviewReset}
           WHERE session_id = ?
             AND user_id = ?
             AND COALESCE(signup_type, 'seat') = 'seat'
@@ -6447,11 +7674,13 @@ export async function kickSessionSeat(user, seatId, body = {}) {
       );
     }
 
-    const content = report
-      ? `车头已将「${seat.name}」移出本车，原因：${removalReasonLabel(reasonType)}`
-      : reason
-        ? `车头已释放「${seat.name}」：${reason}`
-        : `车头已释放「${seat.name}」`;
+    const content = historicalRemoval
+      ? `车头已移除「${seat.name}」的补认成员`
+      : report
+        ? `车头已将「${seat.name}」移出本车，原因：${removalReasonLabel(reasonType)}`
+        : reason
+          ? `车头已释放「${seat.name}」：${reason}`
+          : `车头已释放「${seat.name}」`;
     await runSessionExtensionHook("afterSessionSeatKicked", {
       connection,
       sessionId: seat.session_id,
@@ -6480,22 +7709,39 @@ export async function cancelSession(user, sessionId, body = {}) {
     if (Number(session.organizer_user_id) !== Number(user.user.id)) {
       throw forbidden("Only the session organizer can cancel this session");
     }
-    const inheritingCandidates = await sessionOrganizerCandidates(
-      connection,
-      session,
-      user.user.id
+    const membershipRows = await lockSessionMembershipRows(connection, id);
+    const hasOtherOnboardSeatMembers = (membershipRows.seats || []).some((seat) =>
+      Number(seat.confirmed_user_id) > 0 &&
+      Number(seat.confirmed_user_id) !== Number(user.user.id) &&
+      ["confirmed", "locked"].includes(seat.status)
     );
-    const hasOtherOnboardMembers = inheritingCandidates.some(
-      (candidate) => candidate.source === "seat"
-    );
-    if (hasOtherOnboardMembers) {
+    const hasOtherHistoricalNpcMembers =
+      session.session_purpose === "historical_record" &&
+      (membershipRows.npcRoles || []).some((role) =>
+        Number(role.bound_user_id) > 0 &&
+        Number(role.bound_user_id) !== Number(user.user.id) &&
+        role.status === "active"
+      );
+    if (hasOtherOnboardSeatMembers || hasOtherHistoricalNpcMembers) {
       throw new AppError(
         409,
         "SESSION_HAS_ONBOARD_MEMBERS",
         "已有玩家上车，不能取消删除。请退出车头，系统会转给下一位已上车成员。"
       );
     }
-    if ((await activeSessionAlbumPhotoCount(connection, id)) > 0) {
+    const [activeAlbumPhotos] = await connection.query(
+      `
+        SELECT id
+        FROM session_album_photos
+        WHERE session_id = ?
+          AND status = 'active'
+          AND moderation_status IN ('approved', 'approved_legacy')
+        ORDER BY id
+        FOR UPDATE
+      `,
+      [id]
+    );
+    if (activeAlbumPhotos.length > 0) {
       throw new AppError(
         409,
         "SESSION_HAS_ALBUM_PHOTOS",
@@ -6514,12 +7760,8 @@ export async function cancelSession(user, sessionId, body = {}) {
 export async function deleteAdminSession(sessionId) {
   return withTransaction(async (connection) => {
     const id = positiveId(sessionId, "sessionId");
-    const [rows] = await connection.query("SELECT id FROM sessions WHERE id = ? FOR UPDATE", [
-      id
-    ]);
-    if (!rows[0]) {
-      throw notFound("Session not found");
-    }
+    await requireLockedSession(connection, id);
+    await lockSessionMembershipRows(connection, id);
     return {
       id,
       deleted: await deleteSessionTree(connection, id)
@@ -7129,6 +8371,8 @@ export async function listSessionAlbum(user, sessionId, options = {}) {
       script_name_snapshot: session.script_name_snapshot,
       store_name_snapshot: session.store_name_snapshot,
       start_at: session.start_at,
+      session_purpose: session.session_purpose,
+      organizer_user_id: session.organizer_user_id,
       can_upload: true,
       privacy,
       visible_count: photos.filter((photo) => isModerationPublished(photo.moderation_status)).length,

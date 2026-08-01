@@ -8,6 +8,8 @@ const migrationsUrl = new URL("../apps/api/migrations/", import.meta.url);
 const currentFutureHistory = [
   "0034_schema_migration_checksums.sql",
   "0035_album_tag_public_share_read_model.sql",
+  "0036_historical_session_backfill.sql",
+  "0037_historical_session_creation_operations.sql",
 ];
 
 async function currentMigrationFilenames() {
@@ -44,17 +46,17 @@ test("prefixes from 0034 onward are globally unique", async () => {
   const filenames = await currentMigrationFilenames();
 
   assert.equal(
-    issueCodes([...filenames, "0036_add_alpha.sql", "0036_add_beta.sql"])
+    issueCodes([...filenames, "0038_add_alpha.sql", "0038_add_beta.sql"])
       .includes("MIGRATION_FILENAME_DUPLICATE_PREFIX"),
     true,
   );
   assert.deepEqual(
     validateMigrationFilenames(
-      [...filenames, "0036_add_alpha.sql", "0037_add_beta.sql"],
+      [...filenames, "0038_add_alpha.sql", "0039_add_beta.sql"],
       { futureMigrationHistory: [
         ...currentFutureHistory,
-        "0036_add_alpha.sql",
-        "0037_add_beta.sql",
+        "0038_add_alpha.sql",
+        "0039_add_beta.sql",
       ] },
     ),
     [],
@@ -65,9 +67,9 @@ test("future migration history is append-only and strictly increasing", async ()
   const filenames = await currentMigrationFilenames();
   const futureMigrationHistory = [
     ...currentFutureHistory,
-    "0036_first.sql",
-    "0038_existing.sql",
-    "0037_backdated.sql",
+    "0038_first.sql",
+    "0040_existing.sql",
+    "0039_backdated.sql",
   ];
 
   assert.equal(
@@ -81,14 +83,14 @@ test("future migration history cannot insert a backdated prefix before an existi
   const filenames = await currentMigrationFilenames();
   const baselineFutureMigrationHistory = [
     ...currentFutureHistory,
-    "0036_first.sql",
-    "0038_existing.sql",
+    "0038_first.sql",
+    "0040_existing.sql",
   ];
   const futureMigrationHistory = [
     ...currentFutureHistory,
-    "0036_first.sql",
-    "0037_backdated.sql",
-    "0038_existing.sql",
+    "0038_first.sql",
+    "0039_backdated.sql",
+    "0040_existing.sql",
   ];
 
   assert.equal(

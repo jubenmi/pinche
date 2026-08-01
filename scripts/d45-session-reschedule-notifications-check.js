@@ -101,8 +101,8 @@ assertIncludes(service, "export async function rescheduleSession");
 assertIncludes(service, "export async function rescheduleSessionInTransaction");
 assertIncludes(service, "(start_at <= CURRENT_TIMESTAMP) AS session_started");
 assertIncludes(service, "FROM sessions WHERE id = ? FOR UPDATE");
-assertIncludes(service, "SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE");
-assertIncludes(service, "SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE");
+assertIncludes(service, "await lockSessionSeats(connection, id)");
+assertIncludes(service, "await lockSessionNpcRoles(connection, id)");
 assertIncludes(service, "body.membersConfirmed !== true");
 assertIncludes(service, "USER_NOTIFICATION_TYPES.SESSION_RESCHEDULED");
 assertIncludes(service, "createSessionRescheduleDedupeKey(id)");
@@ -276,11 +276,11 @@ assertIncludes(packageJson.scripts["test:contracts"], "npm run session-reschedul
 const rescheduleServiceIndex = service.indexOf("export async function rescheduleSession");
 const sessionLockIndex = service.indexOf("FROM sessions WHERE id = ? FOR UPDATE", rescheduleServiceIndex);
 const seatLockIndex = service.indexOf(
-  "SELECT id FROM session_seats WHERE session_id = ? FOR UPDATE",
+  "await lockSessionSeats(connection, id)",
   sessionLockIndex
 );
 const npcRoleLockIndex = service.indexOf(
-  "SELECT id FROM session_npc_roles WHERE session_id = ? FOR UPDATE",
+  "await lockSessionNpcRoles(connection, id)",
   seatLockIndex
 );
 const recipientReadIndex = service.indexOf("SELECT DISTINCT member.user_id", npcRoleLockIndex);

@@ -19,6 +19,13 @@ import {
 } from "./http/errors.js";
 import { errorResponse, jsonResponse } from "./http/response.js";
 import {
+  signSignedPayload as signNamespacedPayload,
+  signedPayloadSignature as namespacedPayloadSignature,
+  tokenPositiveInteger as parseTokenPositiveInteger,
+  verifySignedPayload as verifyNamespacedPayload
+} from "./modules/security/signed-payload.js";
+import { createHistoricalInviteTokenCodec } from "./modules/core/historical-invite-token.js";
+import {
   publicUser,
   updateUserPhone,
   updateUserProfile,
@@ -69,10 +76,12 @@ import {
 } from "./modules/album-video/multipart-stream.js";
 import {
   assertAdminOwnSessionAlbumAllowed,
+  assertHistoricalSessionInviteAllowed,
   assertSessionAlbumImageUploadAllowed,
   assertSessionAlbumUploadAllowed,
   approveSignup,
   cancelSession,
+  claimHistoricalSessionRole,
   claimSessionNpcRole,
   claimSessionSeat,
   createOrReuseSessionAlbumPublicShare,
@@ -359,6 +368,7 @@ export const JSON_BODY_MAX_BYTES = 1024 * 1024;
 const SESSION_ALBUM_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_SHARE_TOKEN_SECONDS = 30 * 24 * 60 * 60;
 const SESSION_JOIN_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
+const HISTORICAL_INVITE_TOKEN_SECONDS = 7 * 24 * 60 * 60;
 const SESSION_ALBUM_PUBLIC_MEDIA_TOKEN_SECONDS = 10 * 60;
 const SESSION_ALBUM_PUBLIC_VIDEO_FILE_PURPOSE = "session-album-public-video-file";
 const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
@@ -366,6 +376,9 @@ const SESSION_ALBUM_VIDEO_SNAPSHOT_PARAMS = {
   time: "1",
   format: "jpg"
 };
+const historicalInviteTokenCodec = createHistoricalInviteTokenCodec({
+  secret: config.sessionSecret
+});
 const resolveContentSecurityIntake = createContentSecurityIntakeResolver({
   moderationConfig: config.contentModeration,
   withDatabaseConnection
@@ -537,6 +550,7 @@ function sessionTextSnapshot(row = {}) {
     script_name_snapshot: String(row.script_name_snapshot || ""),
     store_name_snapshot: String(row.store_name_snapshot || ""),
     start_at: row.start_at || null,
+    session_purpose: String(row.session_purpose || ""),
     dm_user_id: row.dm_user_id ? Number(row.dm_user_id) : null,
     dm_name_snapshot: String(row.dm_name_snapshot || ""),
     npc_user_id: row.npc_user_id ? Number(row.npc_user_id) : null,
@@ -679,8 +693,23 @@ async function currentSessionCreateTextBase(
   connection,
   actorUserId,
   body,
-  { forUpdate = false } = {}
+  { forUpdate = false, lockedSnapshot = null } = {}
 ) {
+  if (lockedSnapshot) {
+    const actor = lockedSnapshot.actor;
+    const store = lockedSnapshot.store;
+    const script = lockedSnapshot.script;
+    if (!actor || !store || !script) return "";
+    return createTextBaseline({
+      kind: "session_create",
+      actor: actorSessionCreateSnapshot(actor),
+      store,
+      script,
+      script_npc_roles: Array.isArray(lockedSnapshot.scriptNpcRoles)
+        ? lockedSnapshot.scriptNpcRoles
+        : []
+    });
+  }
   const lock = forUpdate ? " FOR UPDATE" : "";
   const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
   const [storeRows] = await connection.query(
@@ -734,25 +763,61 @@ async function currentNpcRoleTextBase(
   actorUserId,
   { forUpdate = false } = {}
 ) {
-  const [rows] = await connection.query(
-    `SELECT role.id, role.session_id, role.script_npc_role_id, role.name,
-            role.description, role.role_gender, role.source, role.bound_user_id,
-            role.sort_order, role.status,
-            session.id AS parent_session_id, session.organizer_user_id,
-            session.script_id, session.store_id, session.script_name_snapshot,
-            session.store_name_snapshot, session.start_at, session.dm_user_id,
-            session.dm_name_snapshot, session.npc_user_id, session.npc_name_snapshot,
-            session.deposit_amount, session.visibility, session.join_policy,
-            session.join_phone_required, session.npc_join_enabled, session.note,
-            session.status AS session_status, session.cancelled_at
-     FROM session_npc_roles AS role
-     JOIN sessions AS session ON session.id = role.session_id
-     WHERE role.id = ? LIMIT 1${forUpdate ? " FOR UPDATE" : ""}`,
-    [Number(npcRoleId)]
-  );
-  const role = rows[0];
+  let role = null;
+  let parentSession = null;
+  if (!forUpdate) {
+    const [rows] = await connection.query(
+      `SELECT role.id, role.session_id, role.script_npc_role_id, role.name,
+              role.description, role.role_gender, role.source, role.bound_user_id,
+              role.sort_order, role.status,
+              session.id AS parent_session_id, session.organizer_user_id,
+              session.script_id, session.store_id, session.script_name_snapshot,
+              session.store_name_snapshot, session.start_at, session.session_purpose,
+              session.dm_user_id,
+              session.dm_name_snapshot, session.npc_user_id, session.npc_name_snapshot,
+              session.deposit_amount, session.visibility, session.join_policy,
+              session.join_phone_required, session.npc_join_enabled, session.note,
+              session.status AS session_status, session.cancelled_at
+       FROM session_npc_roles AS role
+       JOIN sessions AS session ON session.id = role.session_id
+       WHERE role.id = ? LIMIT 1`,
+      [Number(npcRoleId)]
+    );
+    role = rows[0] || null;
+    if (role) {
+      parentSession = sessionTextSnapshot({
+        ...role,
+        id: role.parent_session_id,
+        status: role.session_status
+      });
+    }
+  } else {
+    const [roleRefRows] = await connection.query(
+      "SELECT session_id FROM session_npc_roles WHERE id = ? LIMIT 1",
+      [Number(npcRoleId)]
+    );
+    const roleRef = roleRefRows[0] || null;
+    if (roleRef) {
+      const [sessionRows] = await connection.query(
+        "SELECT * FROM sessions WHERE id = ? LIMIT 1 FOR UPDATE",
+        [Number(roleRef.session_id)]
+      );
+      const session = sessionRows[0] || null;
+      if (session) {
+        const [roleRows] = await connection.query(
+          `SELECT id, session_id, script_npc_role_id, name, description,
+                  role_gender, source, bound_user_id, sort_order, status
+           FROM session_npc_roles
+           WHERE id = ? AND session_id = ? LIMIT 1 FOR UPDATE`,
+          [Number(npcRoleId), Number(session.id)]
+        );
+        role = roleRows[0] || null;
+        parentSession = sessionTextSnapshot(session);
+      }
+    }
+  }
   const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
-  if (!role) {
+  if (!role || !parentSession) {
     if (!forUpdate) requireInitialTextModerationTarget(role, "Session NPC role");
     return "";
   }
@@ -760,11 +825,6 @@ async function currentNpcRoleTextBase(
     if (!forUpdate) requireInitialTextModerationTarget(actor, "User");
     return "";
   }
-  const parentSession = sessionTextSnapshot({
-    ...role,
-    id: role.parent_session_id,
-    status: role.session_status
-  });
   if (!forUpdate) assertSessionOwnerPreflight(parentSession, actor);
   return createTextBaseline({
     kind: "session_npc_role",
@@ -883,6 +943,7 @@ async function currentPinnedTextBase(connection, sessionId, actorUserId, { forUp
     `SELECT session.id AS session_id,
             session.organizer_user_id, session.script_id, session.store_id,
             session.script_name_snapshot, session.store_name_snapshot, session.start_at,
+            session.session_purpose,
             session.dm_user_id, session.dm_name_snapshot, session.npc_user_id,
             session.npc_name_snapshot, session.deposit_amount, session.visibility,
             session.join_policy, session.join_phone_required, session.npc_join_enabled,
@@ -1090,7 +1151,7 @@ async function moderateCoveredText({ request, user, action, subjectId, body, con
 
 async function loadTextProposalActor(connection, actorUserId) {
   const [users] = await connection.query(
-    "SELECT * FROM users WHERE id = ? LIMIT 1 FOR UPDATE",
+    "SELECT * FROM users WHERE id = ? LIMIT 1",
     [Number(actorUserId)]
   );
   if (!users[0]) return null;
@@ -3164,52 +3225,32 @@ function buildAuthorAlbumImageUrls(photo, options = {}) {
 }
 
 function signedPayloadSignature(purpose, payloadText) {
-  return crypto
-    .createHmac("sha256", config.sessionSecret)
-    .update(`${purpose}:${payloadText}`)
-    .digest("hex");
+  return namespacedPayloadSignature({
+    secret: config.sessionSecret,
+    namespace: purpose,
+    payloadText
+  });
 }
 
 function tokenPositiveInteger(value, label) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw forbidden(`${label} is invalid`);
-  }
-  return parsed;
+  return parseTokenPositiveInteger(value, label);
 }
 
 function signSignedPayload(purpose, payload) {
-  const payloadText = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = signedPayloadSignature(purpose, payloadText);
-  return `${payloadText}.${signature}`;
+  return signNamespacedPayload({
+    secret: config.sessionSecret,
+    namespace: purpose,
+    payload
+  });
 }
 
 function verifySignedPayload(purpose, token, label) {
-  const [payloadText, signature, extra] = String(token || "").split(".");
-  if (!payloadText || !signature || extra !== undefined) {
-    throw forbidden(`${label} is required`);
-  }
-
-  const expected = signedPayloadSignature(purpose, payloadText);
-  const signatureBuffer = Buffer.from(signature, "hex");
-  const expectedBuffer = Buffer.from(expected, "hex");
-  if (
-    signatureBuffer.length !== expectedBuffer.length ||
-    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
-  ) {
-    throw forbidden(`${label} is invalid`);
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(Buffer.from(payloadText, "base64url").toString("utf8"));
-  } catch (error) {
-    throw forbidden(`${label} is invalid`);
-  }
-  if (tokenPositiveInteger(payload.exp, "exp") < Math.floor(Date.now() / 1000)) {
-    throw forbidden(`${label} expired`);
-  }
-  return payload;
+  return verifyNamespacedPayload({
+    secret: config.sessionSecret,
+    namespace: purpose,
+    token,
+    label
+  });
 }
 
 function normalizeSessionAlbumShareClaims(payload) {
@@ -5931,14 +5972,30 @@ export async function legacyRoute(context) {
   const sessionId = idMatch(url.pathname, /^\/api\/sessions\/(\d+)$/);
   if (request.method === "GET" && sessionId) {
     const viewer = await optionalAuthUser(request);
+    const hasInviteToken = url.searchParams.has("inviteToken");
+    const hasHistoricalInviteToken = url.searchParams.has("historicalInviteToken");
     const inviteToken = url.searchParams.get("inviteToken") || "";
+    const historicalInviteToken = url.searchParams.get("historicalInviteToken") || "";
+    if (hasInviteToken && hasHistoricalInviteToken) {
+      throw badRequest("Provide either inviteToken or historicalInviteToken, not both");
+    }
     const inviteClaims = inviteToken ? verifySessionJoinInviteToken(inviteToken) : null;
+    const historicalInviteClaims = historicalInviteToken
+      ? historicalInviteTokenCodec.verify(historicalInviteToken)
+      : null;
     if (inviteClaims && Number(inviteClaims.sessionId) !== Number(sessionId)) {
       throw forbidden("session join invite token is invalid");
+    }
+    if (
+      historicalInviteClaims &&
+      Number(historicalInviteClaims.sessionId) !== Number(sessionId)
+    ) {
+      throw forbidden("historical invite token is invalid");
     }
     const session = await getSessionForViewer(sessionId, {
       viewer,
       inviteClaims,
+      historicalInviteClaims,
       authorTextReader: authorTextProjectionReader
     });
     jsonResponse(response, 200, {
@@ -5961,6 +6018,47 @@ export async function legacyRoute(context) {
       ok: true,
       data: moderated ?? await updateSession(user, sessionId, body)
     }, moderatedTextHeaders(moderated));
+    return;
+  }
+
+  const historicalInviteTokenSessionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/historical-invite-token$/
+  );
+  if (request.method === "POST" && historicalInviteTokenSessionId) {
+    const user = await getAuthUser(request);
+    const invitation = await assertHistoricalSessionInviteAllowed(user, historicalInviteTokenSessionId);
+    const exp = Math.floor(Date.now() / 1000) + HISTORICAL_INVITE_TOKEN_SECONDS;
+    jsonResponse(response, 201, {
+      ok: true,
+      data: {
+        token: historicalInviteTokenCodec.sign({
+          sessionId: Number(historicalInviteTokenSessionId),
+          inviterUserId: Number(invitation.organizerUserId),
+          exp
+        }),
+        expires_at: new Date(exp * 1000).toISOString()
+      }
+    });
+    return;
+  }
+
+  const historicalClaimSessionId = idMatch(
+    url.pathname,
+    /^\/api\/sessions\/(\d+)\/historical-claims$/
+  );
+  if (request.method === "POST" && historicalClaimSessionId) {
+    const user = await getAuthUser(request);
+    const historicalInviteClaims = historicalInviteTokenCodec.verify(body.inviteToken);
+    jsonResponse(response, 200, {
+      ok: true,
+      data: await claimHistoricalSessionRole(
+        user,
+        historicalClaimSessionId,
+        body,
+        historicalInviteClaims
+      )
+    });
     return;
   }
 
@@ -6643,7 +6741,7 @@ export async function legacyRoute(context) {
     const user = await getAuthUser(request);
     jsonResponse(response, 200, {
       ok: true,
-      data: await publishSession(user, publishSessionId)
+      data: await publishSession(user, publishSessionId, body)
     });
     return;
   }

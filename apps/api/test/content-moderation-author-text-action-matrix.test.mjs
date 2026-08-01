@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 
 import { createAuthorDraftService } from "../src/modules/content-moderation/author-drafts.js";
@@ -49,6 +50,7 @@ const ACTION_CASES = Object.freeze({
       storeId: 3,
       scriptId: 4,
       startAt: "2026-07-15 20:00:00",
+      sessionPurpose: "historical_record",
       dmNameSnapshot: "DM",
       depositAmount: 0,
       visibility: "share_only",
@@ -314,7 +316,10 @@ function createLifecycleHarness({ suggestion = "review" } = {}) {
   };
   const authorDrafts = createAuthorDraftService({ transaction, repository });
   const recordBaselineRead = (reader, options) => {
-    state.baselineReads.push({ reader, forUpdate: options?.forUpdate === true });
+    state.baselineReads.push({
+      reader,
+      forUpdate: options?.forUpdate === true || options?.lockedSnapshot !== undefined
+    });
     return "domain:baseline:v1";
   };
   const recordWrite = (action, targetSubjectId, body, { pinned = false } = {}) => {
@@ -353,8 +358,12 @@ function createLifecycleHarness({ suggestion = "review" } = {}) {
       recordWrite("create_private_store", `creation:create_private_store:${actor.user.id}`, body),
     createPrivateScriptWithConnection: async (_connection, actor, body) =>
       recordWrite("create_private_script", `creation:create_private_script:${actor.user.id}`, body),
-    createSessionWithConnection: async (_connection, actor, body) =>
-      recordWrite("create_session", `creation:create_session:${actor.user.id}`, body),
+    createSessionWithConnection: async (_connection, actor, body, options = {}) => {
+      if (typeof options.trustedHistoricalCreationRevalidate === "function") {
+        await options.trustedHistoricalCreationRevalidate({});
+      }
+      return recordWrite("create_session", `creation:create_session:${actor.user.id}`, body);
+    },
     updateSessionWithConnection: async (_connection, _actor, sessionId, body) =>
       recordWrite("update_session", String(sessionId), body),
     createSessionNpcRoleWithConnection: async (_connection, _actor, sessionId, body) =>
@@ -408,15 +417,29 @@ function moderationInput(action, testCase, idempotencyKey, extra = {}) {
     targetSubjectId: testCase.targetSubjectId,
     ...(testCase.sessionId ? { sessionId: testCase.sessionId } : {})
   };
+  let body = testCase.body;
+  let operationKey = idempotencyKey;
+  if (action === "create_session" && body.sessionPurpose === "historical_record") {
+    const historicalCreationKey = `hs_${crypto
+      .createHash("sha256")
+      .update(String(idempotencyKey))
+      .digest("hex")}`;
+    const historicalCreationKeyHash = crypto
+      .createHash("sha256")
+      .update(historicalCreationKey)
+      .digest("hex");
+    body = { ...body, historicalCreationKey };
+    operationKey = `hsc_${historicalCreationKeyHash}`;
+  }
   const descriptor = buildTextModerationDescriptor({
     action,
-    body: testCase.body,
+    body,
     context,
     subjectId: testCase.targetSubjectId,
     actorUserId: ACTOR_USER_ID,
     openid: `openid-${ACTOR_USER_ID}`,
     baseVersion: extra.baseVersion || baseVersionForAction(action),
-    idempotencyKey,
+    idempotencyKey: operationKey,
     idempotencyExplicit: true
   });
   assert.ok(descriptor, `${action}: production boundary must emit a descriptor`);
@@ -476,11 +499,14 @@ test("D46 all ten text actions execute the real service/boundary/applicator life
         action === "create_session"
           ? {
               ...approvedInput.payload.body,
-              idempotencyKey: `${action}:approved`
+              idempotencyKey: approvedInput.idempotencyKey
             }
           : approvedInput.payload.body,
         `${action}:approved:canonical-body`
       );
+      if (action === "create_session") {
+        assert.equal(approvedEntity.body.sessionPurpose, "historical_record");
+      }
       assert.equal(await visibleDraft(approved.reader, action, testCase), null);
       assert.equal(resolveAuthorVisibility({
         viewerUserId: OTHER_USER_ID,
