@@ -39,15 +39,20 @@ export function invitePreparationContractFailures(source) {
   const contractFailures = [];
   const prepareSource = methodBody(source, "prepareJoinInviteToken");
   const retrySource = methodBody(source, "retryPrepareInvite");
-  const tryIndex = prepareSource.indexOf("try");
+  const ordinaryStart = prepareSource.indexOf("this.invitePreparing = true");
+  const ordinaryPrepareSource =
+    ordinaryStart >= 0 ? prepareSource.slice(ordinaryStart) : "";
+  const tryIndex = ordinaryPrepareSource.indexOf("try");
   const prepareBeginSource =
-    tryIndex >= 0 ? prepareSource.slice(0, tryIndex) : prepareSource;
+    tryIndex >= 0
+      ? ordinaryPrepareSource.slice(0, tryIndex)
+      : ordinaryPrepareSource;
   const emptyTokenSource = blockBodyAfterPattern(
-    prepareSource,
+    ordinaryPrepareSource,
     /if\s*\(\s*!this\.inviteToken\s*\)/
   );
   const networkCatchSource = blockBodyAfterPattern(
-    prepareSource,
+    ordinaryPrepareSource,
     /catch\s*\([^)]*\)/
   );
   const retryAwaitIndex = retrySource.indexOf("await this.prepareJoinInviteToken()");
@@ -55,7 +60,7 @@ export function invitePreparationContractFailures(source) {
     retryAwaitIndex >= 0 ? retrySource.slice(0, retryAwaitIndex) : retrySource;
   const retrySuccessSource = blockBodyAfterPattern(
     retrySource,
-    /if\s*\(\s*this\.inviteToken\s*\)/
+    /if\s*\(\s*this\.inviteToken(?:\s*\|\|\s*this\.historicalInviteToken)?\s*\)/
   );
 
   if (!prepareBeginSource.includes("this.invitePrepareError = false")) {
@@ -331,7 +336,8 @@ for (const requiredText of [
   "buildSessionSharePayload({",
   "sessionLoaded",
   "shareReady()",
-  "if (!this.shareReady || !payload)",
+  "if (!this.canShareCurrentSession)",
+  "if (!this.shareReady)",
   "invitePrepareError: false"
 ]) {
   if (!shareSource.includes(requiredText)) {
@@ -385,7 +391,8 @@ const onShareAppMessageSource = methodBody(shareSource, "onShareAppMessage");
 if (
   !shareReadySource.includes("this.sessionLoaded") ||
   !shareReadySource.includes("this.inviteToken") ||
-  !onShareAppMessageSource.includes("if (!this.shareReady || !payload)")
+  !onShareAppMessageSource.includes("if (!this.canShareCurrentSession)") ||
+  !onShareAppMessageSource.includes("if (!this.shareReady)")
 ) {
   fail("Published-session sharing must be gated by loaded session state and a ready payload");
 }

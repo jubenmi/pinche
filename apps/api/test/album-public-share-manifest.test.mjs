@@ -179,12 +179,13 @@ test("manifest telemetry emits only approved identifiers, counters, result code,
   });
 });
 
-test("migration filename history appends migration 0035", async () => {
+test("migration filename history keeps migration 0035 before later migrations", async () => {
   const history = JSON.parse(await readFile(migrationHistoryUrl, "utf8"));
 
-  assert.deepEqual(history.slice(-2), [
-    "0034_schema_migration_checksums.sql",
+  assert.deepEqual(history.slice(-3), [
     "0035_album_tag_public_share_read_model.sql",
+    "0036_historical_session_backfill.sql",
+    "0037_historical_session_creation_operations.sql",
   ]);
 });
 

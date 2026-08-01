@@ -328,7 +328,7 @@ function confirmLogin(options = {}) {
   return new Promise((resolve) => {
     showModal({
       title: options.title || "微信登录",
-      content: options.content || "登录后继续使用剧本迷·拼车。",
+      content: options.content || "登录后继续使用剧本谜。",
       confirmText: options.confirmText || "登录",
       cancelText: options.cancelText || "取消",
       success(result) {

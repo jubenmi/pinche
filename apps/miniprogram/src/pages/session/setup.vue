@@ -585,7 +585,7 @@ export default {
         joinPhoneRequired: this.joinPhoneRequired,
         npcJoinEnabled: this.npcJoinEnabled,
         visibility: this.cityVisible ? "public" : "share_only",
-        note: "剧本迷·拼车，一起沉浸好本。",
+        note: "剧本谜，一起沉浸好本。",
         pinnedMessageText
       };
     },
@@ -749,7 +749,7 @@ export default {
     },
     completeSessionCreation(sessionId, roles, pinnedMessageText, note, setupSnapshot) {
       const setup = setupSnapshot || this.historicalSetupSnapshot();
-      const finalNote = note || "剧本迷·拼车，一起沉浸好本。";
+      const finalNote = note || "剧本谜，一起沉浸好本。";
       const completedSettings = setup.sessionPurpose === HISTORICAL_RECORD
         ? historicalCreateSettings()
         : {
