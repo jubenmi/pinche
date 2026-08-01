@@ -1,5 +1,38 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const historicalSmokeUrl = new URL("./historical-session-backfill-smoke.js", import.meta.url);
+assert.ok(
+  existsSync(historicalSmokeUrl),
+  "historical lifecycle smoke script must exist"
+);
+const historicalSmoke = readFileSync(historicalSmokeUrl, "utf8");
+const historicalSmokePath = fileURLToPath(historicalSmokeUrl);
+
+function assertSmokeSyntax(smokePath, run = spawnSync) {
+  const result = run(process.execPath, ["--check", smokePath], {
+    encoding: "utf8"
+  });
+  assert.equal(
+    result.status,
+    0,
+    `historical smoke syntax check failed: ${String(result.stderr || result.stdout || "")}`
+  );
+}
+
+assertSmokeSyntax(historicalSmokePath);
+assert.throws(
+  () => assertSmokeSyntax(historicalSmokePath, () => ({
+    status: 1,
+    stderr: "synthetic smoke syntax failure"
+  })),
+  /synthetic smoke syntax failure/
+);
+const rootPackage = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8")
+);
 
 const setup = readFileSync(
   new URL("../apps/miniprogram/src/pages/session/setup.vue", import.meta.url),
@@ -69,6 +102,23 @@ function compileObjectMethod(source, name, dependencies = {}) {
   const factory = new Function(
     ...dependencyNames,
     `return ({ ${objectMethodDefinition(source, name)} }).${name};`
+  );
+  return factory(...dependencyNames.map((key) => dependencies[key]));
+}
+
+function namedFunctionDefinition(source, name) {
+  const match = source.match(new RegExp(`function\\s+${name}\\s*\\([^)]*\\)\\s*\\{`));
+  assert.ok(match && match.index !== undefined, `missing function ${name}`);
+  const openBraceIndex = match.index + match[0].lastIndexOf("{");
+  const block = braceBlockAt(source, openBraceIndex, `unterminated function ${name}`);
+  return source.slice(match.index, block.end);
+}
+
+function compileNamedFunction(source, name, dependencies = {}) {
+  const dependencyNames = Object.keys(dependencies);
+  const factory = new Function(
+    ...dependencyNames,
+    `${namedFunctionDefinition(source, name)}; return ${name};`
   );
   return factory(...dependencyNames.map((key) => dependencies[key]));
 }
@@ -1875,6 +1925,180 @@ assert.throws(() =>
       return projection;
     }
   `)
+);
+
+const expectedRootScripts = {
+  "historical-session-backfill:unit":
+    "node --test packages/shared/test/sessionPurpose.test.mjs apps/api/test/session-purpose.test.mjs apps/api/test/historical-session-migration.test.mjs apps/api/test/historical-invite-token.test.mjs apps/api/test/historical-session-service.test.mjs apps/api/test/historical-session-routes.test.mjs apps/miniprogram/test/sessionSetup.test.mjs apps/miniprogram/test/sessionShareInvite.test.mjs",
+  "historical-session-backfill:check":
+    "node scripts/historical-session-backfill-check.js",
+  "historical-session-backfill:verify":
+    "npm run historical-session-backfill:unit && npm run historical-session-backfill:check && npm --workspace apps/api run check && npm run build:mp-weixin",
+  "historical-session-backfill:smoke":
+    "node scripts/historical-session-backfill-smoke.js"
+};
+for (const [name, command] of Object.entries(expectedRootScripts)) {
+  assert.equal(rootPackage.scripts?.[name], command, `root script ${name} must match the plan`);
+}
+
+const smokeRequestBody = methodBody(historicalSmoke, "requestJson");
+assert.doesNotMatch(
+  historicalSmoke,
+  /expectedStatus\s*=(?!=)/,
+  "smoke request helpers must not default expected statuses"
+);
+assert.match(smokeRequestBody, /expectedStatus\s*===\s*undefined/);
+assert.match(smokeRequestBody, /redactSensitiveText/);
+assert.match(smokeRequestBody, /authorization:\s*`Bearer \$\{token\}`/);
+for (const marker of [
+  "/api/admin/stores",
+  "/api/admin/scripts",
+  "/api/sessions",
+  "/seats",
+  "/api/session-npc-roles/",
+  "/publish",
+  "/album",
+  "/review",
+  "/api/sessions/discovery",
+  "/api/sessions/public/upcoming",
+  "/api/signups",
+  "/claim",
+  "/join-invite-token",
+  "/historical-invite-token",
+  "/historical-claims"
+]) {
+  assert.ok(historicalSmoke.includes(marker), `historical smoke must cover ${marker}`);
+}
+for (const marker of [
+  "historical_record",
+  "future_carpool",
+  "share_only",
+  "review_required",
+  "HISTORICAL_ROLE_CLAIM_INVITE_REQUIRED",
+  "historical_session_claim",
+  "historical_invite_preview",
+  "sessionPurpose",
+  "inviterUserId",
+  "Promise.allSettled",
+  "confirmed_user_id",
+  "bound_user_id",
+  "13:00:00"
+]) {
+  assert.ok(historicalSmoke.includes(marker), `historical smoke must assert ${marker}`);
+}
+assert.match(historicalSmoke, /expectedStatus:\s*403/);
+assert.match(historicalSmoke, /expectedStatus:\s*400/);
+assert.match(historicalSmoke, /expectedStatus:\s*\[200,\s*409\]/);
+assert.match(historicalSmoke, /concurrent_historical_claim_successes/);
+assert.match(historicalSmoke, /concurrent_historical_claim_conflicts/);
+assert.match(historicalSmoke, /ordinary_future_claim_successes/);
+
+const assertLocalDevelopmentBaseUrl = compileNamedFunction(
+  historicalSmoke,
+  "assertLocalDevelopmentBaseUrl",
+  { assert }
+);
+for (const allowedUrl of [
+  "http://localhost:3018",
+  "https://127.0.0.1:3018",
+  "http://[::1]:3018"
+]) {
+  assert.doesNotThrow(() => assertLocalDevelopmentBaseUrl(new URL(allowedUrl)));
+}
+for (const deniedUrl of [
+  "http://example.com:3018",
+  "http://localhost.example.com:3018",
+  "file:///tmp/api",
+  "http://user:password@127.0.0.1:3018"
+]) {
+  assert.throws(() => assertLocalDevelopmentBaseUrl(new URL(deniedUrl)));
+}
+assertBefore(
+  historicalSmoke,
+  "assertLocalDevelopmentBaseUrl(baseUrl);",
+  "async function requestJson",
+  "local base URL must fail closed before any request helper can fetch"
+);
+
+const assertDevelopmentHealth = compileNamedFunction(
+  historicalSmoke,
+  "assertDevelopmentHealth",
+  { assert }
+);
+const safeHealth = {
+  ok: true,
+  config: { nodeEnv: "development", wechatMockLogin: true },
+  database: { schemaReady: true }
+};
+assert.doesNotThrow(() => assertDevelopmentHealth(safeHealth));
+for (const unsafeHealth of [
+  { ...safeHealth, ok: false },
+  { ...safeHealth, config: { ...safeHealth.config, nodeEnv: "production" } },
+  { ...safeHealth, config: { ...safeHealth.config, wechatMockLogin: false } },
+  { ...safeHealth, database: { schemaReady: false } }
+]) {
+  assert.throws(() => assertDevelopmentHealth(unsafeHealth));
+}
+const smokeMain = methodBody(historicalSmoke, "main");
+assertBefore(
+  smokeMain,
+  'requestJson("GET", "/health"',
+  'login("dev-admin-openid"',
+  "health preflight must be the first HTTP request before development login"
+);
+assert.match(smokeMain, /requestJson\("GET", "\/health", \{\s*expectedStatus:\s*200/);
+assert.match(smokeMain, /assertDevelopmentHealth/);
+
+for (const marker of [
+  "preclaimAlbum",
+  "preclaimReview",
+  "winnerRace",
+  "loserRace",
+  "winnerMembership",
+  "historicalTokenInOrdinaryNamespace",
+  "futureTokenInHistoricalNamespace",
+  "organizer.user?.open_id",
+  "organizer.user?.avatar_url"
+]) {
+  assert.ok(historicalSmoke.includes(marker), `historical smoke must retain ${marker}`);
+}
+
+const normalizeHistoricalPreviewKey = compileNamedFunction(
+  historicalSmoke,
+  "normalizeHistoricalPreviewKey"
+);
+const historicalPreviewSensitiveKey = compileNamedFunction(
+  historicalSmoke,
+  "historicalPreviewSensitiveKey",
+  { normalizeHistoricalPreviewKey }
+);
+const assertHistoricalPreviewSanitized = compileNamedFunction(
+  historicalSmoke,
+  "assertHistoricalPreviewSanitized",
+  { assert, historicalPreviewSensitiveKey }
+);
+const safePreview = {
+  access_scope: "historical_invite_preview",
+  session_purpose: "historical_record",
+  script_name_snapshot: "安全剧本名",
+  store_name_snapshot: "安全门店名",
+  seats: [{ id: 1 }, { id: 2 }, { id: 3 }],
+  session_npc_roles: [{ id: 4, is_bound: false, has_pending_signup: false }]
+};
+assert.doesNotThrow(() => assertHistoricalPreviewSanitized(safePreview, []));
+for (const unsafePreview of [
+  { ...safePreview, organizer: { id: 9, nickname: "private organizer" } },
+  { ...safePreview, album_items: [{ media_url: "/private/media.jpg" }] },
+  { ...safePreview, review_eligible_at: "2026-08-01T00:00:00Z" },
+  { ...safePreview, canReview: true }
+]) {
+  assert.throws(() => assertHistoricalPreviewSanitized(unsafePreview, []));
+}
+assert.throws(() =>
+  assertHistoricalPreviewSanitized(
+    { ...safePreview, safe_label: "known-private-openid" },
+    ["known-private-openid"]
+  )
 );
 
 console.log("historical session backfill static contract passed");
