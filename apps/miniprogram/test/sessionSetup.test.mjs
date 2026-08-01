@@ -338,6 +338,33 @@ test("setup page applies terminal author-private and missing-operation marker di
   );
 });
 
+test("setup page imports every session creation time helper used during initialization", async () => {
+  const source = await readFile(
+    new URL("../src/pages/session/setup.vue", import.meta.url),
+    "utf8"
+  );
+  const sessionCreationTimeImport = source.match(
+    /import\s*{([^}]*)}\s*from\s*["']\.\.\/\.\.\/utils\/sessionCreationTime["'];/
+  );
+
+  assert.ok(
+    sessionCreationTimeImport,
+    "setup page must import time helpers from sessionCreationTime"
+  );
+  for (const helper of [
+    "sessionCreationDefaults",
+    "sessionCreationPickerValue",
+    "sessionCreationTransportStartAt",
+    "sessionCreationWallTime"
+  ]) {
+    assert.match(
+      sessionCreationTimeImport[1],
+      new RegExp(`\\b${helper}\\b`),
+      `setup page must import ${helper}`
+    );
+  }
+});
+
 test("setup submission is single-flight before deferred login and runs one create/initialize", async () => {
   const login = deferred();
   const calls = { login: 0, create: 0, initialize: 0 };
