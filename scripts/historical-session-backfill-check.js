@@ -766,6 +766,7 @@ function albumMemberHarnessContext(userId = 1) {
     activeFilter: "mine",
     selectedRoleFilter: "seat:3",
     statusText: "",
+    defaultAlbumShareToken: "",
     mediaLoadSerial: 0,
     beginAlbumListRequest() {
       this.albumListRequestSerial += 1;
@@ -795,6 +796,7 @@ function albumMemberHarnessContext(userId = 1) {
     invalidateDefaultAlbumShare() {},
     invalidateAlbumShareState() {},
     clearAuthorPrivateAlbumState() {},
+    primeAlbumShareEntries() {},
     applyAlbumNavigationTitle() {},
     albumMediaRefresh: { schedule() {} }
   };
@@ -911,6 +913,7 @@ const albumFullLoadLatchContext = {
   timelineMode: false,
   sessionId: 91,
   currentUserId: 2,
+  defaultAlbumShareToken: "",
   albumRequiresFullLoad: true,
   loadingAlbum: true,
   fullLoadCalls: 0,
@@ -921,6 +924,7 @@ const albumFullLoadLatchContext = {
   consumePreviewReturnRefreshSkip() {
     return false;
   },
+  primeAlbumShareEntries() {},
   async loadAlbum() {
     this.fullLoadCalls += 1;
   },

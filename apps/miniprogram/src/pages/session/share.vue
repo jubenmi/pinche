@@ -1292,9 +1292,6 @@ export default {
           if (this.navigatingAlbum) {
             return null;
           }
-          if (this.redirectAlbumMemberIfNeeded()) {
-            return null;
-          }
         }
       }
       const latestAuth = getCurrentUser();
@@ -1442,7 +1439,6 @@ export default {
         if (this.redirectHistoricalMemberIfNeeded()) {
           return true;
         }
-        this.redirectAlbumMemberIfNeeded();
         if (
           !this.isHistorical &&
           this.isAlbumEntry &&
@@ -1666,19 +1662,6 @@ export default {
         this.viewerIsOrganizer ||
         !this.sessionId ||
         !this.historicalViewerHasRole ||
-        this.navigatingAlbum
-      ) {
-        return false;
-      }
-      this.navigatingAlbum = true;
-      uni.redirectTo({ url: `/pages/session/album?id=${this.sessionId}` });
-      return true;
-    },
-    redirectAlbumMemberIfNeeded() {
-      if (
-        !this.isAlbumEntry ||
-        !this.sessionId ||
-        (!this.role && !this.currentUserNpcRole) ||
         this.navigatingAlbum
       ) {
         return false;

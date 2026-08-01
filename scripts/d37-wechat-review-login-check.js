@@ -23,7 +23,8 @@ function methodBody(source, name) {
     start = source.indexOf(`async ${name}(`);
   }
   if (start < 0) {
-    start = source.indexOf(`${name}(`);
+    const methodMatch = source.match(new RegExp(`(?:^|\\n)\\s*${name}\\(`));
+    start = methodMatch ? methodMatch.index + methodMatch[0].lastIndexOf(name) : -1;
   }
   assert(start >= 0, `Missing function: ${name}`);
   const parametersEnd = source.indexOf(")", start);

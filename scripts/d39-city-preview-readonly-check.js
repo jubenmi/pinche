@@ -74,7 +74,7 @@ for (const methodName of [
   const body = methodBody(detail, methodName);
   assert(body, `D39 detail should expose method: ${methodName}`);
   assert(
-    body.includes("this.isCityPreview") && body.includes("return;"),
+    body.includes("this.isCityPreview") && body.includes("return"),
     `D39 ${methodName} should stop in city preview`
   );
 }
@@ -93,7 +93,7 @@ assert(
 for (const shareJoinToken of [
   "/api/session-seats/${seatId}/claim",
   'url: "/api/signups"',
-  "await this.claimSeat(targetRole, activityGeneration)"
+  "await this.claimSeat(targetRole, operation)"
 ]) {
   assert(
     share.includes(shareJoinToken),

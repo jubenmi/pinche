@@ -132,7 +132,7 @@
           :embedded="true"
           :auth-tools="authTools"
           @status="setStatus"
-          @updated="reload()"
+          @updated="reload"
         />
       </view>
     </view>

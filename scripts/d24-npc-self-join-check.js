@@ -97,7 +97,8 @@ assert(
 const createSessionBody = functionBody(service, "createSessionWithConnection");
 assert(
   createSessionBody.includes("npc_join_enabled") &&
-    createSessionBody.includes("normalizeNpcJoinEnabled("),
+    createSessionBody.includes("normalizedSessionCreationPayload(body, normalizedCreation)") &&
+    createSessionBody.includes("creation.npcJoinEnabled"),
   "createSession must persist normalized npcJoinEnabled"
 );
 
@@ -130,13 +131,22 @@ const cleanupSessionExclusiveRoleSelectionsBody = functionBody(
 );
 assert(
   cleanupSessionExclusiveRoleSelectionsBody.includes("releaseUserOtherSessionNpcRoles(") &&
-    cleanupSessionExclusiveRoleSelectionsBody.includes("duplicate_npc_roles") &&
-    cleanupSessionExclusiveRoleSelectionsBody.includes("MIN(id) AS keep_id") &&
-    cleanupSessionExclusiveRoleSelectionsBody.includes("bound_user_id = NULL"),
+    cleanupSessionExclusiveRoleSelectionsBody.includes("bound_user_id = NULL") &&
+    (
+      (
+        cleanupSessionExclusiveRoleSelectionsBody.includes("duplicate_npc_roles") &&
+        cleanupSessionExclusiveRoleSelectionsBody.includes("MIN(id) AS keep_id")
+      ) ||
+      (
+        cleanupSessionExclusiveRoleSelectionsBody.includes("rolesByUserId") &&
+        cleanupSessionExclusiveRoleSelectionsBody.includes("duplicateNpcRoleIds") &&
+        cleanupSessionExclusiveRoleSelectionsBody.includes("role.bound_user_id = null")
+      )
+    ),
   "cleanupSessionExclusiveRoleSelections must repair legacy duplicate ordinary/NPC role bindings"
 );
 assert(
-  memberSessionDetailBody.includes("cleanupSessionExclusiveRoleSelections(connection, id)"),
+  memberSessionDetailBody.includes("cleanupSessionExclusiveRoleSelections(connection, id"),
   "member session detail must clean legacy duplicate role bindings before returning seats and NPC roles"
 );
 

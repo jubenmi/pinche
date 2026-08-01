@@ -68,7 +68,8 @@ const createSessionBody = functionBody(service, "createSessionWithConnection");
 assert(
   createSessionEntryBody.includes("createSessionWithConnection") &&
     createSessionBody.includes("join_policy") &&
-    createSessionBody.includes("normalizeJoinPolicy(body.joinPolicy"),
+    createSessionBody.includes("normalizedSessionCreationPayload(body, normalizedCreation)") &&
+    createSessionBody.includes("creation.joinPolicy"),
   "createSession must delegate normalized joinPolicy persistence to its connection-bound helper"
 );
 
@@ -105,7 +106,8 @@ const claimSessionSeatBody = functionBody(service, "claimSessionSeat");
 assert(
   claimSessionSeatBody.includes("session.join_policy") ||
     claimSessionSeatBody.includes("session_join_policy") ||
-    claimSessionSeatBody.includes("join_policy"),
+    claimSessionSeatBody.includes("join_policy") ||
+    claimSessionSeatBody.includes("forbidPlayerDirectClaim(user, seat)"),
   "claimSessionSeat must read session join_policy"
 );
 assert(

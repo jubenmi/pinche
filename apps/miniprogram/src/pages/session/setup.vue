@@ -247,6 +247,7 @@ export default {
       cityVisible: true,
       statusText: "",
       busyAction: false,
+      creationIdempotencyKey: "",
       submissionController: createSessionSetupSubmissionController()
     };
   },
@@ -322,6 +323,9 @@ export default {
     this.role = flow.role || null;
     this.roleOptions = roleOptionsFromFlow(flow);
     this.selectedRoles = selectedRolesFromFlow(flow);
+    this.creationIdempotencyKey =
+      String(flow.creationIdempotencyKey || "").trim() || createSessionCreationKey();
+    writeCreateFlow({ creationIdempotencyKey: this.creationIdempotencyKey });
     this.pendingHistoricalDraft = flow.pendingHistoricalDraft || null;
     this.pinnedMessageText = flow.pinnedMessageText || "";
     this.joinPolicy = flow.joinPolicy === "direct" ? "direct" : "review_required";
@@ -481,7 +485,7 @@ export default {
         fingerprint: historicalDraftFingerprint({
           storeId: this.store?.id,
           scriptId: this.script?.id,
-          startAt: this.startAt,
+          startAt: this.transportStartAt,
           sessionPurpose: this.sessionPurpose,
           pinnedMessageText: historicalPinnedMessage(this.pinnedMessageText),
           seatPayloads: initialization.seatPayloads,
@@ -565,9 +569,10 @@ export default {
         };
       }
       return {
+        idempotencyKey: this.creationIdempotencyKey,
         storeId: Number(this.store.id),
         scriptId: Number(this.script.id),
-        startAt: this.startAt,
+        startAt: this.transportStartAt,
         sessionPurpose: this.sessionPurpose,
         depositAmount: 0,
         joinPolicy: this.joinPolicy,

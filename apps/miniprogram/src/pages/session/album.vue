@@ -1314,6 +1314,9 @@ export default {
     } finally {
       this.suppressAlbumAuthReload = false;
     }
+    if (this.sessionId && this.currentUserId && !this.defaultAlbumShareToken) {
+      this.primeAlbumShareEntries();
+    }
     const skipRefresh = this.consumePreviewReturnRefreshSkip();
     if (accountChanged || this.albumRequiresFullLoad) {
       if (this.sessionId && this.currentUserId && !this.loadingAlbum) {
@@ -2167,59 +2170,22 @@ export default {
           }
         },
         reloadAlbum: async () => {
-          const timelineRequest = this.timelineMode;
-          if (!timelineRequest && (this.loadingAlbum || this.albumRequiresFullLoad)) {
+          if (this.loadingAlbum || this.albumRequiresFullLoad) {
             return null;
           }
-          const requestOwner = timelineRequest ? null : this.beginAlbumMemberRequest();
-          const listRequest = timelineRequest
-            ? this.beginAlbumListRequest()
-            : requestOwner.listRequest;
-          const isCurrentRequest = () =>
-            timelineRequest
-              ? this.isCurrentAlbumListRequest(listRequest)
-              : this.isCurrentAlbumMemberRequest(requestOwner);
+          const requestOwner = this.beginAlbumMemberRequest();
+          const isCurrentRequest = () => this.isCurrentAlbumMemberRequest(requestOwner);
           try {
             const response = await request({
-              url: timelineRequest
-                ? `/api/sessions/${this.sessionId}/album/public-share${queryString({
-                    token: this.albumShareToken
-                  })}`
-                : `/api/sessions/${this.sessionId}/album`,
+              url: `/api/sessions/${this.sessionId}/album`,
               suppressMaintenance: true
             });
             if (!isCurrentRequest()) {
               return null;
             }
             const data = dataOf(response) || {};
-            if (timelineRequest) {
-              this.shareCoverPrepared = false;
-              this.showShareMenus();
-              const preparedCoverUrl = await this.prepareShareCoverUrl(data.cover_url || "");
-              if (!isCurrentRequest()) {
-                return null;
-              }
-              this.albumSession = this.albumSessionSummary(data);
-              this.shareSubject = data.share_subject || this.shareSubject;
-              this.shareOwner = data.share_owner || this.shareOwner;
-              this.shareCoverUrl = preparedCoverUrl;
-              this.shareCoverPrepared = true;
-              this.shareCounts = {
-                total: Number(data.visible_count || 0),
-                photos: Number(data.photo_count || 0),
-                videos: Number(data.video_count || 0)
-              };
-              this.showShareMenus();
-              this.applyAlbumNavigationTitle();
-            }
             reportAlbumMediaEvent("media_refresh_success", { sessionId: Number(this.sessionId) });
             const photos = (data.photos || []).map((photo) => this.normalizePhotoMedia(photo));
-            if (timelineRequest) {
-              return {
-                photos,
-                isCurrent: () => this.isCurrentAlbumListRequest(listRequest)
-              };
-            }
             return {
               photos,
               isCurrent: () => this.isCurrentAlbumMemberRequest(requestOwner)
@@ -2233,7 +2199,8 @@ export default {
               errorCode: error?.code || "MEDIA_REFRESH_FAILED"
             });
             if (error?.statusCode === 401 || error?.statusCode === 403) {
-              if (!timelineRequest) {
+              if (!this.timelineMode) {
+                this.invalidateDefaultAlbumShare({ hideMenus: true });
                 this.clearMemberAlbumProjection("车局相册发车后仅同车成员可查看。");
                 this.applyAlbumNavigationTitle();
               }
@@ -2300,16 +2267,18 @@ export default {
         this.applyAlbumNavigationTitle();
         this.albumRequiresFullLoad = false;
         this.albumMediaRefresh?.schedule();
+        this.primeAlbumShareEntries();
         return true;
       } catch (error) {
         if (!isCurrentRequest()) {
           return false;
         }
-        this.clearMemberAlbumProjection(
-          error?.statusCode === 401 || error?.statusCode === 403
-            ? "车局相册发车后仅同车成员可查看。"
-            : "相册加载失败，请稍后重试。"
-        );
+        if (error?.statusCode === 401 || error?.statusCode === 403) {
+          this.invalidateDefaultAlbumShare({ hideMenus: true });
+          this.clearMemberAlbumProjection("车局相册发车后仅同车成员可查看。");
+        } else {
+          this.clearMemberAlbumProjection("相册加载失败，请稍后重试。");
+        }
         this.applyAlbumNavigationTitle();
         return false;
       } finally {
@@ -4890,7 +4859,7 @@ export default {
       if (this.isHistoricalAlbum && !this.isHistoricalOrganizer) {
         return;
       }
-      uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}` });
+      uni.navigateTo({ url: `/pages/session/share?id=${this.sessionId}&entry=album` });
     },
     toggleSelectionMode() {
       if (this.timelineMode || this.albumBusy) {
