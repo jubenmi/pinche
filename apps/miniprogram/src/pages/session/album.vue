@@ -136,7 +136,7 @@
             </view>
           </t-button>
           <t-button
-            class="album-command"
+            class="album-command tag-action"
             size="extra-small"
             custom-style="height: 52rpx; min-height: 52rpx; padding: 0 10rpx; border-color: #1f6f5b; background: #1f6f5b; color: #ffffff; font-size: 23rpx; font-weight: 700; line-height: 52rpx; --td-button-default-bg-color: #1f6f5b; --td-button-default-color: #ffffff; --td-button-default-border-color: #1f6f5b;"
             :disabled="albumBusy"

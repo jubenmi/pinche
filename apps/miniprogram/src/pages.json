@@ -9,7 +9,7 @@
     {
       "path": "pages/index/index",
       "style": {
-        "navigationBarTitleText": "剧本迷·拼车",
+        "navigationBarTitleText": "剧本谜",
         "initialRenderingCache": "static"
       }
     },
@@ -119,7 +119,7 @@
       "t-toast": "/wxcomponents/tdesign-miniprogram/toast/toast"
     },
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "剧本迷·拼车",
+    "navigationBarTitleText": "剧本谜",
     "navigationBarBackgroundColor": "#ffffff",
     "backgroundColor": "#f7f7f7"
   }

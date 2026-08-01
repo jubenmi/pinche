@@ -1246,7 +1246,7 @@ async function createPublishedSession() {
       depositAmount: 0,
       extraNpcRoles: extraNpcRoles(),
       npcJoinEnabled: npcJoinEnabled.value,
-      note: "剧本迷·拼车，一起沉浸好本。",
+      note: "剧本谜，一起沉浸好本。",
       pinnedMessageText: pinnedMessageText.value.trim() || defaultPinnedMessage.value
     });
     const createdSeats = [];

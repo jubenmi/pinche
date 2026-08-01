@@ -1,8 +1,8 @@
 <template>
   <view class="page home-page">
     <view class="home-boot-state" :style="{ display: showHomeBoot ? 'flex' : 'none' }">
-      <view class="home-boot-mark">拼</view>
-      <view class="home-boot-title">剧本迷·拼车</view>
+      <view class="home-boot-mark">谜</view>
+      <view class="home-boot-title">剧本谜</view>
       <view class="home-boot-text">首页加载中...</view>
       <view class="home-boot-hint">正在获取公开车局</view>
     </view>
@@ -78,8 +78,8 @@ import { showWechatShareMenus } from "../../utils/share";
 import { showToast } from "../../utils/tdesignFeedback";
 
 const buildVersion = `版本 ${__PINCHE_BUILD_TIME__}`;
-const HOME_SHARE_FRIEND_TITLE = "剧本迷·拼车";
-const HOME_SHARE_TIMELINE_TITLE = "剧本迷·拼车，一起玩好本";
+const HOME_SHARE_FRIEND_TITLE = "剧本谜";
+const HOME_SHARE_TIMELINE_TITLE = "剧本谜，一起玩好本";
 const HOME_SHARE_PATH = "/pages/index/index";
 const HOME_SHARE_IMAGE = "/static/art/ink-home-landscape.jpg";
 const backendStatus = reactive(getBackendStatus());

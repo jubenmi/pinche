@@ -48,7 +48,8 @@ test("home boot state renders before the business component block", async () => 
   );
 
   const bootMarkup = pageWxml.slice(bootStart, firstBusinessIndex);
-  assert.match(bootMarkup, /剧本迷·拼车/);
+  assert.match(bootMarkup, /剧本谜/);
+  assert.match(bootMarkup, />谜<\/view>/);
   assert.match(bootMarkup, /首页加载中/);
 
   const nativeTags = new Set(["view", "text", "image"]);
