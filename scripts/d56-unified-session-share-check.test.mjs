@@ -60,8 +60,33 @@ const completeInvitePreparationSource = `
   }
 `;
 
+const historicalAndNormalInvitePreparationSource = completeInvitePreparationSource
+  .replace(
+    "    this.invitePreparing = true;",
+    `    if (this.isHistorical) {
+      try {
+        this.historicalInviteToken = await requestHistoricalToken();
+      } catch (error) {
+        this.historicalInviteToken = "";
+      }
+      return Boolean(this.historicalInviteToken);
+    }
+    this.invitePreparing = true;`
+  )
+  .replace(
+    "    if (this.inviteToken) {",
+    "    if (this.inviteToken || this.historicalInviteToken) {"
+  );
+
 test("invite guard accepts the complete preparation and retry contract", () => {
   assert.deepEqual(invitePreparationContractFailures(completeInvitePreparationSource), []);
+});
+
+test("invite guard checks the ordinary path after a historical preparation branch", () => {
+  assert.deepEqual(
+    invitePreparationContractFailures(historicalAndNormalInvitePreparationSource),
+    []
+  );
 });
 
 test("invite guard requires the empty-token failure assignment", () => {
