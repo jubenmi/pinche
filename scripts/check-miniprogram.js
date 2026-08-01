@@ -5,6 +5,10 @@ import path from "node:path";
 const root = process.cwd();
 const require = createRequire(import.meta.url);
 const apiServerPath = path.join(root, "apps/api/src/legacy-app.js");
+const apiSignedPayloadPath = path.join(
+  root,
+  "apps/api/src/modules/security/signed-payload.js"
+);
 const miniprogramRoot = path.join(root, "apps/miniprogram");
 const srcRoot = path.join(miniprogramRoot, "src");
 const pagesJsonPath = path.join(srcRoot, "pages.json");
@@ -1526,7 +1530,9 @@ if (!fs.existsSync(pagesJsonPath)) {
     "const effectiveCurrentNpcRole = this.currentUserEffectiveNpcRole",
     "const duplicateCurrentUserNpcRole = boundByCurrentUser && !mine",
     "const effectiveBoundUserId = duplicateCurrentUserNpcRole ? 0 : boundUserId",
-    "const taken = effectiveBoundUserId > 0 || effectivePendingUserId > 0",
+    "const taken = Boolean(",
+    "effectiveBoundUserId > 0",
+    "effectivePendingUserId > 0",
     "note: this.npcRoleOccupantDisplayName(displayRole, mine, pendingMine)",
     "avatarUrl: this.npcRoleOccupantAvatarUrl(displayRole, mine, pendingMine)",
     "avatarGender: this.npcRoleOccupantGender(displayRole, mine, pendingMine)",
@@ -1714,13 +1720,14 @@ if (!fs.existsSync(pagesJsonPath)) {
   }
   for (const requiredSilentSwitchText of [
     "roleSelectionSubmitting",
-    "if (this.roleSelectionSubmitting)",
+    "beginRoleSelectionOperation()",
     "this.roleSelectionSubmitting = true",
-    "this.roleSelectionSubmitting = false",
+    "this.roleSelectionSubmitting = released.roleSelectionSubmitting",
     "async confirmRole(role = null, options = {})",
-    "const targetRole = role || this.pendingRole",
+    "const operation = options.operation",
+    "const selectedRole = role || this.pendingRole",
     "const revealPending = options.revealPending !== false",
-    "await this.claimSeat(targetRole, activityGeneration)"
+    "await this.claimSeat(targetRole, operation)"
   ]) {
     if (!shareSource.includes(requiredSilentSwitchText)) {
       fail(`Share role switching must hide intermediate selection state: ${requiredSilentSwitchText}`);
@@ -1740,13 +1747,13 @@ if (!fs.existsSync(pagesJsonPath)) {
     fail("Share role switching must treat ordinary seats and NPC roles as one exclusive role pool");
   }
   for (const requiredNpcSwitchText of [
-    "if (this.roleSelectionSubmitting)",
+    "const operationEntry = this.beginRoleSelectionOperation()",
     "const selectedRoleKey = this.roleKey(npcRole)",
-    "const targetRole = this.npcRoleCards.find((item) => this.roleKey(item) === selectedRoleKey) || npcRole",
+    "const targetRole = this.npcRoleCards.find(",
     "const switchConfirmed = await this.confirmSwitchRole(targetRole)",
     "const confirmed = await this.confirmCrossCastRole(targetRole)",
     "this.confirmedCrossCastRoleKey = this.roleKey(targetRole)",
-    "url: `/api/session-npc-roles/${targetRole.id}/claim`"
+    "url: `/api/session-npc-roles/${confirmedTargetRole.id}/claim`"
   ]) {
     if (!shareChooseNpcRoleSource.includes(requiredNpcSwitchText)) {
       fail(`NPC role selection must mirror ordinary role switching: ${requiredNpcSwitchText}`);
@@ -1895,12 +1902,9 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!createPublishedSessionSource.includes("requirePhone: true")) {
     fail("Setup publish button must require phone before publishing");
   }
-  assertBefore(
-    createPublishedSessionSource,
-    "this.busyAction = true",
-    "ensureLoggedIn",
-    "Setup publish button must guard duplicate login and publish attempts"
-  );
+  if (!createPublishedSessionSource.includes("return this.submissionController.submit({")) {
+    fail("Setup publish button must guard duplicate login and publish attempts");
+  }
   assertBefore(
     createPublishedSessionSource,
     "ensureLoggedIn",
@@ -2342,9 +2346,10 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (albumImageViewerSource.includes('v-for="(photo, index) in photos"')) {
     fail("AlbumImageViewer swiper template must not mount the full photos list");
   }
-  const apiServerSource = fs.existsSync(apiServerPath)
-    ? fs.readFileSync(apiServerPath, "utf8")
-    : "";
+  const apiServerSource = [apiServerPath, apiSignedPayloadPath]
+    .filter((file) => fs.existsSync(file))
+    .map((file) => fs.readFileSync(file, "utf8"))
+    .join("\n");
   for (const requiredAlbumRoleSeatBoardText of [
     "albumTagSections",
     "albumTagSection",

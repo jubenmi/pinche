@@ -666,12 +666,14 @@ test("member reads share list authority while public reads use generation guards
   assert.match(source, /createAlbumListRequestAuthority/);
   assert.match(
     refreshBlock,
-    /isCurrent:\s*\(\)\s*=>\s*this\.isCurrentAlbumListRequest\(listRequest\)/
+    /isCurrent:\s*\(\)\s*=>\s*this\.isCurrentAlbumMemberRequest\(requestOwner\)/
   );
-  for (const block of [refreshBlock, memberBlock]) {
-    assert.match(block, /this\.beginAlbumListRequest\(\)/);
-    assert.match(block, /this\.isCurrentAlbumListRequest\(listRequest\)/);
-  }
+  assert.match(refreshBlock, /this\.beginAlbumMemberRequest\(\)/);
+  assert.match(refreshBlock, /this\.isCurrentAlbumMemberRequest\(requestOwner\)/);
+  assert.match(memberBlock, /this\.beginAlbumListRequest\(\)/);
+  assert.match(memberBlock, /this\.isCurrentAlbumListRequest\(listRequest\)/);
+  assert.match(memberBlock, /this\.beginAlbumMemberRequest\(listRequest\)/);
+  assert.match(memberBlock, /this\.isCurrentAlbumMemberRequest\(requestOwner\)/);
   assert.match(publicBlock, /isCurrentPublicAlbumGeneration\(/);
 });
 

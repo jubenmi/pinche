@@ -49,16 +49,39 @@
         content="同城发现仅供浏览。请先联系店家；收到店家或车友分享卡片后可选择角色上车。"
       />
       <view v-if="!isCityPreview" class="actions">
-        <t-button v-if="isPostStart" class="button" @tap="goAlbum">{{ albumPrimaryText }}</t-button>
+        <t-button v-if="albumPrimaryAction" class="button" @tap="goAlbum">{{ albumPrimaryText }}</t-button>
         <t-button v-else class="button" @tap="goShare">选择角色</t-button>
-        <t-button v-if="guestNeedsLogin" class="button secondary" @tap="requestShareAction">
+        <t-button
+          v-if="isHistoricalOrganizer"
+          class="button secondary"
+          @tap="goShare"
+        >
+          邀请同车成员补认
+        </t-button>
+        <t-button
+          v-if="persistedSessionLoaded && !isHistorical && guestNeedsLogin"
+          class="button secondary"
+          @tap="requestShareAction"
+        >
           分享
         </t-button>
-        <t-button v-else class="button secondary" open-type="share">分享</t-button>
-        <t-button class="button secondary" @tap="goManage">车头管理</t-button>
-        <t-button v-if="!isPostStart" class="button secondary" @tap="goAlbum">{{ albumButtonText }}</t-button>
         <t-button
-          v-if="canRequestRescheduleReminder"
+          v-else-if="persistedSessionLoaded && !isHistorical"
+          class="button secondary"
+          open-type="share"
+        >
+          分享
+        </t-button>
+        <t-button
+          v-if="!isHistorical || isHistoricalOrganizer"
+          class="button secondary"
+          @tap="goManage"
+        >
+          车头管理
+        </t-button>
+        <t-button v-if="!albumPrimaryAction" class="button secondary" @tap="goAlbum">{{ albumButtonText }}</t-button>
+        <t-button
+          v-if="!isHistorical && canRequestRescheduleReminder"
           class="button secondary"
           @tap="requestRescheduleReminder"
         >
@@ -88,7 +111,10 @@
       <view class="info-row">指定DM：{{ session.dm_name_snapshot || "未指定" }}</view>
       <view class="info-row">指定NPC：{{ session.npc_name_snapshot || "未指定" }}</view>
       <view class="info-row">状态：{{ statusLabel(session.status) }}</view>
-      <view v-if="shareStats.view_count !== undefined" class="info-row subtle">
+      <view
+        v-if="persistedSessionLoaded && !isHistorical && shareStats.view_count !== undefined"
+        class="info-row subtle"
+      >
         浏览 {{ shareStats.view_count || 0 }} · 申请 {{ shareStats.signup_count || 0 }}
       </view>
     </view>
@@ -166,22 +192,36 @@
       </view>
     </view>
 
+    <template v-if="!isCityPreview && (!isGuestPreview || currentUserId)">
+      <ChatEntry
+        v-for="extension in sessionDetailExtensions"
+        :key="detailExtensionKey(extension)"
+        ref="sessionDetailExtensionRefs"
+        :session-id="sessionId"
+        :session="session"
+        :current-user-id="currentUserId"
+        :focus-chat-on-load="focusChatOnLoad"
+        :auth-tools="authTools"
+      />
+    </template>
   </view>
 </template>
 
 <script>
-import { formatBeijingDateTime, isBusinessDateTimeReached } from "@pinche/shared";
+import { formatBeijingDateTime, isHistoricalSession } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
 import ChatEntry from "../../extensions/session-pseudo-chat/ChatEntry.vue";
 import { sessionDetailExtensions } from "../../extensions/sessionExtensions.js";
 import {
+  AUTH_CHANGE_EVENT,
   apiUrl,
   assetUrl,
   dataOf,
   ensureLoggedIn,
   getCurrentUser,
+  getToken,
   queryString,
   request
 } from "../../utils/api";
@@ -190,6 +230,7 @@ import { normalizeAuthorPrivateSession } from "../../utils/authorPrivateText";
 import { showToast } from "../../utils/tdesignFeedback";
 import { canRequestRescheduleReminder } from "../../utils/sessionMembership";
 import { requestSessionRescheduledSubscription } from "../../utils/subscribeMessages";
+import { authPrincipalOf } from "../../utils/sessionShareInvite";
 
 function coordinateNumber(value, min, max) {
   if (value === "" || value === null || value === undefined) {
@@ -210,12 +251,21 @@ export default {
       source: "",
       focusedSeatId: "",
       session: {},
+      persistedSessionLoaded: false,
       shareStats: {},
       sessionDetailExtensions,
       loadStatusText: "",
       copyStatusText: "",
       rescheduleReminderStatusText: "",
       currentUserId: "",
+      currentAuthPrincipal: "guest",
+      detailAuthGeneration: 0,
+      detailLoginContinuationNonce: 0,
+      detailShareViewTrackStarted: false,
+      detailInitialShareStatsPending: true,
+      pageActive: false,
+      pageGeneration: 0,
+      detailRequestGeneration: 0,
       focusChatOnLoad: false,
       sessionDetailExtensionRefs: [],
       reviews: [],
@@ -224,6 +274,16 @@ export default {
     };
   },
   computed: {
+    isHistorical() {
+      return isHistoricalSession(this.session);
+    },
+    isHistoricalOrganizer() {
+      return (
+        this.isHistorical &&
+        Boolean(this.currentUserId) &&
+        Number(this.currentUserId) === Number(this.session.organizer_user_id)
+      );
+    },
     isCityPreview() {
       return this.entry === "city";
     },
@@ -235,6 +295,7 @@ export default {
     },
     canRequestRescheduleReminder() {
       return (
+        !this.isHistorical &&
         !this.isCityPreview &&
         canRequestRescheduleReminder(this.session, this.currentUserId)
       );
@@ -242,6 +303,9 @@ export default {
     summaryText() {
       if (!this.session.id) {
         return "基础信息、角色状态和车内留言。";
+      }
+      if (this.isHistorical) {
+        return "这是已经完成车局的历史资料记录，可在相册补上当时的照片和车友记录。";
       }
       if (this.isPostStart) {
         return "相册、照片标注和车友记录会沉淀在这里。";
@@ -261,6 +325,9 @@ export default {
     },
     albumButtonText() {
       return this.isAlbumOpen() ? "车局相册" : "相册·发车后";
+    },
+    albumPrimaryAction() {
+      return this.isHistorical || this.isPostStart;
     },
     isPostStart() {
       return this.isAlbumOpen() && this.session.status !== "cancelled";
@@ -292,6 +359,10 @@ export default {
     },
     seatBoardSummary() {
       const seats = this.session.seats || [];
+      if (this.isHistorical) {
+        const claimed = seats.filter((seat) => Boolean(seat.confirmed_user_id)).length;
+        return `${seats.length - claimed} 个待补认，${claimed} 个已补认`;
+      }
       const open = seats.filter((seat) => this.canApplySeat(seat)).length;
       const applied = seats.filter((seat) => seat.status === "applied").length;
       const onboard = seats.filter((seat) => ["confirmed", "locked"].includes(seat.status)).length;
@@ -310,7 +381,7 @@ export default {
       return (this.session.seats || []).map((seat) => {
         const canApply = this.canApplySeat(seat);
         const actions = [];
-        if (!this.isCityPreview) {
+        if (this.persistedSessionLoaded && !this.isCityPreview && !this.isHistorical) {
           if (canApply) {
             actions.push({ key: "select", label: "选择此位" });
           }
@@ -335,7 +406,7 @@ export default {
           stateKind: canApply ? "available" : this.seatStateKind(seat),
           stateLabel: canApply
             ? this.isCityPreview ? "需联系店家" : "可选"
-            : this.seatStatusLabel(seat.status),
+            : this.seatStatusLabel(seat.status, seat),
           focused: this.isFocusedSeat(seat),
           actions
         };
@@ -348,6 +419,10 @@ export default {
     },
     detailNpcRoleSummary() {
       const roles = this.session.session_npc_roles || [];
+      if (this.isHistorical) {
+        const claimed = roles.filter((role) => Boolean(role.bound_user_id)).length;
+        return `${roles.length - claimed} 个待补认，${claimed} 个已补认`;
+      }
       const available = roles.filter((role) => this.canApplyNpcRole(role)).length;
       const pending = roles.filter(
         (role) => role.pending_signup_id || role.has_pending_signup
@@ -397,7 +472,9 @@ export default {
           key: "npc",
           title: "NPC角色",
           summary: this.detailNpcRoleSummary,
-          statusPill: this.npcSelfJoinEnabled ? "可自选" : "车头安排",
+          statusPill: this.isHistorical
+            ? "待补认 / 已补认"
+            : this.npcSelfJoinEnabled ? "可自选" : "车头安排",
           items: this.detailNpcRoleCards
         });
       }
@@ -411,40 +488,41 @@ export default {
     this.source = options.source || "";
     this.focusedSeatId = options.seatId || "";
     this.focusChatOnLoad = options.chat === "1";
-    if (this.isCityPreview && typeof uni.hideShareMenu === "function") {
-      uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
-    }
-    this.hydrateUser();
-    if (this.guestNeedsLogin && typeof uni.hideShareMenu === "function") {
-      uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
-    }
-    this.relinkSessionMembership();
-    const loaded = await this.loadSession();
-    if (loaded) {
-      this.loadSessionReviews();
-      this.loadMyReviewState();
-      this.loadShareStats();
-      this.trackShareView();
-    }
+    const currentAuth = getCurrentUser();
+    this.currentAuthPrincipal = authPrincipalOf(currentAuth, getToken());
+    this.currentUserId = this.currentAuthPrincipal === "guest" ? "" : currentAuth.user?.id || "";
+    this.observeDetailAuthChanges();
+    const requestOwner = this.activateDetailPage();
+    this.hideSessionShareMenu();
+    await this.reloadDetailProjection(requestOwner, {
+      includeInitialShareContext: true
+    });
   },
   async onShow() {
-    this.hydrateUser();
-    this.relinkSessionMembership();
+    const identityChanged = this.applyDetailAuthSnapshot(getCurrentUser());
+    const requestOwner = this.activateDetailPage();
     if (this.sessionId) {
-      const loaded = await this.loadSession();
-      if (loaded) {
-        this.loadSessionReviews();
-        this.loadMyReviewState();
-      }
+      await this.reloadDetailProjection(requestOwner, {
+        loadShareStats: identityChanged,
+        includeInitialShareContext: true
+      });
     }
   },
   onHide() {
+    this.invalidateDetailPage();
+    this.hideSessionShareMenu();
     this.stopDetailExtensions();
   },
   onUnload() {
+    this.invalidateDetailPage();
+    this.hideSessionShareMenu();
     this.stopDetailExtensions();
+    this.unobserveDetailAuthChanges();
   },
   onShareAppMessage(options) {
+    if (!this.persistedSessionLoaded || this.isHistorical) {
+      return undefined;
+    }
     const id = this.sessionId || "d1-demo";
     const shareCode = `s${id}-${Date.now()}`;
     const seatId = options?.target?.dataset?.seatId || "";
@@ -466,16 +544,120 @@ export default {
   methods: {
     apiUrl,
     assetUrl,
-    hydrateUser() {
-      const auth = getCurrentUser();
-      this.currentUserId = auth.user?.id || "";
+    detailExtensionKey(extension = {}) {
+      return `${extension.id || "extension"}:${this.currentAuthPrincipal}:${this.detailAuthGeneration}`;
     },
-    async relinkSessionMembership() {
+    activateDetailPage() {
+      this.pageActive = true;
+      this.pageGeneration += 1;
+      return this.beginDetailRequest();
+    },
+    invalidateDetailPage() {
+      this.pageActive = false;
+      this.pageGeneration += 1;
+      this.detailRequestGeneration += 1;
+      this.detailLoginContinuationNonce += 1;
+    },
+    beginDetailRequest() {
+      this.detailRequestGeneration += 1;
+      return {
+        pageGeneration: this.pageGeneration,
+        requestGeneration: this.detailRequestGeneration,
+        sessionId: String(this.sessionId || ""),
+        authGeneration: this.detailAuthGeneration,
+        principal: this.currentAuthPrincipal
+      };
+    },
+    currentDetailPageOwner() {
+      return {
+        pageGeneration: this.pageGeneration,
+        sessionId: String(this.sessionId || ""),
+        authGeneration: this.detailAuthGeneration,
+        principal: this.currentAuthPrincipal
+      };
+    },
+    isCurrentDetailPage(owner) {
+      return Boolean(
+        this.pageActive &&
+          owner &&
+          owner.pageGeneration === this.pageGeneration &&
+          owner.sessionId === String(this.sessionId || "") &&
+          owner.authGeneration === this.detailAuthGeneration &&
+          owner.principal === this.currentAuthPrincipal
+      );
+    },
+    isCurrentDetailRequest(requestOwner) {
+      return Boolean(
+        this.isCurrentDetailPage(requestOwner) &&
+          requestOwner.requestGeneration === this.detailRequestGeneration
+      );
+    },
+    observeDetailAuthChanges() {
+      if (typeof uni !== "undefined" && typeof uni.$on === "function") {
+        uni.$on(AUTH_CHANGE_EVENT, this.handleDetailAuthChange);
+      }
+    },
+    unobserveDetailAuthChanges() {
+      if (typeof uni !== "undefined" && typeof uni.$off === "function") {
+        uni.$off(AUTH_CHANGE_EVENT, this.handleDetailAuthChange);
+      }
+    },
+    applyDetailAuthSnapshot(auth = null) {
+      const currentAuth = auth && Object.prototype.hasOwnProperty.call(auth, "user")
+        ? auth
+        : getCurrentUser();
+      const nextPrincipal = authPrincipalOf(currentAuth, getToken());
+      const nextUserId = nextPrincipal === "guest" ? "" : currentAuth.user?.id || "";
+      if (nextPrincipal === this.currentAuthPrincipal) {
+        this.currentUserId = nextUserId;
+        return false;
+      }
+      this.currentAuthPrincipal = nextPrincipal;
+      this.currentUserId = nextUserId;
+      this.detailAuthGeneration += 1;
+      this.detailRequestGeneration += 1;
+      this.clearProtectedDetail("");
+      return true;
+    },
+    async handleDetailAuthChange(auth = null) {
+      const identityChanged = this.applyDetailAuthSnapshot(auth);
+      if (!identityChanged || !this.pageActive || !this.sessionId) {
+        return false;
+      }
+      const requestOwner = this.beginDetailRequest();
+      return this.reloadDetailProjection(requestOwner, {
+        loadShareStats: true,
+        includeInitialShareContext: true
+      });
+    },
+    beginDetailLoginContinuation() {
+      this.detailLoginContinuationNonce += 1;
+      return {
+        nonce: this.detailLoginContinuationNonce,
+        pageGeneration: this.pageGeneration,
+        sessionId: String(this.sessionId || ""),
+        authGeneration: this.detailAuthGeneration,
+        originPrincipal: this.currentAuthPrincipal
+      };
+    },
+    isCurrentDetailLoginContinuation(continuation) {
+      return Boolean(
+        this.pageActive &&
+          continuation &&
+          continuation.nonce === this.detailLoginContinuationNonce &&
+          continuation.pageGeneration === this.pageGeneration &&
+          continuation.sessionId === String(this.sessionId || "")
+      );
+    },
+    async relinkSessionMembership(requestOwner = null) {
+      if (requestOwner && !this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
       if (this.isCityPreview || this.isGuestPreview) {
-        return;
+        return true;
       }
       if (!this.currentUserId || !this.sessionId || this.sessionId === "d1-demo") {
-        return;
+        return true;
       }
       try {
         await request({
@@ -485,95 +667,275 @@ export default {
       } catch (error) {
         // Non-members can still view public session detail; relink only restores existing ties.
       }
+      return !requestOwner || this.isCurrentDetailRequest(requestOwner);
+    },
+    async reloadDetailProjection(requestOwner, options = {}) {
+      if (!this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
+      await this.relinkSessionMembership(requestOwner);
+      if (!this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
+      const loaded = await this.loadSession(requestOwner);
+      if (!loaded || !this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
+      await Promise.all([
+        this.loadSessionReviews(requestOwner),
+        this.loadMyReviewState(requestOwner)
+      ]);
+      if (!this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
+      const shouldLoadInitialShareContext = Boolean(
+        options.includeInitialShareContext && this.detailInitialShareStatsPending
+      );
+      if (shouldLoadInitialShareContext) {
+        await this.trackShareView(requestOwner);
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
+        const shareStatsLoaded = await this.loadShareStats(requestOwner);
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
+        if (shareStatsLoaded) {
+          this.detailInitialShareStatsPending = false;
+        }
+      } else if (options.loadShareStats) {
+        await this.loadShareStats(requestOwner);
+      }
+      return this.isCurrentDetailRequest(requestOwner);
     },
     async ensureProtectedActionLogin(content = "登录后继续查看相册、选择角色或管理车局。") {
+      if (!this.pageActive) {
+        return null;
+      }
+      const continuation = this.beginDetailLoginContinuation();
       const auth = await ensureLoggedIn({
         content
       });
-      if (!auth?.user) {
-        this.loadStatusText = "登录后可继续操作。";
+      if (!this.isCurrentDetailLoginContinuation(continuation)) {
         return null;
       }
-      this.currentUserId = auth.user.id || "";
-      const loaded = await this.loadSession();
+      const latestAuth = getCurrentUser();
+      const latestAuthenticated = getToken();
+      const returnedPrincipal = authPrincipalOf(auth);
+      const actualPrincipal = authPrincipalOf(latestAuth, latestAuthenticated);
+      if (
+        returnedPrincipal === "guest" ||
+        !auth?.user ||
+        returnedPrincipal !== actualPrincipal
+      ) {
+        if (
+          this.detailAuthGeneration === continuation.authGeneration &&
+          this.currentAuthPrincipal === continuation.originPrincipal &&
+          actualPrincipal === continuation.originPrincipal
+        ) {
+          this.loadStatusText = "登录后可继续操作。";
+        }
+        return null;
+      }
+      if (actualPrincipal !== this.currentAuthPrincipal) {
+        this.applyDetailAuthSnapshot(latestAuth);
+      }
+      if (!this.isCurrentDetailLoginContinuation(continuation)) {
+        return null;
+      }
+      const generationUnchanged =
+        this.detailAuthGeneration === continuation.authGeneration;
+      const freshGuestLogin = Boolean(
+        continuation.originPrincipal === "guest" &&
+          this.detailAuthGeneration === continuation.authGeneration + 1 &&
+          this.currentAuthPrincipal === actualPrincipal
+      );
+      if (
+        (!generationUnchanged && !freshGuestLogin) ||
+        this.currentAuthPrincipal !== actualPrincipal
+      ) {
+        return null;
+      }
+      const requestOwner = this.beginDetailRequest();
+      const loaded = await this.reloadDetailProjection(requestOwner, {
+        loadShareStats: true,
+        includeInitialShareContext: true
+      });
       if (!loaded) {
         return null;
       }
-      if (!this.isCityPreview && typeof uni.showShareMenu === "function") {
-        uni.showShareMenu({
-          withShareTicket: true,
-          menus: ["shareAppMessage", "shareTimeline"]
-        });
+      const finalAuth = getCurrentUser();
+      const finalPrincipal = authPrincipalOf(finalAuth, getToken());
+      if (
+        !this.isCurrentDetailLoginContinuation(continuation) ||
+        !this.isCurrentDetailRequest(requestOwner) ||
+        finalPrincipal !== returnedPrincipal ||
+        finalPrincipal !== this.currentAuthPrincipal
+      ) {
+        return null;
       }
+      this.syncSessionShareMenu(requestOwner);
       return auth;
     },
-    clearProtectedDetail(message) {
+    clearProtectedDetail(message, requestOwner = null) {
+      if (requestOwner && !this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
       this.stopDetailExtensions();
       this.session = {};
+      this.persistedSessionLoaded = false;
       this.accessScope = "";
       this.shareStats = {};
       this.reviews = [];
       this.myReviewState = { can_review: false, review: null };
       this.reviewStatusText = "";
       this.loadStatusText = message;
+      this.hideSessionShareMenu();
+      return true;
     },
-    async loadSession() {
+    async loadSession(requestOwner = null) {
+      requestOwner = requestOwner || this.beginDetailRequest();
+      if (!this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
       if (!this.sessionId || this.sessionId === "d1-demo") {
         this.loadStatusText = "请从已发布车进入详情。";
         return false;
       }
+      this.persistedSessionLoaded = false;
+      this.hideSessionShareMenu();
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}` });
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
         this.session = normalizeAuthorPrivateSession(dataOf(response) || {});
+        this.persistedSessionLoaded = Boolean(this.session.id);
         this.accessScope = this.session.access_scope || "";
         this.loadStatusText = "";
         if (this.focusedSeatId && this.focusedSeat) {
           this.loadStatusText = "已定位到分享指定座位。";
         }
+        this.syncSessionShareMenu(requestOwner);
         return true;
       } catch (error) {
-        if (error?.statusCode === 404) {
-          this.clearProtectedDetail("车局已发车，仅同车成员可查看。");
+        if (!this.isCurrentDetailRequest(requestOwner)) {
           return false;
         }
-        this.loadStatusText = "车详情加载失败，请稍后重试。";
+        if (error?.statusCode === 404) {
+          this.clearProtectedDetail("车局已发车，仅同车成员可查看。", requestOwner);
+          return false;
+        }
+        this.clearProtectedDetail("车详情加载失败，请稍后重试。", requestOwner);
         return false;
       }
     },
-    async loadShareStats() {
-      if (!this.sessionId || this.sessionId === "d1-demo") {
+    syncSessionShareMenu(requestOwner = null) {
+      if (
+        !this.pageActive ||
+        (requestOwner && !this.isCurrentDetailRequest(requestOwner))
+      ) {
         return;
+      }
+      if (typeof uni === "undefined") {
+        return;
+      }
+      const menus = ["shareAppMessage", "shareTimeline"];
+      if (
+        !this.persistedSessionLoaded ||
+        this.isCityPreview ||
+        this.guestNeedsLogin ||
+        this.isHistorical
+      ) {
+        if (typeof uni.hideShareMenu === "function") {
+          uni.hideShareMenu({ menus });
+        }
+        return;
+      }
+      if (typeof uni.showShareMenu === "function") {
+        uni.showShareMenu({ withShareTicket: true, menus });
+      }
+    },
+    hideSessionShareMenu() {
+      if (typeof uni !== "undefined" && typeof uni.hideShareMenu === "function") {
+        uni.hideShareMenu({ menus: ["shareAppMessage", "shareTimeline"] });
+      }
+    },
+    async loadShareStats(requestOwner) {
+      if (this.isHistorical) {
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
+        this.shareStats = {};
+        return true;
+      }
+      if (!this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
+      if (!this.sessionId || this.sessionId === "d1-demo") {
+        this.shareStats = {};
+        return true;
       }
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/share-stats` });
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
         this.shareStats = dataOf(response) || {};
+        return true;
       } catch (error) {
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
         this.shareStats = {};
+        return false;
       }
     },
-    async loadSessionReviews() {
+    async loadSessionReviews(requestOwner) {
+      if (!this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
       if (!this.sessionId || this.sessionId === "d1-demo") {
-        return;
+        return false;
       }
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/reviews` });
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
         this.reviews = dataOf(response) || [];
         this.reviewStatusText = "";
+        return true;
       } catch (error) {
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
         this.reviews = [];
         this.reviewStatusText = "车友记录加载失败，请稍后重试。";
+        return false;
       }
     },
-    async loadMyReviewState() {
+    async loadMyReviewState(requestOwner) {
+      if (!this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
       if (!this.currentUserId || !this.sessionId || this.sessionId === "d1-demo") {
         this.myReviewState = { can_review: false, review: null };
-        return;
+        return true;
       }
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/review` });
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
         this.myReviewState = dataOf(response) || { can_review: false, review: null };
+        return true;
       } catch (error) {
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
+        }
         this.myReviewState = { can_review: false, review: null };
+        return false;
       }
     },
     stopDetailExtensions() {
@@ -585,41 +947,71 @@ export default {
         }
       });
     },
-    trackShareView() {
+    async trackShareView(requestOwner) {
+      if (this.isHistorical) {
+        return false;
+      }
+      if (!this.isCurrentDetailRequest(requestOwner)) {
+        return false;
+      }
       if (!this.sessionId || this.sessionId === "d1-demo") {
-        return;
+        return false;
       }
       if (!this.shareCode && !this.source) {
-        return;
+        return false;
       }
-      request({
-        url: "/api/share-events/view",
-        method: "POST",
-        data: {
-          sessionId: Number(this.sessionId),
-          shareCode: this.shareCode,
-          source: this.source || "unknown",
-          path: `/pages/session/detail?id=${this.sessionId}`,
-          seatId: this.focusedSeatId || null,
-          rawPayload: {
-            source: this.source,
+      if (this.detailShareViewTrackStarted) {
+        return false;
+      }
+      // Claim the one-time page view before yielding so a superseding request owner
+      // can refresh stats without emitting the same analytics event again.
+      this.detailShareViewTrackStarted = true;
+      try {
+        await request({
+          url: "/api/share-events/view",
+          method: "POST",
+          data: {
+            sessionId: Number(this.sessionId),
             shareCode: this.shareCode,
-            seatId: this.focusedSeatId
+            source: this.source || "unknown",
+            path: `/pages/session/detail?id=${this.sessionId}`,
+            seatId: this.focusedSeatId || null,
+            rawPayload: {
+              source: this.source,
+              shareCode: this.shareCode,
+              seatId: this.focusedSeatId
+            }
           }
+        });
+        if (!this.isCurrentDetailRequest(requestOwner)) {
+          return false;
         }
-      })
-        .then(() => this.loadShareStats())
-        .catch(() => {});
+        return true;
+      } catch (error) {
+        return false;
+      }
     },
     async goShare(seat) {
       if (this.isCityPreview) {
         return;
       }
-      const auth = await this.ensureProtectedActionLogin("登录后可选择角色上车。");
+      if (this.isHistorical && !this.isHistoricalOrganizer) {
+        return;
+      }
+      const auth = await this.ensureProtectedActionLogin(
+        this.isHistorical ? "登录后可邀请同车成员补认角色。" : "登录后可选择角色上车。"
+      );
       if (!auth) {
         return;
       }
+      if (this.isHistorical && !this.isHistoricalOrganizer) {
+        return;
+      }
       const id = this.sessionId || "d1-demo";
+      if (this.isHistorical) {
+        uni.navigateTo({ url: `/pages/session/share?id=${id}` });
+        return;
+      }
       const selectedSeat = seat || this.focusedSeat;
       const query = queryString({
         id,
@@ -633,8 +1025,14 @@ export default {
       if (this.isCityPreview) {
         return;
       }
+      if (this.isHistorical && !this.isHistoricalOrganizer) {
+        return;
+      }
       const auth = await this.ensureProtectedActionLogin("登录后可管理车局。");
       if (!auth) {
+        return;
+      }
+      if (this.isHistorical && !this.isHistoricalOrganizer) {
         return;
       }
       const id = this.sessionId || "d1-demo";
@@ -652,6 +1050,9 @@ export default {
       uni.navigateTo({ url: `/pages/session/review?id=${id}` });
     },
     async requestShareAction() {
+      if (!this.persistedSessionLoaded || this.isHistorical) {
+        return;
+      }
       const auth = await this.ensureProtectedActionLogin("登录后可分享车局。");
       if (auth) {
         showToast({ title: "已登录，请再次点击分享", icon: "none" });
@@ -727,6 +1128,9 @@ export default {
       return this.focusedSeatId && Number(seat.id) === Number(this.focusedSeatId);
     },
     canApplySeat(seat) {
+      if (this.isHistorical) {
+        return false;
+      }
       if (this.session.status === "recruiting") {
         return ["open", "applied"].includes(seat.status);
       }
@@ -737,6 +1141,9 @@ export default {
       );
     },
     canApplyNpcRole(role) {
+      if (this.isHistorical) {
+        return false;
+      }
       if (role.author_private?.content?.is_draft === true) {
         return false;
       }
@@ -792,6 +1199,9 @@ export default {
       this.goShare(seat);
     },
     seatStateKind(seat) {
+      if (this.isHistorical) {
+        return seat.confirmed_user_id ? "taken" : "available";
+      }
       if (seat.status === "applied") {
         return "pendingReview";
       }
@@ -801,6 +1211,12 @@ export default {
       return "unavailable";
     },
     npcRoleStateKind(role) {
+      if (this.isHistorical) {
+        if (this.currentUserId && Number(role.bound_user_id || 0) === Number(this.currentUserId)) {
+          return "mine";
+        }
+        return role.bound_user_id ? "taken" : "available";
+      }
       if (role.author_private?.content?.is_draft === true) {
         return "pendingReview";
       }
@@ -819,6 +1235,9 @@ export default {
       return this.npcSelfJoinEnabled ? "available" : "unavailable";
     },
     npcRoleStatusLabel(role) {
+      if (this.isHistorical) {
+        return role.bound_user_id ? "已补认" : "待补认";
+      }
       if (role.author_private?.content?.is_draft === true) {
         return role.moderation_message || "仅自己可见 · 审核中";
       }
@@ -838,6 +1257,9 @@ export default {
       return "可选";
     },
     statusLabel(status) {
+      if (isHistoricalSession(this.session)) {
+        return status === "cancelled" ? "已取消补录" : "历史补录";
+      }
       const labels = {
         draft: "草稿",
         recruiting: "招募中",
@@ -846,7 +1268,12 @@ export default {
       };
       return labels[status] || status || "未知";
     },
-    seatStatusLabel(status) {
+    seatStatusLabel(status, seat = {}) {
+      if (this.isHistorical) {
+        return seat.confirmed_user_id || ["confirmed", "locked"].includes(status)
+          ? "已补认"
+          : "待补认";
+      }
       const labels = {
         open: "开放",
         applied: "待审核",

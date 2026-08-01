@@ -47,7 +47,7 @@ test("D46 explicitly projects the ten text actions with correct draft and publis
       }]
     }],
     ["create_session", "creation:create_session:7", {
-      storeId: 3, scriptId: 4, startAt: "2026-07-15 20:00:00", dmUserId: 7,
+      storeId: 3, scriptId: 4, startAt: "2026-07-15 20:00:00", sessionPurpose: "historical_record", dmUserId: 7,
       dmNameSnapshot: "DM", npcUserId: 8, npcNameSnapshot: "NPC", depositAmount: 100,
       visibility: "share_only", note: "说明", pinnedMessageText: "集合", joinPolicy: "direct",
       joinPhoneRequired: false, npcJoinEnabled: true,
@@ -55,7 +55,7 @@ test("D46 explicitly projects the ten text actions with correct draft and publis
       ...sensitive
     }, null, {
       is_draft: true,
-      storeId: 3, scriptId: 4, startAt: "2026-07-15 20:00:00", dmUserId: 7,
+      storeId: 3, scriptId: 4, startAt: "2026-07-15 20:00:00", sessionPurpose: "historical_record", dmUserId: 7,
       dmNameSnapshot: "DM", npcUserId: 8, npcNameSnapshot: "NPC", depositAmount: 100,
       visibility: "share_only", note: "说明", pinnedMessageText: "集合", joinPolicy: "direct",
       joinPhoneRequired: false, npcJoinEnabled: true,

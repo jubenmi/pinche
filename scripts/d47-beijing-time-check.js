@@ -131,8 +131,8 @@ const setupComputedSlice = sourceSlice(setupSource, "  computed: {", "  onLoad()
 const setupOnLoadSlice = sourceSlice(setupSource, "  onLoad() {", "  methods: {", "setup onLoad");
 const setupCreateSlice = sourceSlice(
   setupSource,
-  "    async createPublishedSession() {",
-  "    createErrorText(error) {",
+  "    sessionCreationData(pinnedMessageText, creationIdentity = {}) {",
+  "    async initializeFutureSession(",
   "setup create request"
 );
 assert.match(
@@ -248,18 +248,18 @@ const createSessionSlice = sourceSlice(
 );
 const createSessionInsertSlice = sourceSlice(
   createSessionSlice,
-  "      const [result] = await connection.query(",
-  "      const session = await findById(",
+  "  const [result] = await connection.query(",
+  "  const session = await findById(",
   "session creation INSERT"
 );
 assert.match(
   createSessionSlice,
-  /normalizeSessionCreationStartAt\(requireValue\(body,\s*["']startAt["']\)\)/,
+  /normalizeSessionCreationStartAt\(\s*requireValue\(body,\s*["']startAt["']\),\s*body\.sessionPurpose\s*\)/,
   "session creation must normalize startAt"
 );
 assert.match(
   createSessionInsertSlice,
-  /script\.name,[\s\S]*?store\.name,[\s\S]*?normalizedStartAt,/,
+  /script\.name,[\s\S]*?store\.name,[\s\S]*?creation\.startAt,/,
   "session INSERT must bind normalized startAt"
 );
 assert.doesNotMatch(

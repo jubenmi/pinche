@@ -2,8 +2,8 @@
   <view v-if="session.id" class="pinned-manager" :class="{ embedded }">
     <view class="pinned-head">
       <view>
-        <view class="pinned-title">置顶信息</view>
-        <view class="pinned-note">只放最重要的一句话，比如集合时间、房间号或临时变更。</view>
+        <view class="pinned-title">{{ pinnedTitle }}</view>
+        <view class="pinned-note">{{ pinnedNote }}</view>
       </view>
     </view>
     <view v-if="authorPrivateDraft" class="draft-status">
@@ -13,7 +13,7 @@
       :value="pinnedMessageText"
       class="textarea"
       maxlength="300"
-      placeholder="输入要置顶给车内成员看的信息"
+      :placeholder="pinnedPlaceholder"
       placeholder-class="placeholder"
       :disabled="isBusy || !canEditPinned"
       @change="pinnedMessageText = $event.detail.value"
@@ -33,6 +33,7 @@
 </template>
 
 <script>
+import { isHistoricalSession } from "@pinche/shared";
 import {
   authorPrivatePinnedView,
   chatApi,
@@ -43,6 +44,7 @@ export default {
   props: {
     sessionId: { type: [String, Number], default: "" },
     session: { type: Object, default: () => ({}) },
+    sessionPurpose: { type: String, default: "" },
     busy: { type: Boolean, default: false },
     embedded: { type: Boolean, default: false },
     authTools: { type: Object, required: true }
@@ -57,6 +59,24 @@ export default {
     };
   },
   computed: {
+    isHistorical() {
+      return isHistoricalSession({
+        session_purpose: this.sessionPurpose || this.session?.session_purpose
+      });
+    },
+    pinnedTitle() {
+      return this.isHistorical ? "补录说明" : "置顶信息";
+    },
+    pinnedNote() {
+      return this.isHistorical
+        ? "补充这场已完成车局的背景，供当时的同车成员回看。"
+        : "只放最重要的一句话，比如集合时间、房间号或临时变更。";
+    },
+    pinnedPlaceholder() {
+      return this.isHistorical
+        ? "写下这场已完成车局的补充说明（可选）"
+        : "输入要置顶给车内成员看的信息";
+    },
     api() {
       return chatApi(this.authTools);
     },

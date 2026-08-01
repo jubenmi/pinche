@@ -17,6 +17,14 @@ function boundedIdempotencyKey(value) {
   return String(value ?? "").trim().slice(0, 128);
 }
 
+export function historicalSessionTextIdempotencyKey(creationKeyHash) {
+  const normalized = String(creationKeyHash || "");
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw new TypeError("historical session creation key hash is invalid");
+  }
+  return `hsc_${normalized}`;
+}
+
 export function explicitTextIdempotencyKey(request, body) {
   const fromHeader = boundedIdempotencyKey(
     request?.headers?.["idempotency-key"] ?? request?.headers?.["Idempotency-Key"]
@@ -34,6 +42,17 @@ export function createTextMutationIdentity({
   baseVersion,
   payload
 } = {}) {
+  if (
+    String(action || "") === "create_session" &&
+    payload?.body?.historicalCreationKeyHash !== undefined
+  ) {
+    return {
+      idempotencyKey: historicalSessionTextIdempotencyKey(
+        payload.body.historicalCreationKeyHash
+      ),
+      explicit: true
+    };
+  }
   const explicitKey = explicitTextIdempotencyKey(request, rawBody);
   if (explicitKey) {
     return { idempotencyKey: explicitKey, explicit: true };

@@ -5,8 +5,10 @@ import test from "node:test";
 import { parse as parseSfc } from "@vue/compiler-sfc";
 import {
   isBusinessDateTimeReached,
+  isHistoricalSession,
   parseBusinessDateTime
 } from "@pinche/shared";
+import * as shareInviteHelpers from "../src/utils/sessionShareInvite.js";
 
 import {
   buildSessionSharePayload,
@@ -41,6 +43,7 @@ function loadSharePageComponent(overrides = {}) {
     isBusinessDateTimeReached: (value, now = runtimeDate.now()) =>
       isBusinessDateTimeReached(value, now),
     parseBusinessDateTime,
+    isHistoricalSession,
     AuthIdentityBar: {},
     RoleSeatBoard: {},
     FeedbackHost: {},
@@ -52,6 +55,8 @@ function loadSharePageComponent(overrides = {}) {
     request: async () => {
       throw new Error("unexpected request");
     },
+    CREATE_FLOW_KEY: "test-create-flow",
+    clearCreateFlow: noop,
     displayTags: () => "",
     flowToQuery: () => "",
     isCrossCast: () => false,
@@ -67,6 +72,12 @@ function loadSharePageComponent(overrides = {}) {
     buildSessionSharePayload,
     resolveSessionShareMode,
     sessionSharePresentation,
+    ...shareInviteHelpers,
+    captureRoleSelectionOperation: shareInviteHelpers.beginRoleSelectionOperation,
+    releaseRoleSelectionOperation: shareInviteHelpers.finishRoleSelectionOperation,
+    rebaseCapturedRoleSelectionOperation: shareInviteHelpers.rebaseRoleSelectionOperation,
+    capturedRoleSelectionOperationIsCurrent:
+      shareInviteHelpers.roleSelectionOperationIsCurrent,
     isConfirmedSessionMember: () => false,
     requestSubscriptionAfterConfirmedJoin: noop,
     requestSessionRescheduledSubscription: noop,
@@ -91,6 +102,7 @@ function loadSharePageComponent(overrides = {}) {
 function createSharePageVm(component, overrides = {}) {
   const vm = {
     ...component.data(),
+    pageActive: true,
     ...overrides
   };
   for (const [name, method] of Object.entries(component.methods || {})) {
@@ -736,7 +748,10 @@ test("an unloaded NPC claim cannot subscribe, refresh, navigate, or update resul
   const toasts = [];
   let getCount = 0;
   const component = loadSharePageComponent({
-    ensureLoggedIn: async () => ({ user: { id: 7, gender: "male" } }),
+    ensureLoggedIn: async () => ({
+      token: "auth-token",
+      user: { id: 7, gender: "male" }
+    }),
     getCurrentUser: () => ({ user: { id: 7, gender: "male" } }),
     getToken: () => "auth-token",
     request: async ({ url, method = "GET" }) => {
@@ -761,6 +776,7 @@ test("an unloaded NPC claim cannot subscribe, refresh, navigate, or update resul
   const vm = createSharePageVm(component, {
     sessionId: "42",
     currentUserId: "7",
+    currentAuthPrincipal: "user:7",
     sessionLoaded: true,
     session: sessionResponse({
       join_policy: "direct",
