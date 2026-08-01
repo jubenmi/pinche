@@ -4,7 +4,7 @@
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-mark">剧</span>
-        <span class="brand-text">剧本迷管理</span>
+        <span class="brand-text">剧本谜管理</span>
       </div>
       <nav>
         <button

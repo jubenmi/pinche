@@ -30,7 +30,8 @@ test("cold home renders a native boot state before custom components", () => {
   assert.ok(authStart > businessStart, "AuthIdentityBar must mount only after boot completes");
 
   const bootMarkup = homeSource.slice(bootStart, businessStart);
-  assert.match(bootMarkup, /剧本迷·拼车/);
+  assert.match(bootMarkup, /剧本谜/);
+  assert.match(bootMarkup, />谜<\/view>/);
   assert.match(bootMarkup, /首页加载中/);
   assert.doesNotMatch(
     bootMarkup,

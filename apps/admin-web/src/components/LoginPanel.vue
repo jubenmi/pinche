@@ -2,7 +2,7 @@
   <main class="login-page">
     <section class="login-panel">
       <div>
-        <p class="eyebrow">剧本迷管理后台</p>
+        <p class="eyebrow">剧本谜管理后台</p>
         <h1>微信扫码登录</h1>
         <p class="login-copy">使用小程序管理员账号扫描二维码，在手机上确认后进入后台。</p>
       </div>

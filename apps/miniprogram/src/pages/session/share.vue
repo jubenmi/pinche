@@ -755,7 +755,7 @@ export default {
       roleOptions,
       selectedRoles,
       startText: fromQuery.startText || stored.startText || "时间待定（协商后确认）",
-      note: fromQuery.note || stored.note || "剧本迷·拼车，一起沉浸好本。"
+      note: fromQuery.note || stored.note || "剧本谜，一起沉浸好本。"
     };
     this.store = flow.store;
     this.script = flow.script;
@@ -1414,7 +1414,7 @@ export default {
         this.startText = formatBeijingDateTime(session.start_at);
         this.note = this.isHistorical
           ? "历史车局补录"
-          : "剧本迷·拼车，一起沉浸好本。";
+          : "剧本谜，一起沉浸好本。";
         try {
           writeCreateFlow({
             store: this.store,

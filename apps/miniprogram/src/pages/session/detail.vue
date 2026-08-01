@@ -535,7 +535,7 @@ export default {
     });
     const title = this.session.script_name_snapshot
       ? `${this.session.script_name_snapshot}${seat ? ` ${seat.name}` : ""} 发车`
-      : "剧本迷·拼车";
+      : "剧本谜";
     return {
       title,
       path: `/pages/session/detail${query}`
