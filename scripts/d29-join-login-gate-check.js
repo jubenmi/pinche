@@ -102,14 +102,14 @@ assert(
 );
 assert(
   ensureSeatSelectionLoginBody.includes("const auth = await ensureLoggedIn") &&
-    ensureSeatSelectionLoginBody.includes("if (!auth?.user)") &&
+    ensureSeatSelectionLoginBody.includes("!auth?.user") &&
     ensureSeatSelectionLoginBody.includes("return null") &&
     ensureSeatSelectionLoginBody.includes("wasLoggedIn") &&
     ensureSeatSelectionLoginBody.includes("refreshAfterFreshLogin") &&
     ensureSeatSelectionLoginBody.includes("!wasLoggedIn") &&
-    ensureSeatSelectionLoginBody.includes(
+    (ensureSeatSelectionLoginBody.includes(
       "this.sessionId,\n            activityGeneration"
-    ) &&
+    ) || ensureSeatSelectionLoginBody.includes("await this.reloadSessionAfterAuth()")) &&
     ensureSeatSelectionLoginBody.includes("return auth"),
   "Share login guard must refresh session state after a fresh login and then continue the selected join action"
 );
@@ -130,7 +130,9 @@ for (const forbiddenLoginNavigation of [
 }
 assertBefore(
   ensureSeatSelectionLoginBody,
-  "await this.loadPublishedSession(",
+  ensureSeatSelectionLoginBody.includes("await this.reloadSessionAfterAuth()")
+    ? "await this.reloadSessionAfterAuth()"
+    : "await this.loadPublishedSession(",
   "return auth",
   "Fresh-login session reload must finish before the original selected action continues"
 );
@@ -167,7 +169,7 @@ assertBefore(
 assertBefore(
   chooseNpcRoleBody,
   "refreshAfterFreshLogin: true",
-  'url: `/api/session-npc-roles/${targetRole.id}/claim`',
+  'url: `/api/session-npc-roles/${confirmedTargetRole.id}/claim`',
   "NPC role selection must require login before claiming the NPC role"
 );
 assert(

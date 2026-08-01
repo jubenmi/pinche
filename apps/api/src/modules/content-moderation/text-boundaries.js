@@ -2,8 +2,15 @@ import {
   normalizeNpcRoles,
   normalizePrivateRoleTemplate
 } from "../core/npc-role-normalization.js";
-import { badRequest } from "../../http/errors.js";
+import { AppError, badRequest } from "../../http/errors.js";
 import { normalizeSessionReviewAlbumPhotoIds } from "../core/session-review.js";
+import {
+  assertHistoricalSessionMemberPrebindAllowed,
+  hashHistoricalSessionCreationKey,
+  normalizeHistoricalSessionCreationKeyHash,
+  normalizeHistoricalSessionCreationKey
+} from "../core/session-purpose.js";
+import { historicalSessionTextIdempotencyKey } from "./text-request-identity.js";
 
 const PHONE_NUMBER = /(?:\+?86[\s-]?)?1[3-9]\d(?:[\s-]?\d){8}/g;
 const MAX_SESSION_REVIEW_PHOTOS = 9;
@@ -287,7 +294,7 @@ function canonicalReviewPhotoUrls(value) {
   });
 }
 
-function canonicalBody(action, body) {
+function canonicalBody(action, body, { trustedHistoricalCreationIdentity = "" } = {}) {
   const result = {};
   switch (action) {
     case "update_nickname":
@@ -328,10 +335,55 @@ function canonicalBody(action, body) {
       requireBodyValue(body, "storeId");
       requireBodyValue(body, "scriptId");
       requireBodyValue(body, "startAt");
+      assertHistoricalSessionMemberPrebindAllowed(body, body.sessionPurpose);
       pickDefined(result, body, [
-        "storeId", "scriptId", "startAt", "dmUserId", "dmNameSnapshot", "npcUserId",
-        "npcNameSnapshot", "depositAmount", "visibility", "note", "pinnedMessageText"
+        "storeId", "scriptId", "startAt", "sessionPurpose", "dmUserId", "dm_user_id",
+        "dmNameSnapshot", "npcUserId", "npc_user_id", "npcNameSnapshot", "depositAmount",
+        "visibility", "note", "pinnedMessageText"
       ]);
+      const hasRawHistoricalCreationKey = own(body, "historicalCreationKey");
+      const hasHistoricalCreationKeyHash = own(body, "historicalCreationKeyHash");
+      if (
+        body.sessionPurpose === "historical_record" &&
+        !hasRawHistoricalCreationKey &&
+        !hasHistoricalCreationKeyHash
+      ) {
+        throw new AppError(
+          400,
+          "HISTORICAL_SESSION_CREATION_KEY_REQUIRED",
+          "historicalCreationKey is required for historical session creation"
+        );
+      }
+      if (hasRawHistoricalCreationKey && hasHistoricalCreationKeyHash) {
+        throw badRequest("Provide only one historical creation key identity");
+      }
+      if (
+        hasHistoricalCreationKeyHash &&
+        (body.historicalCreationKeyHash === null || body.historicalCreationKeyHash === undefined)
+      ) {
+        throw badRequest("historical creation key hash is invalid");
+      }
+      const historicalCreationKey = normalizeHistoricalSessionCreationKey(
+        body,
+        body.sessionPurpose
+      );
+      if (historicalCreationKey) {
+        result.historicalCreationKeyHash = hashHistoricalSessionCreationKey(
+          historicalCreationKey
+        );
+      } else if (hasHistoricalCreationKeyHash) {
+        const historicalCreationKeyHash = normalizeHistoricalSessionCreationKeyHash(
+          body.historicalCreationKeyHash,
+          body.sessionPurpose
+        );
+        if (
+          String(trustedHistoricalCreationIdentity || "") !==
+          historicalSessionTextIdempotencyKey(historicalCreationKeyHash)
+        ) {
+          throw badRequest("historical creation key hash is not trusted request input");
+        }
+        result.historicalCreationKeyHash = historicalCreationKeyHash;
+      }
       if (body.depositAmount !== undefined) result.depositAmount = integerValue(body.depositAmount);
       if (body.visibility !== undefined) result.visibility = normalizeSessionVisibility(body.visibility);
       assertPublicTextSafe("dmNameSnapshot", result.dmNameSnapshot);
@@ -525,7 +577,7 @@ export function parseTextDraftReplacement(body = {}) {
   return parsed;
 }
 
-export function buildTextProposalPayload(action, input = {}) {
+export function buildTextProposalPayload(action, input = {}, options = {}) {
   const rawBody = input?.body && typeof input.body === "object" && !Array.isArray(input.body)
     ? input.body
     : input && typeof input === "object" && !Array.isArray(input)
@@ -535,7 +587,7 @@ export function buildTextProposalPayload(action, input = {}) {
     ? input.context
     : {};
   return {
-    body: canonicalBody(String(action || "").trim(), rawBody),
+    body: canonicalBody(String(action || "").trim(), rawBody, options),
     context: canonicalContext(String(action || "").trim(), rawContext)
   };
 }
@@ -545,6 +597,8 @@ export function buildTextModerationDescriptor(input = {}) {
   const payload = buildTextProposalPayload(action, {
     body: input.body,
     context: input.context
+  }, {
+    trustedHistoricalCreationIdentity: input.idempotencyKey
   });
   const definition = actionDefinition(action, payload.body);
   if (Object.keys(definition.fields).length === 0) return null;

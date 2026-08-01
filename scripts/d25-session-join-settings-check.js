@@ -120,7 +120,8 @@ const createSessionBody = functionBody(service, "createSessionWithConnection");
 assert(
   createSessionEntryBody.includes("createSessionWithConnection") &&
     createSessionBody.includes("join_phone_required") &&
-    createSessionBody.includes("normalizeJoinPhoneRequired"),
+    createSessionBody.includes("normalizedSessionCreationPayload(body, normalizedCreation)") &&
+    createSessionBody.includes("creation.joinPhoneRequired"),
   "createSession must delegate normalized joinPhoneRequired persistence to its connection-bound helper"
 );
 
@@ -147,7 +148,8 @@ assert(getSessionBody.includes("memberSessionDetail"), "getSession must use the 
 
 const createSignupBody = functionBody(service, "createSignup");
 assert(
-  createSignupBody.includes("join_phone_required") &&
+  (createSignupBody.includes("join_phone_required") ||
+    createSignupBody.includes("sessionMembershipTarget(seatRow, session)")) &&
     createSignupBody.includes("requireJoinPhoneIfNeeded(user, seat)"),
   "createSignup must enforce phone only when the session requires it"
 );
@@ -155,7 +157,8 @@ assert(
 const claimSessionSeatBody = functionBody(service, "claimSessionSeat");
 assert(
   !claimSessionSeatBody.trimStart().startsWith("requireVerifiedPhone(user);") &&
-    claimSessionSeatBody.includes("join_phone_required") &&
+    (claimSessionSeatBody.includes("join_phone_required") ||
+      claimSessionSeatBody.includes("sessionMembershipTarget(seatRow, session)")) &&
     claimSessionSeatBody.includes("requireJoinPhoneIfNeeded(user, seat)"),
   "claimSessionSeat must use dynamic join phone requirement instead of unconditional phone gating"
 );
@@ -163,7 +166,8 @@ assert(
 const claimSessionNpcRoleBody = functionBody(service, "claimSessionNpcRole");
 assert(
   !claimSessionNpcRoleBody.trimStart().startsWith("requireVerifiedPhone(user);") &&
-    claimSessionNpcRoleBody.includes("join_phone_required") &&
+    (claimSessionNpcRoleBody.includes("join_phone_required") ||
+      claimSessionNpcRoleBody.includes("sessionMembershipTarget(roleRow, session)")) &&
     claimSessionNpcRoleBody.includes("requireJoinPhoneIfNeeded(user, role)"),
   "claimSessionNpcRole must use dynamic join phone requirement instead of unconditional phone gating"
 );

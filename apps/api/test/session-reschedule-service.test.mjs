@@ -33,8 +33,8 @@ function fakeConnection({
           session_started: sessionStarted
         }]];
       }
-      if (normalized.startsWith("SELECT id FROM session_seats")) return [[]];
-      if (normalized.startsWith("SELECT id FROM session_npc_roles")) return [[]];
+      if (normalized.startsWith("SELECT * FROM session_seats")) return [[]];
+      if (normalized.startsWith("SELECT * FROM session_npc_roles")) return [[]];
       if (normalized.startsWith("SELECT DISTINCT member.user_id")) return [recipients];
       if (normalized.startsWith("UPDATE sessions SET start_at")) return [{ affectedRows: 1 }];
       if (normalized.startsWith("INSERT INTO user_notifications")) {

@@ -5,10 +5,12 @@ import {
   profileTextSnapshot
 } from "./text-profile-patch.js";
 import {
+  historicalSessionTextIdempotencyKey,
   textCreationTargetSubjectId,
   textOperationSubjectId,
   textSessionNpcRoleTargetSubjectId
 } from "./text-request-identity.js";
+import { normalizeHistoricalSessionCreationKeyHash } from "../core/session-purpose.js";
 
 export const PRODUCTION_TEXT_PROPOSAL_ACTIONS = Object.freeze([
   "update_nickname",
@@ -39,6 +41,26 @@ function assertProposalBase(proposal, actual) {
   if (!actual || String(proposal?.base_version) !== String(actual)) {
     throw proposalStale("text moderation proposal base version changed");
   }
+}
+
+function trustedHistoricalCreationKeyHash(proposal, payload) {
+  if (payload?.body?.historicalCreationKeyHash === undefined) return null;
+  let creationKeyHash;
+  try {
+    creationKeyHash = normalizeHistoricalSessionCreationKeyHash(
+      payload.body.historicalCreationKeyHash,
+      payload.body.sessionPurpose
+    );
+  } catch {
+    throw proposalStale("historical creation operation identity is invalid");
+  }
+  if (
+    String(proposal?.idempotency_key || "") !==
+    historicalSessionTextIdempotencyKey(creationKeyHash)
+  ) {
+    throw proposalStale("historical creation operation identity changed");
+  }
+  return creationKeyHash;
 }
 
 function assertProposalOperationTarget({ action, actor, job, proposal, payload, targetSubjectId }) {
@@ -159,18 +181,39 @@ export function createProductionTextProposalHandlers(dependencies = {}) {
           actorUserId: actor.user.id
         })
       });
-      assertProposalBase(
-        proposal,
-        await dependencies.currentSessionCreateTextBase(
-          connection,
-          actor.user.id,
-          payload.body,
-          { forUpdate: true }
-        )
-      );
-      return dependencies.createSessionWithConnection(connection, actor, {
+      const creationKeyHash = trustedHistoricalCreationKeyHash(proposal, payload);
+      const creationBody = {
         ...payload.body,
         idempotencyKey: proposal.idempotency_key
+      };
+      if (!creationKeyHash) {
+        assertProposalBase(
+          proposal,
+          await dependencies.currentSessionCreateTextBase(
+            connection,
+            actor.user.id,
+            payload.body,
+            { forUpdate: true }
+          )
+        );
+      }
+      return dependencies.createSessionWithConnection(connection, actor, creationBody, {
+        trustedHistoricalCreationKeyHash: creationKeyHash,
+        ...(creationKeyHash
+          ? {
+              trustedHistoricalCreationRevalidate: async (lockedSnapshot) => {
+                assertProposalBase(
+                  proposal,
+                  await dependencies.currentSessionCreateTextBase(
+                    connection,
+                    actor.user.id,
+                    payload.body,
+                    { lockedSnapshot }
+                  )
+                );
+              }
+            }
+          : {})
       });
     },
 

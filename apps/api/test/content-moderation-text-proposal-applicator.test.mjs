@@ -102,3 +102,28 @@ test("deterministic permission and domain failures become stale while system err
     (error) => error === systemFailure
   );
 });
+
+test("terminal historical creation operation identity conflicts become stale proposals", async () => {
+  const actor = { user: { id: 7, openid: "openid-7" }, roles: ["organizer"] };
+  for (const code of [
+    "HISTORICAL_SESSION_CREATION_KEY_REQUIRED",
+    "HISTORICAL_SESSION_CREATION_OPERATION_MISSING",
+    "HISTORICAL_SESSION_CREATION_KEY_REUSED",
+    "HISTORICAL_SESSION_CREATION_OPERATION_CHANGED",
+    "HISTORICAL_SESSION_CREATION_OPERATION_INVALID"
+  ]) {
+    const applicator = createTextProposalApplicator({
+      loadActor: async () => actor,
+      handlers: {
+        create_session: async () => {
+          throw Object.assign(new Error(code), { code, statusCode: 409 });
+        }
+      }
+    });
+    await assert.rejects(
+      applicator.apply({}, { job: {}, proposal: proposal("create_session") }),
+      { code: "CONTENT_MODERATION_PROPOSAL_STALE" },
+      code
+    );
+  }
+});

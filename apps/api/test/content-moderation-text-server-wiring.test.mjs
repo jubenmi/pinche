@@ -123,7 +123,7 @@ test("direct covered text locks settings and applies the business write on one t
   );
 });
 
-test("NPC-role proposal application locks its role and parent session before revalidating ownership", async () => {
+test("NPC-role proposal application locks parent session before its role and actor baseline", async () => {
   const [source, handlerSource] = await Promise.all([
     readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/modules/content-moderation/text-proposal-handlers.js", import.meta.url), "utf8")
@@ -135,14 +135,44 @@ test("NPC-role proposal application locks its role and parent session before rev
   const handlerEnd = handlerSource.indexOf("async upsert_session_review", handlerStart);
   const handler = handlerSource.slice(handlerStart, handlerEnd);
 
-  assert.match(helper, /JOIN sessions AS session/);
+  assert.match(helper, /SELECT session_id FROM session_npc_roles WHERE id = \? LIMIT 1/);
+  assert.match(helper, /SELECT \* FROM sessions WHERE id = \? LIMIT 1 FOR UPDATE/);
+  assert.match(
+    helper,
+    /FROM session_npc_roles[\s\S]*WHERE id = \? AND session_id = \? LIMIT 1 FOR UPDATE/
+  );
   assert.match(helper, /createTextBaseline/);
   assert.doesNotMatch(helper, /UNIX_TIMESTAMP/);
-  assert.match(helper, /FOR UPDATE/);
+  const sessionLock = helper.indexOf("SELECT * FROM sessions WHERE id = ? LIMIT 1 FOR UPDATE");
+  const roleLock = helper.indexOf("WHERE id = ? AND session_id = ? LIMIT 1 FOR UPDATE");
+  const actorBaseline = helper.indexOf("currentActorTextSnapshot");
+  assert.ok(sessionLock >= 0 && roleLock > sessionLock && actorBaseline > roleLock);
+  const joinedRead = helper.indexOf("JOIN sessions AS session");
+  assert.ok(joinedRead >= 0, "the nonlocking capture path may keep its joined read");
+  assert.doesNotMatch(
+    helper.slice(joinedRead, sessionLock),
+    /FOR UPDATE/,
+    "joined capture must never establish locking order"
+  );
   assert.match(
     handler,
     /currentNpcRoleTextBase\([\s\S]{0,180}\{ forUpdate: true \}/
   );
+  assert.ok(
+    handler.indexOf("currentNpcRoleTextBase") <
+      handler.indexOf("updateSessionNpcRoleWithConnection"),
+    "the locked role/actor baseline must be revalidated before the business mutation"
+  );
+});
+
+test("deferred proposal actor loading does not lock users ahead of domain rows", async () => {
+  const source = await readFile(new URL("../src/legacy-app.js", import.meta.url), "utf8");
+  const start = source.indexOf("async function loadTextProposalActor");
+  const end = source.indexOf("const productionTextProposalHandlers", start);
+  const actorLoader = source.slice(start, end);
+
+  assert.match(actorLoader, /SELECT \* FROM users WHERE id = \? LIMIT 1/);
+  assert.doesNotMatch(actorLoader, /FOR UPDATE|FOR SHARE|LOCK IN SHARE MODE/);
 });
 
 test("initial missing session, NPC, message, and pin targets keep normal not-found handling", async () => {

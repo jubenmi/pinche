@@ -7,6 +7,9 @@ import {
   createContentModerationRetryWorker,
   runContentModerationRetryLoop
 } from "../src/jobs/content-moderation-retry.js";
+import { normalizeTextFields } from "../src/modules/content-moderation/normalize.js";
+import { textProposalPayloadDigest } from "../src/modules/content-moderation/text-proposal-digest.js";
+import { textMutationSubjectVersion } from "../src/modules/content-moderation/text-request-identity.js";
 
 test("retry worker imports the controlled server moderation runtime without starting an HTTP listener", async () => {
   const [workerSource, serverSource, entrypointSource] = await Promise.all([
@@ -86,6 +89,82 @@ test("retry worker uses the shared runtime processor and configured bounded batc
   assert.equal(calls.find((call) => call.kind === "claim").input.limit, 1);
   assert.equal(calls.find((call) => call.kind === "image").input.objectKey, "uploads/session-album/display/a.jpg");
   assert.equal(calls.find((call) => call.kind === "image").input.leaseToken, "lease-worker");
+});
+
+test("retry worker treats a stale historical operation result as terminal success", async () => {
+  const normalizedPayload = {
+    body: { note: "审核版本 B" },
+    context: { sessionId: 12, targetSubjectId: "12" },
+    actor_user_id: 7
+  };
+  const normalizedText = normalizeTextFields({ note: "审核版本 B" });
+  const subjectVersion = textMutationSubjectVersion({ normalizedText });
+  const payloadDigest = textProposalPayloadDigest({
+    action: "update_session",
+    baseVersion: "session-v1",
+    normalizedText,
+    normalizedPayload
+  });
+  const job = {
+    id: 93,
+    attempt_count: 1,
+    provider: "wechat_sec_check",
+    subject_type: "session_update",
+    subject_id: "text-op-historical",
+    subject_version: subjectVersion,
+    status: "error",
+    lease_token: "lease-historical"
+  };
+  const proposal = {
+    id: 53,
+    moderation_job_id: 93,
+    subject_type: "session_update",
+    subject_id: "text-op-historical",
+    status: "pending",
+    action: "update_session",
+    base_version: "session-v1",
+    idempotency_key: "historical-operation",
+    payload_digest: payloadDigest,
+    created_by_user_id: 7,
+    normalized_payload_json: JSON.stringify(normalizedPayload)
+  };
+  let claimed = false;
+  let retries = 0;
+  const worker = createContentModerationRetryWorker({
+    repositoryModule: {
+      claimModerationRetryJobs: async () => {
+        if (claimed) return [];
+        claimed = true;
+        return [job];
+      },
+      rehydrateModerationRetryJob: async () => ({
+        kind: "text",
+        job,
+        proposal,
+        actorOpenid: "openid-7"
+      }),
+      failModerationJob: async () => assert.fail("stale operation is already terminal")
+    },
+    withTransactionFn: async (run) => run({}),
+    contentModerationRuntime: {
+      retryTextModeration: async (input) => {
+        retries += 1;
+        assert.equal(input.expectedText.payloadDigest, payloadDigest);
+        return { kind: "stale" };
+      }
+    },
+    moderationConfig: {
+      retryLimit: 6,
+      retryBatchSize: 1,
+      retryLeaseMs: 90_000
+    },
+    randomUUID: () => "lease-historical",
+    now: () => 1_000,
+    emit: () => {}
+  });
+
+  assert.deepEqual(await worker.runOnce(), { claimed: 1, failed: 0 });
+  assert.equal(retries, 1);
 });
 
 test("retry worker never creates an injected lease shorter than the safe WeChat chain bound", async () => {

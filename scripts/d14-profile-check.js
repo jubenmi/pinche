@@ -64,11 +64,20 @@ assert(
 );
 assert(
   coreService.includes("confirmed_user_avatar_url") &&
-    coreService.includes("user.avatar_url AS confirmed_user_avatar_url") &&
     coreService.includes("confirmed_user_nickname") &&
     coreService.includes("confirmed_user_open_id") &&
     coreService.includes("confirmed_user_gender") &&
-    coreService.includes("user.gender AS confirmed_user_gender"),
+    (
+      (
+        coreService.includes("user.avatar_url AS confirmed_user_avatar_url") &&
+        coreService.includes("user.gender AS confirmed_user_gender")
+      ) ||
+      (
+        coreService.includes("function seatsFromLockedMembership") &&
+        coreService.includes("confirmed_user_avatar_url: confirmedUser.avatar_url") &&
+        coreService.includes("confirmed_user_gender: confirmedUser.gender")
+      )
+    ),
   "session seats must expose confirmed user name, avatar, and gender for role cards"
 );
 

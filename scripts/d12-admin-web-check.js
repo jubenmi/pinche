@@ -159,7 +159,7 @@ assert(
   "album photo deletion should clear the photo record instead of soft-hiding it"
 );
 assert(
-  service.includes('candidate.source === "seat"'),
+  service.includes('["confirmed", "locked"].includes(seat.status)'),
   "user session cancel should only treat confirmed or locked seats as onboard members"
 );
 assert(

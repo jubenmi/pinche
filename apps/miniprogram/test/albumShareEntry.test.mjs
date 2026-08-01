@@ -509,9 +509,9 @@ test("stale member album loads stop after people and guard people fallback write
   const loadAlbum = sourceBlock(source, "async loadAlbum() {", "async loadPublicAlbum() {");
   const loadPeople = sourceBlock(source, "async loadPeople(", "async loadSessionPeopleFallback(");
   const fallback = sourceBlock(source, "async loadSessionPeopleFallback(", "sessionDetailPeople(session) {");
-  const awaitPeople = loadAlbum.indexOf("await this.loadPeople(() => this.isCurrentAlbumListRequest(listRequest))");
+  const awaitPeople = loadAlbum.indexOf("await this.loadPeople(requestOwner)");
   const currentCheck = loadAlbum.indexOf(
-    "if (!this.isCurrentAlbumListRequest(listRequest)) {",
+    "if (!isCurrentRequest()) {",
     awaitPeople
   );
   const navigationTitle = loadAlbum.indexOf("this.applyAlbumNavigationTitle()", awaitPeople);
@@ -523,10 +523,16 @@ test("stale member album loads stop after people and guard people fallback write
   assert.ok(currentCheck < navigationTitle);
   assert.ok(currentCheck < scheduleRefresh);
   assert.ok(currentCheck < primeEntries);
-  assert.match(loadPeople, /async loadPeople\(isCurrent = \(\) => true\)/);
-  assert.match(loadPeople, /if \(!isCurrent\(\)\) \{\s*return;\s*\}[\s\S]*this\.people =/);
-  assert.match(fallback, /async loadSessionPeopleFallback\(isCurrent = \(\) => true\)/);
-  assert.match(fallback, /if \(!isCurrent\(\)\) \{\s*return \[\];\s*\}[\s\S]*this\.applyAlbumSessionFallback\(session\)/);
+  assert.match(loadPeople, /async loadPeople\(requestOwner\)/);
+  assert.match(
+    loadPeople,
+    /if \(!this\.isCurrentAlbumMemberRequest\(requestOwner\)\) \{\s*return false;\s*\}[\s\S]*this\.people =/
+  );
+  assert.match(fallback, /async loadSessionPeopleFallback\(requestOwner\)/);
+  assert.match(
+    fallback,
+    /if \(!this\.isCurrentAlbumMemberRequest\(requestOwner\)\) \{\s*return \[\];\s*\}[\s\S]*this\.applyAlbumSessionFallback\(session\)/
+  );
 });
 
 test("member background refresh replaces default sharing only for semantic media changes", async () => {
