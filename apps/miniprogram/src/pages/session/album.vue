@@ -880,7 +880,6 @@ export default {
       currentUserId: "",
       currentRoles: [],
       albumAuthGeneration: 0,
-      albumLoadingOwner: null,
       albumRequiresFullLoad: true,
       suppressAlbumAuthReload: false,
       mediaLoadSerial: 0,
@@ -1220,8 +1219,6 @@ export default {
         this.loadingAlbum ||
         this.uploading ||
         this.downloading ||
-        this.preparingSharePreview ||
-        this.savingShareSelection ||
         this.savingTags ||
         this.albumSharePreparing ||
         Boolean(this.deletingPhotoId)
@@ -2080,7 +2077,6 @@ export default {
       }
       this.albumAuthGeneration += 1;
       this.beginAlbumListRequest();
-      this.albumLoadingOwner = null;
       this.loadingAlbum = false;
     },
     beginAlbumMemberRequest(listRequest = null) {
@@ -2229,8 +2225,8 @@ export default {
       const isCurrentRequest = () =>
         this.isCurrentAlbumListRequest(listRequest) &&
         this.isCurrentAlbumMemberRequest(requestOwner);
-      this.albumLoadingOwner = requestOwner;
       this.loadingAlbum = true;
+      this.albumLoadFailed = false;
       this.clearMemberAlbumProjection();
       try {
         const response = await request({ url: `/api/sessions/${this.sessionId}/album` });
@@ -2279,11 +2275,11 @@ export default {
         } else {
           this.clearMemberAlbumProjection("相册加载失败，请稍后重试。");
         }
+        this.albumLoadFailed = true;
         this.applyAlbumNavigationTitle();
         return false;
       } finally {
-        if (this.albumLoadingOwner === requestOwner) {
-          this.albumLoadingOwner = null;
+        if (isCurrentRequest()) {
           this.loadingAlbum = false;
         }
       }
