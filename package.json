@@ -60,7 +60,7 @@
     "d55:check": "node scripts/d55-client-canvas-album-share-cover-check.js",
     "album-author-private:unit": "node --test packages/shared/test/albumMedia.test.mjs apps/miniprogram/test/albumMediaUrls.test.mjs apps/miniprogram/test/sessionReviewPhotos.test.mjs apps/miniprogram/test/contentModeration.test.mjs apps/api/test/session-review-album-photos.test.mjs apps/api/test/content-moderation-user-image-boundaries.test.mjs",
     "album-author-private:check": "node scripts/d55-album-author-private-image-preview-check.js",
-    "d56:unit": "node --test apps/miniprogram/test/albumShareEntry.test.mjs",
+    "d56:unit": "node --test apps/miniprogram/test/albumShareEntry.test.mjs apps/miniprogram/test/albumLoadingLifecycle.test.mjs",
     "d56:check": "node scripts/d56-album-share-entry-remap-check.js",
     "d57:unit": "node --test apps/api/test/album-tag-model.test.mjs apps/api/test/album-public-share-manifest.test.mjs apps/api/test/album-public-media-state.test.mjs apps/miniprogram/test/publicAlbumReadState.test.mjs",
     "d57:check": "node scripts/d57-album-tag-public-share-read-model-check.js",
