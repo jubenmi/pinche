@@ -13,7 +13,7 @@
   "scripts": {
     "audit:session-time": "node scripts/session-time-audit.mjs",
     "d51:check": "node --test scripts/d51-architecture-hardening-check.test.mjs && node scripts/d51-architecture-hardening-check.js --allow-red",
-    "postcheck": "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check && npm run unified-share:unit && npm run unified-share:check && npm run d57:unit && npm run d57:check && npm run album-author-private:unit && npm run album-author-private:check",
+    "postcheck": "npm run d54:unit && npm run d54:check && npm run d55:unit && npm run d55:check && npm run d56:unit && npm run d56:check && npm run unified-share:unit && npm run unified-share:check && npm run request-lifecycle:unit && npm run d57:unit && npm run d57:check && npm run album-author-private:unit && npm run album-author-private:check",
     "d51:migrations": "node --test apps/api/test/migration-runner.test.mjs apps/api/test/migration-runner-hardening.test.mjs apps/api/test/migration-registry.test.mjs scripts/check-migration-filenames.test.mjs && node scripts/check-migration-filenames.mjs",
     "d51:security": "node --test apps/api/test/http-body-boundaries.test.mjs apps/api/test/runtime-config.test.mjs apps/api/test/rate-limit.test.mjs",
     "d51:http-kernel": "node --test apps/api/test/router.test.mjs apps/api/test/app-routing.test.mjs apps/api/test/app-dependencies.test.mjs apps/api/test/server-entrypoint.test.mjs",
@@ -71,6 +71,7 @@
     "d53:smoke": "node scripts/d53-album-four-action-selection-smoke.js",
     "unified-share:unit": "node --test apps/api/test/session-share-lifecycle.test.mjs apps/miniprogram/test/sessionShare.test.mjs apps/miniprogram/test/sessionSharePage.test.mjs scripts/d56-unified-session-share-check.test.mjs",
     "unified-share:check": "node scripts/d56-unified-session-share-check.js",
+    "request-lifecycle:unit": "node --test apps/miniprogram/test/sessionShareInvite.test.mjs apps/miniprogram/test/adminCatalogRequestLifecycle.test.mjs",
     "d8:qa": "node scripts/d8-qa-check.js",
     "d9:release-check": "node scripts/d9-release-check.js",
     "d42:check": "node scripts/d42-album-video-hardening-unit-check.js && node scripts/d42-miniprogram-album-video-check.js && node scripts/d42-album-video-delete-integration-check.js && node scripts/d42-album-video-hardening-check.js",
