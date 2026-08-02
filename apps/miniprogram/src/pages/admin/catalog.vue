@@ -873,11 +873,13 @@ const activeTab = ref("stores");
 const roles = ref(getCurrentUser().roles || []);
 const isAdmin = computed(() => roles.value.includes("system_admin"));
 const loading = ref(false);
+const loadingOperationCount = ref(0);
 const loadError = ref("");
 const lastOperationMessage = ref("准备处理资料");
 const dirty = ref(false);
 
 const stores = ref([]);
+const storeLoadSerial = ref(0);
 const storeKeyword = ref("");
 const storeCityFilter = ref("");
 const storeStatus = ref("");
@@ -889,6 +891,7 @@ const storeLinkKeyword = ref("");
 const pendingStoreScriptPrice = ref("");
 
 const scripts = ref([]);
+const scriptLoadSerial = ref(0);
 const scriptKeyword = ref("");
 const scriptTagFilter = ref("");
 const scriptStatus = ref("");
@@ -901,6 +904,7 @@ const scriptTemplateParseError = ref("");
 const scriptRawTemplateText = ref("");
 
 const requests = ref([]);
+const requestLoadSerial = ref(0);
 const requestKeyword = ref("");
 const requestStatus = ref("pending");
 const reviewTypeFilter = ref("");
@@ -1258,6 +1262,7 @@ function currentStorePayload() {
 }
 
 async function withLoading(action, fallbackMessage = "操作失败") {
+  loadingOperationCount.value += 1;
   loading.value = true;
   loadError.value = "";
   try {
@@ -1268,7 +1273,8 @@ async function withLoading(action, fallbackMessage = "操作失败") {
     showMessage(message);
     return null;
   } finally {
-    loading.value = false;
+    loadingOperationCount.value = Math.max(loadingOperationCount.value - 1, 0);
+    loading.value = loadingOperationCount.value > 0;
   }
 }
 
@@ -1290,19 +1296,31 @@ async function retryActiveTab() {
 }
 
 async function loadStores(showLoading = true) {
+  const serial = storeLoadSerial.value + 1;
+  storeLoadSerial.value = serial;
   const action = async () => {
-    const response = await request({
-      url:
-        "/api/admin/stores" +
-        queryString({
-          keyword: [storeKeyword.value, storeCityFilter.value].filter(Boolean).join(" "),
-          status: storeStatus.value,
-          reviewStatus: storeReviewStatus.value,
-          limit: 120
-        })
-    });
-    stores.value = dataOf(response) || [];
-    return stores.value;
+    try {
+      const response = await request({
+        url:
+          "/api/admin/stores" +
+          queryString({
+            keyword: [storeKeyword.value, storeCityFilter.value].filter(Boolean).join(" "),
+            status: storeStatus.value,
+            reviewStatus: storeReviewStatus.value,
+            limit: 120
+          })
+      });
+      if (serial !== storeLoadSerial.value) {
+        return stores.value;
+      }
+      stores.value = dataOf(response) || [];
+      return stores.value;
+    } catch (error) {
+      if (serial !== storeLoadSerial.value) {
+        return stores.value;
+      }
+      throw error;
+    }
   };
   return showLoading ? withLoading(action, "店家加载失败") : action();
 }
@@ -1539,19 +1557,31 @@ async function deleteStoreByItem(store) {
 }
 
 async function loadScripts(showLoading = true) {
+  const serial = scriptLoadSerial.value + 1;
+  scriptLoadSerial.value = serial;
   const action = async () => {
-    const response = await request({
-      url:
-        "/api/admin/scripts" +
-        queryString({
-          keyword: [scriptKeyword.value, scriptTagFilter.value].filter(Boolean).join(" "),
-          status: scriptStatus.value,
-          reviewStatus: scriptReviewStatus.value,
-          limit: 120
-        })
-    });
-    scripts.value = dataOf(response) || [];
-    return scripts.value;
+    try {
+      const response = await request({
+        url:
+          "/api/admin/scripts" +
+          queryString({
+            keyword: [scriptKeyword.value, scriptTagFilter.value].filter(Boolean).join(" "),
+            status: scriptStatus.value,
+            reviewStatus: scriptReviewStatus.value,
+            limit: 120
+          })
+      });
+      if (serial !== scriptLoadSerial.value) {
+        return scripts.value;
+      }
+      scripts.value = dataOf(response) || [];
+      return scripts.value;
+    } catch (error) {
+      if (serial !== scriptLoadSerial.value) {
+        return scripts.value;
+      }
+      throw error;
+    }
   };
   return showLoading ? withLoading(action, "剧本加载失败") : action();
 }
@@ -1755,19 +1785,31 @@ async function deleteScriptByItem(script) {
 }
 
 async function loadRequests(showLoading = true) {
+  const serial = requestLoadSerial.value + 1;
+  requestLoadSerial.value = serial;
   const action = async () => {
-    const response = await request({
-      url:
-        "/api/admin/catalog-review-items" +
-        queryString({
-          keyword: requestKeyword.value,
-          status: requestStatus.value,
-          type: reviewTypeFilter.value,
-          limit: 120
-        })
-    });
-    requests.value = dataOf(response) || [];
-    return requests.value;
+    try {
+      const response = await request({
+        url:
+          "/api/admin/catalog-review-items" +
+          queryString({
+            keyword: requestKeyword.value,
+            status: requestStatus.value,
+            type: reviewTypeFilter.value,
+            limit: 120
+          })
+      });
+      if (serial !== requestLoadSerial.value) {
+        return requests.value;
+      }
+      requests.value = dataOf(response) || [];
+      return requests.value;
+    } catch (error) {
+      if (serial !== requestLoadSerial.value) {
+        return requests.value;
+      }
+      throw error;
+    }
   };
   return showLoading ? withLoading(action, "待审核资料加载失败") : action();
 }

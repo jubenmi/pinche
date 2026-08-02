@@ -929,6 +929,7 @@ export default {
       if (!this.pageActive || !this.sessionId) {
         return Promise.resolve(false);
       }
+      this.invalidateIdentityBoundRequests();
       this.clearIdentityBoundProjection();
       return this.reloadSessionAfterAuth();
     },
@@ -981,6 +982,13 @@ export default {
         // Storage failures must not retain an identity-bound in-memory projection.
       }
       this.hideShareMenus();
+    },
+    invalidateIdentityBoundRequests() {
+      this.sessionLoadSerial += 1;
+      this.sessionLoading = false;
+      this.sessionLoadPromise = null;
+      this.invitePreparing = false;
+      this.invitePrepareError = false;
     },
     async reloadSessionAfterAuth() {
       if (this.malformedInviteLink || !this.pageActive || !this.sessionId) {

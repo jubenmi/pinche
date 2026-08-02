@@ -299,6 +299,48 @@ test("malformed invite routes destroy capabilities and auth changes cannot reque
   }
 });
 
+test("identity changes release stale session and invite locks before reloading", async () => {
+  const component = await loadSharePageComponent({
+    getToken: () => "authenticated-token"
+  });
+  const page = instantiateSharePage(component);
+  Object.assign(page, {
+    pageActive: true,
+    sharePageActive: true,
+    sessionId: "42",
+    currentAuthPrincipal: "guest",
+    sessionLoading: true,
+    sessionLoadPromise: Promise.resolve(false),
+    sessionLoadSerial: 8,
+    invitePreparing: true,
+    invitePrepareError: true
+  });
+  let reloadState = null;
+  page.reloadSessionAfterAuth = async () => {
+    reloadState = {
+      sessionLoading: page.sessionLoading,
+      sessionLoadPromise: page.sessionLoadPromise,
+      sessionLoadSerial: page.sessionLoadSerial,
+      invitePreparing: page.invitePreparing,
+      invitePrepareError: page.invitePrepareError
+    };
+    return true;
+  };
+
+  const refreshed = await page.handleAuthChange({
+    user: { id: 17, gender: "female" }
+  });
+
+  assert.equal(refreshed, true);
+  assert.deepEqual(reloadState, {
+    sessionLoading: false,
+    sessionLoadPromise: null,
+    sessionLoadSerial: 9,
+    invitePreparing: false,
+    invitePrepareError: false
+  });
+});
+
 test("invalid or malformed historical capabilities never make a role claimable", () => {
   const otherwiseClaimable = {
     hasHistoricalToken: true,
