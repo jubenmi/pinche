@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-import { isBusinessDateTimeReached } from '@pinche/shared'
+import { isBusinessDateTimeReached, parseBusinessDateTime } from '@pinche/shared'
 
 import {
   buildSessionSharePayload,
@@ -47,10 +47,10 @@ const reachedAtLifecycleNow = (value) => isBusinessDateTimeReached(value, lifecy
 function evaluateDetailAlbumOpen(session) {
   const body = functionBody(detailPageSource, '    isAlbumOpen() {')
   const method = Function(
-    'isBusinessDateTimeReached',
+    'parseBusinessDateTime',
     `"use strict"; return function () {${body}}`,
-  )(reachedAtLifecycleNow)
-  return method.call({ session })
+  )(parseBusinessDateTime)
+  return method.call({ session, currentTime: lifecycleNow })
 }
 
 function evaluateAdminLifecycleFunction(signature, session) {
@@ -59,13 +59,15 @@ function evaluateAdminLifecycleFunction(signature, session) {
     return Function(
       'isBusinessDateTimeReached',
       'shareSession',
+      'currentTime',
       `"use strict"; return function () {${body}}`,
-    )(reachedAtLifecycleNow, { value: session })()
+    )(reachedAtLifecycleNow, { value: session }, { value: lifecycleNow })()
   }
   return Function(
     'isBusinessDateTimeReached',
+    'currentTime',
     `"use strict"; return function (session) {${body}}`,
-  )(reachedAtLifecycleNow)(session)
+  )(reachedAtLifecycleNow, { value: lifecycleNow })(session)
 }
 
 function assertAuthoritativeLifecycle(evaluate) {

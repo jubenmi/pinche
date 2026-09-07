@@ -28,6 +28,7 @@ export const BACKEND_STATUS_CHANGE_EVENT = "pinche-backend-status-change";
 const BACKEND_HEALTH_TIMEOUT = 10000;
 const MAINTENANCE_USER_MESSAGE = "服务正在上线维护中，请稍后再试。";
 let cosClient = null;
+let authGeneration = 0;
 const albumUploadIdsByKey = new Map();
 const backendStatus = {
   checking: false,
@@ -194,8 +195,13 @@ export function checkBackendHealth(options = {}) {
 
 export function setToken(token) {
   const app = getApp();
+  const nextBaseUrl = token ? getApiBaseUrl() : "";
+  if ((app.globalData.token || uni.getStorageSync(TOKEN_KEY) || "") !== (token || "") ||
+      (app.globalData.authBaseUrl || uni.getStorageSync(AUTH_BASE_URL_KEY) || "") !== nextBaseUrl) {
+    authGeneration += 1;
+  }
   app.globalData.token = token || "";
-  app.globalData.authBaseUrl = token ? getApiBaseUrl() : "";
+  app.globalData.authBaseUrl = nextBaseUrl;
   if (token) {
     uni.setStorageSync(TOKEN_KEY, token);
     uni.setStorageSync(AUTH_BASE_URL_KEY, getApiBaseUrl());
@@ -279,6 +285,7 @@ export function clearCurrentUserAvatarUrl(avatarUrl) {
 }
 
 export function clearAuth() {
+  authGeneration += 1;
   const app = getApp();
   app.globalData.token = "";
   app.globalData.authBaseUrl = "";
@@ -294,13 +301,22 @@ export function clearAuth() {
   notifyAuthChange();
 }
 
-function rejectUnauthorizedResponse(response) {
+function isCurrentAuthRequest(token, baseUrl, generation) {
+  return Boolean(generation === authGeneration && token && baseUrl === getApiBaseUrl() && token === getToken());
+}
+
+function rejectUnauthorizedResponse(response, requestToken, requestBaseUrl, generation) {
   if (response?.statusCode !== 401) {
     return response;
   }
-  clearAuth();
+  let authExpiredGeneration;
+  if (isCurrentAuthRequest(requestToken, requestBaseUrl, generation)) {
+    clearAuth();
+    authExpiredGeneration = authGeneration;
+  }
   return {
     ...response,
+    authExpiredGeneration,
     userMessage: "登录已过期，请重新登录。"
   };
 }
@@ -856,17 +872,23 @@ function uploadBackendFile({
 
   const headers = { ...extraHeaders };
   const token = getToken();
+  const requestBaseUrl = getApiBaseUrl();
+  const generation = authGeneration;
   if (token) {
     headers.Authorization = "Bearer " + token;
   }
 
   return new Promise((resolve, reject) => {
     uni.uploadFile({
-      url: getApiBaseUrl() + url,
+      url: requestBaseUrl + url,
       filePath,
       name,
       header: headers,
       success(response) {
+        if (response.statusCode === 401) {
+          reject(rejectUnauthorizedResponse(response, token, requestBaseUrl, generation));
+          return;
+        }
         let responseData = response.data || {};
         if (typeof responseData === "string") {
           try {
@@ -885,7 +907,7 @@ function uploadBackendFile({
           reject(rejectUnauthorizedResponse({
             statusCode: response.statusCode,
             data: responseData
-          }));
+          }, token, requestBaseUrl, generation));
           return;
         }
 
@@ -946,18 +968,24 @@ function uploadBackendBinaryFile({
     "content-type": contentType
   };
   const token = getToken();
+  const requestBaseUrl = getApiBaseUrl();
+  const generation = authGeneration;
   if (token) {
     headers.Authorization = "Bearer " + token;
   }
 
   return new Promise((resolve, reject) => {
     uni.request({
-      url: getApiBaseUrl() + url,
+      url: requestBaseUrl + url,
       method: "POST",
       data: bodyBytes,
       header: headers,
       timeout: 15000,
       success(response) {
+        if (response.statusCode === 401) {
+          reject(rejectUnauthorizedResponse(response, token, requestBaseUrl, generation));
+          return;
+        }
         let responseData = response.data || {};
         if (typeof responseData === "string") {
           try {
@@ -976,7 +1004,7 @@ function uploadBackendBinaryFile({
           reject(rejectUnauthorizedResponse({
             statusCode: response.statusCode,
             data: responseData
-          }));
+          }, token, requestBaseUrl, generation));
           return;
         }
 
@@ -1573,11 +1601,15 @@ export async function createSessionAlbumVideo(sessionId, payload) {
 }
 
 export async function updateUserProfile(patch) {
+  const token = getToken();
+  const requestBaseUrl = getApiBaseUrl();
+  const generation = authGeneration;
   const response = await request({
     url: "/api/users/me",
     method: "PATCH",
     data: patch
   });
+  if (!isCurrentAuthRequest(token, requestBaseUrl, generation)) return null;
   const data = dataOf(response);
   if (!data?.user) {
     return null;
@@ -1585,7 +1617,7 @@ export async function updateUserProfile(patch) {
 
   const current = getCurrentUser();
   const nextAuth = {
-    token: getToken(),
+    token,
     user: data.user,
     roles: data.roles || current.roles || []
   };
@@ -1598,16 +1630,23 @@ export async function updateUserGender(gender) {
 }
 
 export async function refreshCurrentAuth() {
+  return (await refreshCurrentAuthResult()).auth;
+}
+
+async function refreshCurrentAuthResult() {
   const token = getToken();
+  const requestBaseUrl = getApiBaseUrl();
+  const generation = authGeneration;
   if (!token) {
-    return null;
+    return { auth: null, stale: false };
   }
 
   try {
     const response = await request({ url: "/api/users/me" });
+    if (!isCurrentAuthRequest(token, requestBaseUrl, generation)) return { auth: null, stale: true };
     const data = dataOf(response);
     if (!data?.user) {
-      return null;
+      return { auth: null, stale: false };
     }
 
     const nextAuth = {
@@ -1616,21 +1655,24 @@ export async function refreshCurrentAuth() {
       roles: data.roles || []
     };
     setAuth(nextAuth);
-    return nextAuth;
+    return { auth: nextAuth, stale: false };
   } catch (error) {
-    if (error?.statusCode === 401) {
-      clearAuth();
-    }
-    return null;
+    const expiredHere = error?.authExpiredGeneration === authGeneration &&
+      requestBaseUrl === getApiBaseUrl() && !getToken();
+    return { auth: null, stale: !expiredHere && !isCurrentAuthRequest(token, requestBaseUrl, generation) };
   }
 }
 
 export async function updateUserPhoneFromWechatPhoneCode(code) {
+  const token = getToken();
+  const requestBaseUrl = getApiBaseUrl();
+  const generation = authGeneration;
   const response = await request({
     url: "/api/auth/wechat/phone",
     method: "POST",
     data: { code }
   });
+  if (!isCurrentAuthRequest(token, requestBaseUrl, generation)) return null;
   const data = dataOf(response);
   if (!data?.user) {
     return null;
@@ -1638,7 +1680,7 @@ export async function updateUserPhoneFromWechatPhoneCode(code) {
 
   const current = getCurrentUser();
   const nextAuth = {
-    token: getToken(),
+    token,
     user: data.user,
     roles: data.roles || current.roles || []
   };
@@ -1748,7 +1790,11 @@ export async function ensureUserPhone(auth, options = {}) {
 }
 
 export function loginWithWechat(options = {}) {
+  const generation = authGeneration;
+  const requestBaseUrl = getApiBaseUrl();
+  const stillCurrent = () => generation === authGeneration && requestBaseUrl === getApiBaseUrl();
   const loginWithCode = (code) => {
+    if (!stillCurrent()) return Promise.resolve(null);
     if (!code) {
       const error = new Error("WeChat login code is missing");
       error.userMessage = "微信登录凭证获取失败，请重试";
@@ -1761,6 +1807,7 @@ export function loginWithWechat(options = {}) {
         code
       }
     }).then((response) => {
+      if (!stillCurrent()) return null;
       const data = dataOf(response);
       if (data) {
         setAuth(data);
@@ -1801,7 +1848,8 @@ export async function ensureLoggedIn(options = {}) {
   const auth = getCurrentUser();
   const token = getToken();
   if (auth.user && token) {
-    const refreshedAuth = await refreshCurrentAuth();
+    const { auth: refreshedAuth, stale } = await refreshCurrentAuthResult();
+    if (stale) return null;
     if (refreshedAuth) {
       const phoneAuth = await ensureUserPhone(refreshedAuth, options);
       if (!phoneAuth) {
@@ -1814,8 +1862,10 @@ export async function ensureLoggedIn(options = {}) {
     clearAuth();
   }
 
+  const loginGeneration = authGeneration;
+  const loginBaseUrl = getApiBaseUrl();
   const confirmed = await confirmLogin(options);
-  if (!confirmed) {
+  if (!confirmed || loginGeneration !== authGeneration || loginBaseUrl !== getApiBaseUrl()) {
     return null;
   }
 
@@ -1877,13 +1927,15 @@ export function request(options = {}) {
 
   const headers = Object.assign({}, options.header || {});
   const token = getToken();
+  const requestBaseUrl = getApiBaseUrl();
+  const generation = authGeneration;
   if (token) {
     headers.Authorization = "Bearer " + token;
   }
 
   return new Promise((resolve, reject) => {
     uni.request({
-      url: getApiBaseUrl() + options.url,
+      url: requestBaseUrl + options.url,
       method: options.method || "GET",
       data: options.data || {},
       header: headers,
@@ -1891,12 +1943,14 @@ export function request(options = {}) {
       success(response) {
         const responseData = response.data || {};
         if (response.statusCode >= 400 || responseData.ok === false) {
-          const authResponse = rejectUnauthorizedResponse(response);
-          reject(normalizedApiError({
+          const authResponse = rejectUnauthorizedResponse(response, token, requestBaseUrl, generation);
+          const error = normalizedApiError({
             status: authResponse.statusCode,
             payload: responseData,
             fallbackMessage: "请求失败"
-          }));
+          });
+          error.authExpiredGeneration = authResponse.authExpiredGeneration;
+          reject(error);
           return;
         }
         resolve(response);

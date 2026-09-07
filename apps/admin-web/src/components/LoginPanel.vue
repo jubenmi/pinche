@@ -38,6 +38,9 @@ const ticket = ref(null);
 const status = ref("loading");
 const loading = ref(false);
 let pollTimer = 0;
+let ticketGeneration = 0;
+let pollingGeneration = null;
+let disposed = false;
 
 const statusText = computed(() => {
   const labels = {
@@ -67,11 +70,15 @@ async function drawTicketQr(nextTicket) {
 }
 
 async function checkTicket() {
-  if (!ticket.value) {
+  if (disposed || loading.value || !pollTimer || !ticket.value || pollingGeneration === ticketGeneration) {
     return;
   }
+  const generation = ticketGeneration;
+  const currentTicket = ticket.value;
+  pollingGeneration = generation;
   try {
-    const result = await pollLoginTicket(ticket.value);
+    const result = await pollLoginTicket(currentTicket);
+    if (disposed || generation !== ticketGeneration) return;
     status.value = result.status;
     if (result.status === "approved" && result.token) {
       setStoredAuth(result);
@@ -82,27 +89,41 @@ async function checkTicket() {
       stopPolling();
     }
   } catch (error) {
+    if (disposed || generation !== ticketGeneration) return;
     status.value = "failed";
     stopPolling();
+  } finally {
+    if (pollingGeneration === generation) pollingGeneration = null;
   }
 }
 
 async function refreshTicket() {
+  if (disposed) return;
+  const generation = ++ticketGeneration;
   loading.value = true;
   status.value = "loading";
   stopPolling();
+  ticket.value = null;
   try {
-    ticket.value = await createLoginTicket();
-    await drawTicketQr(ticket.value);
+    const nextTicket = await createLoginTicket();
+    if (disposed || generation !== ticketGeneration) return;
+    await drawTicketQr(nextTicket);
+    if (disposed || generation !== ticketGeneration) return;
+    ticket.value = nextTicket;
     status.value = "pending";
     pollTimer = window.setInterval(checkTicket, 2000);
   } catch (error) {
+    if (disposed || generation !== ticketGeneration) return;
     status.value = "failed";
   } finally {
-    loading.value = false;
+    if (!disposed && generation === ticketGeneration) loading.value = false;
   }
 }
 
 onMounted(refreshTicket);
-onBeforeUnmount(stopPolling);
+onBeforeUnmount(() => {
+  disposed = true;
+  ticketGeneration += 1;
+  stopPolling();
+});
 </script>

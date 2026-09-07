@@ -2,9 +2,9 @@ const TOKEN_KEY = "pinche_admin_web_token";
 const USER_KEY = "pinche_admin_web_user";
 const ROLES_KEY = "pinche_admin_web_roles";
 export const AUTH_EXPIRED_EVENT = "pinche-admin-web-auth-expired";
-import { shouldAttachAdminAuthorization } from "./albumMedia";
-import { buildModerationListFilters } from "./contentModeration";
-import { createContentSecuritySettingsClient } from "./contentSecurity";
+import { shouldAttachAdminAuthorization } from "./albumMedia.js";
+import { buildModerationListFilters } from "./contentModeration.js";
+import { createContentSecuritySettingsClient } from "./contentSecurity.js";
 let cosClient = null;
 let cosSdkConstructor = null;
 const albumUploadsByKey = new Map();
@@ -38,18 +38,25 @@ export function clearStoredAuth() {
   localStorage.removeItem(ROLES_KEY);
 }
 
-function publishAuthExpired() {
-  clearStoredAuth();
-  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+function expireCurrentAuth(response, requestToken) {
+  // A delayed failure from a previous session must not sign out a newer login.
+  if (response.status === 401 && requestToken && getStoredAuth().token === requestToken) {
+    clearStoredAuth();
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+  }
 }
 
-async function parseResponse(response, { hadToken = false } = {}) {
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
+async function parseResponse(response, requestToken) {
+  expireCurrentAuth(response, requestToken);
+  let payload = null;
+  try {
+    const text = await response.text();
+    payload = text ? JSON.parse(text) : null;
+  } catch (error) {
+    // Proxies may return HTML or an unreadable body for HTTP errors.
+    if (response.ok) throw error;
+  }
   if (!response.ok || payload?.ok === false) {
-    if (response.status === 401 && hadToken) {
-      publishAuthExpired();
-    }
     const error = new Error(payload?.error?.message || `Request failed: ${response.status}`);
     error.status = response.status;
     error.statusCode = response.status;
@@ -62,7 +69,6 @@ async function parseResponse(response, { hadToken = false } = {}) {
 
 export async function apiRequest(path, options = {}) {
   const auth = getStoredAuth();
-  const hadToken = Boolean(auth.token);
   const response = await fetch(path, {
     method: options.method || "GET",
     headers: {
@@ -71,7 +77,7 @@ export async function apiRequest(path, options = {}) {
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body)
   });
-  return parseResponse(response, { hadToken });
+  return parseResponse(response, auth.token);
 }
 
 const contentSecuritySettingsClient = createContentSecuritySettingsClient(apiRequest);
@@ -111,6 +117,9 @@ export async function fetchAuthorizedMediaObjectUrl(path) {
     throw error;
   }
   if (!response.ok) {
+    if (headers.authorization && shouldAttachAdminAuthorization(response.url || path)) {
+      expireCurrentAuth(response, auth.token);
+    }
     const error = new Error(`Media request failed: ${response.status}`);
     error.status = response.status;
     error.statusCode = response.status;
@@ -127,7 +136,6 @@ export async function fetchAuthorizedMediaObjectUrl(path) {
 
 async function apiFormDataRequest(path, formData, options = {}) {
   const auth = getStoredAuth();
-  const hadToken = Boolean(auth.token);
   const response = await fetch(path, {
     method: options.method || "POST",
     headers: {
@@ -135,7 +143,7 @@ async function apiFormDataRequest(path, formData, options = {}) {
     },
     body: formData
   });
-  return parseResponse(response, { hadToken });
+  return parseResponse(response, auth.token);
 }
 
 function fileExtensionFromName(name) {

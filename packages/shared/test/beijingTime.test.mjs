@@ -1,4 +1,10 @@
 import test from "node:test";
+
+test("rejects timezone offsets outside the supported ISO range", () => {
+  for (const offset of ["+15:00", "-23:59", "+14:01", "+08:60"]) {
+    assert.equal(parseBusinessDateTime(`2026-09-07T19:30:00${offset}`), null);
+  }
+});
 import assert from "node:assert/strict";
 
 import {

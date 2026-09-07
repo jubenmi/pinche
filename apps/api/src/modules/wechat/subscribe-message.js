@@ -130,7 +130,7 @@ export async function sendSubscribeMessage(
   };
 }
 
-export async function notifySignupCreated(payload = {}) {
+export async function notifySignupCreated(payload = {}, options = {}) {
   payload = payload || {};
   const templateId = config.subscribeMessage.signupCreatedTemplateId;
   return sendSubscribeMessage({
@@ -139,10 +139,10 @@ export async function notifySignupCreated(payload = {}) {
     templateId,
     page: `/pages/session/manage?id=${payload.sessionId}`,
     data: messageData(payload, "待审核")
-  });
+  }, options);
 }
 
-export async function notifySignupReviewed(payload = {}) {
+export async function notifySignupReviewed(payload = {}, options = {}) {
   payload = payload || {};
   const templateId = config.subscribeMessage.signupReviewedTemplateId;
   return sendSubscribeMessage({
@@ -151,7 +151,7 @@ export async function notifySignupReviewed(payload = {}) {
     templateId,
     page: `/pages/session/detail?id=${payload.sessionId}`,
     data: messageData(payload, payload.resultText || "已审核")
-  });
+  }, options);
 }
 
 export async function notifySessionRescheduled(payload = {}, options = {}) {

@@ -22,6 +22,7 @@ import {
   signSignedPayload as signNamespacedPayload,
   signedPayloadSignature as namespacedPayloadSignature,
   tokenPositiveInteger as parseTokenPositiveInteger,
+  tokenExpiration,
   verifySignedPayload as verifyNamespacedPayload
 } from "./modules/security/signed-payload.js";
 import { createHistoricalInviteTokenCodec } from "./modules/core/historical-invite-token.js";
@@ -46,6 +47,8 @@ import {
 } from "./modules/auth/rate-limit.js";
 import { createLazyRedisRateLimitStore } from "./infra/redis/rate-limit-store.js";
 import { routeExtensions } from "./modules/extensions/registry.js";
+import { normalizeSessionCreationStartAt } from "./modules/core/session-purpose.js";
+import { readSessionDatabaseNow } from "./modules/core/session-creation-time.js";
 import { geocodeStoreLocation, reverseGeocodeCity } from "./modules/location/geocoding.js";
 import {
   buildCosAuthorization,
@@ -651,7 +654,7 @@ function assertCatalogSessionPreflight(row, actor, label) {
 function assertReviewEligiblePreflight(session, signups) {
   const startAt = new Date(session.start_at).getTime();
   const cancelledAt = session.cancelled_at ? new Date(session.cancelled_at).getTime() : null;
-  const reviewWindowOpen = Number.isFinite(startAt) && startAt <= Date.now() && (
+  const reviewWindowOpen = Number.isFinite(startAt) && Number(session.session_started) === 1 && (
     String(session.status) !== "cancelled" ||
     cancelledAt === null ||
     cancelledAt >= startAt
@@ -740,6 +743,7 @@ async function currentSessionCreateTextBase(
     if (!actor.phone_verified) throw phoneRequired();
     assertCatalogSessionPreflight(store, actor, "Store");
     assertCatalogSessionPreflight(script, actor, "Script");
+    normalizeSessionCreationStartAt(body?.startAt, body?.sessionPurpose, await readSessionDatabaseNow(connection));
   }
   const [roleRows] = await connection.query(
     `SELECT id, script_id, name, description, role_gender, sort_order, status
@@ -848,7 +852,7 @@ async function currentNpcRoleTextBase(
 async function currentReviewTextBase(connection, sessionId, actorUserId, { forUpdate = false } = {}) {
   const lock = forUpdate ? " FOR UPDATE" : "";
   const [sessionRows] = await connection.query(
-    `SELECT * FROM sessions WHERE id = ? LIMIT 1${lock}`,
+    `SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started FROM sessions WHERE id = ? LIMIT 1${lock}`,
     [Number(sessionId)]
   );
   const actor = await currentActorTextSnapshot(connection, actorUserId, { forUpdate });
@@ -2869,7 +2873,7 @@ function verifySessionAlbumVideoFileQuery(mediaId, query) {
     throw forbidden("album video token is invalid");
   }
   const exp = tokenPositiveInteger(payload.exp, "exp");
-  if (exp < Math.floor(Date.now() / 1000)) {
+  if (exp <= Math.floor(Date.now() / 1000)) {
     throw forbidden("album video token expired");
   }
   return {
@@ -3086,12 +3090,12 @@ function mediaVariant(query) {
 }
 
 function verifySessionAlbumMediaQuery(photoId, query) {
-  const expires = Number.parseInt(query.get("expires") || "", 10);
+  const expires = tokenExpiration(query.get("expires"));
   const signature = query.get("signature") || "";
   if (!expires || !signature) {
     throw forbidden("album media token is required");
   }
-  if (expires < Math.floor(Date.now() / 1000)) {
+  if (expires <= Math.floor(Date.now() / 1000)) {
     throw forbidden("album media token expired");
   }
   const expected = sessionAlbumMediaSignature(photoId, expires);

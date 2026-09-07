@@ -1,9 +1,8 @@
 import { parseBusinessDateTime } from "@pinche/shared";
+import { AppError } from "../../http/errors.js";
 
 function invalidStartAt() {
-  const error = new Error("startAt must be a valid business date time");
-  error.code = "INVALID_START_AT";
-  return error;
+  return new AppError(400, "INVALID_START_AT", "startAt must be a valid business date time");
 }
 
 export function normalizeSessionCreationStartAt(value) {

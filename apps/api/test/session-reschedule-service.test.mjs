@@ -16,7 +16,9 @@ function fakeConnection({
   organizerUserId = 7,
   recipients = [],
   notificationError,
-  sessionStarted = 0
+  sessionStarted = 0,
+  databaseNow = new Date(),
+  startAt = futureStart
 } = {}) {
   const calls = [];
   const connection = {
@@ -29,7 +31,8 @@ function fakeConnection({
           id: 42,
           organizer_user_id: organizerUserId,
           script_name_snapshot: "测试剧本",
-          start_at: futureStart,
+          start_at: startAt,
+          database_now: databaseNow,
           session_started: sessionStarted
         }]];
       }
@@ -57,6 +60,25 @@ test("unauthorized reschedule rejects before locks or mutation", async () => {
     { code: "FORBIDDEN" }
   );
   assert.equal(connection.calls.length, 1);
+});
+
+test("reschedule rejects a target already past on the database clock", async () => {
+  const connection = fakeConnection({
+    databaseNow: new Date(Date.now() + 3 * 3_600_000),
+    startAt: new Date(Date.now() + 4 * 3_600_000)
+  });
+  await assert.rejects(rescheduleSessionInTransaction(connection, organizer, 42, {
+    startAt: requestedStart
+  }), { statusCode: 400 });
+  assert.equal(connection.calls.some(({ sql }) => sql.startsWith("UPDATE")), false);
+});
+
+test("reschedule uses the database clock when the app clock is ahead", async (t) => {
+  const databaseNow = new Date();
+  const connection = fakeConnection({ databaseNow });
+  t.mock.method(Date, "now", () => databaseNow.getTime() + 3 * 3_600_000);
+  await rescheduleSessionInTransaction(connection, organizer, 42, { startAt: requestedStart });
+  assert.equal(connection.calls.some(({ sql }) => sql.startsWith("UPDATE sessions")), true);
 });
 
 test("delivery diagnostics are per-result and redact sensitive error content", () => {

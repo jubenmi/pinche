@@ -254,8 +254,13 @@ const createSessionInsertSlice = sourceSlice(
 );
 assert.match(
   createSessionSlice,
-  /normalizeSessionCreationStartAt\(\s*requireValue\(body,\s*["']startAt["']\),\s*body\.sessionPurpose\s*\)/,
-  "session creation must normalize startAt"
+  /const startAt = parseSessionCreationStartAt\(requireValue\(body,\s*["']startAt["']\)\);/,
+  "session creation must reject invalid startAt before querying the database"
+);
+assert.match(
+  createSessionSlice,
+  /normalizeSessionCreationStartAt\(\s*startAt,\s*body\.sessionPurpose,\s*await readSessionDatabaseNow\(connection\)\s*\)/,
+  "session creation must normalize startAt against the database clock"
 );
 assert.match(
   createSessionInsertSlice,

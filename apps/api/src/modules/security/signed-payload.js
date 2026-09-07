@@ -17,6 +17,16 @@ export function tokenPositiveInteger(value, label) {
   return parsed;
 }
 
+export function tokenExpiration(value) {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw forbidden("exp is invalid");
+  }
+  return parsed;
+}
+
 export function signSignedPayload({ secret, namespace, payload }) {
   const payloadText = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = signedPayloadSignature({ secret, namespace, payloadText });
@@ -52,7 +62,7 @@ export function verifySignedPayload({
   } catch (error) {
     throw forbidden(`${label} is invalid`);
   }
-  if (tokenPositiveInteger(payload.exp, "exp") < nowSeconds()) {
+  if (tokenExpiration(payload?.exp) <= nowSeconds()) {
     throw forbidden(`${label} expired`);
   }
   return payload;

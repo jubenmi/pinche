@@ -238,12 +238,14 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { onShow, onHide } from "@dcloudio/uni-app";
 import {
   beijingDateKey,
   beijingDateParts,
   beijingTimeText,
   isHistoricalSession,
+  createClockTicker,
   parseBusinessDateTime
 } from "@pinche/shared";
 import { dataOf, request } from "../utils/api";
@@ -311,6 +313,12 @@ const props = defineProps({
 const emit = defineEmits(["refresh", "create", "admin", "identity-required", "auth-expired"]);
 
 const sessionStatusText = ref("");
+const currentTime = ref(Date.now());
+const clock = createClockTicker((now) => { currentTime.value = now; });
+onMounted(clock.start);
+onShow(clock.start);
+onHide(clock.stop);
+onBeforeUnmount(clock.dispose);
 const signupStatusText = ref("");
 const activeFilter = ref("mine");
 const loadedCalendarCount = ref(CALENDAR_PAGE_SIZE);
@@ -1161,7 +1169,7 @@ function isCalendarItemPostStart(item) {
 
 function isStartedAt(startAt) {
   const startDate = parseBusinessDateTime(startAt);
-  return Boolean(startDate && startDate.getTime() <= Date.now());
+  return Boolean(startDate && startDate.getTime() <= currentTime.value);
 }
 
 function hasAlbumContent(source = {}) {
@@ -1299,7 +1307,7 @@ function targetElementIdForDate(key) {
 }
 
 function todayStart() {
-  return dateFromKey(beijingDateKey(new Date()));
+  return dateFromKey(beijingDateKey(new Date(currentTime.value)));
 }
 
 function startOfDay(date) {

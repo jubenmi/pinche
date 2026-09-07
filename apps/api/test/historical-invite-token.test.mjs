@@ -82,7 +82,7 @@ test("historical invitation token verification rejects malformed token payloads"
   }
 });
 
-test("generic verification preserves baseline handling of signed non-object JSON", () => {
+test("generic verification rejects signed non-object JSON with a controlled expiration error", () => {
   function verifyPayload(payload) {
     return verifySignedPayload({
       secret: SECRET,
@@ -93,14 +93,13 @@ test("generic verification preserves baseline handling of signed non-object JSON
     });
   }
 
-  for (const payload of [[], 42, "claims"]) {
+  for (const payload of [null, [], 42, "claims"]) {
     assert.throws(() => verifyPayload(payload), {
       statusCode: 403,
       code: "FORBIDDEN",
       message: "exp is invalid"
     });
   }
-  assert.throws(() => verifyPayload(null), TypeError);
 });
 
 test("historical invitation tokens require the exact claim purpose and session purpose", () => {

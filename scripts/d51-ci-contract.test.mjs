@@ -74,6 +74,7 @@ test("PR CI runs every D51 gate on Node 24 before a reusable publish dependency"
     "npm run test:unit",
     "npm run test:contracts",
     "npm run test:integration",
+    "npm run test:business-time-mysql",
     "npm run build:all",
   ]) {
     assert.match(ci, new RegExp(`run:\\s*${command.replaceAll(" ", "\\s+")}`));

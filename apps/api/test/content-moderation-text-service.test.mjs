@@ -936,6 +936,61 @@ test("a revalidation permission failure becomes stale and closes the proposal tr
   assert.equal(state.transitions.at(-1).errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
 });
 
+for (const code of ["SESSION_START_AT_NOT_FUTURE", "INVALID_START_AT", "SESSION_PURPOSE_TIME_MISMATCH"]) {
+  test(`approved create-session time failure ${code} terminates as stale without applying`, async () => {
+    const timeError = Object.assign(new Error("session time is no longer eligible"), {
+      code, statusCode: 400
+    });
+    const { service, state } = textHarness({ applyError: timeError });
+    await assert.rejects(service.moderateTextMutation(mutationInput({
+      action: "create_session", subjectType: "session_create",
+      payload: {
+        body: { storeId: 1, scriptId: 2, startAt: "2026-09-07T11:30:00Z", note: "周末拼车" },
+        context: { targetSubjectId: "creation:create_session:7" }
+      }
+    })), { code: "CONTENT_MODERATION_PROPOSAL_STALE" });
+    assert.equal(state.job.status, "rejected");
+    assert.equal(state.proposal.status, "stale");
+    assert.equal(state.transitions.at(-1).errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
+    assert.equal(state.applied.length, 0);
+    assert.equal(state.failures.length, 0);
+  });
+}
+
+test("leased retry closes an expired creation as stale instead of leaving a retryable job", async () => {
+  const normalizedText = normalizeTextFields({ note: "周末拼车" });
+  const subjectVersion = textMutationSubjectVersion({ normalizedText });
+  const normalizedPayload = {
+    body: { storeId: 1, scriptId: 2, startAt: "2026-09-07T11:30:00Z", note: "周末拼车" },
+    context: { targetSubjectId: "creation:create_session:7" }, actor_user_id: 7
+  };
+  const payloadDigest = textProposalPayloadDigest({
+    action: "create_session", baseVersion: "session-v1", normalizedText, normalizedPayload
+  });
+  const { service, state } = textHarness({
+    jobStatus: "error",
+    jobOverrides: { subject_type: "session_create", subject_version: subjectVersion },
+    proposalOverrides: {
+      action: "create_session", subject_type: "session_create", payload_digest: payloadDigest,
+      normalized_payload_json: JSON.stringify(normalizedPayload)
+    },
+    applyError: Object.assign(new Error("start time elapsed during review"), {
+      code: "SESSION_START_AT_NOT_FUTURE", statusCode: 400
+    })
+  });
+  const result = await service.retryTextModeration({
+    job: { ...state.job }, proposal: { ...state.proposal }, normalizedText,
+    openid: "openid-7", leaseToken: "lease-text"
+  });
+  assert.deepEqual(result, { kind: "stale" });
+  assert.equal(state.job.status, "rejected");
+  assert.equal(state.proposal.status, "stale");
+  assert.equal(state.transitions.at(-1).leaseToken, "lease-text");
+  assert.equal(state.checked.length, 1);
+  assert.equal(state.applied.length, 0);
+  assert.equal(state.failures.length, 0);
+});
+
 test("an existing error text job is left for the leased Worker instead of resubmitting directly", async () => {
   const { service, state } = textHarness({ jobStatus: "error" });
 

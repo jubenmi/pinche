@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, transformWithEsbuild } from "vite";
 import uniPlugin from "@dcloudio/vite-plugin-uni";
+import { formatBeijingDateTime } from "@pinche/shared";
 
 const uni = typeof uniPlugin === "function" ? uniPlugin : uniPlugin.default;
 const miniprogramRoot = fileURLToPath(new URL(".", import.meta.url));
@@ -90,12 +91,7 @@ const nativeTdesignTags = new Set([
 ]);
 
 function formatBuildTime(date = new Date()) {
-  const pad = (value) => String(value).padStart(2, "0");
-
-  return [
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
-    `${pad(date.getHours())}:${pad(date.getMinutes())}`
-  ].join(" ");
+  return formatBeijingDateTime(date);
 }
 
 function firstExistingPath(paths) {
