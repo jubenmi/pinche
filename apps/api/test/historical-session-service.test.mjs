@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import mysql from "mysql2/promise";
+import { formatBeijingDateTime } from "@pinche/shared";
 
 import {
   approveSignup,
@@ -1040,6 +1041,32 @@ test("historical creation binds normalized purpose and time with share-only revi
   assert.equal(values.join_policy, "review_required");
   assert.equal(values.join_phone_required, 0);
   assert.equal(values.npc_join_enabled, 0);
+});
+
+for (const startAt of ["2026-09-03 13:00:00", "2026-09-03T13:00:00+08:00", "2026-09-03T05:00:00.000Z"]) {
+  test(`September 3 historical creation preserves 13:00 for ${startAt}`, async () => {
+    const connection = createConnection();
+    const session = await createSessionWithConnection(connection, ACTOR, baseBody({ startAt }));
+    const stored = sessionInsertValues(connection.state.sessionInsert).start_at;
+    assert.ok(stored instanceof Date);
+    assert.equal(mysql.escape(stored, false, "Z"), "'2026-09-03 05:00:00.000'");
+    assert.equal(formatBeijingDateTime(session.start_at), "2026-09-03 13:00");
+  });
+}
+
+test("historical draft retry keeps the same session after transport changes from wall time to ISO", async () => {
+  const connection = idempotentHistoricalCreationConnection();
+  const body = baseBody({
+    startAt: "2026-09-03 13:00:00",
+    historicalCreationKey: "hs_0123456789abcdef0123456789abcdef0123456789abcdef"
+  });
+  const first = await createSessionWithConnection(connection, ACTOR, body);
+  const replay = await createSessionWithConnection(connection, ACTOR, {
+    ...body, startAt: "2026-09-03T05:00:00.000Z"
+  });
+  assert.equal(replay.id, first.id);
+  assert.equal(connection.state.sessionInsertCount, 1);
+  assert.equal(formatBeijingDateTime(replay.start_at), "2026-09-03 13:00");
 });
 
 test("future creation retains requested public visibility and recruitment settings", async () => {
