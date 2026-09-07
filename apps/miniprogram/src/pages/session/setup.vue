@@ -560,7 +560,7 @@ export default {
         return {
           storeId: Number(this.store.id),
           scriptId: Number(this.script.id),
-          startAt: this.startAt,
+          startAt: this.transportStartAt,
           sessionPurpose: this.sessionPurpose,
           depositAmount: 0,
           ...historicalSettings,
@@ -680,7 +680,7 @@ export default {
       }
       if (session.status === "locked") {
         return this.clearPendingHistoricalDraft(() =>
-          this.redirectToSessionShare(session.id)
+          this.redirectToCreatedSession(session.id, HISTORICAL_RECORD)
         );
       }
       if (session.status !== "draft") {
@@ -708,7 +708,7 @@ export default {
       }
       if (reloaded.status === "locked") {
         return this.clearPendingHistoricalDraft(() =>
-          this.redirectToSessionShare(session.id)
+          this.redirectToCreatedSession(session.id, HISTORICAL_RECORD)
         );
       }
       if (reloaded.status !== "draft") {
@@ -780,7 +780,7 @@ export default {
       } catch (error) {
         // The server-side publish already succeeded; navigation is the recovery path.
       }
-      this.redirectToSessionShare(sessionId);
+      this.redirectToCreatedSession(sessionId, setup.sessionPurpose);
     },
     createPublishedSession() {
       return this.submissionController.submit({
@@ -942,8 +942,9 @@ export default {
         this.busyAction = false;
       });
     },
-    redirectToSessionShare(sessionId) {
-      uni.redirectTo({ url: `/pages/session/share?id=${sessionId}` });
+    redirectToCreatedSession(sessionId, sessionPurpose) {
+      const page = sessionPurpose === HISTORICAL_RECORD ? "detail" : "share";
+      uni.redirectTo({ url: `/pages/session/${page}?id=${sessionId}` });
     },
     createErrorText(error) {
       if (error?.statusCode === 400) {
