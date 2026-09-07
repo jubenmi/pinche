@@ -885,7 +885,10 @@ export default {
           newStartAt: startAt
         }),
         confirmText: "确认纠正",
-        cancelText: "再检查一下",
+        cancelText: "取消",
+        fail: () => {
+          this.statusText = "确认框打开失败，请重新选择时间后重试。";
+        },
         success: (result) => {
           if (result.confirm) {
             this.correctHistoricalTime(startAt);
