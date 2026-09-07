@@ -19,6 +19,27 @@ test("creation sends selected Beijing time as UTC", () => {
   assert.equal(page.computed.transportStartAt.call({ dateValue: "2026-09-07", timeValue: "19:30" }), "2026-09-07T11:30:00.000Z");
 });
 
+for (const isHistorical of [true, false]) {
+  for (const [timeValue, expected] of [
+    ["13:00", "2026-09-03T05:00:00.000Z"],
+    ["00:30", "2026-09-02T16:30:00.000Z"]
+  ]) {
+    test(`${isHistorical ? "historical" : "future"} creation payload preserves September 3 ${timeValue}`, () => {
+      const state = {
+        dateValue: "2026-09-03", timeValue, isHistorical,
+        store: { id: 1 }, script: { id: 2 },
+        sessionPurpose: isHistorical ? shared.HISTORICAL_RECORD : shared.FUTURE_CARPOOL
+      };
+      state.startAt = page.computed.startAt.call(state);
+      state.transportStartAt = page.computed.transportStartAt.call(state);
+      const payload = page.methods.sessionCreationData.call(state, "");
+      assert.equal(payload.startAt, expected, "the actual request must include the UTC timezone");
+      assert.equal(shared.formatBeijingDateTime(payload.startAt), `2026-09-03 ${timeValue}`);
+      assert.equal(state.startAt, `2026-09-03 ${timeValue}:00`, "local drafts keep their existing wall time format");
+    });
+  }
+}
+
 test("pure time picker permits morning on a future date even when now is evening", async () => {
   const picker = source.match(/<t-date-time-picker\s+title="选择时间"[\s\S]*?\/>/)[0];
   const start = picker.includes(':start="TIME_PICKER_START"') ? sessionSetup.TIME_PICKER_START : undefined;

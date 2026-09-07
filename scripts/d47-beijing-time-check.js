@@ -156,6 +156,11 @@ assert.match(
   /startAt:\s*this\.transportStartAt/,
   "setup create request must send explicit transport time"
 );
+assert.doesNotMatch(
+  setupCreateSlice,
+  /startAt:\s*this\.startAt\b/,
+  "every creation branch, including historical backfill, must send explicit transport time"
+);
 
 const miniprogramAlbumFormatter = sourceSlice(
   miniprogramAlbumSource,
