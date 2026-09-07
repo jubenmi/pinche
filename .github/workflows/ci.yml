@@ -51,5 +51,8 @@ jobs:
       - name: MySQL 8.4 integration
         run: npm run test:integration
 
+      - name: Business time MySQL round trip
+        run: npm run test:business-time-mysql
+
       - name: Build all deliverables
         run: npm run build:all

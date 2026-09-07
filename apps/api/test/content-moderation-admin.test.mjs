@@ -14,6 +14,7 @@ function harness({
   authorVisibilityVersion = 0,
   mediaTransitionResult,
   requeueResult = true,
+  proposalAction,
   applyTextProposal
 } = {}) {
   const state = {
@@ -50,7 +51,7 @@ function harness({
     id: 71,
     moderation_job_id: 7,
     status: "pending",
-    action: subjectType === "private_store" ? "create_private_store" : "update_nickname",
+    action: proposalAction || (subjectType === "private_store" ? "create_private_store" : "update_nickname"),
     created_by_user_id: 7,
     base_version: subjectType === "private_store" ? "create:7" : "v1",
     normalized_payload_json: JSON.stringify({ body: { nickname: "Alice", name: "门店", city: "上海" } }),
@@ -392,6 +393,22 @@ test("admin approval closes a direct-A versus approved-B historical operation co
   assert.equal(state.transitions.at(-1).errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
   assert.equal(state.audits.at(-1).action, "stale");
 });
+for (const code of ["SESSION_START_AT_NOT_FUTURE", "INVALID_START_AT", "SESSION_PURPOSE_TIME_MISMATCH"]) {
+  test(`admin approval closes create-session ${code} as stale and records an audit`, async () => {
+    const { service, state } = harness({ subjectType: "session_create", proposalAction: "create_session" });
+    const result = await service.decideAsAdmin({
+      admin: { user: { id: 2 }, roles: ["system_admin"] }, jobId: 7, action: "approve",
+      applyTextProposal: async () => {
+        throw Object.assign(new Error("session time is no longer eligible"), { code, statusCode: 400 });
+      }
+    });
+    assert.deepEqual(result, { id: 7, status: "rejected", stale: true });
+    assert.equal(state.proposals.at(-1).toStatus, "stale");
+    assert.equal(state.transitions.at(-1).toStatus, "rejected");
+    assert.equal(state.transitions.at(-1).errorCode, "CONTENT_MODERATION_PROPOSAL_STALE");
+    assert.equal(state.audits.at(-1).action, "stale");
+  });
+}
 
 test("retry retires the old provider attempt so delayed callbacks stay stale", async () => {
   for (const decision of ["pass", "review", "block"]) {

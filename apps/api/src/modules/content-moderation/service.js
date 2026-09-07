@@ -1035,7 +1035,7 @@ export function createContentModerationService(dependencies) {
           appliedResult = await deps.applyTextProposal(connection, { job, proposal });
           safeAppliedResult = requireSafeAppliedResult(appliedResult);
         } catch (error) {
-          const staleError = proposalStaleForRevalidationError(error) || error;
+          const staleError = proposalStaleForRevalidationError(error, { action: proposal.action }) || error;
           if (staleError?.code !== MODERATION_ERROR_CODES.proposalStale) throw error;
           const proposalChanged = await deps.repository.markTextProposalStale(connection, {
             jobId: job.id,
@@ -1443,7 +1443,7 @@ export function createContentModerationService(dependencies) {
             appliedResult = await input.applyTextProposal(connection, { job, proposal });
             safeAppliedResult = requireSafeAppliedResult(appliedResult);
           } catch (error) {
-            const staleError = proposalStaleForRevalidationError(error) || error;
+            const staleError = proposalStaleForRevalidationError(error, { action: proposal.action }) || error;
             if (staleError?.code !== MODERATION_ERROR_CODES.proposalStale) throw error;
             const proposalChanged = await deps.repository.markTextProposalStale(connection, {
               jobId: job.id,

@@ -201,7 +201,7 @@ export async function verifyBusinessToken(token) {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  if (!payload.exp || payload.exp < now) {
+  if (!Number.isFinite(payload?.exp) || payload.exp <= now) {
     throw unauthorized("Token expired");
   }
 

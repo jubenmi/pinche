@@ -64,7 +64,11 @@ export function parseBusinessDateTime(value) {
   const explicitMatch = text.match(EXPLICIT_TIME_ZONE_PATTERN);
   if (explicitMatch) {
     const parts = calendarParts(explicitMatch);
-    if (!validCalendarParts(parts)) {
+    const offset = explicitMatch[8].replace(":", "");
+    const offsetHour = offset.toUpperCase() === "Z" ? 0 : Number(offset.slice(1, 3));
+    const offsetMinute = offset.toUpperCase() === "Z" ? 0 : Number(offset.slice(3, 5));
+    if (!validCalendarParts(parts) || offsetHour > 14 || offsetMinute > 59 ||
+        (offsetHour === 14 && offsetMinute !== 0)) {
       return null;
     }
     const date = new Date(text);

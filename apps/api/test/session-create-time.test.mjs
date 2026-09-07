@@ -46,7 +46,7 @@ test("rejects an invalid creation timestamp before any connection query", async 
     ),
     {
       statusCode: 400,
-      code: "BAD_REQUEST",
+      code: "INVALID_START_AT",
       message: "startAt must be a valid business date time"
     }
   );

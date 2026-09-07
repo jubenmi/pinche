@@ -4077,7 +4077,7 @@ if (!fs.existsSync(pagesJsonPath)) {
   if (!/define:\s*\{[\s\S]*__PINCHE_BUILD_TIME__/.test(viteConfigSource)) {
     fail("Vite config must inject the build-time constant through define");
   }
-  if (!/formatBuildTime/.test(viteConfigSource) || !/padStart\(2,\s*"0"\)/.test(viteConfigSource)) {
+  if (!/formatBuildTime/.test(viteConfigSource) || !viteConfigSource.includes("formatBeijingDateTime(date)")) {
     fail("Vite config must format the build time as a stable YYYY-MM-DD HH:mm label");
   }
   for (const requiredTdesignBuildText of [

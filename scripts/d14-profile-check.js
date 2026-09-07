@@ -109,16 +109,18 @@ assert(
   api.includes("function rejectUnauthorizedResponse") &&
     api.includes("clearAuth()") &&
     api.includes('userMessage: "登录已过期，请重新登录。"') &&
-    api.includes("rejectUnauthorizedResponse(response)"),
-  "miniprogram API must clear cached auth and surface a relogin message on 401 responses"
+    api.includes("rejectUnauthorizedResponse(response, token, requestBaseUrl, generation)") &&
+    api.includes("if (isCurrentAuthRequest(requestToken, requestBaseUrl, generation)) {"),
+  "miniprogram API must expire only the matching request's auth and surface a relogin message on 401 responses"
 );
 assert(
-  api.includes("const refreshedAuth = await refreshCurrentAuth();") &&
+  api.includes("const { auth: refreshedAuth, stale } = await refreshCurrentAuthResult();") &&
+    api.includes("if (stale) return null;") &&
     api.includes("if (refreshedAuth) {") &&
     api.includes("ensureUserPhone(refreshedAuth, options)") &&
     !api.includes("refreshedAuth ||") &&
     !api.includes("if (!refreshedAuth) {\n      return null;\n    }"),
-  "ensureLoggedIn must discard stale cached auth after refresh fails and continue to a fresh login flow"
+  "ensureLoggedIn must stop obsolete login attempts while permitting refresh after its own auth expiry"
 );
 
 const identityBar = read("apps/miniprogram/src/components/AuthIdentityBar.vue");

@@ -564,6 +564,9 @@ function createConnection() {
     state,
     async query(sql, values = []) {
       const normalized = compactSql(sql);
+      if (normalized === "SELECT CURRENT_TIMESTAMP AS database_now") {
+        return [[{ database_now: new Date("2026-09-07T00:00:00Z") }]];
+      }
 
       if (
         normalized ===
@@ -710,6 +713,9 @@ function idempotentHistoricalCreationConnection() {
     state,
     async query(sql, values = []) {
       const normalized = compactSql(sql);
+      if (normalized === "SELECT CURRENT_TIMESTAMP AS database_now") {
+        return [[{ database_now: new Date("2026-09-07T00:00:00Z") }]];
+      }
       if (
         normalized ===
         "SELECT id, nickname, avatar_url, gender, phone_verified_at FROM users WHERE id = ? LIMIT 1 FOR SHARE"
@@ -841,6 +847,7 @@ function createPublishConnection({
     id: 101,
     organizer_user_id: ACTOR.user.id,
     status: "draft",
+    start_at: new Date(session.session_purpose === "future_carpool" ? "2099-01-01T05:00:00Z" : "2020-01-01T05:00:00Z"),
     session_purpose: "historical_record",
     visibility: "share_only",
     join_policy: "review_required",
@@ -867,6 +874,9 @@ function createPublishConnection({
     state,
     async query(sql, values = []) {
       const normalized = compactSql(sql);
+      if (normalized === "SELECT CURRENT_TIMESTAMP AS database_now") {
+        return [[{ database_now: new Date("2026-09-07T00:00:00Z") }]];
+      }
       state.queries.push({ sql: normalized, values });
       if (/^(INSERT|UPDATE|DELETE) /i.test(normalized)) {
         state.mutations.push({ sql: normalized, values });
@@ -926,7 +936,7 @@ function createPublishConnection({
         });
         return [{ affectedRows: 1 }];
       }
-      if (normalized === "UPDATE sessions SET status = 'recruiting' WHERE id = ?") {
+      if (normalized === "UPDATE sessions SET status = 'recruiting' WHERE id = ? AND start_at > CURRENT_TIMESTAMP") {
         currentSession.status = "recruiting";
         return [{ affectedRows: 1 }];
       }
@@ -1578,7 +1588,7 @@ test("future publish retains recruiting behavior without creatorSeatId", async (
 
   assert.equal(session.status, "recruiting");
   assert.deepEqual(connection.state.mutations, [{
-    sql: "UPDATE sessions SET status = 'recruiting' WHERE id = ?",
+    sql: "UPDATE sessions SET status = 'recruiting' WHERE id = ? AND start_at > CURRENT_TIMESTAMP",
     values: [101]
   }]);
 });
@@ -2829,7 +2839,7 @@ test("public session availability requires a future carpool", async () => {
   assert.match(helper, /session\.session_purpose === "future_carpool"/);
   assert.match(helper, /session\.visibility === "public"/);
   assert.match(helper, /session\.status === "recruiting"/);
-  assert.match(helper, /startAt > Date\.now\(\)/);
+  assert.match(helper, /Number\(session\.session_started\) === 0/);
 });
 
 test("discoverable session SQL requires a public recruiting future carpool", async () => {

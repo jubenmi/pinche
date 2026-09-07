@@ -17,10 +17,17 @@ const REVALIDATION_STALE_CODES = new Set([
   "HISTORICAL_SESSION_CREATION_OPERATION_CHANGED",
   "HISTORICAL_SESSION_CREATION_OPERATION_INVALID"
 ]);
+const SESSION_CREATION_TIME_STALE_CODES = new Set([
+  "INVALID_START_AT",
+  "SESSION_START_AT_NOT_FUTURE",
+  "SESSION_PURPOSE_TIME_MISMATCH"
+]);
 
-export function proposalStaleForRevalidationError(error) {
+export function proposalStaleForRevalidationError(error, { action } = {}) {
   if (error?.code === MODERATION_ERROR_CODES.proposalStale) return error;
-  if (!REVALIDATION_STALE_CODES.has(String(error?.code || ""))) return null;
+  const code = String(error?.code || "");
+  const creationTimeExpired = action === "create_session" && SESSION_CREATION_TIME_STALE_CODES.has(code);
+  if (!creationTimeExpired && !REVALIDATION_STALE_CODES.has(code)) return null;
   return staleProposal("text moderation proposal is no longer eligible");
 }
 
@@ -74,7 +81,7 @@ export function createTextProposalApplicator({ loadActor, handlers } = {}) {
           payload: parsePayload(proposal)
         });
       } catch (error) {
-        throw proposalStaleForRevalidationError(error) || error;
+        throw proposalStaleForRevalidationError(error, { action }) || error;
       }
     }
   };
