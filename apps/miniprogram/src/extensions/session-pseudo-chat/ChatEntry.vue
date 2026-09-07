@@ -126,6 +126,7 @@ export default {
       messages: [],
       draftMessage: "",
       replacementDraftId: null,
+      sendingMessage: false,
       messageStatusText: "",
       canChat: false,
       chatModalOpen: false,
@@ -134,7 +135,13 @@ export default {
       localUserId: this.currentUserId || "",
       focusOpened: false,
       messageTimer: null,
-      chatPollingDenied: false
+      chatPollingDenied: false,
+      focusTimer: null,
+      pollingActive: false,
+      chatDisposed: false,
+      chatGeneration: 0,
+      chatLoadFlight: null,
+      pollingStartFlight: null
     };
   },
   computed: {
@@ -143,6 +150,7 @@ export default {
     },
     canSendMessage() {
       return (
+        !this.sendingMessage &&
         this.canComposeMessage &&
         Boolean(this.draftMessage.trim())
       );
@@ -180,18 +188,44 @@ export default {
     }
   },
   mounted() {
-    this.startMessagePolling();
-    this.openFocusedChatOnce();
+    this.start();
   },
   beforeUnmount() {
+    this.chatDisposed = true;
     this.stop();
   },
   methods: {
+    start() {
+      if (this.chatDisposed) return Promise.resolve(false);
+      this.pollingActive = true;
+      const started = this.startMessagePolling();
+      this.openFocusedChatOnce();
+      return started;
+    },
     stop() {
+      this.pollingActive = false;
+      this.invalidateChatRequests();
       this.stopMessagePolling();
+      this.clearFocusTimer();
+    },
+    clearFocusTimer() {
+      if (this.focusTimer !== null) clearTimeout(this.focusTimer);
+      this.focusTimer = null;
+    },
+    isCurrentChat(generation, sessionId) {
+      return this.pollingActive && !this.chatDisposed &&
+        generation === this.chatGeneration && String(sessionId) === String(this.sessionId);
+    },
+    invalidateChatRequests() {
+      this.chatGeneration += 1;
+      this.chatLoadFlight = null;
+      this.pollingStartFlight = null;
+      this.sendingMessage = false;
     },
     resetChatState() {
+      this.invalidateChatRequests();
       this.stopMessagePolling();
+      this.clearFocusTimer();
       this.pinnedMessage = null;
       this.messages = [];
       this.draftMessage = "";
@@ -205,19 +239,37 @@ export default {
       this.chatPollingDenied = false;
     },
     openFocusedChatOnce() {
-      if (!this.focusChatOnLoad || this.focusOpened || !this.sessionId) {
+      if (!this.pollingActive || this.chatDisposed || !this.focusChatOnLoad ||
+          this.focusOpened || this.focusTimer !== null || !this.sessionId) {
         return;
       }
-      this.focusOpened = true;
-      setTimeout(() => this.openChatModal(), 300);
+      const generation = this.chatGeneration;
+      const sessionId = this.sessionId;
+      this.focusTimer = setTimeout(() => {
+        this.focusTimer = null;
+        if (!this.isCurrentChat(generation, sessionId)) return;
+        this.focusOpened = true;
+        this.openChatModal();
+      }, 300);
     },
     async startMessagePolling() {
-      if (!this.sessionId || this.sessionId === "d1-demo" || this.messageTimer) {
-        return;
+      if (!this.pollingActive || this.chatDisposed || !this.sessionId || this.sessionId === "d1-demo") {
+        return false;
       }
-      const loaded = await this.loadChat();
-      if (loaded || !this.chatPollingDenied) {
-        this.messageTimer = setInterval(this.pollMessages, 3000);
+      if (this.messageTimer) return true;
+      if (this.pollingStartFlight) return this.pollingStartFlight;
+      const generation = this.chatGeneration;
+      const sessionId = this.sessionId;
+      const flight = this.loadChat().then((loaded) => {
+        if ((!loaded && this.chatPollingDenied) || !this.isCurrentChat(generation, sessionId)) return false;
+        if (!this.messageTimer) this.messageTimer = setInterval(this.pollMessages, 3000);
+        return true;
+      });
+      this.pollingStartFlight = flight;
+      try {
+        return await flight;
+      } finally {
+        if (this.pollingStartFlight === flight) this.pollingStartFlight = null;
       }
     },
     stopMessagePolling() {
@@ -227,43 +279,65 @@ export default {
       }
     },
     pollMessages() {
-      this.loadChat({ silent: true });
+      return this.loadChat({ silent: true });
     },
     async loadChat(options = {}) {
-      if (!this.sessionId || this.sessionId === "d1-demo") {
+      if (!this.pollingActive || this.chatDisposed || !this.sessionId || this.sessionId === "d1-demo") {
         return false;
       }
-      try {
-        const chat = await this.api.loadChat(this.sessionId);
-        const nextMessages = chat.messages || [];
-        this.pinnedMessage = chat.pinnedMessage || null;
-        this.updateUnreadCount(nextMessages);
-        this.messages = nextMessages;
-        this.canChat = true;
-        this.chatPollingDenied = false;
-        this.messageStatusText = "";
-        return true;
-      } catch (error) {
-        if (isChatAccessDeniedError(error)) {
-          this.canChat = false;
-          this.chatPollingDenied = true;
-          this.chatModalOpen = false;
-          this.unreadCount = 0;
-          this.lastSeenMessageId = "";
-          this.stopMessagePolling();
-          this.messageStatusText = this.messageErrorText(error);
-        } else {
+      if (this.chatLoadFlight) return this.chatLoadFlight;
+      const generation = this.chatGeneration;
+      const sessionId = this.sessionId;
+      const flight = (async () => {
+        try {
+          const chat = await this.api.loadChat(sessionId);
+          if (!this.isCurrentChat(generation, sessionId)) return false;
+          const nextMessages = chat.messages || [];
+          this.pinnedMessage = chat.pinnedMessage || null;
+          this.updateUnreadCount(nextMessages);
+          this.messages = nextMessages;
+          if (this.replacementDraftId && !nextMessages.some((message) => (
+            this.isAuthorPrivate(message) &&
+            Number(message.draft_id) === Number(this.replacementDraftId)
+          ))) {
+            this.replacementDraftId = null;
+          }
+          this.canChat = true;
           this.chatPollingDenied = false;
-          this.messageStatusText = options.silent
-            ? "聊天刷新失败，正在重试。"
-            : this.messageErrorText(error);
+          this.messageStatusText = "";
+          return true;
+        } catch (error) {
+          if (!this.isCurrentChat(generation, sessionId)) return false;
+          if (isChatAccessDeniedError(error)) {
+            this.canChat = false;
+            this.chatPollingDenied = true;
+            this.chatModalOpen = false;
+            this.unreadCount = 0;
+            this.lastSeenMessageId = "";
+            this.stopMessagePolling();
+            this.messageStatusText = this.messageErrorText(error);
+          } else {
+            this.chatPollingDenied = false;
+            this.messageStatusText = options.silent
+              ? "聊天刷新失败，正在重试。"
+              : this.messageErrorText(error);
+          }
+          return false;
         }
-        return false;
+      })();
+      this.chatLoadFlight = flight;
+      try {
+        return await flight;
+      } finally {
+        if (this.chatLoadFlight === flight) this.chatLoadFlight = null;
       }
     },
     async openChatModal() {
+      const generation = this.chatGeneration;
+      const sessionId = this.sessionId;
+      if (!this.isCurrentChat(generation, sessionId)) return;
       const loaded = this.canChat || (await this.loadChat());
-      if (!loaded && !this.canChat) {
+      if (!this.isCurrentChat(generation, sessionId) || (!loaded && !this.canChat)) {
         return;
       }
       this.chatModalOpen = true;
@@ -325,25 +399,29 @@ export default {
       return "聊天加载失败，请稍后重试。";
     },
     async sendMessage() {
-      if (!this.draftMessage.trim()) {
+      const generation = this.chatGeneration;
+      const sessionId = this.sessionId;
+      if (!this.isCurrentChat(generation, sessionId) || !this.canSendMessage) {
         return;
       }
-      const loggedIn = await this.ensureLogin();
-      if (!loggedIn) {
-        return;
-      }
+      const draftMessage = this.draftMessage;
+      const replacementDraftId = this.replacementDraftId;
+      this.sendingMessage = true;
       try {
+        const loggedIn = await this.ensureLogin();
+        if (!loggedIn || !this.isCurrentChat(generation, sessionId)) return;
         const result = await this.api.sendMessage(
-          this.sessionId,
-          this.draftMessage.trim(),
-          this.replacementDraftId
+          sessionId,
+          draftMessage.trim(),
+          replacementDraftId
         );
+        if (!this.isCurrentChat(generation, sessionId)) return;
         const message = authorPrivateMessageView(result, this.localUserId || this.currentUserId) || result;
         if (message) {
           this.messages = [
             ...this.messages.filter((entry) => (
-              !this.replacementDraftId ||
-              Number(entry.draft_id) !== Number(this.replacementDraftId)
+              !replacementDraftId ||
+              Number(entry.draft_id) !== Number(replacementDraftId)
             )),
             message
           ];
@@ -351,20 +429,30 @@ export default {
             this.markChatRead(this.messages);
           }
         }
-        this.draftMessage = "";
-        this.replacementDraftId = null;
+        if (Number(this.replacementDraftId) === Number(replacementDraftId)) {
+          const unchanged = this.draftMessage === draftMessage;
+          if (unchanged) this.draftMessage = "";
+          this.replacementDraftId = !unchanged && this.isAuthorPrivate(message) ? message.draft_id : null;
+        }
         this.canChat = true;
         this.messageStatusText = message?.moderation_message || "";
         this.startMessagePolling();
       } catch (error) {
+        if (!this.isCurrentChat(generation, sessionId)) return;
         this.messageStatusText = this.messageErrorText(error);
+      } finally {
+        if (this.isCurrentChat(generation, sessionId)) this.sendingMessage = false;
       }
     },
     async ensureLogin() {
+      const generation = this.chatGeneration;
+      const sessionId = this.sessionId;
+      if (!this.isCurrentChat(generation, sessionId)) return false;
       const auth = await this.authTools.ensureLoggedIn({
         content: "登录后继续使用车内留言。",
         failTitle: "登录失败"
       });
+      if (!this.isCurrentChat(generation, sessionId)) return false;
       if (auth?.user) {
         this.localUserId = auth.user.id;
         return true;
@@ -386,9 +474,12 @@ export default {
       this.messageStatusText = "修改后重新提交审核，提交前仍仅自己可见。";
     },
     async cancelMessageDraft(message) {
-      if (!this.isAuthorPrivate(message)) return;
+      const generation = this.chatGeneration;
+      const sessionId = this.sessionId;
+      if (!this.isCurrentChat(generation, sessionId) || !this.isAuthorPrivate(message)) return;
       try {
         await this.api.cancelDraft(message.draft_id);
+        if (!this.isCurrentChat(generation, sessionId)) return;
         this.messages = this.messages.filter((entry) => (
           Number(entry.draft_id) !== Number(message.draft_id)
         ));
@@ -398,6 +489,7 @@ export default {
         }
         this.messageStatusText = "已取消这条待审消息。";
       } catch (error) {
+        if (!this.isCurrentChat(generation, sessionId)) return;
         this.messageStatusText = this.messageErrorText(error);
       }
     },

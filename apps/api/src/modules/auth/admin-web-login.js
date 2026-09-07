@@ -31,7 +31,7 @@ function assertSecret(ticket, secret) {
 }
 
 function ticketStatus(row) {
-  if (row.status === "pending" && new Date(row.expires_at).getTime() <= Date.now()) {
+  if (["pending", "approved"].includes(row.status) && new Date(row.expires_at).getTime() <= Date.now()) {
     return "expired";
   }
   return row.status;

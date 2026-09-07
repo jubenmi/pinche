@@ -255,9 +255,9 @@ assert(!webApi.includes("restoreAdminSession"), "web API should not restore sess
 assert(!webApi.includes("downlistSession"), "web API should not expose session downlisting");
 for (const token of [
   "AUTH_EXPIRED_EVENT",
-  "response.status === 401 && hadToken",
-  "publishAuthExpired()",
-  "parseResponse(response, { hadToken })"
+  "response.status === 401 && requestToken && getStoredAuth().token === requestToken",
+  "expireCurrentAuth(response, requestToken)",
+  "parseResponse(response, auth.token)"
 ]) {
   assert(webApi.includes(token), `admin web API must centralize token expiry: ${token}`);
 }

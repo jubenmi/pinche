@@ -294,11 +294,21 @@ const serviceSource = read(servicePath);
 if (!/export\s+function\s+sessionHasStarted\s*\(/.test(serviceSource)) {
   fail("API service must export sessionHasStarted");
 }
-for (const serializerName of ["memberSessionDetail", "publicSessionPreview"]) {
+for (const [serializerName, clockSource] of [
+  ["memberSessionDetail", "lockedSession"],
+  ["publicSessionPreview", "session"]
+]) {
   const serializerSource = methodBody(serviceSource, serializerName);
-  if (!serializerSource.includes("has_started: sessionHasStarted(safeSession)")) {
-    fail(`${serializerName} must serialize has_started from sessionHasStarted(safeSession)`);
+  if (!serializerSource.includes(`has_started: sessionHasStarted(${clockSource})`)) {
+    fail(`${serializerName} must serialize has_started from the row retaining the database clock projection`);
   }
+}
+const startedHelperSource = serviceSource.slice(
+  serviceSource.indexOf("export function sessionHasStarted("),
+  serviceSource.indexOf("function publicSessionAvailable(")
+);
+if (!startedHelperSource.includes("Number(session.session_started) === 1")) {
+  fail("sessionHasStarted must honor the database clock projection");
 }
 
 const helperSource = read(helperPath);

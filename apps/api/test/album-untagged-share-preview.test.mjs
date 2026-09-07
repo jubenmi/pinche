@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { publicShareTokenOptions, sessionAlbumShareTokenResponse } from "../src/server.js";
 
 import {
   createOrReuseSessionAlbumPublicShare,
@@ -454,10 +455,16 @@ test("custom selection rejects invalid shape, focus conflicts and video overflow
   );
 
   for (const selectedMediaIds of [
+    null,
+    "1",
+    { 0: 1 },
     [],
     [1, 1],
     ["1"],
-    Array.from({ length: 31 }, (_, index) => index + 1)
+    [0],
+    [-1],
+    [1.5],
+    [Number.MAX_SAFE_INTEGER + 1]
   ]) {
     await assert.rejects(
       () => createOrReuseSessionAlbumPublicShare({ user: { id: 100 } }, 10, {
@@ -492,13 +499,47 @@ test("custom snapshot persistence keeps the exact requested scope", async () => 
   assert.equal(share.visible_count, 1);
 });
 
+for (const count of [31, 100]) {
+  test(`D54 custom selection persists all ${count} eligible images beyond the old 30-item limit`, async () => {
+    const photos = Array.from({ length: count }, (_, index) => media(index + 1));
+    const connection = untaggedShareConnection(photos);
+    const selectedMediaIds = photos.map((photo) => photo.id);
+    const share = await createOrReuseSessionAlbumPublicShare(
+      { user: { id: 100 } },
+      10,
+      {
+        includeOwnedUntaggedImages: true,
+        selectedMediaIds,
+        withTransaction: async (work) => work(connection)
+      }
+    );
+    assert.equal(share.visible_count, count);
+    assert.deepEqual(new Set(share.media_ids), new Set(selectedMediaIds));
+    assert.equal(connection.shareItems.length, count);
+  });
+}
+
 test("share-token route forwards preview inputs and returns untagged count", () => {
   const route = serverSource.slice(
     serverSource.indexOf("const sessionAlbumShareTokenId"),
     serverSource.indexOf("const sessionAlbumPublicSharesId")
   );
-  assert.match(route, /focusMediaId: body\?\.focusMediaId/);
-  assert.match(route, /includeOwnedUntaggedImages: body\?\.includeOwnedUntaggedImages/);
-  assert.match(route, /selectedMediaIds: body\?\.selectedMediaIds/);
-  assert.match(route, /implicit_untagged_count: share\.implicit_untagged_count/);
+  assert.match(route, /const shareOptions = publicShareTokenOptions\(body\)/);
+  assert.match(route, /createOrReuseSessionAlbumPublicShare\(\s*user,\s*sessionAlbumShareTokenId,\s*shareOptions\s*\)/);
+  assert.match(route, /data: sessionAlbumShareTokenResponse\(share, claims, albumShareToken\)/);
+  const inputs = { focusMediaId: 70, includeOwnedUntaggedImages: true, selectedMediaIds: [70, 71] };
+  assert.deepEqual(publicShareTokenOptions({ ...inputs, unauthorizedField: "ignored" }), inputs);
+  const result = sessionAlbumShareTokenResponse({
+    session_id: 10,
+    share_id: 50,
+    share_subject: { seat_id: 1000 },
+    implicit_untagged_count: 2,
+    visible_count: 2,
+    photo_count: 2,
+    video_count: 0,
+    cover_media: []
+  }, { ...claims, exp: 4102444800 }, "signed-token");
+  assert.equal(result.implicit_untagged_count, 2);
+  assert.equal(result.visible_count, 2);
+  assert.equal(result.token, "signed-token");
 });

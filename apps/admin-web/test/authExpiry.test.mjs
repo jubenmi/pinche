@@ -7,9 +7,9 @@ import { after, afterEach, beforeEach, test } from "node:test";
 
 const apiFixtureDir = await mkdtemp(join(tmpdir(), "pinche-admin-auth-expiry-"));
 const apiSource = (await readFile(new URL("../src/api.js", import.meta.url), "utf8"))
-  .replace('from "./albumMedia";', 'from "./albumMedia.mjs";')
-  .replace('from "./contentModeration";', 'from "./contentModeration.mjs";')
-  .replace('from "./contentSecurity";', 'from "./contentSecurity.mjs";');
+  .replace('from "./albumMedia.js";', 'from "./albumMedia.mjs";')
+  .replace('from "./contentModeration.js";', 'from "./contentModeration.mjs";')
+  .replace('from "./contentSecurity.js";', 'from "./contentSecurity.mjs";');
 await Promise.all([
   writeFile(join(apiFixtureDir, "api.mjs"), apiSource),
   writeFile(
@@ -175,7 +175,7 @@ test("concurrent authenticated 401 responses remain idempotent", async () => {
     ["rejected", "rejected"]
   );
   assert.deepEqual(getStoredAuth(), { token: "", user: null, roles: [] });
-  assert.equal(expiryEvents, 2);
+  assert.equal(expiryEvents, 1);
 });
 
 test("root app listens for expiry and returns to the existing login panel", async () => {

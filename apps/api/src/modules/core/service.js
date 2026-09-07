@@ -20,6 +20,8 @@ import {
   parseRoleTemplate
 } from "./npc-role-normalization.js";
 import { runSessionExtensionHook } from "../extensions/registry.js";
+import { assertFutureSessionStartAt, readSessionDatabaseNow } from "./session-creation-time.js";
+import { normalizeSessionCreationStartAt as parseSessionCreationStartAt } from "./session-create-time.js";
 import {
   notifySessionRescheduled,
   notifySignupCreated,
@@ -1153,10 +1155,11 @@ async function replaceScriptNpcRoles(connection, scriptId, roles = []) {
 }
 
 async function insertSessionNpcRoles(connection, sessionId, roles = [], options = {}) {
+  const insertedIds = [];
   for (const [index, role] of roles.entries()) {
     assertPublicTextSafe("npcRoleName", role.name);
     assertPublicTextSafe("npcRoleDescription", role.description);
-    await connection.query(
+    const [result] = await connection.query(
       `
         INSERT INTO session_npc_roles
           (
@@ -1176,7 +1179,9 @@ async function insertSessionNpcRoles(connection, sessionId, roles = [], options 
         role.sortOrder ?? index
       ]
     );
+    insertedIds.push(result.insertId);
   }
+  return insertedIds;
 }
 
 async function cloneScriptNpcRolesForSession(
@@ -4339,9 +4344,11 @@ export async function createSessionWithConnection(
     trustedHistoricalCreationRevalidate = null
   } = {}
 ) {
+  const startAt = parseSessionCreationStartAt(requireValue(body, "startAt"));
   const normalizedCreation = normalizeSessionCreationStartAt(
-    requireValue(body, "startAt"),
-    body.sessionPurpose
+    startAt,
+    body.sessionPurpose,
+    await readSessionDatabaseNow(connection)
   );
   const creationIdempotencyKey = normalizeSessionCreationIdempotencyKey(body);
   const createNormalizedSession = async () => {
@@ -4547,19 +4554,20 @@ export async function createSession(user, body) {
 }
 
 export function sessionHasStarted(session = {}, nowMs = Date.now()) {
+  if (session?.session_started !== undefined && session?.session_started !== null) {
+    return Number(session.session_started) === 1;
+  }
   const startAtMs = new Date(session?.start_at || "").getTime();
   const normalizedNowMs = Number(nowMs);
   return Number.isFinite(startAtMs) && Number.isFinite(normalizedNowMs) && startAtMs <= normalizedNowMs;
 }
 
 function publicSessionAvailable(session) {
-  const startAt = new Date(session.start_at).getTime();
   return (
     session.session_purpose === "future_carpool" &&
     session.visibility === "public" &&
     session.status === "recruiting" &&
-    Number.isFinite(startAt) &&
-    startAt > Date.now()
+    Number(session.session_started) === 0
   );
 }
 
@@ -4715,7 +4723,7 @@ async function memberSessionDetail(connection, session, options = {}) {
     store_latitude: storeLocation?.latitude ?? null,
     store_longitude: storeLocation?.longitude ?? null,
     join_policy: safeSession.join_policy || "review_required",
-    has_started: sessionHasStarted(safeSession),
+    has_started: sessionHasStarted(lockedSession),
     join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
     npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
     active_album_photo_count: activeAlbumPhotoCount,
@@ -4769,7 +4777,7 @@ async function publicSessionPreview(
     store_latitude: storeLocation?.latitude ?? null,
     store_longitude: storeLocation?.longitude ?? null,
     join_policy: safeSession.join_policy || "review_required",
-    has_started: sessionHasStarted(safeSession),
+    has_started: sessionHasStarted(session),
     join_phone_required: Boolean(Number(safeSession.join_phone_required ?? 1)),
     npc_join_enabled: Boolean(Number(safeSession.npc_join_enabled ?? 1)),
     seats: seats.map(publicSeatResponse),
@@ -6126,7 +6134,8 @@ export function summarizeSessionRescheduleDeliveries(recipients, settledResults)
 
 export async function rescheduleSessionInTransaction(connection, user, id, body = {}) {
     const [sessionRows] = await connection.query(
-      `SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started
+      `SELECT *, (start_at <= CURRENT_TIMESTAMP) AS session_started,
+              CURRENT_TIMESTAMP AS database_now
        FROM sessions WHERE id = ? FOR UPDATE`,
       [id]
     );
@@ -6140,7 +6149,8 @@ export async function rescheduleSessionInTransaction(connection, user, id, body 
     if (Number(session.session_started) === 1) {
       throw conflict("Past or started sessions cannot be rescheduled");
     }
-    const now = Date.now();
+    const now = session.database_now?.getTime();
+    if (!Number.isFinite(now)) throw new Error("Database clock is unavailable");
 
     let normalizedStart;
     try {
@@ -6319,9 +6329,8 @@ export async function createSessionNpcRoleWithConnection(connection, user, sessi
     { extraNpcRoles: [role] },
     session.session_purpose
   );
-  await insertSessionNpcRoles(connection, id, [role], { source: "session" });
-  const roles = await sessionNpcRolesForSession(connection, id);
-  return roles[roles.length - 1] || null;
+  const [insertedId] = await insertSessionNpcRoles(connection, id, [role], { source: "session" });
+  return sessionNpcRoleById(connection, insertedId);
 }
 
 export async function createSessionNpcRole(user, sessionId, body = {}) {
@@ -6508,6 +6517,10 @@ export async function publishSessionWithConnection(connection, user, sessionId, 
     throw conflict("Only draft sessions can be published");
   }
 
+  if (session.session_purpose !== "historical_record") {
+    assertFutureSessionStartAt(session.start_at, await readSessionDatabaseNow(connection));
+  }
+
   const [seats] = await connection.query(
     "SELECT * FROM session_seats WHERE session_id = ? ORDER BY id FOR UPDATE",
     [sessionId]
@@ -6578,10 +6591,13 @@ export async function publishSessionWithConnection(connection, user, sessionId, 
     if (body.creatorSeatId !== undefined) {
       throw badRequest("creatorSeatId is only valid for historical sessions");
     }
-    await connection.query(
-      "UPDATE sessions SET status = 'recruiting' WHERE id = ?",
+    const [result] = await connection.query(
+      "UPDATE sessions SET status = 'recruiting' WHERE id = ? AND start_at > CURRENT_TIMESTAMP",
       [sessionId]
     );
+    if (!result.affectedRows) {
+      throw new AppError(400, "SESSION_START_AT_NOT_FUTURE", "startAt must be in the future");
+    }
   }
 
   return findById(connection, "sessions", sessionId);

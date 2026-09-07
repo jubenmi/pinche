@@ -33,27 +33,38 @@ function jsonResponse(payload, status = 200) {
   });
 }
 
-test("content-security response body reading shares the request deadline and the configured ceiling stays within the lease budget", async () => {
+test("content-security response body reading shares the request deadline and the configured ceiling stays within the lease budget", { timeout: 1000 }, async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let bodyStarted;
+  const readingBody = new Promise((resolve) => { bodyStarted = resolve; });
+  let requestSignal;
   const client = createWechatContentSecurityClient({
     tokenProvider: createTokenProvider(),
     timeoutMs: 5,
-    fetchImpl: async () => ({
-      ok: true,
-      status: 200,
-      text: () => new Promise(() => {})
-    })
+    fetchImpl: async (_url, options) => {
+      requestSignal = options.signal;
+      t.mock.timers.tick(3);
+      return {
+        ok: true,
+        status: 200,
+        text: () => {
+          bodyStarted();
+          return new Promise(() => {});
+        }
+      };
+    }
   });
 
-  await assert.rejects(
-    Promise.race([
-      client.checkText({ content: "private text", openid: "openid-deadline", scene: 2 }),
-      new Promise((_, reject) => setTimeout(
-        () => reject(new Error("content response body did not respect its deadline")),
-        30
-      ))
-    ]),
+  const rejectsAtDeadline = assert.rejects(
+    client.checkText({ content: "private text", openid: "openid-deadline", scene: 2 }),
     { code: "WECHAT_CONTENT_SECURITY_TIMEOUT" }
   );
+  await readingBody;
+  t.mock.timers.tick(1);
+  assert.equal(requestSignal.aborted, false);
+  t.mock.timers.tick(1);
+  await rejectsAtDeadline;
+  assert.equal(requestSignal.aborted, true);
   assert.throws(
     () => createWechatContentSecurityClient({
       tokenProvider: createTokenProvider(),

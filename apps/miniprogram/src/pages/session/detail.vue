@@ -208,7 +208,7 @@
 </template>
 
 <script>
-import { formatBeijingDateTime, isHistoricalSession } from "@pinche/shared";
+import { createClockTicker, formatBeijingDateTime, isHistoricalSession, parseBusinessDateTime } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -245,6 +245,8 @@ export default {
   data() {
     return {
       sessionId: "",
+      detailPageVisible: false,
+      currentTime: Date.now(),
       entry: "",
       accessScope: "",
       shareCode: "",
@@ -499,6 +501,9 @@ export default {
     });
   },
   async onShow() {
+    this._pageClock ||= createClockTicker((now) => { this.currentTime = now; });
+    this._pageClock.start();
+    this.detailPageVisible = true;
     const identityChanged = this.applyDetailAuthSnapshot(getCurrentUser());
     const requestOwner = this.activateDetailPage();
     if (this.sessionId) {
@@ -507,13 +512,19 @@ export default {
         includeInitialShareContext: true
       });
     }
+    await this.$nextTick();
+    if (this.detailPageVisible) this.startDetailExtensions();
   },
   onHide() {
+    this._pageClock?.stop();
+    this.detailPageVisible = false;
     this.invalidateDetailPage();
     this.hideSessionShareMenu();
     this.stopDetailExtensions();
   },
   onUnload() {
+    this._pageClock?.dispose();
+    this.detailPageVisible = false;
     this.invalidateDetailPage();
     this.hideSessionShareMenu();
     this.stopDetailExtensions();
@@ -938,6 +949,11 @@ export default {
         return false;
       }
     },
+    startDetailExtensions() {
+      const refs = this.$refs.sessionDetailExtensionRefs || [];
+      const extensionRefs = Array.isArray(refs) ? refs : [refs];
+      extensionRefs.forEach((extensionRef) => { extensionRef?.start?.(); });
+    },
     stopDetailExtensions() {
       const refs = this.$refs.sessionDetailExtensionRefs || [];
       const extensionRefs = Array.isArray(refs) ? refs : [refs];
@@ -1112,7 +1128,8 @@ export default {
       if (!this.session.start_at) {
         return false;
       }
-      return isBusinessDateTimeReached(this.session.start_at);
+      const startAt = parseBusinessDateTime(this.session.start_at);
+      return Boolean(startAt && startAt.getTime() <= this.currentTime);
     },
     starText(rating) {
       const value = Math.max(0, Math.min(5, Number(rating || 0)));

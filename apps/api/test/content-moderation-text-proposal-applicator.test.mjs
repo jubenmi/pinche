@@ -127,3 +127,33 @@ test("terminal historical creation operation identity conflicts become stale pro
     );
   }
 });
+
+for (const code of ["SESSION_START_AT_NOT_FUTURE", "INVALID_START_AT", "SESSION_PURPOSE_TIME_MISMATCH"]) {
+  test(`creation time failure ${code} becomes stale only for create_session`, async () => {
+    const timeError = Object.assign(new Error("session time is no longer eligible"), {
+      code, statusCode: 400
+    });
+    const applicator = createTextProposalApplicator({
+      loadActor: async () => ({ user: { id: 7 }, roles: ["organizer"] }),
+      handlers: {
+        create_session: async () => { throw timeError; },
+        update_session: async () => { throw timeError; }
+      }
+    });
+    await assert.rejects(applicator.apply({}, { proposal: proposal("create_session") }), {
+      code: "CONTENT_MODERATION_PROPOSAL_STALE"
+    });
+    await assert.rejects(applicator.apply({}, { proposal: proposal("update_session") }),
+      (error) => error === timeError);
+  });
+}
+
+test("unrelated create-session bad requests still propagate without becoming stale", async () => {
+  const badInput = Object.assign(new Error("invalid unrelated input"), { code: "BAD_REQUEST", statusCode: 400 });
+  const applicator = createTextProposalApplicator({
+    loadActor: async () => ({ user: { id: 7 }, roles: ["organizer"] }),
+    handlers: { create_session: async () => { throw badInput; } }
+  });
+  await assert.rejects(applicator.apply({}, { proposal: proposal("create_session") }),
+    (error) => error === badInput);
+});

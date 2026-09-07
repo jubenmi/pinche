@@ -285,7 +285,7 @@
 </template>
 
 <script>
-import { isHistoricalSession } from "@pinche/shared";
+import { createClockTicker, isHistoricalSession } from "@pinche/shared";
 import AuthIdentityBar from "../../components/AuthIdentityBar.vue";
 import RoleSeatBoard from "../../components/RoleSeatBoard.vue";
 import FeedbackHost from "../../components/TDesignFeedbackHost.vue";
@@ -342,7 +342,7 @@ export default {
     return {
       sessionId: "",
       session: {},
-      currentUserId: 0,
+      currentTime: Date.now(),
       signups: [],
       currentUserId: "",
       manageRequestGeneration: 0,
@@ -392,7 +392,7 @@ export default {
       return formatSessionDateTime(this.session.start_at);
     },
     canReschedule() {
-      return !this.isHistorical && canRescheduleSession(this.session.start_at);
+      return !this.isHistorical && canRescheduleSession(this.session.start_at, new Date(this.currentTime));
     },
     canCorrectHistoricalTime() {
       return canCurrentOrganizerCorrectHistoricalSession(this.session, this.currentUserId);
@@ -626,6 +626,8 @@ export default {
     await this.reload(auth);
   },
   async onShow() {
+    this._pageClock ||= createClockTicker((now) => { this.currentTime = now; });
+    this._pageClock.start();
     if (!this.sessionId) {
       return;
     }
@@ -638,9 +640,11 @@ export default {
     await this.reload(auth);
   },
   onHide() {
+    this._pageClock?.stop();
     this.invalidateManageRequests();
   },
   onUnload() {
+    this._pageClock?.dispose();
     this.invalidateManageRequests();
     this.unobserveManageAuthChanges();
   },

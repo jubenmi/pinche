@@ -646,12 +646,13 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   beijingDateKey,
   beijingDateParts,
   beijingTimeText,
   beijingWallTimeToIso,
+  createClockTicker,
   formatBeijingDateTime,
   isBusinessDateTimeReached,
   parseBusinessDateTime
@@ -707,6 +708,8 @@ const props = defineProps({
   initialSource: { type: String, default: "" }
 });
 
+const currentTime = ref(Date.now());
+const clock = createClockTicker((now) => { currentTime.value = now; });
 const screen = ref(normalizeInitialMiniScreen(props.initialScreen, props.initialSessionId));
 const createStep = ref("store");
 const busy = ref(false);
@@ -1085,7 +1088,7 @@ function isShareSessionStarted() {
   if (typeof shareSession.value.has_started === "boolean") {
     return shareSession.value.has_started;
   }
-  return isBusinessDateTimeReached(shareSession.value.start_at);
+  return isBusinessDateTimeReached(shareSession.value.start_at, currentTime.value);
 }
 
 function roleDisplayText(role) {
@@ -1232,6 +1235,11 @@ function extraNpcRoles() {
 
 async function createPublishedSession() {
   if (busy.value || !canCreate.value) {
+    return;
+  }
+  const selectedTime = parseBusinessDateTime(startAt.value);
+  if (!selectedTime || selectedTime.getTime() <= Date.now()) {
+    errorText.value = "请选择晚于当前时间的开本时间。";
     return;
   }
   busy.value = true;
@@ -2195,7 +2203,7 @@ function isAlbumOpenForSession(session) {
   if (typeof session?.has_started === "boolean") {
     return session.has_started;
   }
-  return isBusinessDateTimeReached(session?.start_at);
+  return isBusinessDateTimeReached(session?.start_at, currentTime.value);
 }
 
 function canTransferToSeat(seat) {
@@ -2227,7 +2235,7 @@ function storeMeta(store) {
 }
 
 function mineTodayStart() {
-  return parseBusinessDateTime(`${beijingDateKey(new Date())} 00:00:00`);
+  return parseBusinessDateTime(`${beijingDateKey(new Date(currentTime.value))} 00:00:00`);
 }
 
 function mineStartOfDay(date) {
@@ -2361,11 +2369,23 @@ async function openInitialRoute() {
   });
 }
 
+function syncClockVisibility() {
+  if (document.visibilityState === "hidden") clock.stop();
+  else clock.start();
+}
+
 onMounted(() => {
+  document.addEventListener("visibilitychange", syncClockVisibility);
+  syncClockVisibility();
   const auth = getStoredAuth();
   if (!auth.roles?.includes("system_admin")) {
     errorText.value = "当前入口仅管理员可用。";
   }
   openInitialRoute();
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("visibilitychange", syncClockVisibility);
+  clock.dispose();
 });
 </script>
